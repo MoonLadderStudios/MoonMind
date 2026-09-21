@@ -274,7 +274,7 @@ GH_NO_UPDATE_NOTIFIER=1
 GH_NO_EXTENSION_UPDATE_NOTIFIER=1
 ```
 
-The trusted host entrypoint receives the narrowly scoped credential only long enough to write `gh/hosts.yml` with owner-only permissions under the lease-owned cache volume. It removes the raw credential before Omnigent starts, while the non-secret `XDG_CONFIG_HOME` selector reaches the runner and native Codex app-server. The cache volume is outside the repository workspace and is removed with the host lease, so it is neither shared between sessions nor eligible for workspace capture. A reusable static host is not eligible for credential-bearing GitHub runs because its host-wide configuration could expose credentials to unrelated runners. Such a deployment must route the run to an on-demand or run-dedicated host.
+The trusted host entrypoint receives the narrowly scoped credential only long enough to write `gh/hosts.yml` with owner-only permissions under the lease-owned cache volume. It writes `gh/config.yml` declaring the configuration schema version that projection already satisfies. GitHub CLI migrates an unversioned configuration on every invocation and reads the account name from `api.github.com` to do it, so without that marker one blocked, throttled, or transiently failing provider call makes every `gh` command in the host exit non-zero — including `gh --version`. The projection is complete as written and must never depend on a provider round trip to become usable. It removes the raw credential before Omnigent starts, while the non-secret `XDG_CONFIG_HOME` selector reaches the runner and native Codex app-server. The cache volume is outside the repository workspace and is removed with the host lease, so it is neither shared between sessions nor eligible for workspace capture. A reusable static host is not eligible for credential-bearing GitHub runs because its host-wide configuration could expose credentials to unrelated runners. Such a deployment must route the run to an on-demand or run-dedicated host.
 
 The tool bundle never contains token values. MoonMind resolves the credential at the trusted launch boundary and must keep it out of workflow payloads, Temporal history, logs, artifacts, and durable host metadata.
 
@@ -346,6 +346,8 @@ For a CLI named `<tool>`, minimum readiness uses its trusted manifest probe:
 bash -lc 'command -v <tool>'
 bash -lc '<tool> <validated-versionProbe-arguments>'
 ```
+
+A `versionProbe` attests the delivered build: that the pinned executable is present, executable, and reports its manifest-declared version. Exact-host attestation therefore runs it with a cleared environment, not the host's runtime configuration. A tool can be built exactly right and still refuse to run under a broken credential projection, and that fault belongs to the credential owner in section 7 — reporting it as `OMNIGENT_HARNESS_BUILD_MISMATCH` sends the operator to realign a build that was never wrong. Credential and authorization evidence comes from the capability probes below, which do run in the agent's real environment.
 
 The check must run in the actual stock host environment with the mounted bundle and profile file applied. When the harness creates a distinct runner environment, the same probe must also execute through the exact runner construction path before session creation. Runner-bound verification is mandatory in that case; host-shell success alone is insufficient evidence.
 

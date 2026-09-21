@@ -155,7 +155,8 @@ def test_prerequisites_never_mark_unknown_facts_complete() -> None:
 
 def test_run_gate_keeps_plan_unarchived_and_deployment_blocked(tmp_path: Path) -> None:
     # run_gate must pass hermetic rehearsal while leaving deployment blocked;
-    # it must not mutate the repo (plan stays Proposed).
+    # it must not mutate the repo (plan stays as Proposed pre-cutover or
+    # superseded scoped reference).
     results = rehearsal.run_gate()
     by_name = {r.name: r for r in results}
     assert by_name["plan-precondition"].status == "completed"
@@ -227,7 +228,7 @@ def test_build_pins_collect_exact_versions_and_topology() -> None:
     assert pins["realm_clients"] == []
     assert pins["auth_provider_default"] == "disabled"
     assert isinstance(pins["alembic_revisions"], int) and pins["alembic_revisions"] > 0
-    assert pins["plan_status"] == "Proposed"
+    assert pins["plan_status"] in ("Proposed", "Superseded-reference")
     # Exact registry-host comparison, not a URL substring/prefix match.
     assert pins["app_image_default"].split("/", 1)[0] == "ghcr.io"
     assert pins["root_package_version"] == "1.0.0"

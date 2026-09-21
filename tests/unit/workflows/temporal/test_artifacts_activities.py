@@ -169,6 +169,7 @@ async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
             "summary": "Workflow completed successfully",
             "error_category": None,
             "finish_outcome_code": "PUBLISHED_PR",
+            "attention_required": None,
             "finish_summary": {
                 "schemaVersion": "v1",
                 "finishOutcome": {

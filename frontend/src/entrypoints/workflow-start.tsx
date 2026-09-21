@@ -140,10 +140,10 @@ const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
 // - Focus shows default + MoonMind-recent branches with zero GitHub requests.
 // - Typing filters those local suggestions synchronously inside the isolated
 //   input; the large Create page does not rerender per keystroke.
-// - One settled value schedules at most one exact-name lookup (no suggestion
-//   fetch alongside it). Broader discovery runs only via an explicit action.
+// - One settled value schedules at most one exact-name lookup. There is no
+//   broader branch discovery in the page: typing, focusing, and submitting
+//   never trigger branch enumeration.
 const BRANCH_SUGGESTION_LIMIT = 20;
-const BRANCH_SEARCH_DEBOUNCE_MS = 250;
 const BRANCH_RESOLVE_DEBOUNCE_MS = 600;
 const BRANCH_RECENT_HISTORY_MAX = 10;
 const BRANCH_RECENT_HISTORY_KEY_PREFIX =
@@ -151,7 +151,6 @@ const BRANCH_RECENT_HISTORY_KEY_PREFIX =
 
 export const BRANCH_TEXT_FIRST_LIMITS = {
   suggestionLimit: BRANCH_SUGGESTION_LIMIT,
-  searchDebounceMs: BRANCH_SEARCH_DEBOUNCE_MS,
   resolveDebounceMs: BRANCH_RESOLVE_DEBOUNCE_MS,
   recentHistoryMax: BRANCH_RECENT_HISTORY_MAX,
 };
@@ -522,7 +521,11 @@ function repositoryOptionValue(
   );
 }
 
-type TemplateScope = "global" | "personal";
+type TemplateScope = "global" | "personal"; // Backend-owned catalog partition
+// (MoonLadderStudios/MoonMind#4353 presents one unified instance list; the
+// scope/scopeRef routing contract is owned by #4350. Removal condition:
+// when the backend exposes a unified preset list/detail/save surface without
+// scope partitioning, delete this type and the scope plumbing below).
 type ScheduleMode = "immediate" | "once" | "deferred_minutes" | "recurring";
 
 interface DashboardConfig {
@@ -1156,17 +1159,6 @@ interface BranchOption {
   source: string;
 }
 
-interface BranchListResponse {
-  items?: Array<{
-    value?: string | null;
-    label?: string | null;
-    source?: string | null;
-  }>;
-  error?: string | null;
-  defaultBranch?: string | null;
-  hasMore?: boolean | null;
-}
-
 type BranchResolutionOutcome =
   | "not-checked"
   | "checking"
@@ -1659,22 +1651,6 @@ function configuredTemporalUpdateUrl(
   workflowId: string,
 ): string {
   return interpolatePath(updateTemplate, { workflowId });
-}
-
-export function configuredBranchLookupUrl(
-  branchTemplate: string,
-  repository: string,
-  options: { query?: string; limit?: number } = {},
-): string {
-  const base = interpolatePath(branchTemplate, { repository });
-  const limit =
-    typeof options.limit === "number" && Number.isFinite(options.limit)
-      ? Math.max(1, Math.min(BRANCH_SUGGESTION_LIMIT, Math.floor(options.limit)))
-      : BRANCH_SUGGESTION_LIMIT;
-  return withQueryParams(base, {
-    q: String(options.query || "").trim() || undefined,
-    limit: String(limit),
-  });
 }
 
 export function configuredBranchResolveUrl(
@@ -3554,8 +3530,15 @@ function canLookupRepositoryBranches(value: string): boolean {
   return isValidRepositoryInput(value);
 }
 
-function scopeLabel(scope: TemplateScope): string {
-  return scope === "personal" ? "Personal" : "Global";
+// MoonLadderStudios/MoonMind#4353: the account-free instance presents one
+// unified preset catalog. Template `scope`/`scopeRef` remain backend-owned
+// routing fields (passed through untouched for detail/expand/delete), but the
+// UI never labels or partitions presets as Personal/Global.
+function presetOptionLabel(item: TemplateOption, items: TemplateOption[]): string {
+  const titleCollides = items.some(
+    (other) => other !== item && other.title === item.title,
+  );
+  return titleCollides ? `${item.title} (${item.slug})` : item.title;
 }
 
 export function preferredTemplate(items: TemplateOption[]): TemplateOption | null {
@@ -5080,46 +5063,6 @@ async function responseErrorMessage(
   fallback: string,
 ): Promise<string> {
   return (await responseErrorDetail(response, fallback)).message;
-}
-
-async function readBranchOptions(
-  branchLookupEndpoint: string,
-  repository: string,
-  options: { query?: string; limit?: number; signal?: AbortSignal } = {},
-): Promise<{ items: BranchOption[]; defaultBranch: string; hasMore: boolean }> {
-  const response = await fetch(
-    configuredBranchLookupUrl(branchLookupEndpoint, repository, options),
-    options.signal
-      ? { headers: { Accept: "application/json" }, signal: options.signal }
-      : { headers: { Accept: "application/json" } },
-  );
-  if (!response.ok) {
-    throw new Error(
-      await responseErrorMessage(response, "Failed to load branches."),
-    );
-  }
-  const payload = (await response.json()) as BranchListResponse;
-  if (payload.error) {
-    throw new Error(payload.error);
-  }
-  const items = (payload.items || [])
-    .map((item) => {
-      const value = String(item.value || "").trim();
-      if (!value) {
-        return null;
-      }
-      return {
-        value,
-        label: String(item.label || value).trim() || value,
-        source: String(item.source || "github").trim() || "github",
-      };
-    })
-    .filter((item): item is BranchOption => item !== null);
-  return {
-    items,
-    defaultBranch: String(payload.defaultBranch || "").trim(),
-    hasMore: payload.hasMore === true,
-  };
 }
 
 async function readBranchResolve(
@@ -7669,6 +7612,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ],
     enabled: presetCatalogEnabled,
     queryFn: async (): Promise<TemplateCatalogResult> => {
+      // Backend-owned scope contract (MoonLadderStudios/MoonMind#4350 owns the
+      // unified-catalog policy): GET /api/presets defaults to scope=personal
+      // and has no unified list surface, so both partitions are fetched and
+      // merged into the single unified instance list shown by the UI.
+      // Removal condition: replace with one scope-free fetch when #4350 lands.
       const scopes: TemplateScope[] = ["global", "personal"];
       const results = await Promise.all(
         scopes.map(async (scope) => {
@@ -9053,9 +9001,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     : "";
   // Authored text stays synchronous and authoritative inside
   // `BranchInputField` + `branchDraftRef`. The parent subscribes only to the
-  // settled value committed after edits pause, and suggestion search never
-  // runs automatically: opening the form fetches only default-branch
-  // metadata, and broader discovery requires an explicit user action.
+  // settled value committed after edits pause. Suggestion search never
+  // runs automatically and there is no broader discovery control: opening
+  // the form fetches only default-branch metadata.
   // Touched tracks synchronously in a ref so submit validation sees an
   // authored-then-cleared field even before the settled commit fires.
   const branchTouchedRef = useRef(false);
@@ -9078,31 +9026,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setBranchInputSyncToken((token) => token + 1);
   }, []);
   const readBranchDraft = (): string => branchDraftRef.current || "";
-  const [branchSearchRequested, setBranchSearchRequested] = useState(false);
-  const [branchSearchQuery, setBranchSearchQuery] = useState("");
-  const branchOptionsQuery = useQuery({
-    ...configQueryDefaults,
-    queryKey: [
-      "workflow-start",
-      "github-branches",
-      branchLookupRepository,
-      branchSearchQuery,
-    ],
-    enabled: Boolean(
-      branchLookupEndpoint && branchLookupRepository && branchSearchRequested,
-    ),
-    queryFn: async ({ signal }) =>
-      readBranchOptions(branchLookupEndpoint || "", branchLookupRepository, {
-        query: branchSearchQuery,
-        limit: BRANCH_SUGGESTION_LIMIT,
-        signal,
-      }),
-  });
   // Default-branch metadata loads once per repository with no branch
-  // enumeration and no dependence on suggestion state or input text. When the
-  // metadata route is unconfigured (legacy configs/tests), fall back to the
-  // suggestion route once per repository: its payload carries defaultBranch
-  // and the metadata reader discards the items.
+  // enumeration and no dependence on input text. When the metadata route is
+  // unconfigured (legacy configs/tests), fall back to the suggestion route
+  // once per repository: its payload carries defaultBranch and the metadata
+  // reader discards the items.
   const effectiveBranchMetadataEndpoint =
     branchMetadataEndpoint || branchLookupEndpoint;
   const branchMetadataQuery = useQuery({
@@ -9125,18 +9053,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ),
   });
   const branchOptions = useMemo(() => {
-    // Local-first: default + MoonMind-recent require zero GitHub requests.
-    // Explicit remote results (if the user requested a broader search) are
-    // appended afterwards. Typing filters this base list inside the isolated
-    // input; it never triggers a fetch.
-    const serverItems = branchSearchRequested
-      ? branchOptionsQuery.data?.items || []
-      : [];
+    // Local-first: default + MoonMind-recent require zero branch enumeration.
+    // Typing filters this base list inside the isolated input; it never
+    // triggers a fetch.
     const fallbackDefault = String(
-      branchMetadataQuery.data?.defaultBranch ||
-        (branchSearchRequested
-          ? branchOptionsQuery.data?.defaultBranch || ""
-          : ""),
+      branchMetadataQuery.data?.defaultBranch || "",
     ).trim();
     const recent = readRecentBranches(branchLookupRepository);
     const merged: BranchOption[] = [];
@@ -9158,37 +9079,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     for (const name of recent) {
       push({ value: name, label: name, source: "recent" });
     }
-    for (const item of serverItems) {
-      push(item);
-    }
-    // Mounted options stay bounded even after repeated paging or history
-    // growth; older branches remain submittable via exact lookup below.
+    // Mounted options stay bounded as recent history grows; other branches
+    // remain submittable by typing their exact name below.
     return merged.slice(0, BRANCH_SUGGESTION_LIMIT);
-  }, [
-    branchOptionsQuery.data,
-    branchMetadataQuery.data,
-    branchLookupRepository,
-    branchSearchRequested,
-  ]);
+  }, [branchMetadataQuery.data, branchLookupRepository]);
   const defaultBranch = useMemo(() => {
     const value = String(
-      branchMetadataQuery.data?.defaultBranch ||
-        branchOptionsQuery.data?.defaultBranch ||
-        "",
+      branchMetadataQuery.data?.defaultBranch || "",
     ).trim();
     return value;
-  }, [
-    branchMetadataQuery.data?.defaultBranch,
-    branchOptionsQuery.data?.defaultBranch,
-  ]);
+  }, [branchMetadataQuery.data?.defaultBranch]);
   // Settled branch text drives only optional exact-name evidence below.
   // Submission reads the live draft ref inside `handleSubmit` (see
   // `submissionBranch`) so a Start pressed within the settle debounce never
   // reuses a prior value; an authored-then-cleared field stays empty.
   const settledBranchText = branchSettled.trim();
-  // Exact-name evidence is independent of suggestion membership and never
-  // runs alongside suggestion search: one settled value schedules at most one
-  // non-blocking lookup after edits pause. The query key carries the full
+  // Exact-name evidence is independent of suggestion membership: one settled
+  // value schedules at most one non-blocking lookup after edits pause. The query key carries the full
   // request identity (repository + exact name) so late responses can never
   // validate a newer draft; the component checks identity before rendering.
   const trimmedBranchForResolve = settledBranchText;
@@ -9245,21 +9152,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   })();
   const branchControlDisabled =
     !selectedRepositoryForBranchLookup.trim() ||
-    !branchLookupEndpoint ||
+    !effectiveBranchMetadataEndpoint ||
     !branchLookupRepository;
-  const requestBranchSearch = useCallback(() => {
-    setBranchSearchQuery((branchDraftRef.current || "").trim());
-    setBranchSearchRequested(true);
-  }, []);
-  const clearBranchSearch = useCallback(() => {
-    setBranchSearchRequested(false);
-    setBranchSearchQuery("");
-  }, []);
   const branchStatusMessage = (() => {
     if (!selectedRepositoryForBranchLookup.trim()) {
       return "Select a repository to load branches.";
     }
-    if (!branchLookupEndpoint) {
+    if (!effectiveBranchMetadataEndpoint) {
       return "Branch lookup is not configured.";
     }
     if (!branchLookupRepository) {
@@ -9269,58 +9168,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return "";
     }
     if (
-      branchSearchRequested &&
-      (branchOptionsQuery.isLoading || branchOptionsQuery.isFetching)
-    ) {
-      return "";
-    }
-    if (branchSearchRequested && branchOptionsQuery.isError) {
-      // Lookup availability is reported separately from input validity: a
-      // failed suggestion fetch never implies the authored branch is wrong.
-      if (defaultBranch) {
-        return "Branch suggestions are unavailable. You can still type a branch name.";
-      }
-      const error = branchOptionsQuery.error;
-      return error instanceof Error ? error.message : "Failed to load branches.";
-    }
-    if (
       branchResolutionOutcome === "absent" &&
       trimmedBranchForResolve === (branchDraftRef.current || "").trim() &&
       (branchDraftRef.current || "").trim()
     ) {
       return `No branch named "${trimmedBranchForResolve}" was found in this repository. You can still submit it for backend validation.`;
     }
-    if (
-      branchSearchRequested &&
-      branchOptionsQuery.isSuccess &&
-      branchOptionsQuery.data?.hasMore === true &&
-      branchSearchQuery
-    ) {
-      // The suggestion list is one bounded page, never a complete crawl:
-      // say so instead of implying these are all the matches.
-      return `Showing the first ${branchOptions.length} suggestions. Type to narrow the list or paste the exact branch name.`;
-    }
-    if (
-      branchSearchRequested &&
-      branchOptionsQuery.isSuccess &&
-      branchOptions.length === 0
-    ) {
-      return "No branches returned for this repository. Type a branch name.";
-    }
     return "";
   })();
-  const branchStatusIsError = Boolean(
-    branchSearchRequested && branchOptionsQuery.isError && !defaultBranch,
-  );
   const handleRepositoryChange = (value: string) => {
     setRepository(value);
     setRepositoryTouched(true);
     const selectedOption = repositoryOptionValue(repositoryOptions, value);
     writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
-    // A new repository invalidates explicit search results and the settled
-    // branch draft; metadata reloads via its repository-scoped query key.
-    setBranchSearchRequested(false);
-    setBranchSearchQuery("");
+    // Metadata reloads via its repository-scoped query key.
   };
   const handleGitHubIssueRepositoryChange = (issueRepository: string) => {
     if (repositoryTouched || repository.trim() === issueRepository) {
@@ -9341,7 +9202,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return "Failed to load presets.";
     }
     if (templateItems.length === 0) {
-      return "No presets available for your account.";
+      return "No presets available in this instance.";
     }
     return "";
   }
@@ -10438,6 +10299,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           Accept: "application/json",
         },
         body: JSON.stringify({
+          // Backend-owned save contract (MoonLadderStudios/MoonMind#4350):
+          // PresetSaveFromWorkflowRequestSchema requires scope "personal".
+          // The UI presents the saved preset in the single instance catalog
+          // without a Personal/Global selector. Removal condition: drop this
+          // field when #4350 accepts a scope-free save.
           scope: "personal",
           title,
           description: title,
@@ -10474,19 +10340,48 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setTemplateMessage("Enter a preset name to delete.");
       return false;
     }
-    const personalItems = templateItems.filter(
-      (item) => item.scope === "personal",
-    );
     const matchesName = (item: (typeof templateItems)[number]) =>
       item.title.trim().toLowerCase() === normalized ||
       item.slug.trim().toLowerCase() === normalized;
-    const target = personalItems.find(matchesName);
+    // The unified instance catalog deletes whichever listed preset matches;
+    // the preset's own backend scope/scopeRef travels with the request and
+    // the server remains the authorization boundary (detail/delete/expand
+    // require scope as Query(...); owned by #4350 with the same removal
+    // condition as the list/save contract above). A colliding title/slug
+    // across scopes must not silently pick the first sorted match: require
+    // an unambiguous exact slug instead of issuing a destructive request.
+    const matches = templateItems.filter(matchesName);
+    if (matches.length === 0) {
+      setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
+      return false;
+    }
+    let target = matches.find(
+      (item) => item.slug.trim().toLowerCase() === normalized,
+    );
     if (!target) {
-      if (templateItems.some(matchesName)) {
-        setTemplateMessage("Only personal presets can be deleted.");
-      } else {
-        setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
+      if (matches.length > 1) {
+        const options = matches.map((item) => `'${item.slug}'`).join(', ');
+        setTemplateMessage(
+          `Multiple presets match '${nameOverride.trim()}'. Enter the exact slug: ${options}.`,
+        );
+        return false;
       }
+      target = matches[0];
+    } else if (matches.length > 1) {
+      const exactSlugMatches = matches.filter(
+        (item) => item.slug.trim().toLowerCase() === normalized,
+      );
+      if (exactSlugMatches.length !== 1) {
+        const options = matches.map((item) => `'${item.slug}'`).join(', ');
+        setTemplateMessage(
+          `Multiple presets match '${nameOverride.trim()}'. Enter the exact slug: ${options}.`,
+        );
+        return false;
+      }
+      target = exactSlugMatches[0];
+    }
+    if (!target) {
+      setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
       return false;
     }
 
@@ -10905,9 +10800,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? "Wait for the repository default branch to load, or enter a branch before starting this workflow."
           : liveBranchTouched
             ? "Choose a branch before starting this repository-backed workflow."
-            : branchSearchRequested && branchOptionsQuery.isError
-              ? "The repository default branch could not be loaded. Enter a branch before starting this workflow."
-              : "No repository default branch is available. Enter a branch before starting this workflow.",
+            : "No repository default branch is available. Enter a branch before starting this workflow.",
       );
       clearSubmitBusy();
       return;
@@ -14104,7 +13997,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           <option value="">Select preset...</option>
                           {templateItems.map((item) => (
                             <option key={item.key} value={item.key}>
-                              {`${item.title} (${scopeLabel(item.scope)})`}
+                              {presetOptionLabel(item, templateItems)}
                             </option>
                           ))}
                         </select>
@@ -14570,7 +14463,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     className="queue-step-icon-button destructive"
                     aria-label="Delete preset"
                     aria-busy={isDeletingPreset}
-                    title="Delete a personal preset by name"
+                    title="Delete an instance preset by name"
                     disabled={isDeletingPreset}
                     onClick={openPresetDeleteDialog}
                   >
@@ -15184,13 +15077,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           aria-label="Workflow submission controls"
         >
           {branchStatusMessage ? (
-            <p
-              className={
-                branchStatusIsError
-                  ? "queue-authoring-controls-status notice error"
-                  : "queue-authoring-controls-status small"
-              }
-            >
+            <p className="queue-authoring-controls-status small">
               {branchStatusMessage}
             </p>
           ) : null}
@@ -15234,25 +15121,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 onSettled={commitBranchSettled}
                 extraOnChange={markBranchTouchedLive}
               />
-              {branchControlDisabled ? null : branchSearchRequested ? (
-                <button
-                  type="button"
-                  className="secondary small queue-branch-search"
-                  onClick={clearBranchSearch}
-                  title="Hide broader GitHub branch search results; typing always filters local suggestions."
-                >
-                  Hide search
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="secondary small queue-branch-search"
-                  onClick={requestBranchSearch}
-                  title="Search other branches on GitHub (one bounded request). Typing, pasting, and submitting never require this."
-                >
-                  Search other branches
-                </button>
-              )}
             </div>
             <div
               className="queue-inline-selector queue-inline-selector--publish"

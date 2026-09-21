@@ -563,6 +563,37 @@ class ExecutionDependencySummary:
     state: str | None
     close_status: str | None
     workflow_type: str | None
+    attention_required: bool = False
+
+def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) -> None:
+    """Reject a publish mode the authored plan can never satisfy."""
+
+    from moonmind.workflows.executions.execution_contract import (
+        WorkflowContractError,
+        validate_publish_mode_repository_authority,
+    )
+
+    parameters = initial_parameters if isinstance(initial_parameters, Mapping) else {}
+    workflow_payload = parameters.get("workflow")
+    if not isinstance(workflow_payload, Mapping):
+        workflow_payload = parameters.get("task")
+    if not isinstance(workflow_payload, Mapping):
+        return
+    publish = workflow_payload.get("publish")
+    publish_mode = publish.get("mode") if isinstance(publish, Mapping) else None
+    if publish_mode is None:
+        publish_mode = workflow_payload.get("publishMode") or parameters.get(
+            "publishMode"
+        )
+    steps = workflow_payload.get("steps")
+    try:
+        validate_publish_mode_repository_authority(
+            publish_mode=publish_mode,
+            steps=steps if isinstance(steps, list) else None,
+        )
+    except WorkflowContractError as exc:
+        raise TemporalExecutionValidationError(str(exc)) from exc
+
 
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
@@ -1931,6 +1962,10 @@ class TemporalExecutionService:
                     "value",
                     record.workflow_type,
                 ),
+                attention_required=bool(
+                    getattr(record, "attention_required", False)
+                    or (record.memo or {}).get("attention_required")
+                ),
             )
             for record in records
         }
@@ -2092,6 +2127,12 @@ class TemporalExecutionService:
                     f"{first_error.path}: {first_error.message}"
                 )
             initial_parameters = skill_validation.parameters
+            # A publish mode no authored step can satisfy is admitted here for
+            # rerun, continuation, checkpoint branching, and deployment routes
+            # that never pass the router's task-shaped check. Enforce the one
+            # invariant at the handoff every launch converges on so no route
+            # can queue a run that is guaranteed to fail finalizing.
+            _validate_publish_authority(initial_parameters)
 
         # Provider Profiles are runtime-owned launch contracts, so the
         # runtime/profile pair has to be valid at the boundary every
@@ -2197,18 +2238,6 @@ class TemporalExecutionService:
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
-        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
-            action = str(
-                getattr(
-                    settings.workflow,
-                    "moonspec_environment_blocked_publish_action",
-                    "fail",
-                )
-                or "fail"
-            ).strip().lower()
-            if action not in {"fail", "draft_pr"}:
-                action = "fail"
-            params["moonspecEnvironmentBlockedPublishAction"] = action
         task_params = dict(_workflow_payload(params))
         legacy_task_params = params.get("task")
         if isinstance(legacy_task_params, Mapping):
@@ -3893,6 +3922,7 @@ class TemporalExecutionService:
         error_category: str | None = None,
         finish_outcome_code: str | None = None,
         finish_summary: dict[str, Any] | None = None,
+        attention_required: bool | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = canonicalize_workflow_state_alias(
             str(state or "").strip().lower(),
@@ -3943,6 +3973,11 @@ class TemporalExecutionService:
                 self._set_state(record, target_state, close_status=target_close_status)
                 if isinstance(record, TemporalExecutionCanonicalRecord):
                     await self._sync_integration_correlation_record(record)
+            self._preserve_terminal_attention(
+                record,
+                attention_required=attention_required,
+                finish_summary=finish_summary,
+            )
             await self._session.commit()
             await self._session.refresh(record)
             if isinstance(record, TemporalExecutionRecord):
@@ -3957,6 +3992,11 @@ class TemporalExecutionService:
             finish_summary=finish_summary,
         )
         self._attach_terminal_governance_report(record)
+        self._preserve_terminal_attention(
+            record,
+            attention_required=attention_required,
+            finish_summary=finish_summary,
+        )
         if summary:
             if target_state is MoonMindWorkflowState.FAILED:
                 category = str(error_category or "execution_error").strip()
@@ -5645,6 +5685,14 @@ class TemporalExecutionService:
         self, record: TemporalExecutionCanonicalRecord
     ) -> str | None:
         if record.state is MoonMindWorkflowState.COMPLETED:
+            # MoonLadderStudios/MoonMind#4446: a completed-with-attention draft
+            # PR is not successful evidence for dependents. Keep the
+            # disposition distinguishable so the dependency gate stays blocked
+            # instead of releasing the prerequisite.
+            if bool(getattr(record, "attention_required", False)) or bool(
+                (record.memo or {}).get("attention_required")
+            ):
+                return "dependency_attention_required"
             return None
         error_category = str((record.memo or {}).get("error_category") or "").strip()
         if error_category:
@@ -5781,6 +5829,10 @@ class TemporalExecutionService:
         owner_id: UUID | str | None,
         owner_type: str | None,
     ) -> tuple[TemporalExecutionOwnerType, str]:
+        # Single-user (#4351): new executions default to instance (SYSTEM)
+        # without a human-owner lookup. Legacy USER payloads still decode
+        # unchanged for retained-history replay; no present-day user table is
+        # consulted and histories are never rewritten.
         owner_value = str(owner_id).strip() if owner_id is not None else ""
         if owner_type:
             try:
@@ -5791,6 +5843,8 @@ class TemporalExecutionService:
                     f"Unsupported owner type: {owner_type}. Supported values: {supported}"
                 ) from exc
         elif owner_value:
+            # History compatibility: a retained payload that carries an owner
+            # id without an explicit type keeps its legacy USER meaning.
             owner_type_enum = TemporalExecutionOwnerType.USER
         else:
             owner_type_enum = TemporalExecutionOwnerType.SYSTEM
@@ -5813,6 +5867,32 @@ class TemporalExecutionService:
                 "owner_id is required when owner_type is service"
             )
         return owner_type_enum, owner_value
+
+    def decode_previous_execution_owner(
+        self, payload: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """Decode a retained workflow/activity/update/signal payload.
+
+        Single-user (#4351) history-compatibility inventory: already-admitted
+        parent/child runs, previous activity payloads, Continue-As-New,
+        cancellation, and recovery records may carry legacy ``owner_user_id``,
+        ``mm_owner_type``, or ``mm_owner_id`` human-owner fields. They are
+        preserved as non-authoritative provenance without consulting a
+        present-day user table, without rewriting histories, and without
+        mapping every actor to a synthetic constant. Missing owner fields
+        decode to the instance default (``system``).
+        """
+        data = dict(payload or {})
+        for key in ("owner_user_id", "mm_owner_id"):
+            if key in data and data[key] is not None:
+                text = str(data[key]).strip()
+                data[key] = text or None
+        owner_type = str(data.get("mm_owner_type") or data.get("owner_type") or "").strip()
+        if owner_type:
+            data["mm_owner_type"] = owner_type
+        else:
+            data.setdefault("mm_owner_type", "system")
+        return data
 
     def _default_owner_id(
         self,
@@ -5885,6 +5965,34 @@ class TemporalExecutionService:
         record.awaiting_external = False
         record.waiting_reason = None
         record.attention_required = False
+
+    def _preserve_terminal_attention(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+        *,
+        attention_required: bool | None,
+        finish_summary: dict[str, Any] | None,
+    ) -> None:
+        """Persist the completed-with-attention marker across the terminal boundary.
+
+        MoonLadderStudios/MoonMind#4446: ``_set_state`` clears waiting metadata
+        for every terminal state. A verification-incomplete draft PR completes
+        with ``attention_required`` set on the workflow, so re-apply it here
+        from the explicit activity input (or the durable finish summary) to
+        keep the canonical execution and API projection honest.
+        """
+        wants_attention = bool(attention_required)
+        if not wants_attention and isinstance(finish_summary, dict):
+            for key in ("attentionRequired", "attention_required"):
+                if key in finish_summary:
+                    wants_attention = bool(finish_summary.get(key))
+                    break
+        if not wants_attention:
+            return
+        record.attention_required = True
+        memo = dict(record.memo or {})
+        memo["attention_required"] = True
+        record.memo = memo
 
     def _clean_text(self, value: Any) -> str | None:
         if value is None:

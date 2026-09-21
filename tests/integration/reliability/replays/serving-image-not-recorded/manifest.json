@@ -1,9 +1,0 @@
-{
-  "incidentWorkflowId": "mm:09459f99-97d1-4584-af1a-cc41fbbb18c8-2026-09-13T18:20:00Z",
-  "failure": "A Compose replacement removed the current Temporal workers before any release job recorded their image. The availability owner exhausted restoration with no coherent live worker owner. A scheduled occurrence remained at history length two and blocked 42 ticks under Skip.",
-  "events": ["compose_start", "current_route_verified", "workers_removed", "replacement_installed", "scheduled_workflow_task_unclaimed", "automatic_restoration"],
-  "blockedHistoryLength": 2,
-  "expected": "The ordinary supervisor records the serving image before loss, restores that exact cohort without an update receipt, and resumes the same scheduled occurrence without promoting the unrelated replacement.",
-  "test": "tests/integration/reliability/test_automatic_release_availability.py::test_background_owner_restores_authoritative_missing_image",
-  "agentLaunched": false
-}

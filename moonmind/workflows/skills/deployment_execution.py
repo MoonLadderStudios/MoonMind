@@ -123,31 +123,59 @@ class ComposeRunner(Protocol):
         """Verify the requested desired state is running."""
 
 
+# Bounded holds taken on the stack lock by owners that are not updates. The
+# availability supervisor sweeps every deployment worker on a short cycle and
+# the maintenance pass reconciles retained release jobs; both share the lock
+# that serializes updates. An update must outlast the longer of them, because
+# reporting "already running" for a routine observation sweep fails a release
+# while nothing is being deployed.
+DEPLOYMENT_AVAILABILITY_SWEEP_TIMEOUT_SECONDS = 300
+DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS = 840
+DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS = (
+    max(
+        DEPLOYMENT_AVAILABILITY_SWEEP_TIMEOUT_SECONDS,
+        DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS,
+    )
+    + 60
+)
+_DEPLOYMENT_LOCK_POLL_SECONDS = 0.5
+
+
+def _lock_unavailable(stack: str, *, retryable: bool) -> ToolFailure:
+    return ToolFailure(
+        error_code="DEPLOYMENT_LOCKED",
+        message=f"Deployment update for stack '{stack}' is already running.",
+        retryable=retryable,
+        details={"stack": stack, "failureClass": "deployment_lock_unavailable"},
+    )
+
+
 class DeploymentUpdateLockManager:
-    """Nonblocking per-stack lock manager for deployment updates."""
+    """Per-stack lock manager for deployment updates.
+
+    ``wait_seconds`` is the caller's budget for waiting out the current owner.
+    It defaults to zero so background sweeps keep yielding to a running update
+    immediately instead of queueing behind it.
+    """
 
     def __init__(self) -> None:
         self._guard = asyncio.Lock()
         self._held: set[str] = set()
 
-    async def acquire(self, stack: str) -> "DeploymentUpdateLockLease":
+    async def acquire(
+        self, stack: str, *, wait_seconds: float = 0.0
+    ) -> "DeploymentUpdateLockLease":
         normalized = _required_string(stack, "stack")
-        async with self._guard:
-            if normalized in self._held:
-                raise ToolFailure(
-                    error_code="DEPLOYMENT_LOCKED",
-                    message=(
-                        "Deployment update for stack "
-                        f"'{normalized}' is already running."
-                    ),
-                    retryable=False,
-                    details={
-                        "stack": normalized,
-                        "failureClass": "deployment_lock_unavailable",
-                    },
-                )
-            self._held.add(normalized)
-        return DeploymentUpdateLockLease(self, normalized)
+        deadline = asyncio.get_running_loop().time() + max(0.0, wait_seconds)
+        while True:
+            async with self._guard:
+                if normalized not in self._held:
+                    self._held.add(normalized)
+                    return DeploymentUpdateLockLease(self, normalized)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise _lock_unavailable(normalized, retryable=False)
+            await asyncio.sleep(min(_DEPLOYMENT_LOCK_POLL_SECONDS, remaining))
 
     async def _release(self, stack: str) -> None:
         async with self._guard:
@@ -183,22 +211,29 @@ class FileDeploymentUpdateLockManager:
 
     lock_dir: str
 
-    async def acquire(self, stack: str) -> "FileDeploymentUpdateLockLease":
+    async def acquire(
+        self, stack: str, *, wait_seconds: float = 0.0
+    ) -> "FileDeploymentUpdateLockLease":
         import fcntl
         normalized = _validate_stack_path_component(stack)
         lock_path = Path(self.lock_dir).expanduser() / f"{normalized}.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open("a+")
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            handle.close()
-            raise ToolFailure(
-                error_code="DEPLOYMENT_LOCKED",
-                message=f"Deployment update for stack '{normalized}' is already running.",
-                retryable=True,
-                details={"stack": normalized, "failureClass": "deployment_lock_unavailable"},
-            ) from exc
+        # Contention with a bounded background owner is routine, not a running
+        # update. A caller that declares a wait budget waits that owner out;
+        # the default keeps the nonblocking acquire background sweeps need.
+        deadline = asyncio.get_running_loop().time() + max(0.0, wait_seconds)
+        while True:
+            handle = lock_path.open("a+")
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                handle.close()
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise _lock_unavailable(normalized, retryable=True) from exc
+                await asyncio.sleep(min(_DEPLOYMENT_LOCK_POLL_SECONDS, remaining))
+                continue
+            break
         handle.seek(0)
         previous = handle.read()
         if previous:
@@ -1620,6 +1655,10 @@ class DeploymentUpdateExecutor:
     evidence_writer: EvidenceWriter
     runner: ComposeRunner
     excluded_services: tuple[str, ...] = ()
+    # How long an update waits for the stack lock before reporting contention.
+    # The lock is shared with bounded background owners, so a zero wait makes a
+    # routine sweep fail an operator's release.
+    lock_wait_seconds: float = DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS
     # Stale-code recovery (MoonLadderStudios/MoonMind#4224): after services are
     # recreated, bind-mounted workers that were not recreated may still run
     # stale modules. The checker reports stale workers
@@ -1794,9 +1833,21 @@ class DeploymentUpdateExecutor:
         converged is left running, and substrate that does not converge
         fails the release instead of reporting success on stale definitions.
         """
-        targets = _substrate_reconciliation_targets(
-            before_state=before_state,
-            excluded_services=self.excluded_services,
+        # A gateway aligned before the workers is already on the incoming
+        # release. Selecting it again here would force-recreate it a second
+        # time after the stack verified, bouncing egress underneath workers
+        # that are live and may already be running egress-dependent work.
+        aligned = {
+            service.strip().lower()
+            for service in _attested_gateway_services(before_state)
+        }
+        targets = tuple(
+            service
+            for service in _substrate_reconciliation_targets(
+                before_state=before_state,
+                excluded_services=self.excluded_services,
+            )
+            if service.strip().lower() not in aligned
         )
         if not targets:
             return None
@@ -1868,6 +1919,74 @@ class DeploymentUpdateExecutor:
         ]
         report["remaining"] = remaining
         command_log["substrate"] = report
+        return report
+
+    async def _align_attested_substrate(
+        self,
+        *,
+        stack: str,
+        parsed: Mapping[str, Any],
+        command_plan: ComposeCommandPlan,
+        before_state: Mapping[str, Any],
+        execution_image: str,
+        progress_events: list[dict[str, str]],
+        command_log: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Align the egress gateway before workers are recreated against it.
+
+        Workers attest the restricted-egress gateway at startup, and the
+        gateway is excluded from the main update, so a release that changes
+        its policy would recreate workers against the old gateway: their
+        attestation fails, ``compose up --wait`` fails, and the staged
+        substrate pass that would have fixed the gateway never runs because
+        it is gated on the main stack verifying. The blue/green path avoided
+        this by aligning the candidate gateway before starting candidate
+        workers; recreate-in-place needs the same ordering.
+
+        Convergence is not decided here. ``before_state`` renders the
+        *installed* image, so a gateway correctly running the old release
+        reads as converged and would be skipped -- and the gateway is itself
+        parameterized by the release image, so it does need to move. Compose
+        already performs that comparison against the incoming configuration
+        and leaves a converged service untouched, so this issues the pull and
+        up unconditionally and lets Compose decide whether to recreate.
+
+        Only the egress gateway moves here. The controller's own transport
+        (docker-proxy) and stateful substrate stay with the staged pass so
+        the updater never recreates its own transport mid-update.
+        """
+        targets = _attested_gateway_services(before_state)
+        if not targets:
+            return None
+        report: dict[str, Any] = {"targets": list(targets)}
+        _add_progress(
+            progress_events,
+            "ALIGNING_EGRESS_GATEWAY",
+            "Aligning the restricted-egress gateway before recreation.",
+        )
+        gateway_plan = build_compose_command_plan(
+            mode=str(parsed["mode"]),
+            remove_orphans=bool(parsed["removeOrphans"]),
+            wait=bool(parsed["wait"]),
+            runner_mode=command_plan.runner_mode,
+        )
+        # No separate pull. The main pull targets the requested repository,
+        # and the gateway may be pinned to a different one -- the
+        # deployment-update-infrastructure-reconciliation replay records
+        # exactly that shape. This recreates the gateway the same way the main
+        # up always did, only earlier, and Compose fetches a missing image.
+        up_command = (*gateway_plan.up_args, "--no-deps", *targets)
+        up_result = await self.runner.up(
+            stack=stack, command=up_command, requested_image=execution_image
+        )
+        command_log["attestedSubstrateUp"] = {
+            "command": list(up_command),
+            "result": dict(up_result) if isinstance(up_result, Mapping) else up_result,
+        }
+        # A gateway that cannot come up on the incoming release must fail the
+        # update here, not after workers fail an attestation against it.
+        _ensure_command_succeeded("egress-gateway-up", up_result)
+        command_log["attestedSubstrate"] = report
         return report
 
     async def execute(
@@ -1963,7 +2082,9 @@ class DeploymentUpdateExecutor:
         _add_progress(
             progress_events, "LOCK_WAITING", "Waiting for deployment update lock."
         )
-        async with await self.lock_manager.acquire(parsed["stack"]):
+        async with await self.lock_manager.acquire(
+            parsed["stack"], wait_seconds=self.lock_wait_seconds
+        ):
             try:
                 _add_progress(
                     progress_events,
@@ -1980,9 +2101,31 @@ class DeploymentUpdateExecutor:
                     excluded_services=self.excluded_services,
                 )
                 one_shot_services = _one_shot_services_from_plan(command_plan)
+                # The egress gateway is aligned ahead of the workers that
+                # attest it, and normally stays in the main recreation too:
+                # the deployment-update-infrastructure-reconciliation replay
+                # records the incident that holding it out causes, where the
+                # restricted-egress network it defines went absent and the
+                # worker restarted with exit code 1. Compose leaves an
+                # already-aligned service alone, so including it costs
+                # nothing.
+                #
+                # `--force-recreate` is the exception: it would bounce the
+                # gateway a second time, concurrently with the workers whose
+                # startup attests it, defeating the alignment. The pre-pass
+                # inherits the same force flag, so the gateway has already
+                # been recreated and its network exists; excluding it here
+                # keeps that guarantee without the second bounce.
+                forced = "--force-recreate" in tuple(command_plan.up_args)
+                excluded_from_main = set(one_shot_services)
+                if forced:
+                    excluded_from_main |= {
+                        service.strip().lower()
+                        for service in _attested_gateway_services(before_state)
+                    }
                 service_command_plan = _command_plan_without_services(
                     command_plan,
-                    excluded_services=one_shot_services,
+                    excluded_services=excluded_from_main,
                 )
                 command_log["pull"]["command"] = list(command_plan.pull_args)
                 command_log["up"]["command"] = list(service_command_plan.up_args)
@@ -2068,10 +2211,17 @@ class DeploymentUpdateExecutor:
                         one_shot_result,
                     )
 
-                cohort = context.get("release_cohort")
-                if cohort is not None:
-                    command_log["releaseRouting"] = await cohort.qualify(execution_image)
                 await self.desired_state_store.persist(desired_payload)
+
+                await self._align_attested_substrate(
+                    stack=parsed["stack"],
+                    parsed=parsed,
+                    command_plan=command_plan,
+                    before_state=before_state,
+                    execution_image=execution_image,
+                    progress_events=progress_events,
+                    command_log=command_log,
+                )
 
                 _add_progress(
                     progress_events,
@@ -2878,6 +3028,26 @@ def _compose_one_shot_up_args(
     if parts and parts[-1] == "--":
         parts.pop()
     return (*parts, "--exit-code-from", one_shot_service, one_shot_service)
+
+
+def _attested_gateway_services(before_state: Mapping[str, Any]) -> tuple[str, ...]:
+    """Configured services whose policy workers attest at startup.
+
+    Selected from the configured services, never from the exclusion list. The
+    documented default excludes only the deployment-control runner, so keying
+    this off exclusions made the pre-worker alignment a no-op on exactly the
+    supported default configuration.
+    """
+    from moonmind.security.egress import EGRESS_GATEWAY_SERVICE
+
+    configured = before_state.get("configuredServices")
+    if not isinstance(configured, Sequence) or isinstance(configured, (str, bytes)):
+        return ()
+    return tuple(
+        str(service)
+        for service in configured
+        if _service_name_matches(str(service), EGRESS_GATEWAY_SERVICE)
+    )
 
 
 def _remove_services_from_command_args(

@@ -394,9 +394,33 @@ class EffectivePhase:
                 list(evidence_refs) if isinstance(evidence_refs, list) else []
             ),
             "blockers": list(self.blockers),
-            "directLaunchAllowed": self.phase
-            < CutoverPhase.DIRECT_LAUNCH_DISABLED,
+            "directLaunchAllowed": self._direct_launch_allowed(),
         }
+
+    def _direct_launch_allowed(self) -> bool:
+        """Return whether direct launch is currently admitted.
+
+        The single deployment-owned direct-retirement cutoff
+        (MoonLadderStudios/MoonMind#3931,
+        ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) is the only deployment-owned
+        retirement decision for the direct lane: it closes the lane to new
+        work once it passes and preserves it while unset. The rollout phase
+        governs defaults promotion, not direct admission, so clearing or
+        postponing the cutoff preserves the direct path without coordinating
+        a second phase control. The published readiness matches the
+        admission decision in ``select_runtime``.
+        """
+
+        try:
+            from moonmind.omnigent.codex_cutover_drain import (
+                direct_retired_by_cutoff,
+            )
+        except ImportError:
+            return True
+        try:
+            return not direct_retired_by_cutoff()
+        except ValueError:
+            return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,29 +494,40 @@ def select_runtime(
     release_status: EffectivePhase | None = None,
     rollback_generation: str | None = None,
     versioned_default: bool = False,
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> RuntimeSelection:
     """Apply rollout defaults without ever rewriting an explicit selection.
 
     Create/edit/rerun defaults advance at phase 2; schedule and preset defaults
-    advance at phase 3.  Explicit direct launch is rejected from phase 5.  This
-    helper never performs automatic fallback: callers must persist the returned
-    evidence on the run before launch.
+    advance at phase 3. This helper never performs automatic fallback: callers
+    must persist the returned evidence on the run before launch.
 
     When ``versioned_default`` is true the caller already resolved the default
     through the versioned rollout boundary, so the legacy phase promotion must
     not rewrite it (MoonLadderStudios/MoonMind#3988): a restored direct default
     stays direct instead of being promoted back to Omnigent.
 
-    The rollout phase and the code-owned retirement class are separate
-    authorities and both must permit a runtime before it becomes a new
-    selection (#3835). Neither ever affects an already-recorded plan.
+    The code-owned retirement class remains a separate authority and must
+    permit a runtime before it becomes a new selection (#3835). Neither it
+    nor this boundary ever affects an already-recorded plan.
+
+    The deployment-owned direct-retirement cutoff
+    (MoonLadderStudios/MoonMind#3931,
+    ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) is the single deployment-owned
+    retirement decision for the direct lane: once the cutoff passes, no new
+    direct work is admitted; while unset, the direct path is preserved
+    without coordinating a second phase control. It is evaluated here so
+    the retired lane rejects at the same selection boundary without
+    rewriting already-recorded plans.
     """
+
+    from moonmind.omnigent.codex_cutover_drain import assert_new_admission_allowed
 
     explicit = str(authored_runtime or "").strip().lower()
     if explicit:
         explicit = normalize_runtime_id(explicit)
-        if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
-            raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
+        assert_new_admission_allowed(explicit, env=env, now=now)
         assert_runtime_new_admission(explicit, rollback_generation=rollback_generation)
         return RuntimeSelection(
             explicit,
@@ -523,6 +558,7 @@ def select_runtime(
         selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
     # A configured default may not keep a direct runtime as a default target
     # once its retirement class stops admitting new work (#3835 required work 2).
+    assert_new_admission_allowed(selected, env=env, now=now)
     assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
     return RuntimeSelection(
         selected,

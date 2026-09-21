@@ -303,8 +303,16 @@ class OmnigentRuntimeScriptService:
             "mkdir -p /home/app/.config/gh; "
             "cp /run/mm-credentials/github/hosts.yml "
             "/home/app/.config/gh/hosts.yml; "
+            # gh migrates an unversioned config on every invocation and reads
+            # the account name from api.github.com to do it, so one blocked or
+            # throttled provider call fails every gh command in the host --
+            # including the --version build probe. Declare the schema version
+            # this projection already satisfies; gh then resolves the token
+            # and the git credential helper without a provider round trip.
+            "printf 'version: \"1\"\\n' > /home/app/.config/gh/config.yml; "
             "chmod 0700 /home/app/.config/gh; "
-            "chmod 0600 /home/app/.config/gh/hosts.yml; "
+            "chmod 0600 /home/app/.config/gh/hosts.yml "
+            "/home/app/.config/gh/config.yml; "
             "mkdir -p " + _RUNTIME_BIN_DIR + "; "
             "printf '%s\\n' '#!/bin/sh' "
             "'export GH_CONFIG_DIR=/home/app/.config/gh' "

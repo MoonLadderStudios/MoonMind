@@ -4,7 +4,7 @@
 **Viewpoint:** Module Contract Specification  
 **Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-19  
 **Audience:** Workflow, runtime, API, and dashboard contributors and operators  
 **Authority:** Authored workflow/batch publication intent, context and branch roles, compiled effect ownership, and publication outcome semantics. The provider-neutral evidence schema is owned by Lore VCS Integration Design section 3.13.  
 **Owning Surface:** Workflow admission/compiler, publication orchestration, and repository publisher consumers  
@@ -249,6 +249,8 @@ Dependabot's cross-run identity remains based on repository, PR, and head SHA. A
 
 The compiler derives `repositoryOperation` and required capabilities for each execution role. A batch coordinator does not receive repository-write credentials simply because descendants produce PRs. Nor can a read-only step remove the whole workflow's publication intent. Descendant write authority is admitted at the relevant child boundary.
 
+A plan in which **every** authored step declares `repositoryOperation: read` is the one exception, because it declares no repository mutation authority at all. Publication is bound to step outputs, so `branch`, `pr`, and agent-owned `auto` can never produce publish evidence for such a plan: the run would execute and then fail finalization with an unknown publish outcome or `auto_publish_evidence_missing`. The declaration is read from a step's tool or skill binding inputs as well as its top level, matching what the compiler compiles. Per PUBLISH-004 that combination is rejected at admission with the authored step that would have to change, not admitted and failed late. The invariant is enforced both on the task-shaped submission path and at the shared execution-creation boundary that rerun, continuation, checkpoint branching, and deployment routes converge on, and before a recurring schedule is created so it cannot repeat the failure on every tick.
+
 One policy does not require one final push. A supported composition can include staged candidate publication, verification, an early PR handoff, and later tracker updates. Each effect has one declared owner and stable target. Arbitrary mixed publication owners, unrelated repositories, or incompatible outputs require a compatible declared composition or separate workflows, not user-authored per-step overrides.
 
 ### One Provider-Neutral Evidence Contract
@@ -367,7 +369,7 @@ Post-merge GitHub finalization validates the merge owner's tracked PR against a 
 
 Publication eligibility uses the latest structured verification verdict and the run-owned accepted unified repository-publication artifact.
 
-`FULLY_IMPLEMENTED` with valid subject/scope-bound objective evidence permits the policy's candidate publication. Issue completion additionally requires evidence on the intended completion target; each downstream side effect retains its own authority and postconditions. `ADDITIONAL_WORK_NEEDED` continues bounded remediation while budget remains. After exhaustion, a PR-authorized workflow may publish the prescribed draft handoff with remaining-work verdict/report, then fail with `attention_required: true` and skip promotion/trusted handoffs. A pushed branch or draft PR is not `no_commit` and does not make an incomplete objective successful.
+`FULLY_IMPLEMENTED` with valid subject/scope-bound objective evidence permits the policy's candidate publication. Issue completion additionally requires evidence on the intended completion target; each downstream side effect retains its own authority and postconditions. `ADDITIONAL_WORK_NEEDED` continues bounded remediation while budget remains. After exhaustion, a PR-authorized workflow publishes the prescribed draft handoff with remaining-work verdict/report, then completes with `attention_required: true` and skips promotion/trusted handoffs. A pushed branch or draft PR is not `no_commit` and does not make an incomplete objective successful.
 
 A read-only verification step has no accepted publication evidence of its own. Inconclusive evidence at the stopping step defers to the atomic run-owned reference to validated `moonmind.publish.repository.v1` evidence and its exact candidate/target. Raw `pushStatus`, `branch`, or `headSha` from step metadata is not that evidence. A definitive authorization, contamination, or no-candidate refusal is not overridden by another projection.
 
@@ -377,7 +379,7 @@ The draft target is that same accepted published revision and, where applicable,
 
 A blocked gate records `publicationBlockedBy: "moonspec_verify"`, report refs, and `failureSummary.type = "moonspec_verification_gate"` in `reports/run_summary.json`, and skips downstream publication/Jira handoffs.
 
-The existing environment-class draft option `workflow.moonspec_environment_blocked_publish_action` / `WORKFLOW_MOONSPEC_ENVIRONMENT_BLOCKED_PUBLISH_ACTION` defaults to `fail`. Its `draft_pr` setting can permit an annotated attention-required draft for the declared environment-class `BLOCKED` or malformed/degraded `NO_DETERMINATION` result. Verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` remain fail-closed. This gate option can narrow or implement an already authorized PR policy; it cannot turn explicit None or Branch into a PR grant or enable merging after incomplete verification.
+A declared environment-class `BLOCKED` or malformed/degraded `NO_DETERMINATION` result publishes an annotated attention-required draft for the same accepted revision. Verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` remain fail-closed. Draft publication never turns explicit None or Branch into a PR grant and never enables merging after incomplete verification.
 
 ## 11. Runtime Instructions and Provider Boundaries
 

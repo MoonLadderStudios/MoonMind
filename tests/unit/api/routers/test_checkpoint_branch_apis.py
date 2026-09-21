@@ -1921,14 +1921,15 @@ async def test_checkpoint_branch_promotion_rejection_persists_audit_without_adva
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_branch_api_fails_closed_for_non_owner(
+async def test_checkpoint_branch_api_allows_operator_for_foreign_record(
     checkpoint_branch_denied_client: AsyncClient,
 ) -> None:
+    # Single-user (#4351): the admitted operator reads every instance
+    # execution without a human-owner lookup.
     response = await checkpoint_branch_denied_client.get(
         "/api/executions/mm:wf-branch/checkpoints"
     )
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "execution_not_found"
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio

@@ -84,6 +84,64 @@ router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
 _claude_manual_validation_client: httpx.AsyncClient | None = None
 
 
+#: Reported when the manager never answered at all, so nothing about its
+#: state — wedged, restarting, unreachable — was actually observed.
+_MANAGER_UNREACHABLE = "manager_unreachable"
+
+_GENERIC_MANAGER_UNAVAILABLE_MESSAGE = (
+    "Credential setup could not start because the provider "
+    "credential manager is temporarily unavailable. "
+    "Your saved credentials have not changed. Try again; "
+    "if this continues, check the workflow worker diagnostics."
+)
+
+
+def _credential_manager_unavailable_report(recovery: Any) -> tuple[str, str]:
+    """Name the condition that blocked credential setup, not a guess at it.
+
+    A manager whose recorded history the running build cannot replay is
+    replaced automatically from the durable ledger. The refusals below are the
+    cases where that replacement must not happen, and each has a different
+    remedy than waiting, so the drawer reports which one occurred instead of
+    offering one generic retry for every cause.
+    """
+
+    from moonmind.provider_profiles.manager_recovery import (
+        MANAGER_HELD_LEASE_PRESENT,
+        MANAGER_UNREADABLE_LEDGER,
+    )
+
+    refusal = str(getattr(recovery, "refusal", "") or "")
+    if not refusal:
+        return _MANAGER_UNREACHABLE, _GENERIC_MANAGER_UNAVAILABLE_MESSAGE
+    if refusal == MANAGER_HELD_LEASE_PRESENT:
+        held = getattr(recovery, "held_leases", None)
+        # Waiting does not clear this. The holder's release travels to the
+        # same wedged run, which completes no workflow task, so the durable
+        # row stays unreleased and every later attempt refuses identically.
+        # Send the operator to teardown verification and ledger
+        # reconciliation, not to another retry.
+        return refusal, (
+            "Credential setup could not start because this runtime's provider "
+            "credential manager cannot process requests, and it cannot be "
+            f"replaced while {held if held is not None else 'some'} lease "
+            "row(s) still hold its capacity. Your saved credentials have not "
+            "changed. A wedged manager cannot process a release, so this will "
+            "not clear on its own: verify the holder has stopped and "
+            "reconcile the durable lease row using the wedged-singleton "
+            "recovery runbook in docs/Security/ProviderProfiles.md."
+        )
+    if refusal == MANAGER_UNREADABLE_LEDGER:
+        return refusal, (
+            "Credential setup could not start because this runtime's provider "
+            "credential manager cannot process requests, and the credential "
+            "ledger could not be read to confirm it is safe to replace. Your "
+            "saved credentials have not changed. Try again; if this "
+            "continues, check database availability."
+        )
+    return refusal, _GENERIC_MANAGER_UNAVAILABLE_MESSAGE
+
+
 async def _credential_maintenance_guard(
     *,
     profile_id: str,
@@ -94,10 +152,15 @@ async def _credential_maintenance_guard(
 ) -> AsyncIterator[object]:
     """Hold the shared credential lane through an HTTP maintenance action."""
 
+    from temporalio.service import RPCError
+
     from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
     from moonmind.provider_profiles.maintenance import (
         acquire_credential_maintenance_guard,
         drain_profile_bound_hosts,
+    )
+    from moonmind.provider_profiles.manager_recovery import (
+        ProviderManagerUnavailableError,
     )
 
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -110,16 +173,53 @@ async def _credential_maintenance_guard(
         or request.headers.get("X-Request-ID")
         or uuid4().hex
     )
-    guard = await acquire_credential_maintenance_guard(
-        runtime_id=profile.runtime_id,
-        profile_id=profile.profile_id,
-        purpose=CredentialLeasePurpose(purpose),
-        operation_id=operation_id,
-        metadata={
-            "workflowId": f"http:{operation_id}",
-            "ownerIsWorkflow": False,
-        },
-    )
+    try:
+        guard = await acquire_credential_maintenance_guard(
+            runtime_id=profile.runtime_id,
+            profile_id=profile.profile_id,
+            purpose=CredentialLeasePurpose(purpose),
+            operation_id=operation_id,
+            metadata={
+                "workflowId": f"http:{operation_id}",
+                "ownerIsWorkflow": False,
+            },
+        )
+    except (ProviderManagerUnavailableError, RPCError, TimeoutError) as exc:
+        # Acquisition failed before credential validation or persistence. Keep
+        # the current profile intact and return a safe diagnostic the drawer
+        # can display instead of an unhandled, non-JSON 500 response.
+        # The failure is ambiguous: Temporal may have accepted
+        # AcquireCredentialMaintenanceLease before the result was lost, so the
+        # deterministic owner derived from operation_id may hold a waiter or
+        # lease. Echo operation_id as the stable retry identity: a retry that
+        # reuses it via Idempotency-Key reattaches to the same owner
+        # (already_held) instead of orphaning a competing owner behind the
+        # original. operation_id is a random hex or caller identity, never
+        # credential material, so it is safe to return.
+        recovery = getattr(exc, "recovery", None)
+        refusal, message = _credential_manager_unavailable_report(recovery)
+        logger.warning(
+            "Provider credential manager unavailable: runtime_id=%s "
+            "profile_id=%s operation_id=%s error_type=%s rpc_status=%s "
+            "refusal=%s held_leases=%s evidence=%s",
+            profile.runtime_id,
+            profile.profile_id,
+            operation_id,
+            type(exc).__name__,
+            exc.status.name if isinstance(exc, RPCError) else None,
+            refusal,
+            getattr(recovery, "held_leases", None),
+            getattr(recovery, "evidence", ""),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_credential_manager_unavailable",
+                "refusal": refusal,
+                "message": message,
+                "retry_idempotency_key": operation_id,
+            },
+        ) from exc
     try:
         await drain_profile_bound_hosts(
             profile_id=profile.profile_id,

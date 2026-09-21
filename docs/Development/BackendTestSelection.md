@@ -2,37 +2,33 @@
 
 ## Purpose
 
-MoonMind uses impact-aware backend test selection to keep pull request feedback fast without weakening coverage for risky changes. The strategy is:
+Keep pull request feedback useful and fast without silently losing coverage. Run the inexpensive safety net for backend changes, select specialized suites at the boundaries affected, and select broader coverage when classification is uncertain. Here, fail-open means **run more tests**, never accept failed or missing required execution.
 
-```text
-Run the cheap, broad safety net on backend pull requests.
-Run expensive specialized suites only when changed files can affect them.
-Run full backend verification for risky or uncertain cases.
-Fail open when classification is incomplete or ambiguous.
-```
+The executable owners are `tools/select_test_suites.py`, `tests/conftest.py`, `tools/verify_test_shard_ownership.py`, and `.github/workflows/pytest-unit-tests.yml`. This document describes their responsibilities and the intended verification policy. Proposed optimizations are not proof of implemented behavior.
 
-This document describes the intended steady-state behavior. It is not a rollout checklist.
+Follow [AGENTS.md](../../AGENTS.md): targeted local tests support development and diagnosis. GitHub Actions owns broader regression, integration, and browser verification. A broad local run is not a prerequisite to opening or updating an authorized PR.
 
 ## Test Categories
 
-Backend tests are classified by the runtime resources they start, not by the implementation code they exercise.
+Classification follows resources started by a test, not simply the module it imports.
 
-| Category | Marker | Resource boundary | PR behavior |
-| --- | --- | --- | --- |
-| Fast unit | `unit_fast` | Pure Python logic, schemas, validation, and services with mocks. No Docker, network, external process, or Temporal test server. | Required for backend-impacting pull requests. |
-| Slow unit | `slow` | Remaining slow tests under `tests/unit`, with precedence over component and Temporal ownership. | Runs on main pushes, schedules, manual/full runs, fail-open runs, and direct changes to known slow tests. |
-| Component | `component` | FastAPI `TestClient`, dependency overrides, and in-process router/service wiring. | Required for API, auth, database, service, and generated OpenAPI type changes. |
-| Temporal boundary | `temporal_boundary` | Temporal `WorkflowEnvironment`, `Worker`, `Replayer`, workflow signal/update/query/replay, activity-boundary, and serialized payload behavior. | Required for Temporal workflow, runtime, worker, or Temporal schema-sensitive changes. |
-| Reliability journey | `reliability_journey` | Hermetic production composition across the Temporal test server, real workflows, managed-session/runtime adapters, scripted provider or subprocess behavior, terminal artifacts, and checkpoint/finalization routing. No external network or credentials. | Required for orchestration seams, managed runtime packaging, skill contracts, checkpoints, and replay fixtures. |
-| Slow | `slow` | Valuable tests that are too expensive or too environment-sensitive for the default PR fast path. | Excluded from the default PR fast path; run manually, nightly, or by explicit target. |
-| Hermetic integration CI | `integration` plus `integration_ci` | Docker Compose-backed tests using local dependencies only. No external credentials. | Required for Docker, compose, database, migration, integration-test, and runtime infrastructure changes. |
-| Provider verification | `provider_verification` plus provider-specific markers | Live external-provider tests requiring real credentials. | Outside required PR CI; run manually or in credentialed scheduled environments. |
+| Category | Marker | Boundary |
+| --- | --- | --- |
+| Fast unit | `unit_fast` | Pure Python logic with no Docker, network, external process, or Temporal test server. |
+| Slow unit | `slow` | Expensive unit tests, selected on full runs and relevant direct changes rather than the default fast path. |
+| Component | `component` | In-process API/router/service wiring, TestClient, and dependency overrides. |
+| Temporal boundary | `temporal_boundary` | Real test-server/worker/replay behavior, signals, updates, queries, serialized payloads, and Activity boundaries. |
+| Reliability journey | `reliability_journey` | Hermetic production orchestration, scripted external counterparts, and real recovery/artifact boundaries. |
+| Hermetic integration CI | `integration` and `integration_ci` | Disposable Compose-backed local dependencies, without external credentials. |
+| Provider verification | `provider_verification` and provider markers | Live external-provider checks in explicitly credentialed environments, outside required credential-free PR CI. |
 
-The pytest marker registry lives in `pyproject.toml`. Runtime classification for existing tests is centralized in `tests/conftest.py`; explicit markers are still preferred when a test has a clear resource boundary.
+`pyproject.toml` owns marker registration. `tests/conftest.py` owns classification for existing tests. Prefer an explicit resource marker for a clear boundary. Unit ownership precedence is `slow > temporal_boundary > component > unit_fast`. The ownership verifier checks that eligible provider-free tests have exactly one owner.
+
+Reliability tests are excluded from the general Compose integration corpus so the same journeys are not executed twice under different names.
 
 ## Selector Contract
 
-`tools/select_test_suites.py` reads changed file paths from stdin and emits GitHub Actions-compatible outputs:
+`tools/select_test_suites.py` consumes changed paths and emits:
 
 ```text
 unit_fast=true|false
@@ -50,449 +46,173 @@ frontend_browser_firefox=true|false
 full_frontend=true|false
 ```
 
-The selector is conservative. If it cannot classify the change confidently, it selects full backend verification.
-
 ### Shared Changed-File Helper
 
-`tools/ci/compute_changed_files.sh` is the single event-aware classifier that computes the exact changed-file list from a shallow checkout. It fetches only the exact base and head commits (`ensure_commit_available`) and emits the two-dot tree diff. The selector, deployment validation, and the generated-contract detector all consume it instead of maintaining subtly different event logic. It classifies pull requests, pushes with a real non-zero base SHA, and merge groups as known change sets; manual dispatches, scheduled runs, first pushes, and missing or unavailable commits resolve to an unknown change set so every consumer stays fail-open.
+`tools/ci/compute_changed_files.sh` owns event-aware base/head resolution for selection, deployment validation, and generated-contract detection. It fetches exact commits as needed from a shallow checkout and emits a two-dot tree diff. Known PR, push, and merge-group changes use their actual base/head. Unavailable history, first pushes, schedules, and manual runs take the conservative unknown-change path. Do not add a second event classifier.
 
 ### Backend Detection
 
-A pull request is backend-impacting when it touches backend source, backend tests, backend tooling, migrations, or workflow-sensitive generated contracts. Backend-impacting pull requests select `unit_fast=true` unless the selector forces the full backend path, which also includes fast unit coverage.
+Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. Canonical prose such as `AGENTS.md`, `README.md`, and `docs/` does not itself select backend execution unless another sensitive or unknown path requires it.
 
-Canonical guidance (`AGENTS.md`, `README.md`, and files under `docs/`) and
-frontend-only changes do not select backend suites unless they touch a
-backend-sensitive generated contract or another fail-open path.
-
-Frontend selection is independent. Generated OpenAPI client changes select static validation only; ordinary UI source selects static validation plus Chromium; browser tests, styles, browser configuration, and npm dependency changes also select Firefox. Pushes to `main`, schedules, manual runs, unavailable change sets, and unknown paths select the full backend and frontend paths. The stable `test-frontend` job always runs as a result aggregator even when both frontend runner jobs are intentionally skipped.
+Frontend selection is independent. Generated API-client changes require static validation. UI source selects static checks and Chromium. Browser tests, styles, configuration, and dependency changes can also require Firefox. Full/unknown paths select full frontend coverage. `test-frontend` aggregates selected frontend jobs even when intentional nonselection leaves both browser jobs skipped.
 
 ### Component Selection
 
-The selector enables `api_component=true` for changes under or matching:
-
-- `api_service/api/`
-- `api_service/auth*`
-- `api_service/auth_providers.py`
-- `api_service/db/`
-- `api_service/services/`
-- `tests/unit/api/`
-- `tests/unit/api_service/`
-- `tests/component/api/`
-- `tools/export_openapi.py`
-- `tools/generate_openapi_types.py`
-- `frontend/src/generated/openapi.ts`
-
-Component tests are intended to catch in-process API, router, auth, database, and service wiring regressions without starting Docker or a live Temporal server.
+API routers, authentication, database/service wiring, component/API tests, and generated API contracts select component coverage. Exact path predicates and their regression tests live in the selector and `tests/unit/tools/test_select_test_suites.py`, rather than a second path registry in this document.
 
 ### Temporal Boundary Selection
 
-The selector enables `temporal_boundary=true` for changes under or matching:
-
-- `moonmind/workflows/temporal/`
-- `moonmind/schemas/managed_session_models.py`
-- `moonmind/schemas/*workflow*`
-- `moonmind/schemas/*temporal*`
-- `api_service/worker*`
-- `tests/unit/workflows/temporal/`
-- `tests/integration/workflows/temporal/`
-
-Temporal boundary tests are mandatory for changes to workflow code, activity invocation shapes, signal/update/query names, replay-visible behavior, status normalization, serialized payloads, managed-session schemas, or adapter-to-workflow contracts.
-
-Changes under `moonmind/workflows/adapters/` select both Temporal boundary and reliability journey coverage because adapter results and metadata are workflow-visible contracts.
+Workflow/runtime/worker code, Temporal-facing schemas, relevant tests, and changes to replay-visible invocation or payload behavior require Temporal-boundary coverage. Adapter changes select both Temporal and reliability coverage because adapter results cross durable workflow boundaries.
 
 ### Reliability Journey Selection
 
-The selector enables `reliability_journey=true` for changes to:
+Reliability coverage is selected for orchestration and runtime seams, checkpoints, skill contracts and their materialization, replay fixtures, and managed runtime packaging. Shared CI, dependency, selector, or global test-configuration changes take the full-backend path.
 
-- `moonmind/workflows/adapters/` and `moonmind/workflows/temporal/`, including checkpoint policy, activity catalog, and worker routing
-- `moonmind/schemas/agent_runtime_models.py`, `moonmind/schemas/managed_session_models.py`, `moonmind/schemas/temporal_models.py`, and checkpoint schemas
-- `.agents/skills/` and their orchestration tools
-- `tests/integration/reliability/` replay fixtures and scripted runtime helpers
-- managed-agent runtime Dockerfiles, image build/install files under `api_service/docker/`, and runtime images under `docker/`
-- CI workflows, selector/test runners, dependency locks, and global pytest configuration through the full-backend fail-open path
+These journeys test retained user outcomes through real production composition. Scripted external providers remove network/credential dependence, not the boundary under test.
 
-This is a separate resource boundary from ordinary unit and Compose integration coverage. It runs a small deterministic journey corpus through real production orchestration layers while replacing external providers and networks with scripted local counterparts.
+### Backend Matrix Ownership And Failure Propagation
 
-### Backend Matrix Ownership And Failure Propagation (MoonLadderStudios/MoonMind#4377)
+The current `backend-matrix` contains unit-fast, api-component, temporal-boundary, and four reliability rows. The matrix job is skipped when no primary backend suite is selected. Otherwise its fixed rows use the selector outputs to guard suite-specific setup and test steps. An unselected row doing no pytest work is intentional nonselection, not proof that its tests passed.
 
-The eligible primary backend executions — `unit-fast`, `api-component`,
-`temporal-boundary`, and four deterministic reliability shards
-(`reliability-shard-1` through `reliability-shard-4`) — share one native
-GitHub Actions matrix job named `backend-matrix` in
-`.github/workflows/pytest-unit-tests.yml`. This shared matrix boundary is
-what allows a failure in a Temporal/API/unit entry to cancel running or
-queued reliability siblings through native `strategy.fail-fast` behavior.
-No custom API cancellation loop, privileged Actions write token, external
-cancellation bot, or polling workflow is used.
+Native `strategy.fail-fast` is enabled outside scheduled diagnostics. It can cancel siblings inside this matrix after a failure. It does not cancel unrelated frontend, integration, image, or migration jobs. Scheduled diagnostics keep collecting sibling outcomes within their execution bounds. Superseded-run cancellation remains a separate existing Actions concurrency behavior.
 
-Decision evidence: run #14404 showed `temporal-boundary` failing near the
-three-minute mark while the then-independent reliability job continued to
-minute 21 — roughly 18 minutes of executor time spent after the first
-definitive required-backend failure (excluding queued time and
-user-canceled obsolete runs). That waste justified consolidation; the
-matrix keeps successful-run critical-path time flat by isolating setup
-and mutable resources per row (see below) rather than adding a serialized
-environment-build prerequisite.
+Fast rows retain their suite-specific xdist execution. Unit-fast and Temporal use per-file distribution, while API/component uses per-test distribution. Reliability runs serial pytest within each isolated runner, using its own Compose project, network, database, Temporal, and object-store state. Do not combine matrix fan-out with a new unbounded inner worker pool or shared mutable fixture stack.
 
-Matrix rows are derived from the existing `tools/select_test_suites.py`
-outputs with a small explicit mapping: `unit_fast` selects the `unit-fast`
-row, `api_component` selects `api-component`, `temporal_boundary` selects
-`temporal-boundary`, and `reliability_journey` selects all four reliability
-shards. There is no second change-impact classifier, universal runner
-framework, or shell snippet derived from untrusted issue/branch text —
-only fixed trusted pytest commands with ordinary quoted parameters.
+The workflow initializes only submodules a selected job needs. In the reviewed implementation, unit-fast initializes MoonSpec and Omnigent fixtures and API/component initializes Omnigent. Do not assume that only the projection job needs a submodule, or initialize every submodule for every row.
 
-- `strategy.fail-fast` is `${{ github.event_name != 'schedule' }}`: enabled
-  for pull-request and merge-group validation (plus push/manual runs that
-  share the same validation path) so a failed Temporal/API/unit entry
-  cancels pending/running reliability siblings; disabled (`false`) for
-  scheduled diagnostics so nightly runs keep collecting sibling outcomes.
-- Fast rows preserve existing xdist behavior (`-n auto`, `--dist load` for
-  the API shard and `--dist loadfile` for unit-fast/temporal) and never
-  build images or start Compose services. Reliability rows run serial
-  pytest (no `-n`) inside their own isolated Compose
-  PostgreSQL/Temporal/MinIO under per-shard Docker project names
-  (`moonmind-reliability-reliability-shard-N`). The setup step exports
-  `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
-  fixture tests attach to their row's isolated Compose network instead of
-  the retired single-job `moonmind-reliability-qualification_default`.
-- Fast rows keep the pre-existing per-test (`--timeout 600`), job
-  (`timeout-minutes: 30`), and cleanup (`always()` compose `down -v`,
-  wrapped in `timeout 100s`) bounds. Reliability shards use short budgets
-  (MoonLadderStudios/MoonMind#4369, #4384): 150s per-test timeout and a ~10-min
-  step ceiling on PRs (`timeout 600s`, above the ~500s heaviest partition
-  load), 300s per-test under a 12-min step
-  ceiling on schedules. Reliability collection steps are additionally
-  wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
-  cannot stall the row; each command records its own failure to
-  `collection-status.txt` without stopping the remaining bounded collection
-  or cleanup, and the original test failure is never replaced.
-- Each row streams combined stdout/stderr through
-  `2>&1 | tee artifacts/pytest-backend-<suite>.log` with
-  `PYTHONUNBUFFERED=1` and `set -euo pipefail` (plus `PIPESTATUS`
-  capture), so live Actions logs stay complete while a local text log is
-  retained without buffering the whole output in memory. Each row keeps its
-  JUnit report plus derived `artifacts/pytest-backend-<suite>-slowest.txt`
-  and `artifacts/pytest-backend-<suite>-durations.json` (written by the
-  small `tools/ci/write_backend_matrix_summary.py` hook from standard
-  pytest/JUnit output). Reliability rows run
-  `-vv --tb=short --durations=25` so the active node ID is visible before a
-  stall; other lanes keep lower-noise console verbosity with duration
-  output. A missing final JUnit file is reported as unavailable/interrupted
-  in the per-job `$GITHUB_STEP_SUMMARY`, never as zero tests or a pass.
-- Each row uploads a stable suite/shard/run-attempt artifact
-  (`pytest-<suite>-attempt-<attempt>`) containing only the known diagnostic
-  files (JUnit XML, text log, slowest report, duration-hints snapshot) with
-  `retention-days: 7` and `if-no-files-found: warn`, on success, failure,
-  and (best-effort) normal cancellation via `always()` plus the native
-  selection guard. Reliability Compose logs and scoped manifests upload the
-  same way on every selected run (MoonLadderStudios/MoonMind#4371) with the
-  same retention. No hidden environment files, tokens,
-  unrestricted workspaces, or whole source trees are staged.
-- Each row appends a per-job `$GITHUB_STEP_SUMMARY` (via the same hook)
-  with suite/shard identity, tested revision, run/attempt, JUnit counts
-  (never progress-% parsing), outcome (`passed`, `failed`, `canceled`,
-  `intentionally unselected`, or `unavailable`), measured test-step wall
-  time plus JUnit suite time, top slowest cases, and evidence paths. The
-  hook always exits 0 so a parsing problem never hides an unsuccessful job
-  or alters selection.
-- Duration hints for #4366 maintenance are the per-shard
-  `pytest-backend-<suite>-durations.json` snapshots, uploaded as separate
-  artifacts. The committed partition input stays immutable during a matrix
-  run: rows never overwrite a shared baseline, and a partial failed-shard
-  result never replaces a complete baseline.
-- Scope: unrelated `unit-slow`, `integration-ci`, exact-artifact,
-  frontend, generated-contract, and `migration-gate` jobs remain
-  independently enforced. `ci-required` consumes only the `backend-matrix`
-  aggregate `result` (never last-writer matrix outputs); a failed,
-  timed-out, or canceled selected row fails the aggregate, and an empty
-  backend selection skips the matrix intentionally without instantiating
-  tests or hiding selector errors.
+### Execution Budgets
 
-Reliability sharding is deterministic and duration-balanced
-(MoonLadderStudios/MoonMind#4367): files matching
-`tests/integration/reliability/test_*.py` are assigned by greedy
-longest-processing-time balancing over advisory duration hints in
-`tools/ci/reliability_shard_weights.json`. The single partition authority
-is `tools/ci/reliability_shard_partition.py`, called by the CI workflow as
-`python3 tools/ci/reliability_shard_partition.py --shard N` and imported by
-`tools/verify_test_shard_ownership.py` in `reliability_shard_for_path()`,
-so local ownership checks and CI execute each file in the same shard.
-Timing history is an optimization hint only: new or unweighted files run
-via `DEFAULT_WEIGHT_SECONDS` and are never skipped.
+The workflow is the authority for effective limits. The #4369 revision
+replaced the blanket 30-minute job ceiling with simple per-row bounds sized
+from observed setup, testing, and bounded diagnostics/cleanup:
 
-### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
+| Lane | Per-test timeout | Test-step bound | Job bound |
+| --- | --- | --- | --- |
+| Unit-fast | 60s (`--timeout 60`) | 7-minute native test step | 15-minute job |
+| API/component | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
+| Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
+| Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
+| Scheduled reliability shard | 300s | 660-second shell deadline inside a 12-minute Actions step | 20-minute job |
 
-No additional Dockerfile-layer GHA cache is added for reliability shards.
-Content-addressed pip/uv package caches are shared across shards and runs
-(MoonLadderStudios/MoonMind#4376); no mutable release state lives there.
-Measured-gap analysis: `tests/integration/reliability/compose.yaml` declares only
-registry images (`minio`, `postgres`, `temporalio/auto-setup`) with no
-`build` section, and its sole volume mount is the read-only Temporal
-dynamic config (`:ro`). There are therefore no local Dockerfile layers to
-cache — `docker compose up` natively reuses the pulled registry layers,
-and each shard runs them under its own Compose project
-(`moonmind-reliability-<suite>`) with per-shard networks/volumes, so no
-mutable release state is shared. This is pinned by
-`test_reliability_fixtures_reuse_registry_layers_without_shared_state`.
-By contrast, `integration-ci` and `omnigent-exact-artifact` do build local
-images (`api_service/Dockerfile` `test-runtime` / exact artifact) and
-already carry GHA layer caches (`cache-from`/`cache-to` with dedicated
-scopes); that is where layer caching demonstrably applies. If reliability
-`compose.yaml` later gains a `build` section, revisit caching there —
-until then an extra cache subsystem would be redundant machinery.
+Fast 15-minute jobs cover observed setup (~2-3 minutes: checkout,
+Python, dependencies, submodules), the 7-minute test step, and bounded
+reporting (2-minute caps that typically finish in seconds). Reliability
+20-minute jobs cover the same setup shape plus Compose pull/up (~1-2
+minutes), the 12-minute test step, and bounded diagnostics/cleanup (2-minute
+caps each). The 20-minute reliability bound is a measured exception: the
+heaviest duration-balanced partition holds ~500s of tests plus
+collection/shutdown overhead, so it must not receive a shorter aspirational
+cutoff. A justified individual slow test can use the installed
+pytest-timeout per-test marker as a documented exception; global defaults
+are never raised to fit the table.
 
-Diagnostic limitation: a canceled sibling may exit before writing its
-junit report or Compose logs. Cancellation uploads are best-effort
-(`||` fallbacks, `if-no-files-found: warn/error` per artifact) and the
-original failure remains visible in the failed entry plus the
-`ci-required` aggregate — `ci-required` can never turn green because other
-entries were canceled or skipped. Runner disappearance and a hard job kill
-may prevent final uploads entirely; live Actions output (streamed via
-`tee`) remains the primary record in that case rather than a guaranteed
-final artifact.
+Use the installed pytest timeout mechanism for stuck tests and native Actions step/job bounds for the outer process. Keep an existing shell deadline only where it provides a distinct useful bound. A cooperative session timeout and a diagnostic stack dump do not replace a hard process bound. No additional timeout framework, test retry loop, watchdog, or cancellation service is needed.
 
-### Reproducible Before/After Comparison (MoonLadderStudios/MoonMind#4370)
+Pytest fail-fast (`--maxfail=1` on ordinary runs, omitted on schedules so
+diagnostic collection continues) stops one invocation. Native matrix fail-fast stops its siblings. The #4369 bounds above are the implemented
+behavior, not tuning proposals.
 
-No automatic scheduled monitoring workflow is added. To compare a change
-against the pre-evidence baseline (failure-only diagnostics, no
-success-path text log/JUnit upload, `-q` reliability verbosity):
+### Reliability Sharding
 
-1. Fix the selected universe: run with the same selector outputs (same
-   `unit_fast`/`api_component`/`temporal_boundary`/`reliability_journey`
-   selection, same reliability file set from
-   `python3 tools/ci/reliability_shard_partition.py --shard N`).
-2. Fix the revision/configuration: compare runs on the same commit (or
-   adjacent commits with no test/workflow changes), same workflow file,
-   same reliability budgets (150s PR / 300s schedule per-test timeout,
-   10-min PR / 12-min schedule step ceilings), same runner class
-   (`ubuntu-latest`).
-3. Repeat each side at least twice to separate ordinary timing noise from a
-   real shift; do not add a performance gate on the result.
-4. Separate cold and warm setup: record dependency-install/Compose-pull
-   time apart from pytest execution (cold = cache miss / fresh Compose
-   pull, warm = cache hit). Record queue time separately from execution
-   time using the run's `created_at`/`started_at` timestamps.
-5. Compare longest shard versus summed runner time: the critical path is
-   the slowest `backend-matrix` row (JUnit suite time plus its step summary
-   wall time); the cost is the sum over rows. The #4366 duration-hints
-   snapshots (`pytest-backend-<suite>-durations.json`) and the per-row
-   slowest reports supply both without rerunning the suite.
-6. A subsequent successful-but-slow run is diagnosed from its retained
-   `pytest-backend-<suite>.log`, JUnit XML, slowest report, and step
-   summary alone.
+The collected reliability universe is split into four groups through pytest-split:
+
+```text
+--splits 4 --group N --splitting-algorithm least_duration
+--durations-path tests/.reliability-test-durations.json
+```
+
+`N` is 1 through 4. All shards use the same checkout, collection inputs, and advisory hints. `tools/ci/refresh_reliability_durations.py --validate-only` checks hint usability. Missing or unusable history warns and falls back consistently; it must not exclude new tests or make an otherwise correct test fail. The ownership verifier checks the actual plugin collections for complete, disjoint coverage.
+
+Refresh hints when a measured imbalance or changed corpus warrants it. Per-run timing artifacts are evidence, not a second correctness database or a requirement for automated timing commits. Do not rebuild sharding that is already present.
+
+### Reliability Docker Fixture Layers
+
+The Compose dependency file uses registry images. That does **not** mean the test corpus builds no local images: `test_automatic_release_availability.py` at the reviewed baseline generates a Python/Temporal Dockerfile and builds case-specific images. Conversely, the presence of those builds does not prove that dependency layers are repeatedly rebuilt. Native Docker caching may already reuse them.
+
+First check whether the fixture survives the authorized deployment simplification. Do not build a cache for retired release machinery or restore a deleted fixture to satisfy an old optimization issue. For surviving expensive builds, inspect actual cold/warm build output and separate build cost from routing waits and startup. Prefer native layer caching; add only a small immutable dependency fixture if a material remaining cost is demonstrated.
+
+Mutable release records, images under test, containers, volumes, queues, and workspaces remain case/shard-owned. A cached base must not make an intentionally removed case image appear restored. Cold execution must remain correct, and cleanup must not remove another case's resources or use global Docker prune. The existing integration/exact-artifact build caches remain separate from this measurement question.
+
+### Logs And Diagnostic Evidence
+
+The existing workflow streams combined pytest output through `tee`, captures the pytest exit code, and uses `tools/ci/write_backend_matrix_summary.py` with logs, actual JUnit reports, and timing artifacts. Extend that path rather than introducing another reporter. Continue relevant work in the existing #4371 implementation PR.
+
+Keep normal success evidence small: tested revision, suite/shard and attempt identity, real output, any JUnit report, and useful slow-case timings. Existing artifacts use finite retention and distinct shard/attempt names. Richer service diagnostics belong on the failure path where useful, from known test-owned locations with redaction. Do not collect whole environments, source trees, tokens, or unrelated host files.
+
+Missing or partial JUnit is unavailable/incomplete evidence, never zero tests or a pass. Preserve the original failure through logging, report generation, and cleanup. Bound secondary operations separately so a hung log command cannot consume the rest of the job. Matrix cancellation is best effort for artifact collection, and a hard job kill or runner loss can prevent final uploads entirely.
+
+Validate interruption with a real disposable subprocess through the production reporting path. Fabricating post-kill artifacts proves a parser can read them, not that a killed test leaves them. No new universal fault-injection framework or documentation-wording tests are required.
+
+### Reproducible Before/After Comparison
+
+Use existing CI evidence before commissioning another run. Compare equivalent selected coverage and runner resources, distinguish cold/warm setup and queue delay, and report both longest-row latency and summed runner execution. A failed/canceled partial corpus is not equivalent to a complete passing run.
+
+If the change removes an authorized obsolete capability, identify the retired work and the retained replacement outcomes. Do not advertise that as equivalent coverage of the deleted mechanism. Do not require a new monitoring service, exact timing baseline, or performance gate to make a small improvement. An evidence-backed no-change disposition is valid when an optimization would add more complexity than benefit.
 
 ### Hermetic Integration CI Selection
 
-The selector enables `integration_ci=true` for changes under or matching:
+Compose, Docker/runtime infrastructure, database and migration changes, integration tests, and their runner/dependencies select the existing credential-free integration path. Reliability journeys keep their separate owner.
 
-- `docker-compose.test.yaml`
-- `api_service/Dockerfile`
-- `.env-template`
-- `tests/integration/`
-- `tools/test_integration.sh`
-- `api_service/db/`
-- `api_service/migrations/`
-- `migrations/`
-- `alembic/`
-- `pyproject.toml`
-- `uv.lock`
+- Single-user impact (MoonLadderStudios/MoonMind#4356): settings/secrets/preset routers and services, frontend transport, worker binding, machine-authority helpers, the credential-conversion service (`api_service/services/profile_secret_migration.py`), and the single-user test packages (`moonmind/single_user/`, `tests/unit/single_user/`, `tests/integration/single_user/`).
+- Single-user integration suites select `integration_ci=true` through the `tests/integration/` prefix (reliability-owned `tests/integration/reliability/` stays excluded). Required-check aggregation needs no workflow change: the existing `integration-ci` job in `.github/workflows/pytest-unit-tests.yml` already runs whenever `integration_ci=true`, and `ci-required` already aggregates its result.
 
-This suite validates compose-backed local infrastructure seams and must remain free of external-provider credentials.
-Tests under `tests/integration/reliability/` are explicitly excluded because
-the reliability journey shard owns them.
-
-`tools/test_integration.sh` builds the compose `pytest` image unless
-`MOONMIND_PYTHON_TEST_IMAGE` names a caller-supplied image, in which case the
-image must already be loadable locally. CI prebuilds that image with a GitHub
-Actions layer cache so dependency layers are not rebuilt on every run. The suite
-runs under xdist with per-file distribution; `MOONMIND_INTEGRATION_WORKERS`
-overrides the default worker count.
+`tools/test_integration.sh` builds its test image unless `MOONMIND_PYTHON_TEST_IMAGE` supplies an already loadable image. CI's existing image layer cache and per-file xdist execution are reused. `MOONMIND_INTEGRATION_WORKERS` controls the supported worker override. This host-side path is not a reason to expose Docker to a managed agent.
 
 ### Omnigent Conformance Selection
 
-The selector enables `omnigent_conformance=true` for Omnigent-owned paths (the
-same inventory that elevates the complete Omnigent contract gate), for the
-runner's own evidence inputs listed in `OMNIGENT_CONFORMANCE_INPUT_EXACT` (its
-pytest layers, frontend test, profile fixture, and report builder), and for every
-full-verification event. `ci-required` aggregates the selected job's result. The deterministic conformance runner republishes the
-Omnigent evidence bundle from layers the exclusive shards already execute, so an
-unrelated change does not pay for it.
+The selector owns the Omnigent path and runner-input inventory. Selected conformance consumes evidence from the owning layers instead of rerunning those suites under another name. `ci-required` enforces the selected result. Live-provider qualification stays distinct from deterministic credential-free conformance.
 
 ## Full Backend Path
 
-The selector enables `full_backend=true` and selects all backend suites when any of the following is true:
+Unknown or unavailable changes, empty change input, pushes to main, schedules, manual runs, and shared CI/dependency/runner/selector/global-test changes select full verification. The full path uses the same exclusive owners:
 
-- Changed files cannot be determined.
-- Changed-file input is empty.
-- A changed path is unknown to the selector.
-- The event is a push to `main`.
-- The event is `workflow_dispatch`.
-- The event is `schedule`.
-- CI workflow files changed under `.github/workflows/`.
-- Dependency files changed, including `pyproject.toml`, `uv.lock`, or `poetry.lock`.
-- Test runner or selector files changed, including `tools/test_unit.sh`, `tools/test_unit_docker.sh`, `tools/test_integration.sh`, or `tools/select_test_suites.py`.
-- Global pytest configuration changed, including `tests/conftest.py` or `tests/unit/conftest.py`.
-
-The full backend path selects the same exclusive shards used by targeted runs:
-
-```bash
-unit-fast + unit-slow + api-component + temporal-boundary + reliability-journey (4 shards) + integration-ci
+```text
+unit-fast + unit-slow + api-component + temporal-boundary
++ reliability-journey through four shards + integration-ci
 ```
 
-In CI the `reliability-journey` selection fans out to all four
-`backend-matrix` reliability shards; locally the single corpus command
-above covers the same files.
-
-The `unit-fast` command is invariant: full runs do not switch it to the broad
-unit wrapper. Ownership precedence is `slow > temporal_boundary > component >
-unit_fast`. `tools/verify_test_shard_ownership.py` collects the provider-free
-CI corpus and fails on missing, duplicate, or conflicting ownership.
+Full execution does not switch fast-unit into a broad wrapper that duplicates specialized suites. Exact-artifact, conformance, frontend, and generated-contract selection continues through their existing policy. An optimization must not silently move required recovery behavior out of PR coverage.
 
 ## Required Check Model
 
-Conditional GitHub Actions jobs are not suitable as individual branch-protection requirements because skipped jobs can leave required checks unresolved. MoonMind uses one always-running required summary job instead:
+`ci-required` is the stable, always-running result aggregator. It performs no checkout, dependency setup, or repository execution. It checks the existing policy, projection, ownership, selected backend, frontend, generated-contract, and other workflow dependencies and reports their unsuccessful outcomes.
 
-- `select-test-suites` computes backend suite outputs from a shallow, submodule-free checkout.
-- `preflight-policy` runs the static repository policy checks in parallel with test selection.
-- `moonspec-projection` verifies the vendored MoonSpec projection.
-- `backend-matrix` (unit-fast, api-component, temporal-boundary, four reliability shards), `unit-slow`, `integration-ci`, `omnigent-exact-artifact`, and `omnigent-deterministic-conformance` run only when selected.
-- `test-frontend` and `check-generated-contracts` always run as result aggregators for the selected frontend and generated-contract jobs.
-- `verify-test-shard-ownership` always runs because exclusive shard ownership is a static repository invariant.
-- `ci-required` always runs and fails if any always-required or selected backend job, the `test-frontend` aggregator, the `check-generated-contracts` aggregator, or the shard-ownership verifier did not complete successfully.
+For primary backend execution it consumes the matrix aggregate result, not the last matrix row's output. Failed, timed-out, canceled, or unexpectedly skipped selected work cannot pass. Explicit selector nonselection is allowed but is not execution evidence. A matrix with no selected Python work must not conceal an unsuccessful selector.
 
-`ci-required` is a pure result aggregator: it performs no repository operations (no checkout, no submodules, no Python/Node setup, no repository command) and has a short timeout. It evaluates every dependency and emits one annotation per failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting, rather than stopping at the first failure. For the consolidated backend suites it consumes only the `backend-matrix` aggregate result (selected when any of `unit_fast`, `api_component`, `temporal_boundary`, or `reliability_journey` is true, otherwise expecting `skipped`); per-row completion is never inferred from last-writer matrix outputs. This keeps repository, submodule, and policy work off the serial tail of required CI.
+`preflight-policy` remains the existing owner of repository policy checks, not a reason to duplicate those checks in test rows or add tests for documentation phrasing. `test-frontend` and `check-generated-contracts` aggregate their selected jobs. The ownership verifier protects complete/disjoint selection.
 
-`preflight-policy` owns the static repository guardrails — docs terminology, workflow terminology, removed-capability semantics, status-token domains, the status-token audit, the GitHub workflow display-name guard, and AgentSession deployment validation. These checks start immediately alongside `select-test-suites` and are no longer duplicated in `unit-fast` or `ci-required`. In CI, deployment validation consumes the exact event-derived changed-file list (`--changed-files-file`) computed by `tools/ci/compute_changed_files.sh`; local development still uses `--base-ref`.
+Branch-protection requirements remain `ci-required` for the aggregated suites, the standalone `migration-gate`, and applicable independent repository checks such as CodeQL. Do not rename public required contexts or change branch protection as a side effect of test optimization. Separate requirements for retired/renamed internal aggregators should be reconciled through their owning configuration, not worked around with fake checks.
 
-Backend jobs use shallow, submodule-free checkouts. Only `moonspec-projection` initializes a submodule, and it initializes just `moonspec` via `git submodule update --init --depth 1 -- moonspec`. Open WebUI and Omnigent are never initialized in required backend CI.
-
-Branch protection must require `ci-required` as the single required context for backend, frontend, and generated-contract gates. `test-frontend` and `check-generated-contracts` report into `ci-required`, so they must not be listed as separate required contexts; a separately required aggregator can leave merges blocked after a check rename or removal. CodeQL and other repository policy checks that run outside this workflow remain separately required. Branch protection must also require the standalone `migration-gate` check so migration-graph and clean-database upgrade failures block merges independently of impact selection.
-
-Required checks must run against the current merge candidate. Prefer GitHub Merge Queue, which exercises the checked-in `merge_group` triggers before each queued merge. If Merge Queue is unavailable, require branches to be up to date with `main` before merging. A successful check from an older base revision is not authoritative: two concurrent pull requests can each have a valid migration graph while their combined result creates multiple Alembic heads.
+Required evidence must correspond to the current merge candidate. Use the existing merge-group path where available, or keep the PR up to date with main before merging. A green run from a different base does not prove that concurrent migrations compose correctly.
 
 ## Main, Manual, And Scheduled Runs
 
-Pull request CI is impact-aware. Full-verification paths are intentionally broader:
-
-- Pushes to `main` run full backend verification.
-- Manual dispatches run full backend verification.
-- Scheduled runs run full backend verification.
-- The `CI / Test Suite` workflow owns the hermetic `integration-ci` job for all
-  three full-verification paths, so scheduled and manual runs do not need a second
-  standalone integration workflow.
-- Provider verification remains separate and should run only where required provider credentials are intentionally available.
+Main pushes, manual dispatches, and schedules run the full path. The existing test workflow owns hermetic integration for these events. Scheduled diagnostics disable matrix fail-fast but retain bounds. No second scheduled reporter or standalone duplicate integration workflow is required. Credentialed provider checks run only where that access is explicitly available and authorized.
 
 ## Local Commands
 
-Run selector tests after changing path rules:
+For a focused selector change inside a managed workflow:
 
 ```bash
-pytest tests/unit/tools/test_select_test_suites.py -q
+moonmind container python-tests tests/unit/tools/test_select_test_suites.py
 ```
 
-Run the fast unit PR regression suite:
+Outside a managed workflow:
 
 ```bash
-pytest tests/unit \
-  --ignore=tests/unit/workflows/temporal \
-  --ignore=tests/unit/api \
-  --ignore=tests/unit/api_service \
-  -m "unit_fast and not provider_verification and not requires_credentials" \
-  -q -n auto --dist loadfile --durations=25
+./tools/test_unit.sh --python-only tests/unit/tools/test_select_test_suites.py
 ```
 
-Run component coverage:
+The same entrypoints accept other targeted paths or node IDs. Broader suites normally run in GitHub Actions. For a justified host-side integration reproduction, use `./tools/test_integration.sh` and its disposable services. Managed agents do not run nested Docker or acquire a deployment socket to reproduce CI.
 
-```bash
-pytest tests/unit/api tests/unit/api_service tests/component/api \
-  -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-  -q -n auto --dist load --durations=25
-```
+To reproduce a reliability partition in an already prepared, disposable host/CI test environment, use its recorded pytest command with `--splits 4 --group N --splitting-algorithm least_duration` and the same validated hints. Omitting the hints path reproduces the consistent no-history fallback. Service addresses, networks, and fixture prerequisites must match that isolated environment, not the installed deployment. The workflow contains the exact suite commands, marker expressions, and environment setup.
 
-Component tests distribute per test rather than per file because a few router
-modules hold several hundred tests each. `tests/unit/api/conftest.py` fails
-Compose-only hostname lookups immediately (the settings-backed S3 artifact store
-and the API Postgres engine) so un-overridden request dependencies do not spend
-seconds per request in DNS and client retry backoff.
+`python3 tools/ci/refresh_reliability_durations.py` refreshes the advisory collection-based hints when needed. `python tools/verify_test_shard_ownership.py` checks the eligible provider-free universe in its supported environment. These are not broad local prerequisites to every PR.
 
-Run Temporal boundary coverage:
-
-```bash
-pytest tests/unit/workflows/temporal \
-  -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-  -q -n auto --dist loadfile --durations=25
-```
-
-Run slow unit coverage without xdist:
-
-```bash
-pytest tests/unit \
-  -m "slow and not provider_verification and not requires_credentials and not integration" \
-  -q --durations=50
-```
-
-Run hermetic integration CI:
-
-```bash
-./tools/test_integration.sh
-```
-
-Run the hermetic reliability journeys (all shards):
-
-```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
-  -m reliability_journey -q --durations=25
-```
-
-Run one deterministic reliability shard locally (mirrors the CI matrix
-`tools/ci/reliability_shard_partition.py --shard N` selection):
-
-```bash
-mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard 0)
-MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest "${shard_files[@]}" \
-  -m reliability_journey -q --durations=25
-```
-
-Shards 1-3 use `--shard 1` through `--shard 3`.
-`tools/verify_test_shard_ownership.py` assigns each file to
-the same shard via `reliability_shard_for_path()`.
-
-Run the checkpoint archive cold-resume replay directly:
-
-```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest \
-  tests/integration/reliability/test_escaped_failure_journeys.py \
-  -k source_destroying_cold_resume -q
-```
-
-Verify checkpoint/runtime selector coverage with:
-
-```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh \
-  tests/unit/tools/test_select_test_suites.py --python-only
-```
-
-The archive replay deliberately destroys the source workspace before using
-durable artifact evidence to restore a distinct destination and retries the
-restore idempotently. It exercises production capture/restore engines and the
-artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
-journey. The required CI reliability job has a 30-minute budget.
-
-Verify that every eligible provider-free node has exactly one owner:
-
-```bash
-python tools/verify_test_shard_ownership.py
-```
+The source-destroying checkpoint-resume journey still exercises durable capture/restore and idempotent recovery. It does not by itself prove the entire Temporal-to-managed-runtime journey. Use the appropriate owning integration boundary rather than treating one helper test as complete product verification.
 
 ## Maintaining The Selector
 
-When adding a new backend subsystem, test category, or high-risk path:
+Keep path rules and their focused behavior tests together. Use conservative selection when uncertain. Selector changes require full CI because incorrect classification can silently omit tests.
 
-1. Add the path rule to `tools/select_test_suites.py`.
-2. Add selector unit coverage in `tests/unit/tools/test_select_test_suites.py`.
-3. Update this document when the intended strategy changes.
-4. Keep test classification resource-based.
-5. Prefer over-selection to under-selection.
-
-Selector changes must force full backend verification, because a broken selector can silently skip the wrong suites.
+During an authorized architecture removal, update obsolete test ownership, fixture setup, and duration hints with the retired code. Preserve real coverage of supported default journeys, data integrity, and the active-work transition. Do not preserve every historical class or versioning parameter solely because an older issue listed it. Explain moved/retired coverage briefly in the PR instead of building a permanent registry or approval mechanism.

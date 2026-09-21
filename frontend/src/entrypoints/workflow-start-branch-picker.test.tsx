@@ -15,7 +15,6 @@ import {
   BRANCH_TEXT_FIRST_LIMITS,
   WorkflowStartPage,
   branchRecentHistoryKey,
-  configuredBranchLookupUrl,
   configuredBranchResolveUrl,
   readRecentBranches,
   writeRecentBranch,
@@ -78,22 +77,13 @@ const mockPayload: BootPayload = {
   },
 };
 
-// 25 server names on purpose: the picker must cap mounted options at 20 even
-// though the fixture advertises more pages via hasMore.
-const SERVER_BRANCHES = [
-  "main",
-  ...Array.from({ length: 24 }, (_, index) => `feature/${String(index).padStart(2, "0")}`),
-];
-
+// Canary payload: branch enumeration must never run, so any request to the
+// legacy list route is recorded and asserted as zero in the tests below.
 function branchListPayload() {
   return {
-    items: SERVER_BRANCHES.map((value) => ({
-      value,
-      label: value,
-      source: "github",
-    })),
+    items: [{ value: "main", label: "main", source: "github" }],
     defaultBranch: "main",
-    hasMore: true,
+    hasMore: false,
     error: null,
   };
 }
@@ -182,11 +172,11 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
       { timeout: 5000 },
     );
     // Opening Create (or changing repository) fetches only default-branch
-    // metadata. Suggestion enumeration requires an explicit user action.
+    // metadata. There is no broader branch enumeration in the page.
     expect(branchRequestUrls.length).toBe(0);
   });
 
-  it("preserves pasted text with at most one resolve and zero suggestion fetches", async () => {
+  it("preserves pasted text with at most one resolve and zero enumeration fetches", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText("Branch", {
@@ -200,8 +190,8 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
       screen.queryByText(/not in the latest list for this repository/),
     ).toBeNull();
 
-    // One settled paste schedules at most one exact lookup and never a
-    // suggestion search alongside it.
+    // One settled paste schedules at most one exact lookup and never branch
+    // enumeration alongside it.
     await waitFor(
       () => {
         expect(resolveRequestUrls.length).toBe(1);
@@ -260,45 +250,39 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     expect(branchInput.disabled).toBe(false);
   });
 
-  it("caps mounted suggestions at 20 and says the list is partial", async () => {
+  it("offers local default and recent suggestions with zero enumeration and no search control", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText("Branch", {
       selector: "input",
     })) as HTMLInputElement;
     fireEvent.change(branchInput, { target: { value: "feature" } });
-    // Local typing alone never fetches suggestions.
+    // Local typing alone never fetches suggestions and there is no broader
+    // discovery button in the floating bar.
     expect(branchInput.value).toBe("feature");
-
-    // Broader discovery is explicit: one bounded request on demand.
-    fireEvent.click(screen.getByRole("button", { name: /Search other branches/i }));
+    expect(
+      screen.queryByRole("button", { name: /Search other branches/i }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Hide search/i }),
+    ).toBeNull();
 
     await waitFor(
       () => {
-        expect(
-          screen.getByText(/Showing the first 20 suggestions/),
-        ).toBeTruthy();
+        expect(metadataRequestUrls.length).toBeGreaterThan(0);
       },
       { timeout: 5000 },
     );
+    expect(branchRequestUrls.length).toBe(0);
     const options = document.querySelectorAll(
       '#queue-branch-options option',
     );
     expect(options.length).toBeLessThanOrEqual(
       BRANCH_TEXT_FIRST_LIMITS.suggestionLimit,
     );
-    // One bounded page per explicit search: the client never drains pages.
-    const suggestionCalls = branchRequestUrls.filter((url) =>
-      url.startsWith("/api/github/branches?"),
-    );
-    expect(suggestionCalls).toHaveLength(1);
-    for (const url of suggestionCalls) {
-      const parsed = new URL(url, "http://localhost");
-      expect(Number(parsed.searchParams.get("limit"))).toBeLessThanOrEqual(50);
-    }
   });
 
-  it("keeps manual input editable and intact while suggestions fail", async () => {
+  it("keeps manual input editable and intact when the branch list endpoint fails", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith("/api/github/branches/metadata")) {
@@ -342,24 +326,17 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     })) as HTMLInputElement;
     fireEvent.change(branchInput, { target: { value: "feature/typed-during-outage" } });
 
-    // Typing alone never triggers a remote search, so no suggestion error
-    // appears before the user explicitly requests broader discovery.
+    // Typing never triggers branch enumeration, so a failing list endpoint
+    // leaves the authored value intact without a suggestion error.
     expect(branchInput.value).toBe("feature/typed-during-outage");
     expect(
       screen.queryByText(/Branch suggestions are unavailable/),
     ).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: /Search other branches/i }));
-    await waitFor(
-      () => {
-        expect(
-          screen.getByText(/Branch suggestions are unavailable/),
-        ).toBeTruthy();
-      },
-      { timeout: 5000 },
-    );
-    // Lookup availability is reported separately from input validity: the
-    // authored value stays intact and the control stays enabled.
+    expect(
+      screen.queryByRole("button", { name: /Search other branches/i }),
+    ).toBeNull();
+    expect(branchRequestUrls.length).toBe(0);
+    // The authored value stays intact and the control stays enabled.
     expect(branchInput.value).toBe("feature/typed-during-outage");
     expect(branchInput.disabled).toBe(false);
     expect(
@@ -385,7 +362,7 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     );
     expect(branchInput.value).toBe("missing-nope");
     expect(branchInput.disabled).toBe(false);
-    // A full-name paste needs exact resolution only, never suggestions.
+    // A full-name paste needs exact resolution only, never enumeration.
     expect(branchRequestUrls.length).toBe(0);
   });
 
@@ -476,18 +453,6 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
 describe("branch picker helpers", () => {
   beforeEach(() => {
     window.localStorage.clear();
-  });
-
-  it("builds bounded suggestion urls with encoded queries", () => {
-    const url = configuredBranchLookupUrl(
-      "/api/github/branches?repository={repository}",
-      "Octo/Repo",
-      { query: "feature/foo bar", limit: 999 },
-    );
-    const parsed = new URL(url, "http://localhost");
-    expect(parsed.searchParams.get("repository")).toBe("Octo/Repo");
-    expect(parsed.searchParams.get("q")).toBe("feature/foo bar");
-    expect(parsed.searchParams.get("limit")).toBe("20");
   });
 
   it("encodes slash-containing branch names in resolve urls", () => {

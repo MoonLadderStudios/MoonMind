@@ -62,8 +62,10 @@ from moonmind.schemas.container_job_models import (
     ContainerJobFailureClass,
     GpuObservation,
     ImageObservation,
+    ResourceLimits,
     gpu_observation,
     is_historical_shared_or_adaptive,
+    legacy_fixed_successor_resources,
     require_explicit_resources,
 )
 from moonmind.utils.logging import redact_sensitive_text
@@ -690,22 +692,25 @@ class DockerContainerJobBackend:
         return expires_at.isoformat().replace("+00:00", "Z")
 
     def _enforce_resource_ceilings(
-        self, request: ContainerJobActivityRequest
+        self,
+        request: ContainerJobActivityRequest,
+        *,
+        resources: ResourceLimits | None = None,
     ) -> None:
         spec = request.request.spec
+        effective = resources if resources is not None else spec.resources
         try:
-            require_explicit_resources(spec.resources)
+            require_explicit_resources(effective)
         except ValueError as exc:
             # Historical documents stay decodable for replay, but an unstarted
             # historical request (shared-pool cpuMillis=0 or adaptive
-            # minimumMemoryMiB) has no executable successor: the shared pool
-            # and adaptive negotiation were retired, and the workflow only
-            # skips this guard when reconcile reattached an already-created
-            # container. Fail closed with an explicit replan disposition
-            # rather than silently substituting a new limit.
+            # minimumMemoryMiB) resolves to its fixed-resource successor at the
+            # create step (MoonLadderStudios/MoonMind#4456); only a request
+            # with no derivable successor fails here with an explicit replan
+            # disposition rather than a silent substitution.
             historical = ""
             try:
-                if is_historical_shared_or_adaptive(spec.resources):
+                if is_historical_shared_or_adaptive(effective):
                     historical = (
                         " Retired shared-pool/adaptive semantics cannot be "
                         "re-executed; replan the job with one fixed explicit "
@@ -719,13 +724,13 @@ class DockerContainerJobBackend:
             ) from exc
         ceilings = self._settings
         checks = (
-            (spec.resources.cpu_millis, ceilings.max_cpu_millis, "cpuMillis"),
+            (effective.cpu_millis, ceilings.max_cpu_millis, "cpuMillis"),
             (
-                spec.resources.memory_mib,
+                effective.memory_mib,
                 ceilings.max_memory_mib,
                 "memoryMiB",
             ),
-            (spec.resources.pids, ceilings.max_pids, "pids"),
+            (effective.pids, ceilings.max_pids, "pids"),
             (spec.timeout_seconds, ceilings.max_timeout_seconds, "timeoutSeconds"),
         )
         for requested, ceiling, name in checks:
@@ -735,7 +740,7 @@ class DockerContainerJobBackend:
                     f"{name}={requested} exceeds the deployment ceiling {ceiling} "
                     "and cannot be raised by a caller",
                 )
-        requested_shm = spec.resources.shm_size
+        requested_shm = effective.shm_size
         if requested_shm is not None:
             requested_shm_mib = parse_size_bytes(requested_shm) / (1024 * 1024)
             if requested_shm_mib > ceilings.max_shm_size_mib:
@@ -745,7 +750,7 @@ class DockerContainerJobBackend:
                     f"{ceilings.max_shm_size_mib}MiB and cannot be raised by a "
                     "caller",
                 )
-        gpu = spec.resources.gpu
+        gpu = effective.gpu
         if gpu is not None and ceilings.max_gpu_count is not None:
             # ``all`` is unbounded by definition, so a deployment that publishes
             # a finite device ceiling rejects it rather than silently clamping a
@@ -928,21 +933,24 @@ class DockerContainerJobBackend:
         enumeration and the ``docker start`` that follows are one serialized
         operation: two workers racing for the final slot cannot both observe
         it free. A retry never acquires a second slot for the same job — a
-        job whose own container is already running already holds its slot and
-        is admitted unconditionally. A job whose container is only created has
-        not yet claimed a slot, so it is admitted on the same basis as a job
-        with no container yet; the lock serializes competing created waiters
-        so exactly one starts per free slot. Agent hosts and their
-        subordinate test jobs use separate counts (host leases vs this job
-        ledger), so an agent occupying the final host slot can still launch
-        the test job it is waiting for.
+        job whose own container already holds a slot (restarting, running,
+        paused, or being removed) is admitted unconditionally. A job whose
+        container is only created has not yet claimed a slot, so it is
+        admitted on the same basis as a job with no container yet; the lock
+        serializes competing created waiters so exactly one starts per free
+        slot. Agent hosts and their subordinate test jobs use separate counts
+        (host leases vs this job ledger), so an agent occupying the final
+        host slot can still launch the test job it is waiting for.
         """
 
         holders = await self._slot_holders()
         own_state = holders.get(container_name)
-        if own_state == "running":
+        if own_state in self._SLOT_HOLDING_STATES:
             # A retry after an uncertain start: the container provably holds
             # this job's slot, so it must proceed, never wait or double-count.
+            # This covers every slot-holding daemon state, not just running:
+            # a paused/restarting/removing own container still occupies the
+            # slot and must not be parked behind other holders.
             return
         others = sum(1 for name in holders if name != container_name)
         if others < int(self._settings.max_active_jobs):
@@ -2111,17 +2119,38 @@ class DockerContainerJobBackend:
     async def create_container(self, request: ContainerJobActivityRequest):
         if not request.resolved_workspace_ref or not request.resolved_image_ref:
             raise RuntimeError("resolved workspace and image are required")
-        self._enforce_resource_ceilings(request)
         spec = request.request.spec
+        try:
+            self._enforce_resource_ceilings(request)
+            resources = spec.resources
+        except ContainerJobBackendError as exc:
+            # An already-admitted, unstarted legacy job (shared-pool CPU or
+            # adaptive memory range) executes through its deterministic
+            # fixed-resource successor (MoonLadderStudios/MoonMind#4456). The
+            # workflow only reaches create when reconcile found no existing
+            # container, so no running or uncertain consumer is replaced; the
+            # persisted original request is never rewritten. A successor the
+            # deployment ceiling cannot admit still fails closed below.
+            if (
+                exc.failure_class
+                is not ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+                or not is_historical_shared_or_adaptive(spec.resources)
+            ):
+                raise
+            successor = legacy_fixed_successor_resources(spec.resources)
+            if successor is None:
+                raise
+            self._enforce_resource_ceilings(request, resources=successor)
+            resources = successor
         # Explicit per-container CPU ceiling as an ordinary Docker quota.
         # There is no pool to subtract from and no fallback to select.
-        cpu_limit = int(spec.resources.cpu_millis)
+        cpu_limit = int(resources.cpu_millis)
         # Report the selected daemon's support for a caller-requested GPU
         # resource before anything is created, so an unsupported request never
         # reaches the caller's workload.
         resolved_gpu = (
-            await self._report_gpu_support(spec.resources.gpu)
-            if spec.resources.gpu is not None
+            await self._report_gpu_support(resources.gpu)
+            if resources.gpu is not None
             else None
         )
         name = self._name(request)
@@ -2207,25 +2236,25 @@ class DockerContainerJobBackend:
             network_mode,
             *structured_container_security_args(),
             "--memory",
-            f"{min(spec.resources.memory_mib, self._settings.max_memory_mib)}m",
+            f"{min(resources.memory_mib, self._settings.max_memory_mib)}m",
             "--shm-size",
             # The caller owns this resource once the deployment ceiling has
             # admitted it; the deployment default only applies when the request
             # omits it.
-            spec.resources.shm_size or f"{self._settings.shm_size_mib}m",
+            resources.shm_size or f"{self._settings.shm_size_mib}m",
             "--pids-limit",
-            str(spec.resources.pids),
+            str(resources.pids),
             "--workdir",
             spec.workdir,
             "--mount",
             workspace_mount,
         ]
         args.extend(("--cpus", str(cpu_limit / 1000)))
-        if spec.resources.gpu is not None:
+        if resources.gpu is not None:
             # The caller owns the device request; the backend only realizes it as
             # the vendor's Docker device request after the deployment ceiling has
             # already admitted the count.
-            args.extend(gpu_device_request_args(spec.resources.gpu))
+            args.extend(gpu_device_request_args(resources.gpu))
         resolved_cache_refs: list[str] = []
         for requested_cache in spec.caches:
             try:
@@ -2286,7 +2315,7 @@ class DockerContainerJobBackend:
             # before the ordinary launch failure, so a caller can tell an
             # unavailable GPU resource from an unusable workspace.
             self._reject_gpu_launch_refusal(
-                spec.resources.gpu, stderr=create_stderr, exit_code=code
+                resources.gpu, stderr=create_stderr, exit_code=code
             )
             # Docker mount errors echo the trusted host source. Keep it out of
             # workflow history and caller-visible terminal diagnostics.
@@ -2311,9 +2340,9 @@ class DockerContainerJobBackend:
         return ContainerJobActivityResult(
             containerRef=name,
             diagnosticsRef=egress_evidence_ref,
-            resolvedResources=spec.resources.model_copy(update={
+            resolvedResources=resources.model_copy(update={
                 "cpu_millis": cpu_limit,
-                "memory_mib": min(spec.resources.memory_mib, self._settings.max_memory_mib),
+                "memory_mib": min(resources.memory_mib, self._settings.max_memory_mib),
             }),
             resolvedCacheRefs=tuple(resolved_cache_refs),
             gpuObservation=resolved_gpu,

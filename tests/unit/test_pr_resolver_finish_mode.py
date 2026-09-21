@@ -447,3 +447,182 @@ def test_merge_command_guards_the_reviewed_head(finalize_module, monkeypatch):
     with pytest.raises(RuntimeError, match="verified PR head"):
         merge("350", "squash", "")
     assert len(calls) == 1
+
+
+def _approval_blocked_snapshot() -> dict[str, Any]:
+    """PR 831 at rest: every resolver-owned blocker clear, no human approval."""
+
+    snapshot = _mergeable_snapshot()
+    snapshot["pr"]["mergeStateStatus"] = "BLOCKED"
+    snapshot["pr"]["mergeable"] = "MERGEABLE"
+    snapshot["pr"]["reviewDecision"] = "REVIEW_REQUIRED"
+    return snapshot
+
+
+def _run_finalize_with(
+    finalize_module: dict[str, Any],
+    snapshot: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *extra_args: str,
+) -> tuple[int, dict[str, Any]]:
+    main = finalize_module["main"]
+
+    def _write_snapshot(
+        _snapshot_script: Path,
+        _pr: str | None,
+        snapshot_path: Path,
+        **_review_kwargs: Any,
+    ) -> None:
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    merged: list[tuple[str, str]] = []
+    monkeypatch.setitem(main.__globals__, "_run_snapshot", _write_snapshot)
+    monkeypatch.setitem(
+        main.__globals__,
+        "_merge_pr",
+        lambda selector, method, head: merged.append((selector, method)),
+    )
+    monkeypatch.setitem(main.__globals__, "_check_pr_merged", lambda _selector: True)
+    monkeypatch.delenv("PR_RESOLVER_FINISH_MODE", raising=False)
+
+    result_path = tmp_path / "result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--pr",
+            "350",
+            "--snapshot-path",
+            str(tmp_path / "snapshot.json"),
+            "--result-path",
+            str(result_path),
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--strict-exit-codes",
+            *extra_args,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["_merged_calls"] = merged
+    return int(excinfo.value.code), payload
+
+
+def test_fix_only_stops_clean_when_only_a_human_approval_is_missing(
+    finalize_module, tmp_path, monkeypatch
+) -> None:
+    """`fix_only`'s goal is a clean review, not merge authorization.
+
+    The preset promises "stop the loop at the first clean review without
+    merging". Workflow mm:8978104c reached exactly that state on PR 831 and
+    failed instead, because `review_clean` was gated on a merge gate that a
+    human approval requirement keeps closed forever.
+    """
+
+    code, payload = _run_finalize_with(
+        finalize_module,
+        _approval_blocked_snapshot(),
+        tmp_path,
+        monkeypatch,
+        "--finish-mode",
+        "fix_only",
+    )
+
+    assert code == finalize_module["EXIT_CODE_REVIEW_CLEAN"]
+    assert payload["status"] == "review_clean"
+    assert payload["merge_outcome"] == "skipped"
+    assert payload["mergeAutomationDisposition"] == "review_clean"
+    assert payload["_merged_calls"] == []
+
+
+def test_merge_mode_reports_the_approval_gate_instead_of_waiting_forever(
+    finalize_module, tmp_path, monkeypatch
+) -> None:
+    """With merge authority the same state is a durable, reportable blocker."""
+
+    code, payload = _run_finalize_with(
+        finalize_module,
+        _approval_blocked_snapshot(),
+        tmp_path,
+        monkeypatch,
+    )
+
+    assert code == finalize_module["EXIT_CODE_BLOCKED"]
+    assert payload["status"] == "blocked"
+    assert payload["final_reason"] == "merge_gate_requires_human_approval"
+    assert payload["mergeAutomationDisposition"] == "manual_review"
+    # Never attempt a merge the branch protection will reject.
+    assert payload["_merged_calls"] == []
+
+
+def test_fix_only_approval_gate_still_respects_resolver_owned_blockers(
+    finalize_module, tmp_path, monkeypatch
+) -> None:
+    """An approval gate never converts outstanding work into success."""
+
+    snapshot = _approval_blocked_snapshot()
+    snapshot["commentsSummary"]["hasActionableComments"] = True
+
+    code, payload = _run_finalize_with(
+        finalize_module,
+        snapshot,
+        tmp_path,
+        monkeypatch,
+        "--finish-mode",
+        "fix_only",
+    )
+
+    assert code == finalize_module["EXIT_CODE_BLOCKED"]
+    assert payload["status"] != "review_clean"
+    assert payload["_merged_calls"] == []
+
+
+def test_fix_only_approval_stop_is_distinguishable_from_an_open_gate(
+    finalize_module, tmp_path, monkeypatch
+) -> None:
+    """A clean stop at a closed gate must not record "merge gate passed".
+
+    Both terminals are `review_clean`, but only one of them observed an open
+    merge gate. The durable result has to keep that distinction.
+    """
+
+    open_gate_code, open_gate = _run_finalize_with(
+        finalize_module,
+        _mergeable_snapshot(),
+        tmp_path / "open",
+        monkeypatch,
+        "--finish-mode",
+        "fix_only",
+    )
+    approval_code, approval = _run_finalize_with(
+        finalize_module,
+        _approval_blocked_snapshot(),
+        tmp_path / "approval",
+        monkeypatch,
+        "--finish-mode",
+        "fix_only",
+    )
+
+    assert open_gate_code == approval_code == finalize_module["EXIT_CODE_REVIEW_CLEAN"]
+    assert open_gate["status"] == approval["status"] == "review_clean"
+    assert open_gate["final_reason"] == "finish_mode_fix_only"
+    assert approval["final_reason"] == "finish_mode_fix_only_awaiting_human_approval"
+    assert "merge gate passed" not in approval["decision"]
+
+
+def test_full_gate_defers_the_approval_decision_to_the_finalizer(
+    tmp_path, monkeypatch
+) -> None:
+    """`pr_resolve_full` has no finish mode, so it must not decide this."""
+
+    full_module = _load_module("pr_resolve_full.py")
+    evaluation = full_module["evaluate_full_state"](_approval_blocked_snapshot())
+
+    assert evaluation["status"] == "ready_for_finalize"
+    assert evaluation["next_step"] == "run_finalize"

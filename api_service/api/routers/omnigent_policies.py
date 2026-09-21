@@ -54,14 +54,20 @@ def _require(user: User, permission: str) -> None:
         raise HTTPException(403, f"Missing required Omnigent policy permission: {permission}.")
 
 
-def _can_read_policy(policy: Any, user: User) -> bool:
-    return policy.visibility == "deployment" or policy.owner_user_id == getattr(user, "id", None)
+def _can_read_policy(policy: Any, user: User | None = None) -> bool:
+    # Single-user (#4351): policies are instance resources. Human-owned
+    # visibility is converted to instance access; ``visibility`` and
+    # ``owner_user_id`` remain stored as provenance while versions,
+    # compiled/runtime bindings, and operational restrictions are preserved.
+    # Callers still enforce settings permissions and secret-handling policy
+    # at their owning boundaries; raw secret access is not broadened here.
+    return True
 
 
-async def _require_policy_read(service: OmnigentPolicyService, policy_id: str, user: User) -> None:
-    policy = await service.get_policy(policy_id)
-    if not _can_read_policy(policy, user):
-        raise HTTPException(404, "Policy not found")
+async def _require_policy_read(service: OmnigentPolicyService, policy_id: str, user: User | None = None) -> None:
+    # Single-user (#4351): instance access; raises only when the policy
+    # itself is missing. Retained for call-site compatibility.
+    await service.get_policy(policy_id)
 
 
 def _version_json(row: Any) -> dict[str, Any]:
@@ -92,7 +98,9 @@ async def create_policy(body: CreatePolicy, session: AsyncSession = Depends(get_
     _require(user, "settings.system.write")
     try:
         row = await OmnigentPolicyService(session).create(
-            policy_id=body.policy_id, name=body.name, owner_user_id=getattr(user, "id", None),
+            # Single-user (#4351): new policies carry no human owner;
+            # legacy owner/visibility values stay as provenance.
+            policy_id=body.policy_id, name=body.name, owner_user_id=None,
             visibility=body.visibility, document=body.document, actor=_actor(user),
             clone_source_ref=body.clone_source_ref,
         )

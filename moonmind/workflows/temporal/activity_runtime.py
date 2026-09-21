@@ -1108,6 +1108,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "github_issue_plan_legacy_repair",
     ),
+    "codex.direct_drain_report": (
+        "integrations",
+        "codex_direct_drain_report",
+    ),
     "pr_resolver.resolve_selector": (
         "integrations",
         "pr_resolver_resolve_selector",
@@ -5433,6 +5437,35 @@ class TemporalIntegrationActivities:
         )
         return {
             "status": "succeeded" if result.get("allowed") else "failed",
+            **result,
+        }
+
+    async def codex_direct_drain_report(self, payload, /, **kwargs):
+        """Run the bounded direct-Codex drain from the operator activity boundary.
+
+        Production Temporal entrypoint for
+        ``codex_direct_drain_report`` (MoonLadderStudios/MoonMind#3931 R3/R6):
+        callers pass ready per-category row lists under ``queries`` and
+        receive the four-state drain payload with fail-closed missing
+        categories. Pure evidence only: never terminates workflows, erases
+        evidence, or deletes credential volumes.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+            codex_direct_drain_report as run_drain_report,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "codex.direct_drain_report requires an object"
+            )
+        config = payload.get("drain")
+        if not isinstance(config, Mapping):
+            config = payload
+        raw_queries = config.get("queries")
+        queries = dict(raw_queries) if isinstance(raw_queries, Mapping) else None
+        result = run_drain_report(queries=queries, store=None)
+        return {
+            "status": "succeeded" if result.get("ok") else "failed",
             **result,
         }
 
@@ -12617,6 +12650,9 @@ class TemporalAgentRuntimeActivities:
         /,
     ) -> AgentRunResult:
         """Apply an execution-bound terminal contract above provider adapters."""
+        from moonmind.workflows.adapters.managed_agent_adapter import (
+            _PR_RESOLVER_HUMAN_APPROVAL_REASON,
+        )
         from moonmind.workflows.terminal_evidence import (
             PR_RESOLVER_VERDICT_FAILURE_CODES,
             evaluate_terminal_evidence,
@@ -12894,8 +12930,24 @@ class TemporalAgentRuntimeActivities:
                 or evaluation.failure_code,
                 "metadata": metadata,
             }
-            if result.failure_class is None:
+            # A merge gate awaiting a required human approving review is the
+            # merge-automation parent's terminal to route, not an agent
+            # execution failure. Failing here would discard a complete,
+            # validated verdict and hand the parent its generic exception path.
+            merge_gate_human_approval = (
+                evaluation.failure_code == "PR_RESOLVER_MANUAL_REVIEW"
+                and metadata.get("prResolverMergeGateOwned") is True
+                and str(metadata.get("prResolverReason") or "")
+                .strip()
+                .lower()
+                .replace("-", "_")
+                .replace(" ", "_")
+                == _PR_RESOLVER_HUMAN_APPROVAL_REASON
+            )
+            if result.failure_class is None and not merge_gate_human_approval:
                 update["failure_class"] = "execution_error"
+                update["summary"] = verdict_summary
+            elif result.failure_class is None:
                 update["summary"] = verdict_summary
             else:
                 # An earlier runtime failure keeps its own summary; the verdict
