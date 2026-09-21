@@ -513,6 +513,96 @@ def is_worker_compatible(
     return str(observed_bundle or "").strip() == str(pinned_bundle or "").strip()
 
 
+def post_migration_startup_state(*, cutover_marker_applied: bool) -> dict[str, Any]:
+    """Ordinary post-migration startup consults only the completed marker.
+
+    Never runs a census of deleted credential sources and never depends on
+    a new migration ledger/lease. A missing marker is a bounded actionable
+    outcome (declare an explicit connection for new authenticated work),
+    not a blanket permanent startup block.
+    """
+
+    if cutover_marker_applied:
+        return {
+            "startup_census_required": False,
+            "ledger_required": False,
+            "ready": True,
+        }
+    return {
+        "startup_census_required": False,
+        "ledger_required": False,
+        "ready": False,
+        "correction": (
+            "cutover marker 388 not yet applied; new authenticated work "
+            "must declare one connection explicitly."
+        ),
+    }
+
+
+def resolve_saved_history_for_replay(
+    *,
+    recorded_before_cutover: bool,
+    migrated_or_expired: bool,
+    repository: str,
+    branch: str | None,
+    recorded_digest: str,
+    connection_ref: str,
+) -> dict[str, Any]:
+    """Bind recorded history to an explicit connection for replay owners.
+
+    Draft/schedule/replay owners call this instead of the frozen decoder
+    directly: the narrow historical-reader gate runs first, so migrated or
+    expired histories (and anything not recorded before the cutover) suspend
+    only the affected replay with a concrete correction instead of granting
+    new-write authority. Permitted histories preserve repository/branch/
+    digest identity with an explicit connection binding.
+    """
+
+    if not is_historical_reader_permitted(
+        recorded_before_cutover=recorded_before_cutover,
+        migrated_or_expired=migrated_or_expired,
+    ):
+        raise RepositoryRouteError(
+            REPOSITORY_DENIED,
+            "recorded history is not a permitted historical reader "
+            f"({LEGACY_HISTORICAL_READER_REMOVAL_CONDITION}); "
+            "declare one connection explicitly for replay.",
+        )
+    return decode_and_map_saved_history(
+        repository=repository,
+        branch=branch,
+        recorded_digest=recorded_digest,
+        connection_ref=connection_ref,
+    )
+
+
+def cutover_preflight_for_deployment(
+    *,
+    observed_bundle: str,
+    pinned_bundle: str,
+    action: str,
+    connection_ref: str,
+    backend_ref: str,
+) -> str:
+    """Deployment-controller-safe cutover preflight (stdlib-safe inputs).
+
+    The portable deployment controller (``moonmind/deployment_access.py``)
+    is standard-library-only so host update scripts can run it directly;
+    it cannot import the pydantic contract. The controller calls this seam
+    with plain strings before cutover: an actually incompatible writer
+    (changed tool bundle) stops with a safe diagnostic, a compatible writer
+    proceeds, and newer shared database work is never overwritten here.
+    """
+
+    return cutover_stop_if_incompatible(
+        observed_bundle=observed_bundle,
+        pinned_bundle=pinned_bundle,
+        action=action,
+        connection_ref=connection_ref,
+        backend_ref=backend_ref,
+    )
+
+
 __all__ = [
     "LEGACY_CUTOVER_REQUEST_VERSION",
     "LEGACY_HISTORICAL_READER_REMOVAL_CONDITION",
@@ -520,6 +610,7 @@ __all__ = [
     "CutoverMappingStore",
     "EffectiveLegacyReference",
     "cutover_diagnostic",
+    "cutover_preflight_for_deployment",
     "cutover_stop_if_incompatible",
     "decode_and_map_saved_history",
     "determine_effective_legacy_reference",
@@ -528,7 +619,9 @@ __all__ = [
     "is_historical_reader_permitted",
     "is_worker_compatible",
     "map_saved_target_to_connection",
+    "post_migration_startup_state",
     "require_explicit_allowlist_match",
+    "resolve_saved_history_for_replay",
     "scratch_or_anonymous_usable",
     "select_admitted_connection",
 ]
