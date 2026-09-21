@@ -676,6 +676,7 @@ async def test_repo_create_pr_transient_failure_retries_and_adopts_lost_ack(monk
             if failure == 'timeout':
                 raise httpx.ReadTimeout('lost response', request=request)
             return httpx.Response(failure, json={'message': 'temporarily unavailable'})
+        # #4010 W4: adoption is read-only; no metadata PATCH follows a retry.
         assert request.method == 'PATCH'
         return httpx.Response(200, json=pr)
 
@@ -693,4 +694,6 @@ async def test_repo_create_pr_transient_failure_retries_and_adopts_lost_ack(monk
         result = await repo_create_pr_activity(payload)
     assert result['adopted'] is True
     assert result['url'] == pr['html_url']
-    assert calls == ['GET', 'POST', 'GET', 'PATCH']
+    # First attempt reconciles open + closed priors before POSTing; the retry
+    # adopts the remotely created PR read-only without a metadata PATCH.
+    assert calls == ['GET', 'GET', 'POST', 'GET']
