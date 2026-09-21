@@ -103,14 +103,80 @@ def _session_http_exception(exc: BaseException):
     return HTTPException(status_code=status_code, detail={"code": code})
 
 
+async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
+    """Migration-state gate for account-free disabled-mode access (#4346).
+
+    Returns True only when the guarded conversion ledger records a
+    completed, published fresh-init or eligible conversion: migration
+    state proves the source needed no account (or converted cleanly), so
+    ordinary disabled-mode routes may serve a transient local-operator
+    principal without minting a synthetic User row. Fresh installations
+    initialize without a person and successful restarts no longer require
+    live account tables. Any error -- including a missing ledger table on
+    pre-386 schemas -- fails closed to False: failed required conversion
+    must not expose ordinary account-free data.
+    """
+    try:
+        from sqlalchemy import select as _select
+
+        from api_service.services.single_user_conversion import (
+            SingleUserConversionRun,
+        )
+
+        rows = (await session.execute(_select(SingleUserConversionRun))).scalars().all()
+    except Exception:
+        # No ledger evidence (or an unreadable ledger) means conversion
+        # state is unknown: deny account-free access rather than guess.
+        return False
+    for row in rows or []:
+        if str(getattr(row, "status", "")) != "complete":
+            continue
+        stored = dict(getattr(row, "result_json", None) or {})
+        if not stored.get("published", False):
+            continue
+        decision = dict(stored.get("decision", None) or {})
+        if str(decision.get("disposition", "")) in {
+            "fresh_init",
+            "eligible_conversion",
+        }:
+            return True
+    return False
+
+
+def _transient_disabled_operator() -> User:
+    """Transient local-operator principal for account-free disabled mode.
+
+    Never added to the session: fresh/converted installations initialize
+    without a person (#4346), so no synthetic User row is minted to
+    satisfy the boundary. Scalar attributes mirror the historical default
+    row (local administrator); relationship traversal is unavailable
+    because there is no retained account to traverse.
+    """
+    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+    try:
+        user_uuid = uuid.UUID(user_id_str)
+    except ValueError:
+        user_uuid = uuid.UUID(_DEFAULT_USER_ID)
+    return User(
+        id=user_uuid,
+        email=settings.oidc.DEFAULT_USER_EMAIL or "operator@localhost",
+        is_active=True,
+        is_superuser=True,
+        is_verified=True,
+    )
+
+
 async def _load_disabled_user(session: AsyncSession) -> User:
     """Resolve the persisted local-mode principal, failing closed.
 
-    No synthetic administrator is ever minted: identity-store outage
-    returns 503 ``unavailable`` and a missing default row returns 503
-    ``setup_required``. Test callers must use explicit dependency
-    overrides; no environment-driven test identity shortcut exists on
-    this path.
+    A present default row keeps serving exactly as before (existing
+    deployments are unaffected). When the row is absent, account-free
+    access is allowed only when conversion migration state proves a
+    completed fresh-init or eligible conversion; otherwise this boundary
+    still returns 503 ``setup_required``. No synthetic administrator is
+    ever minted: identity-store outage returns 503 ``unavailable``. Test
+    callers must use explicit dependency overrides; no environment-driven
+    test identity shortcut exists on this path.
     """
 
     async def _fetch() -> User | None:
@@ -126,6 +192,11 @@ async def _load_disabled_user(session: AsyncSession) -> User:
         )
         raise HTTPException(status_code=503, detail="unavailable")
     if user_obj is None:
+        if await _disabled_account_free_allowed(session):
+            logger.info(
+                "auth_event mode=disabled reason=local_operator code=account_free",
+            )
+            return _transient_disabled_operator()
         logger.info(
             "auth_event mode=disabled reason=session_denial code=setup_required",
         )
