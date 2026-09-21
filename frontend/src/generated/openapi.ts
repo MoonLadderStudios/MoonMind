@@ -1363,6 +1363,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repository-connections/github-app/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin a GitHub App installation enrollment
+         * @description Issue single-use setup state plus the provider install URL.
+         */
+        post: operations["begin_github_app_setup_api_v1_repository_connections_github_app_begin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/github-app/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete a GitHub App installation enrollment
+         * @description Verify the installation with the provider, then persist it.
+         */
+        post: operations["complete_github_app_setup_api_v1_repository_connections_github_app_callback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/catalog": {
         parameters: {
             query?: never;
@@ -9209,6 +9249,131 @@ export interface components {
             compatibilityPath: boolean;
         };
         /**
+         * GitHubAppBeginRequest
+         * @description Operator request to begin one GitHub App enrollment.
+         */
+        GitHubAppBeginRequest: {
+            /** Appslug */
+            appSlug: string;
+            /** Expectedappref */
+            expectedAppRef: string;
+            /** Requestid */
+            requestId: string;
+            /** Connectionid */
+            connectionId: string;
+            /** Principalref */
+            principalRef: string;
+            /**
+             * Principalscopetype
+             * @default system
+             */
+            principalScopeType: string;
+            /** Principalscoperef */
+            principalScopeRef?: string | null;
+            /**
+             * Expectedaccount
+             * @default
+             */
+            expectedAccount: string;
+            /**
+             * Permittedrepositories
+             * @default []
+             */
+            permittedRepositories: string[];
+        };
+        /** GitHubAppBeginResponse */
+        GitHubAppBeginResponse: {
+            /** Setupurl */
+            setupUrl: string;
+            /** State */
+            state: string;
+            /** Requestid */
+            requestId: string;
+            /** Connectionid */
+            connectionId: string;
+        };
+        /**
+         * GitHubAppCallbackRequest
+         * @description Browser callback payload after the operator installs the App.
+         */
+        GitHubAppCallbackRequest: {
+            /** State */
+            state: string;
+            /** Installationid */
+            installationId: string;
+            /** Expectedappref */
+            expectedAppRef: string;
+            /** Requestid */
+            requestId: string;
+            /** Connectionid */
+            connectionId: string;
+            /** Appid */
+            appId: string;
+            /** Keysecretref */
+            keySecretRef: string;
+            /**
+             * Expectedaccount
+             * @default
+             */
+            expectedAccount: string;
+            /**
+             * Permittedrepositories
+             * @default []
+             */
+            permittedRepositories: string[];
+            /**
+             * Allowedapihosts
+             * @default []
+             */
+            allowedApiHosts: string[];
+            /**
+             * Displayname
+             * @default GitHub App connection
+             */
+            displayName: string;
+            /**
+             * Endpointref
+             * @default https://github.com
+             */
+            endpointRef: string;
+            /**
+             * Allowedoperations
+             * @default [
+             *       "read"
+             *     ]
+             */
+            allowedOperations: string[];
+            /**
+             * Ownerref
+             * @default
+             */
+            ownerRef: string;
+            /**
+             * Principalref
+             * @default
+             */
+            principalRef: string;
+            /**
+             * Callerscopetype
+             * @default system
+             */
+            callerScopeType: string;
+            /** Callerscoperef */
+            callerScopeRef?: string | null;
+            /**
+             * Actorref
+             * @default
+             */
+            actorRef: string;
+            /** Keyref */
+            keyRef?: string | null;
+        };
+        /** GitHubAppCallbackResponse */
+        GitHubAppCallbackResponse: {
+            /** Connectionid */
+            connectionId: string;
+        };
+        /**
          * GitHubTokenProbeRequest
          * @description Targeted GitHub token validation request.
          */
@@ -16828,6 +16993,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    begin_github_app_setup_api_v1_repository_connections_github_app_begin_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubAppBeginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubAppBeginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_github_app_setup_api_v1_repository_connections_github_app_callback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubAppCallbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubAppCallbackResponse"];
                 };
             };
             /** @description Validation Error */

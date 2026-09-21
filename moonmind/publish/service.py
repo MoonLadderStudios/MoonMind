@@ -70,6 +70,90 @@ _PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
 _PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
 
+
+def push_env_from_bound_credential(
+    acquired: Any,
+    *,
+    base_env: dict[str, str] | None = None,
+    repository: str = "",
+    endpoint: str = "https://github.com",
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Build the git-push env from a bound credential (PAT or App).
+
+    Existing immediate publication consumes App-issued credentials through
+    this same path instead of a parallel App-only implementation: the token
+    enters ``GITHUB_TOKEN``/``GH_TOKEN`` inside the trusted ``use_now``
+    boundary with ``GIT_TERMINAL_PROMPT=0``, and the redaction tuple carries
+    the opaque value for ``run_command``. Server-held credentials stay
+    server-held; diagnostics must use the metadata-only binding.
+
+    When ``repository`` parses as an ``owner/name`` identity, the shared
+    bound-Git credential-helper contract is layered on top so the push to
+    ``origin`` authenticates through the admitted repository's trusted
+    endpoint instead of ambient configuration.
+    """
+
+    captured: list[str] = []
+
+    def _capture(raw: bytes) -> None:
+        captured.append(bytes(raw).decode("utf-8", errors="strict").strip())
+
+    acquired.credential.use_now(_capture)
+    token = captured[0] if captured else ""
+    if not token or "\n" in token or "\r" in token:
+        raise ValueError("credential material is invalid")
+    env = dict(base_env or {})
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    env["GITHUB_TOKEN"] = token
+    env["GH_TOKEN"] = token
+    owner, sep, name = str(repository or "").strip().strip("/").partition("/")
+    if sep and owner.strip() and name.strip() and "/" not in name.strip():
+        try:
+            from moonmind.auth.github_app import build_bound_git_env
+
+            bound = build_bound_git_env(
+                token.encode("utf-8"),
+                repository=f"{owner.strip()}/{name.strip()}",
+                endpoint=endpoint,
+            )
+            bound_env = dict(bound.get("env") or {})
+            for key in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+                        "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1"):
+                if key in bound_env:
+                    env[key] = bound_env[key]
+        except ValueError:
+            # Invalid repository/endpoint for the bound credential-helper
+            # contract; keep the PAT-compatible GITHUB_TOKEN/GH_TOKEN env
+            # so the push still authenticates without the helper layer.
+            pass
+    return env, (token,)
+
+
+def gh_env_from_bound_credential(
+    acquired: Any, *, base_env: dict[str, str] | None = None
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Build the deferred ``gh`` env projection from a bound credential.
+
+    Shares ``moonmind.auth.github_app.build_gh_env`` so the existing
+    CLI-PR fallback path consumes App credentials with the same
+    server-held/redaction contract as PAT.
+    """
+
+    from moonmind.auth.github_app import build_gh_env
+
+    holder: list[dict[str, Any]] = []
+
+    def _build(raw: bytes) -> None:
+        holder.append(build_gh_env(raw))
+
+    acquired.credential.use_now(_build)
+    projected = holder[0]
+    env = dict(base_env or {})
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    env.update(dict(projected.get("env") or {}))
+    return env, tuple(projected.get("redact") or ())
+
+
 class PublishService:
     """Service to publish changes to Git branches or Pull Requests."""
 
@@ -162,6 +246,7 @@ class PublishService:
         run_command: CommandRunner,
         repo: str | None = None,
         github_token: str | None = None,
+        bound_credential: Any | None = None,
         publish_existing_commits: bool = False,
         publication_branch_name: str | None = None,
         verify_remote: bool = False,
@@ -176,6 +261,12 @@ class PublishService:
             runtime_mode: The runtime that generated the changes (e.g. "codex", "claude").
             repo_dir: Path to the git repository.
             run_command: Async callable that runs a shell command and returns an object with a `stdout` attribute.
+            bound_credential: Optional already-acquired bound credential (PAT or
+                GitHub App) for the admitted operation. When present and no
+                explicit token is given, push/gh env projections consume it
+                through the bound helpers with redaction instead of ambient
+                resolution. Acquire it via
+                ``moonmind.auth.github_app_wiring.acquire_bound_credential_for_connection``.
         """
         if publish_mode == "none":
             return None
@@ -267,6 +358,18 @@ class PublishService:
         token = str(github_token or "").strip()
         push_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         resolved_github_credential = None
+        # A bound acquisition for the admitted operation (PAT or App
+        # installation, already scoped at issuance) sits between an explicit
+        # token and ambient resolution; it needs no repo gate.
+        token_from_bound = False
+        if not token and bound_credential is not None:
+            push_env, bound_redact = push_env_from_bound_credential(
+                bound_credential,
+                base_env=push_env,
+                repository=str(repo or ""),
+            )
+            token = bound_redact[0] if bound_redact else ""
+            token_from_bound = bool(token)
         if repo and not token:
             from moonmind.auth.github_credentials import resolve_github_credential
 
@@ -420,7 +523,7 @@ class PublishService:
                 remote_verified=remote_verified,
             )
 
-        if resolved_github_credential is None:
+        if resolved_github_credential is None and not token_from_bound:
             from moonmind.auth.github_credentials import resolve_github_credential
 
             resolved_github_credential = await resolve_github_credential()
@@ -433,9 +536,15 @@ class PublishService:
             )
 
         verify_cli_is_executable(self._gh_binary)
-        gh_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        gh_env["GITHUB_TOKEN"] = token
-        gh_env["GH_TOKEN"] = token
+        if token_from_bound and bound_credential is not None:
+            gh_env, _gh_bound_redact = gh_env_from_bound_credential(
+                bound_credential,
+                base_env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+        else:
+            gh_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+            gh_env["GITHUB_TOKEN"] = token
+            gh_env["GH_TOKEN"] = token
         if repo:
             gh_env["GH_REPO"] = repo
         await run_command(
