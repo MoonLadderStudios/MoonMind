@@ -429,10 +429,15 @@ OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST_ENV = (
 OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_ENV = (
     "MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS"
 )
-#: Default aggregate ceiling for concurrently allocated generic hosts. Sized to
-#: the documented local Compose path: each on-demand host is a bounded
-#: container with its own writable home and state volume.
-OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY = 8
+#: Default aggregate ceiling for concurrently allocated generic hosts.
+#: Conservative fresh-install default (MoonLadderStudios/MoonMind#4458): one
+#: host. Each on-demand host is a bounded container with its own writable
+#: home and state volume. The default is conservative, not a guarantee that
+#: one host fits every machine: size the configured concurrency so it fits
+#: the deployment's host. Deployments that already export an explicit value
+#: keep it until the operator changes it; higher fixed concurrency remains
+#: available through the same setting.
+OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY = 1
 #: A cold host launch pulls/starts a container and waits for registration, so
 #: launches are bounded per window independently of the steady-state ceiling.
 OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_BURST = 2

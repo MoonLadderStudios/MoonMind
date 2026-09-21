@@ -279,6 +279,55 @@ def require_explicit_resources(resources: "ResourceLimits") -> "ResourceLimits":
     return resources
 
 
+#: Fixed CPU limit an unstarted legacy job's successor executes under
+#: (MoonLadderStudios/MoonMind#4456). This is the same stock product default
+#: new jobs already carry (``ResourceLimits`` default, the ``moonmind
+#: container python-tests`` submission, and the Omnigent bootstrap fixed
+#: successor): deployment-authorized configuration, not a caller-supplied
+#: fallback. Memory is never defaulted here because every persisted document
+#: already carries an explicit ``memoryMiB``; the successor keeps it.
+STOCK_FIXED_CPU_MILLIS = 2000
+
+
+def legacy_fixed_successor_resources(
+    resources: "ResourceLimits",
+) -> "ResourceLimits | None":
+    """Return the executable fixed-resource successor for a legacy request.
+
+    An already-admitted, unstarted job whose persisted resources use a retired
+    interpretation (shared-pool ``cpuMillis=0`` or a ``minimumMemoryMiB``
+    range) cannot be re-executed as written, but it is owed an executable
+    continuation, not a terminal replan message. The successor fixes only the
+    retired semantics -- stock CPUs for a zero CPU value, the persisted
+    ``memoryMiB`` as the single fixed limit -- and preserves every other
+    explicit field (custom memory, pids, GPU, shared memory) unchanged.
+
+    Returns ``None`` when ``resources`` are already explicit (no successor
+    needed) or when no fixed successor can be derived. The input document is
+    never mutated: the original serialized request stays historically readable
+    and remains the idempotency identity. Resolution is a pure deterministic
+    function of the original, so repeated retries converge on the same
+    successor and never create multiple continuations.
+    """
+
+    if not is_historical_shared_or_adaptive(resources):
+        return None
+    successor = resources.model_copy(
+        update={
+            "cpu_millis": (
+                STOCK_FIXED_CPU_MILLIS if resources.cpu_millis < 1
+                else resources.cpu_millis
+            ),
+            "minimum_memory_mib": None,
+        }
+    )
+    try:
+        require_explicit_resources(successor)
+    except ValueError:
+        return None
+    return successor
+
+
 class OutputDeclaration(ContractModel):
     name: str = Field(min_length=1, max_length=128)
     relative_path: str = Field(alias="relativePath", min_length=1, max_length=1000)

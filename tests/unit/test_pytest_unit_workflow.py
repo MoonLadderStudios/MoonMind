@@ -286,16 +286,23 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
         assert "-n auto" in command
         # A hung test must fail its own shard instead of running to the job
         # timeout; faulthandler alone only dumps stacks.
-        assert "--timeout 600" in command
+        # Tight fast-lane per-test bounds (MoonLadderStudios/MoonMind#4369):
+        # 60s unit-fast, 120s API/component and Temporal.
+    assert "--timeout 60" in unit_fast
+    assert "--timeout 120" in api_command
+    assert "--timeout 120" in temporal_command
+    for command in (unit_fast, api_command, temporal_command):
+        assert "--timeout 600" not in command
     # The API shard's 400-test router modules dominate a per-file distribution,
     # so component tests are distributed per test.
     assert "--dist load " in api_command or api_command.rstrip().endswith("--dist load")
     assert "--dist loadfile" not in api_command
     assert "--dist loadfile" in temporal_command
     # Reliability shards run serially with their own short per-test bound
-    # (MoonLadderStudios/MoonMind#4369, #4384): 150s PR / 300s schedule, never the
-    # fast-lane 600s. Step ceilings: ~10-min PR via `timeout 600s` (above the
-    # ~500s heaviest partition load), 12-min schedule via step timeout-minutes.
+    # (MoonLadderStudios/MoonMind#4369, #4384): 150s PR / 300s schedule, never a
+    # raised global default. Step ceilings: ~10-min PR via `timeout 600s`
+    # (above the ~500s heaviest partition load), 12-min schedule via step
+    # timeout-minutes.
     assert "-n auto" not in reliability_command
     assert "--timeout 600" not in reliability_command
     assert "pytest_timeout=150" in reliability_command
@@ -654,7 +661,10 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    assert job["timeout-minutes"] == 30
+    # Per-row job bounds (MoonLadderStudios/MoonMind#4369): fast rows get 15
+    # minutes, reliability rows keep a measured 20-minute bound. The blanket
+    # 30-minute ceiling is replaced, not raised.
+    assert job["timeout-minutes"] == "${{ matrix.job_minutes }}"
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
     # scheduled diagnostics.
@@ -678,6 +688,17 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     # pytest-split groups are 1-based (MoonLadderStudios/MoonMind#4366):
     # suite reliability-shard-N runs --group N.
     assert shards == ["1", "2", "3", "4"]
+    rows = {entry["suite"]: entry for entry in strategy["matrix"]["include"]}
+    assert rows["unit-fast"]["job_minutes"] == 15
+    assert rows["api-component"]["job_minutes"] == 15
+    assert rows["temporal-boundary"]["job_minutes"] == 15
+    for shard in (
+        "reliability-shard-1",
+        "reliability-shard-2",
+        "reliability-shard-3",
+        "reliability-shard-4",
+    ):
+        assert rows[shard]["job_minutes"] == 20
 
 
 def test_backend_matrix_documents_max_parallel_deviation() -> None:
@@ -819,16 +840,16 @@ def test_reliability_shards_enforce_short_step_and_test_deadlines() -> None:
     """MoonLadderStudios/MoonMind#4369, #4384: short reliability budgets.
 
     Each reliability shard uses a short per-test timeout (150s PR / 300s
-    schedule, never the fast-lane 600s) under a ~10-min PR step ceiling
-    (``timeout 600s``, above the ~500s heaviest duration-balanced partition
-    load) and a 12-min schedule step ceiling. The 124 exit from ``timeout``
-    flows through ``PIPESTATUS`` so the evidence hook reports an interrupted
-    run instead of masking it, and the 30-minute job timeout reserves setup,
-    diagnostics, cleanup, and evidence/upload margin.
+    schedule) under a ~10-min PR step ceiling (``timeout 600s``, above the
+    ~500s heaviest duration-balanced partition load) and a 12-min schedule
+    step ceiling. The 124 exit from ``timeout`` flows through ``PIPESTATUS``
+    so the evidence hook reports an interrupted run instead of masking it,
+    and the 20-minute per-row job bound reserves setup, diagnostics,
+    cleanup, and evidence/upload margin.
     """
     workflow = _load_workflow()
     job = workflow["jobs"]["backend-matrix"]
-    assert job["timeout-minutes"] == 30
+    assert job["timeout-minutes"] == "${{ matrix.job_minutes }}"
     steps = {step["name"]: step for step in job["steps"]}
     assert steps["Run hermetic reliability shard"].get("timeout-minutes") == 12
     command = steps["Run hermetic reliability shard"]["run"]

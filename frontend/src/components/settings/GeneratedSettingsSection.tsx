@@ -408,7 +408,7 @@ export function GeneratedSettingsSection({
   canReadAudit,
 }: {
   scope: SettingScope;
-  onScopeChange: (scope: SettingScope) => void;
+  onScopeChange?: ((scope: SettingScope) => void) | undefined;
   canReadAudit: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -501,11 +501,12 @@ export function GeneratedSettingsSection({
   }, [scope]);
 
   const requestScopeChange = (nextScope: SettingScope) => {
-    if (nextScope === scope) {
+    if (nextScope === scope || !onScopeChange) {
       return;
     }
+    const changeScope = onScopeChange;
     requestDeparture(
-      () => onScopeChange(nextScope),
+      () => changeScope(nextScope),
       `Change to ${SCOPE_LABELS[nextScope]} scope? Your unsaved settings draft will be discarded.`,
     );
   };
@@ -580,7 +581,7 @@ export function GeneratedSettingsSection({
   }
 
   return (
-    <section className="space-y-5" aria-label="Generated user and workspace settings">
+    <section className="space-y-5" aria-label="Generated settings">
       <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
@@ -589,6 +590,7 @@ export function GeneratedSettingsSection({
               Configure eligible settings from backend-owned descriptors. Validation, sensitivity, and authorization remain server-side.
             </p>
           </div>
+          {onScopeChange ? (
           <div className="flex rounded-full border border-slate-300 p-1 dark:border-slate-700" aria-label="Settings scope">
             {(['workspace', 'user'] as SettingScope[]).map((candidate) => (
               <button
@@ -605,6 +607,7 @@ export function GeneratedSettingsSection({
               </button>
             ))}
           </div>
+          ) : null}
         </div>
       </div>
 

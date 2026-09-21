@@ -363,7 +363,7 @@ async def test_unavailable_reviews_are_never_committed():
         _payload(), reviewer=_Failing("unused"), committed_store=store
     )
     assert result["verdict"] == "NO_DETERMINATION"
-    assert result["recommendedNextAction"] == "needs_human"
+    assert result["recommendedNextAction"] == "blocked"
     assert result["recoverableInCurrentRuntime"] is False
     assert store == {}
     assert (
@@ -374,18 +374,19 @@ async def test_unavailable_reviews_are_never_committed():
     )
 
 
-def test_workflow_boundary_never_reruns_business_step_for_unavailable_reviewer():
+@pytest.mark.parametrize("action", ["blocked", "needs_human"])
+def test_workflow_boundary_never_reruns_business_step_for_unavailable_reviewer(action):
     """Scheduler harness: an unavailable review must not authorize another attempt.
 
     run.py branches on review_gate_retry_allowed(); NO_DETERMINATION with
-    needs_human + recoverable False must refuse retry so the completed
+    blocked or needs_human + recoverable False must refuse retry so the completed
     business step is preserved and the run stops instead of re-executing.
     """
     unavailable = parse_step_gate_result(
         {
             "verdict": "NO_DETERMINATION",
             "confidence": 0.0,
-            "recommendedNextAction": "needs_human",
+            "recommendedNextAction": action,
             "recoverableInCurrentRuntime": False,
         }
     ).to_review_verdict()

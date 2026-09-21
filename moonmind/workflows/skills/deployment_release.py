@@ -242,6 +242,14 @@ async def container_health(name):
 def readiness_matches(state, digest):
     if state.get("ready") is not True:
         return False
+    # A worker can be ready while routing still targets the outgoing version:
+    # startup parks rather than displacing a live route, and only a background
+    # task retries the promotion. Treating that as verified issued a success
+    # receipt while ordinary work still routed elsewhere, with no proof the
+    # handoff ever completed. Verification fails closed until routing moves.
+    routing = state.get("releaseRouting")
+    if isinstance(routing, dict) and routing.get("status") == "awaiting_promotion":
+        return False
     if "children" in state:
         children = state["children"]
         return bool(children) and all(
@@ -707,792 +715,89 @@ async def execute_detached(executor, inputs, context):
     return result
 
 
-class ReleaseCohort:
-    """Qualify every candidate queue while the current fleet remains alive."""
+async def verify_installed_fleet(runner, image, *, expected=None, attempts=60):
+    """Wait until every installed fleet worker serves the requested release.
 
-    def __init__(self, runner, directory, owner):
-        self.runner, self.directory, self.owner = runner, directory, owner
-        self.names = []
+    Updates recreate the installed fleet in place, so readiness is asserted
+    against that one fleet: exactly one container per fleet service, each
+    reporting the expected release digest.
+    """
+    from moonmind.release_identity import installed_release
+    from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
 
-    async def _discover_installed_serving_image(self):
-        """Image every installed fleet agrees on, without readiness evidence.
-
-        Worker readiness attests the egress gateway, so a broken gateway
-        fails every probe. Image identity is observable without it, which
-        lets the caller repair the gateway before requiring the readiness
-        proof that names the serving image.
-        """
-        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
-
-        images = set()
+    expected = expected or installed_release()["digest"]
+    for _ in range(attempts):
+        ready = True
         for service in _FLEET_SERVICE_NAMES.values():
-            found = await self.runner._run_compose_command(
-                ("docker", "compose", "ps", "-q", service)
+            found = await runner._run_compose_command(
+                ("docker", "compose", "ps", "-q", service),
+                requested_image=image,
             )
-            _ensure_command_succeeded("inspect previous release", found)
+            _ensure_command_succeeded("inspect installed worker", found)
             identifiers = found["stdout"].split()
             if len(identifiers) != 1:
-                raise ValueError("Previous release has no coherent live worker owner")
-            observed = json.loads(await docker("inspect", identifiers[0]))[0]
-            images.add(observed["Image"])
-        if len(images) != 1:
-            raise ValueError("Previous release spans different images")
-        return images.pop()
-
-    async def resolve_serving_image(self, version, deployment):
-        """Serving image authority without gateway-dependent readiness.
-
-        Returns ``(retained, provenance)`` where provenance is ``receipt``
-        for a durable ``retained.json``, ``evidence`` for a successful
-        release or availability receipt, and ``installed`` for
-        live-container discovery. Only the ``installed`` provenance still
-        needs a readiness proof, which the caller performs after repairing
-        the gateway (see ``record_resolved_serving_image``).
-        """
-        record_file = self.directory / "retained.json"
-        if record_file.exists():
-            retained = json.loads(record_file.read_text())
-            if retained["owner"] != self.owner or retained["version"] != version:
-                raise ValueError("Retained release authority differs")
-            return retained, "receipt"
-        evidence = await successful_release_image(self.directory.parent, version)
-        if evidence is not None:
-            return {"owner": self.owner, "version": version, **evidence}, "evidence"
-        return {
-            "owner": self.owner,
-            "version": version,
-            "image": await self._discover_installed_serving_image(),
-            "retired": [],
-        }, "installed"
-
-    async def record_resolved_serving_image(self, version, deployment, resolved):
-        """Persist a resolved serving image, proving readiness when discovered.
-
-        Receipt and release-evidence provenances already carry their
-        authority. Live-container discovery still needs its coherent
-        readiness proof, which must run only after the caller has repaired
-        the egress gateway the probes attest.
-        """
-        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
-
-        record_file = self.directory / "retained.json"
-        retained, provenance = resolved
-        if provenance == "receipt":
-            return retained
-        if provenance == "installed":
-            expected_digest = version.removeprefix(deployment + ".")
-            images = set()
-            for service in _FLEET_SERVICE_NAMES.values():
-                found = await self.runner._run_compose_command(
-                    ("docker", "compose", "ps", "-q", service)
-                )
-                _ensure_command_succeeded("inspect previous release", found)
-                identifiers = found["stdout"].split()
-                if len(identifiers) != 1 or not readiness_matches(
-                    await worker_readiness(identifiers[0]), expected_digest
-                ):
-                    raise ValueError(
-                        "Previous release has no coherent live worker owner"
-                    )
-                observed = json.loads(await docker("inspect", identifiers[0]))[0]
-                images.add(observed["Image"])
-            if len(images) != 1 or retained["image"] not in images:
-                raise ValueError("Previous release spans different images")
-        write_record(record_file, retained)
-        return retained
-
-    async def record_serving_image(self, version, deployment):
-        """Capture recovery authority while the serving image is observable.
-
-        Recording an image does not launch another worker or change routing.
-        The same receipt is consumed by normal updates and outage recovery.
-        """
-        return await self.record_resolved_serving_image(
-            version, deployment, await self.resolve_serving_image(version, deployment)
-        )
-
-    async def qualify_provider_managers(self, client):
-        """Gate promotion on provider-profile manager singleton liveness.
-
-        MoonLadderStudios/MoonMind#4363: a release must not be promoted while
-        a ``provider-profile-manager:*`` singleton is wedged in a
-        workflow-task failure loop. The singleton keeps ``running=true`` with
-        every ``get_state`` query failing, slot signals queue forever, and
-        waiters park in ``AWAITING SLOT`` despite free DB capacity. This gate
-        fails closed with precise evidence and the recovery owner instead of
-        reporting success past a wedged singleton.
-        """
-        from moonmind.workflows.skills.provider_manager_liveness import (
-            collect_provider_manager_liveness,
-            describe_liveness_block,
-            evaluate_provider_manager_liveness,
-            read_db_held_lease_counts,
-        )
-
-        db_held_leases = await read_db_held_lease_counts()
-        observations = await collect_provider_manager_liveness(
-            client, db_held_leases=db_held_leases
-        )
-        disposition = evaluate_provider_manager_liveness(observations)
-        if disposition["blocked"] and db_held_leases is not None and any(
-            entry.get("finding") == "ledger_disagreement"
-            for entry in (disposition.get("evidence") or [])
-            if isinstance(entry, dict)
-        ):
-            # The DB count and the manager queries are not one atomic
-            # observation: a concurrent grant or release can move the ledger
-            # between the two reads and present as corruption. Confirm with
-            # one bounded reread before aborting promotion.
-            reread = await read_db_held_lease_counts()
-            if reread is not None:
-                db_held_leases = reread
-                observations = await collect_provider_manager_liveness(
-                    client, db_held_leases=db_held_leases
-                )
-                disposition = evaluate_provider_manager_liveness(observations)
-        write_record(
-            self.directory / "manager-liveness.json",
-            {
-                "owner": self.owner,
-                "dbLedger": (
-                    "reconciled" if db_held_leases is not None else "unavailable"
-                ),
-                **disposition,
-            },
-        )
-        if disposition["blocked"]:
-            raise RuntimeError(
-                "Provider-profile manager singletons are not healthy: "
-                f"{describe_liveness_block(disposition)}. "
-                f"{disposition['recoveryHint']}"
-            )
-
-    async def _retained_definition_runner(self, image):
-        """Render the retained cohort from the definition its image owns.
-
-        A deployment checkout bind-mounts the *current* Compose file, whose
-        gateway definition may be incompatible with the retained image: the
-        v1 gateway used ``ubuntu/squid`` with legacy labels and a direct
-        config mount, while the current definition needs
-        ``/opt/moonmind-egress/policy.sh`` from the new image. Recreating
-        the gateway from the current definition with the retained image
-        leaves it exiting. Render the definition the retained image embeds
-        instead; the deployment-owned runner identity (project, environment,
-        override files) still accompanies the command through the replaced
-        runner.
-        """
-        digest = hashlib.sha256(image.encode()).hexdigest()[:16]
-        retained_compose = self.directory / f"retained-compose-{digest}.yaml"
-        if not retained_compose.exists():
-            try:
-                content = await docker(
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--entrypoint",
-                    "cat",
-                    image,
-                    "/app/release/docker-compose.yaml",
-                )
-            except RuntimeError:
-                # Images predating the embedded release definition keep
-                # the previous behavior: render from the deployment
-                # checkout instead of failing worker retention outright.
-                return self.runner
-            _atomic_write_bytes(retained_compose, content.encode())
-        return replace(self.runner, compose_file=str(retained_compose))
-
-    async def preserve_previous(self, previous, deployment, candidate):
-        """Keep the exact previous image polling until Temporal drains it.
-
-        Returns the retained definition runner and image so a later step
-        that replaces shared substrate (the candidate gateway upgrade) can
-        restore the retained definition if qualification fails afterwards.
-        """
-        if previous in {"", "__unversioned__", f"{deployment}.{candidate}"}:
-            return None, None
-        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
-
-        expected_digest = previous.removeprefix(deployment + ".")
-        # The serving image is discovered without gateway-dependent readiness
-        # so an initial installation without any release receipt can still
-        # reach the recovery below: worker readiness attests the gateway, so
-        # requiring the proof before the repair leaves the repair unreachable.
-        retained, provenance = await self.resolve_serving_image(previous, deployment)
-        retained_runner = await self._retained_definition_runner(retained["image"])
-        gateway = await self.restore_gateway(retained_runner, retained["image"])
-        retained = await self.record_resolved_serving_image(
-            previous, deployment, (retained, provenance)
-        )
-        for fleet, service in _FLEET_SERVICE_NAMES.items():
-            name = f"mm-retained-{self.directory.name[:16]}-{fleet.replace('_', '-')}"
-            existing = await inspect_owned(name, self.owner)
-            if existing is None:
-                launched = await retained_runner._run_compose_command(
-                    (
-                        "docker",
-                        "compose",
-                        "run",
-                        "-d",
-                        "--no-deps",
-                        "--name",
-                        name,
-                        "--label",
-                        f"moonmind.release.owner={self.owner}",
-                        "-e",
-                        "MOONMIND_RELEASE_QUALIFICATION=1",
-                        service,
-                    ),
-                    requested_image=retained["image"],
-                )
-                existing = await inspect_owned(name, self.owner)
-                if existing is None:
-                    _ensure_command_succeeded("retain previous release", launched)
-                    raise RuntimeError(
-                        "Previous release replacement has no verified owner"
-                    )
-            if existing["Image"] != retained["image"]:
-                raise ValueError("Retained worker image differs from previous release")
-            if not existing["State"]["Running"]:
-                await docker("start", name)
-            for attempt in range(60):
-                try:
-                    if readiness_matches(await worker_readiness(name), expected_digest):
-                        break
-                except RuntimeError:
-                    # A retained worker may still be booting; the loop is bounded.
-                    pass
-                await asyncio.sleep(2)
-            else:
-                from moonmind.utils.logging import redact_sensitive_text
-
-                try:
-                    tail = await docker_logs_tail(name)
-                except (RuntimeError, OSError, TimeoutError) as exc:
-                    # Auxiliary log collection must never replace the
-                    # established retention failure with an unrelated one.
-                    tail = f"unavailable:{exc}"
-                raise RuntimeError(
-                    "Previous release could not retain compatible pollers"
-                    f" (fleet={fleet}; gateway={gateway or 'unknown'}; "
-                    + "retained-logs="
-                    + redact_sensitive_text(str(tail) or "(empty)")[-1500:]
-                    + ")"
-                )
-        return retained_runner, retained["image"]
-
-    async def restore_gateway(self, runner, image, attempts=60, force=False):
-        """Repair the deployment-owned egress gateway the cohort depends on.
-
-        Workers attest the singular restricted-egress gateway before they
-        report ready, so a gateway left unhealthy by an out-of-band change
-        blocks every release — including the one that installs its
-        replacement. The gateway is recreated from the definition this
-        cohort's own image owns, never from a newer one, so the release that
-        follows still owns the upgrade. Its observed health is returned for
-        the caller's diagnosis whether or not the repair converged.
-
-        A recreate that does not take is retried inside this window rather
-        than left for the next release attempt. Repairing exactly once meant
-        a gateway needing a second recreate failed retention, failed the
-        whole attempt, and only converged because the job retried the entire
-        update — minutes of wall clock for a repair that belongs here. Each
-        recreate still gets a cooldown to converge on its own, so a gateway
-        that is coming up is never bounced.
-
-        ``force`` recreates from the given definition even while healthy.
-        Only the qualification rollback uses it, to restore the retained
-        definition after a candidate gateway upgrade when later checks fail.
-        """
-        from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
-
-        repaired_at = None
-        for attempt in range(attempts):
-            health = await container_health(EGRESS_GATEWAY_REF)
-            if health == "healthy" and not (force and repaired_at is None):
-                return health
-            if health is None:
-                # No gateway container, or one that publishes no health: this
-                # deployment either does not run a gateway or has not been
-                # brought up. Creating one belongs to the stack's own ``up``,
-                # never to this recovery path.
-                return health
-            # A gateway that is still starting owns the first half of the
-            # window on its own: recovery must not bounce deployment state
-            # that was about to converge. The same restraint spaces out the
-            # retries: a recreate keeps the cooldown to report healthy before
-            # another one replaces it. ``force`` recreates exactly once up
-            # front and then rejoins the same restraint.
-            due = (
-                repaired_at is None
-                or attempt - repaired_at >= _GATEWAY_REPAIR_COOLDOWN_POLLS
-            )
-            if (force and repaired_at is None) or (
-                due and (health != "starting" or attempt * 2 >= attempts)
-            ):
-                repaired_at = attempt
-                result = await runner._run_compose_command(
-                    (
-                        "docker",
-                        "compose",
-                        "up",
-                        "-d",
-                        "--no-deps",
-                        "--force-recreate",
-                        EGRESS_GATEWAY_SERVICE,
-                    ),
-                    requested_image=image,
-                )
-                _ensure_command_succeeded("restore release egress gateway", result)
-            await asyncio.sleep(2)
-        return health
-
-    async def align_gateway_to_candidate(self, image, attempts=60):
-        """Serve the candidate's egress definition before candidates attest.
-
-        Worker readiness attests the singular restricted-egress gateway
-        exactly, and retention repairs that gateway from the previous
-        definition only. An egress-policy change (new files or digests)
-        therefore deadlocks canary qualification: candidates fail against
-        the old gateway, while retained workers would fail against a
-        prematurely upgraded one. Retention has already converged above
-        against the previous definition, and running workers attest only at
-        startup, so upgrading the gateway here leaves retained pollers
-        valid while letting candidates prove the new enforcement.
-
-        The candidate definition is observed through the same Compose
-        service entrypoint candidates launch with, so deployment-owned
-        environment (package-registry class) and policy mounts apply
-        identically. The no-op path additionally requires the live gateway
-        to be healthy and to present the candidate's enforcer and network
-        contract, not just matching files. A deployment that runs no
-        gateway is left alone.
-        """
-        from moonmind.workflows.temporal.workers import (
-            AGENT_RUNTIME_FLEET,
-            _FLEET_SERVICE_NAMES,
-        )
-
-        service = _FLEET_SERVICE_NAMES[AGENT_RUNTIME_FLEET]
-        probe = (
-            "import json;"
-            "from moonmind.security import egress as _egress;"
-            "print(json.dumps({"
-            "'liveDirectory': _egress.EGRESS_LIVE_DIRECTORY,"
-            "'files': _egress.EGRESS_FILE_DIGESTS,"
-            "'enforcer': _egress.ENFORCER_IMPLEMENTATION,"
-            "'networks': sorted(_egress._EXPECTED_GATEWAY_NETWORKS),"
-            "}))"
-        )
-        try:
-            rendered = await self.runner._run_compose_command(
-                (
-                    "docker",
-                    "compose",
-                    "run",
-                    "--rm",
-                    "--no-deps",
-                    "-T",
-                    "--entrypoint",
-                    "python",
-                    service,
-                    "-c",
-                    probe,
-                ),
-                requested_image=image,
-                max_stdout_chars=None,
-            )
-            _ensure_command_succeeded(
-                "observe candidate gateway definition", rendered
-            )
-            expected = json.loads(rendered["stdout"])
-            files = dict(expected.get("files") or {})
-            live_directory = str(expected.get("liveDirectory") or "").strip()
-            enforcer = str(expected.get("enforcer") or "").strip()
-            networks = {
-                str(name).strip()
-                for name in (expected.get("networks") or [])
-                if str(name).strip()
-            }
-        except (ToolFailure, ValueError, AttributeError, TypeError, KeyError) as exc:
-            raise RuntimeError(
-                "candidate gateway definition cannot be observed"
-            ) from exc
-        if not files or not live_directory or not enforcer or not networks:
-            raise RuntimeError("candidate gateway definition is empty")
-        want = {
-            f"{directory}/{name}": str(digest).removeprefix("sha256:")
-            for directory in ("/etc/squid", live_directory)
-            for name, digest in sorted(files.items())
-        }
-
-        from moonmind.security.egress import EGRESS_GATEWAY_REF
-
-        try:
-            rows = json.loads(await docker("inspect", EGRESS_GATEWAY_REF))
-            live = rows[0]
-            live_labels = (live.get("Config") or {}).get("Labels") or {}
-            live_networks = set(
-                ((live.get("NetworkSettings") or {}).get("Networks") or {})
-            )
-        except (RuntimeError, ValueError, LookupError, TypeError, AttributeError):
-            return None
-
-        async def observed_files():
-            # A gateway that cannot execute the observation does not serve
-            # the contract; fall through to recreation rather than reporting
-            # a read-only alignment callers cannot act on.
-            try:
-                out = await docker(
-                    "exec", EGRESS_GATEWAY_REF, "sha256sum", *sorted(want)
-                )
-            except RuntimeError:
-                return {}
-            try:
-                seen = {}
-                for line in out.splitlines():
-                    parts = line.split()
-                    seen[parts[1]] = parts[0]
-            except (IndexError, AttributeError, TypeError):
-                return {}
-            return seen
-
-        def contract_matches(seen):
-            return (
-                seen == want
-                and live_labels.get("moonmind.egress.enforcer") == enforcer
-                and live_networks == networks
-            )
-
-        from moonmind.security.egress import EGRESS_GATEWAY_SERVICE
-
-        if contract_matches(await observed_files()):
-            for _ in range(attempts):
-                if await container_health(EGRESS_GATEWAY_REF) == "healthy":
-                    return "aligned"
-                await asyncio.sleep(2)
-        result = await self.runner._run_compose_command(
-            (
-                "docker",
-                "compose",
-                "up",
-                "-d",
-                "--no-deps",
-                "--force-recreate",
-                EGRESS_GATEWAY_SERVICE,
-            ),
-            requested_image=image,
-        )
-        _ensure_command_succeeded("upgrade release egress gateway", result)
-        for _ in range(attempts):
-            if await container_health(EGRESS_GATEWAY_REF) == "healthy":
+                ready = False
                 break
-            await asyncio.sleep(2)
-        else:
-            raise RuntimeError("upgraded egress gateway did not become healthy")
-        try:
-            rows = json.loads(await docker("inspect", EGRESS_GATEWAY_REF))
-            live = rows[0]
-            live_labels = (live.get("Config") or {}).get("Labels") or {}
-            live_networks = set(
-                ((live.get("NetworkSettings") or {}).get("Networks") or {})
-            )
-        except (RuntimeError, ValueError, LookupError, TypeError, AttributeError):
-            live_labels, live_networks = {}, set()
-        if not contract_matches(await observed_files()):
-            raise RuntimeError(
-                "upgraded egress gateway serves a stale contract; "
-                "the deployment checkout policy files may predate the candidate image"
-            )
-        return "upgraded"
-
-    async def qualify_api(self, image):
-        name = f"mm-candidate-{self.directory.name[:16]}-api"
-        if name not in self.names:
-            self.names.append(name)
-        existing = await inspect_owned(name, self.owner)
-        if existing is None:
-            launched = await self.runner._run_compose_command(
-                (
-                    "docker",
-                    "compose",
-                    "run",
-                    "-d",
-                    "--no-deps",
-                    "--name",
-                    name,
-                    "--label",
-                    f"moonmind.release.owner={self.owner}",
-                    "api",
-                ),
-                requested_image=image,
-            )
-            existing = await inspect_owned(name, self.owner)
-            if existing is None:
-                _ensure_command_succeeded("launch candidate API", launched)
-                raise RuntimeError("Candidate API launch has no verified owner")
-        expected_image = json.loads((self.directory / "request.json").read_text())[
-            "imageId"
-        ]
-        if existing["Image"] != expected_image:
-            raise ValueError("Candidate API image differs from selected release")
-        for attempt in range(60):
             try:
-                await docker(
-                    "exec",
-                    name,
-                    "python",
-                    "-m",
-                    "moonmind.workflows.skills.deployment_surface",
-                    "http://localhost:8000",
-                )
-                return
+                state = await worker_readiness(identifiers[0])
             except RuntimeError:
-                await asyncio.sleep(2)
-        raise RuntimeError(
-            "Candidate API did not pass health, dashboard, asset and read-only API qualification"
-        )
+                ready = False
+                break
+            if not readiness_matches(state, expected):
+                ready = False
+                break
+        if ready:
+            return {
+                "digest": expected,
+                "status": "verified",
+                "fleets": len(_FLEET_SERVICE_NAMES),
+            }
+        await asyncio.sleep(2)
+    raise RuntimeError(
+        "Installed fleet did not become ready for the requested release"
+    )
 
-    async def qualify(self, image):
-        from moonmind.config.settings import settings
-        from moonmind.release_identity import installed_release
-        from moonmind.workflows.temporal.client import get_temporal_client
-        from moonmind.workflows.temporal.release_routing import (
-            current_version,
-            promote_version,
-            routing_snapshot,
-        )
-        from moonmind.workflows.temporal.workers import (
-            _FLEET_SERVICE_NAMES,
-            WORKFLOW_FLEET,
-            build_all_worker_topologies,
-        )
 
-        release = installed_release()
-        if release is None:
-            raise ValueError("Release updater must execute from an immutable image")
-        await require_coherent_images(self.runner, image)
-        deployment = (
-            os.environ.get("TEMPORAL_WORKER_DEPLOYMENT_NAME")
-            or "moonmind-workflow-fleet"
-        )
-        topologies = build_all_worker_topologies()
-        client = await get_temporal_client(
-            settings.temporal.address, settings.temporal.namespace
-        )
-        from temporalio.service import RPCError, RPCStatusCode
+async def migrate_omnigent(runner, owner, image, *, actor="release"):
+    """Advance the singular Omnigent release; no-op when already aligned.
 
-        try:
-            snapshot = await routing_snapshot(client, deployment)
-            previous = current_version(snapshot)
-        except RPCError as exc:
-            if exc.status != RPCStatusCode.NOT_FOUND:
-                raise
-            previous = "__unversioned__"
-        record_file = self.directory / "routing.json"
-        if record_file.exists():
-            prior = json.loads(record_file.read_text())
-            if prior["candidate"] != release["digest"]:
-                raise ValueError("Release candidate changed within one update")
-            previous = prior["previous"]
-        else:
-            write_record(
-                record_file,
-                {
-                    "previous": previous,
-                    "candidate": release["digest"],
-                    "deployment": deployment,
-                },
-            )
-        retained_runner, retained_image = await self.preserve_previous(
-            previous, deployment, release["digest"]
-        )
-        # Retention converged against the previous gateway definition while
-        # running workers attest only at startup. Serve the candidate's
-        # egress definition now so canary workers can prove the new
-        # enforcement; without this an egress-policy change deadlocks
-        # qualification (candidates fail closed against the old gateway).
-        gateway_state = await self.align_gateway_to_candidate(image)
-        try:
-            for topology in topologies:
-                service = _FLEET_SERVICE_NAMES[topology.fleet]
-                name = f"mm-candidate-{self.directory.name[:16]}-{topology.fleet.replace('_', '-')}"
-                self.names.append(name)
-                existing = await inspect_owned(name, self.owner)
-                if existing is None:
-                    launched = await self.runner._run_compose_command(
-                        (
-                            "docker",
-                            "compose",
-                            "run",
-                            "-d",
-                            "--no-deps",
-                            "--name",
-                            name,
-                            "--label",
-                            f"moonmind.release.owner={self.owner}",
-                            "-e",
-                            "MOONMIND_RELEASE_QUALIFICATION=1",
-                            service,
-                        ),
-                        requested_image=image,
-                    )
-                    existing = await inspect_owned(name, self.owner)
-                    if existing is None:
-                        _ensure_command_succeeded("launch candidate", launched)
-                        raise RuntimeError("Candidate launch has no verified owner")
-            target = f"{deployment}.{release['digest']}"
-            for attempt in range(90):
-                try:
-                    observed = current_version(await routing_snapshot(client, deployment))
-                except RPCError as exc:
-                    if exc.status != RPCStatusCode.NOT_FOUND:
-                        raise
-                    await asyncio.sleep(2)
-                    continue
-                if observed not in {previous, target}:
-                    raise ValueError("Another release changed routing before promotion")
-                # Wait for all container readiness probes before the pinned canary.
-                states = []
-                for name in self.names:
-                    try:
-                        readiness = await worker_readiness(name)
-                    except RuntimeError:
-                        readiness = {}
-                    states.append(readiness)
-                if all(readiness_matches(row, release["digest"]) for row in states):
-                    await self.qualify_api(image)
-                    await self.qualify_provider_managers(client)
-                    return await promote_version(
-                        client,
-                        deployment=deployment,
-                        build_id=release["digest"],
-                        expected_current=previous,
-                        task_queue=topologies[0].task_queues[0],
-                        workflow_queues=tuple(
-                            queue
-                            for item in topologies
-                            if item.fleet == WORKFLOW_FLEET
-                            for queue in item.task_queues
-                        ),
-                        task_queues=tuple(
-                            dict.fromkeys(
-                                queue for item in topologies for queue in item.task_queues
-                            )
-                        ),
-                        canary_id=f"mm-release-canary-{self.directory.name}",
-                    )
-                await asyncio.sleep(2)
-            raise RuntimeError(
-                "Candidate fleet did not become ready; current routing was retained"
-            )
-        except Exception:
-            # The candidate gateway upgrade is the one shared-gateway change
-            # in this flow. When anything afterwards fails, restore the
-            # retained definition before surfacing the error so the still
-            # routed previous workers keep the egress they attested. The
-            # original failure stands; a failed rollback must never replace
-            # it or block the next attempt's diagnosis.
-            if gateway_state == "upgraded" and retained_runner is not None:
-                try:
-                    await self.restore_gateway(
-                        retained_runner, retained_image, force=True
-                    )
-                except Exception:
-                    # Best-effort rollback: a failed restore must not mask
-                    # the original qualification failure below.
-                    pass
-            raise
+    Runs inside the primary success path so an omnigent migration failure
+    blocks the release receipt exactly like a fleet verification failure.
+    """
+    from moonmind.workflows.skills.deployment_execution import (
+        FileDesiredStateStore,
+    )
+    from moonmind.workflows.skills.omnigent_release import (
+        migrate_omnigent_release,
+        production_drivers,
+    )
 
-    async def verify_installed(self, image, *, expected=None, attempts=60):
-        from moonmind.release_identity import installed_release
-        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
-
-        expected = expected or installed_release()["digest"]
-        for attempt in range(attempts):
-            ready = True
-            for service in _FLEET_SERVICE_NAMES.values():
-                found = await self.runner._run_compose_command(
-                    ("docker", "compose", "ps", "-q", service),
-                    requested_image=image,
-                )
-                _ensure_command_succeeded("inspect installed worker", found)
-                identifiers = found["stdout"].split()
-                if len(identifiers) != 1:
-                    ready = False
-                    break
-                try:
-                    state = await worker_readiness(identifiers[0])
-                except RuntimeError:
-                    ready = False
-                    break
-                if not readiness_matches(state, expected):
-                    ready = False
-                    break
-            if ready:
-                return {
-                    "digest": expected,
-                    "status": "verified",
-                    "fleets": len(_FLEET_SERVICE_NAMES),
-                }
-            await asyncio.sleep(2)
-        raise RuntimeError(
-            "Installed worker cohort did not become ready; candidate workers retain routing"
+    store = FileDesiredStateStore(
+        env_file_path=os.environ.get(
+            "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", ""
+        ),
+        json_file_path=os.environ.get(
+            "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", ""
         )
-
-    async def cleanup(self):
-        for name in self.names:
-            existing = await inspect_owned(name, self.owner)
-            if existing:
-                await docker("stop", "--time", "300", name)
-                observed = await inspect_owned(name, self.owner)
-                if observed and observed["State"]["Running"]:
-                    raise RuntimeError("Candidate worker did not drain")
-                await docker("rm", name)
-
-    async def migrate_omnigent(self, image, *, actor="release"):
-        """Advance the singular Omnigent release; no-op when already aligned.
-
-        Runs inside the primary success path so an omnigent migration failure
-        blocks the release receipt exactly like a fleet verification failure:
-        the retained fleet owns recovery and a resume converges instead of
-        duplicating completed steps.
-        """
-        from moonmind.workflows.skills.deployment_execution import (
-            FileDesiredStateStore,
-        )
-        from moonmind.workflows.skills.omnigent_release import (
-            migrate_omnigent_release,
-            production_drivers,
-        )
-
-        store = FileDesiredStateStore(
-            env_file_path=os.environ.get(
-                "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", ""
-            ),
-            json_file_path=os.environ.get(
-                "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", ""
-            )
-            or None,
-        )
-        if not str(
-            os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
-        ).strip():
-            # No durable desired-state file: the singular record has nowhere
-            # to live, so there is nothing to migrate. The receipt says so
-            # explicitly instead of pretending alignment was verified.
-            return {"status": "skipped", "reason": "no durable desired-state file"}
-        return await migrate_omnigent_release(
-            store=store,
-            runner=self.runner,
-            owner=self.owner,
-            moonmind_image=image,
-            drivers=production_drivers(
-                runner=self.runner, moonmind_image=image, actor=actor
-            ),
-            actor=actor,
-        )
+        or None,
+    )
+    if not str(
+        os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
+    ).strip():
+        # No durable desired-state file: the singular record has nowhere to
+        # live, so there is nothing to migrate. The receipt says so explicitly
+        # instead of pretending alignment was verified.
+        return {"status": "skipped", "reason": "no durable desired-state file"}
+    return await migrate_omnigent_release(
+        store=store,
+        runner=runner,
+        owner=owner,
+        moonmind_image=image,
+        drivers=production_drivers(
+            runner=runner, moonmind_image=image, actor=actor
+        ),
+        actor=actor,
+    )
 
 
 async def verify_operator_access(image, urls, owner, *, expected_release=None):
@@ -1631,8 +936,6 @@ async def _run_job_body(request_file):
             executor.runner.compose_file or "/app/release/docker-compose.yaml"
         ),
     )
-    cohort = ReleaseCohort(runner, request_file.parent, owner)
-    context["release_cohort"] = cohort
     parsed = dict(record["authored"]["inputs"])
     repository, digest = record["image"].split("@", 1)
     parsed["image"] = {
@@ -1647,12 +950,6 @@ async def _run_job_body(request_file):
             if primary["owner"] != owner:
                 raise ValueError("Deployment result owner differs")
             result = ToolResult(**primary["result"])
-            from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
-
-            cohort.names = [
-                f"mm-candidate-{request_file.parent.name[:16]}-{fleet.replace('_', '-')}"
-                for fleet in _FLEET_SERVICE_NAMES
-            ] + [f"mm-candidate-{request_file.parent.name[:16]}-api"]
         else:
             operator_targets = await prepare_operator_access(
                 runner, record["image"], request_file.parent, owner,
@@ -1686,10 +983,17 @@ async def _run_job_body(request_file):
                     reason = result.outputs.get("failure", {}).get("reason")
                     raise RuntimeError(
                         reason
-                        or "Release verification did not establish completion; retained workers own recovery"
+                        or (
+                            "Release verification did not establish completion. "
+                            "The installed fleet is whatever this attempt left "
+                            "running; no retained cohort exists and maintenance "
+                            "does not resume this job. Re-run "
+                            "./tools/update-moonmind.sh to start a fresh audited "
+                            "release."
+                        )
                     )
                 if result.status == "COMPLETED":
-                    readiness = await cohort.verify_installed(record["image"])
+                    readiness = await verify_installed_fleet(runner, record["image"])
                     readiness["operatorAccess"] = await verify_operator_access(
                         record["image"],
                         operator_targets,
@@ -1707,7 +1011,9 @@ async def _run_job_body(request_file):
                         readiness_outputs["sourceRevision"] = expected_revision
                     result = replace(result, outputs=readiness_outputs)
                     try:
-                        omnigent_receipt = await cohort.migrate_omnigent(
+                        omnigent_receipt = await migrate_omnigent(
+                            runner,
+                            owner,
                             record["image"]
                         )
                     except Exception as exc:
@@ -1719,8 +1025,12 @@ async def _run_job_body(request_file):
                             },
                         )
                         raise RuntimeError(
-                            f"Omnigent release migration did not establish "
-                            f"completion ({exc}); retained workers own recovery"
+                            "Omnigent release migration did not establish "
+                            f"completion ({exc}). The MoonMind fleet was "
+                            "recreated and verified; only the Omnigent release "
+                            "is unaligned. No retained cohort exists and "
+                            "maintenance does not resume this job. Re-run "
+                            "./tools/update-moonmind.sh to converge it."
                         ) from exc
                     result = replace(
                         result,
@@ -1730,30 +1040,8 @@ async def _run_job_body(request_file):
                         },
                     )
             write_record(primary_file, {"owner": owner, "result": result.to_payload()})
-        if result.status == "COMPLETED":
-            # Cleanup is auxiliary to the verified deployment. Preserve primary
-            # success and durable cleanup ownership if bounded cleanup exhausts.
-            cleanup_error = None
-            for attempt in range(3):
-                try:
-                    await cohort.cleanup()
-                    cleanup_error = None
-                    break
-                except RuntimeError as exc:
-                    cleanup_error = str(exc)
-                    await asyncio.sleep(attempt + 1)
-            if cleanup_error:
-                from moonmind.utils.logging import redact_sensitive_text
-
-                result = replace(
-                    result,
-                    outputs={
-                        **result.outputs,
-                        "cleanupPending": True,
-                        "cleanupOwner": owner,
-                        "cleanupReason": redact_sensitive_text(cleanup_error)[:300],
-                    },
-                )
+        # Recreate-in-place leaves no parallel cohort behind, so a verified
+        # release has nothing left to drain or remove.
         if result.status == "COMPLETED" and expected_revision:
             # The terminal receipt is self-sufficient: it carries the verified
             # source revision alongside the digest and readiness evidence, so
@@ -1825,7 +1113,12 @@ async def run_job(request_file):
             outcome = json.loads(primary_file.read_text())
             if outcome.get("owner") != owner:
                 raise ValueError("Release primary receipt owner differs")
-            outcome["result"]["outputs"].update(cleanupPending=True, cleanupOwner=owner)
+            # Recreate-in-place has no cleanup phase. Reporting one hid the
+            # finalization error behind an operation that no longer exists
+            # and named an owner with no recovery action.
+            outcome["result"]["outputs"].update(
+                recoveryOwner=owner, finalError=error
+            )
         else:
             attempt_file = request_file.parent / "attempt-result.json"
             if attempt_file.exists():
