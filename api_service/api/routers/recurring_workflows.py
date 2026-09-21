@@ -537,14 +537,7 @@ def _map_error(exc: Exception) -> HTTPException:
 @router.get("", response_model=RecurringWorkflowDefinitionListResponse)
 async def list_recurring_workflows(
     *,
-    scope: Literal["personal", "global"] = Query(
-        "personal",
-        deprecated=True,
-        description=(
-            "Legacy scope selector, ignored. Schedules are instance resources; "
-            "every scope is listed together. Removal tracked by #4354."
-        ),
-    ),
+    scope: Literal["personal", "global"] = Query("personal"),
     limit: int = Query(200, ge=1, le=500),
     cursor: Optional[str] = Query(None),
     sort: Literal[
