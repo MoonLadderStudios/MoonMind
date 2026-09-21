@@ -1355,9 +1355,28 @@ async def _rewire_dangling_profile_refs(
             targets[field] = slug
     if not targets:
         return []
-    profiles = (
-        await session.execute(_select(ManagedAgentProviderProfile))
-    ).scalars().all()
+    probe = await session.begin_nested()
+    try:
+        profiles = (
+            await session.execute(_select(ManagedAgentProviderProfile))
+        ).scalars().all()
+        await probe.commit()
+    except Exception as exc:
+        # An absent provider-profile table holds no refs to rewire (partial
+        # schemas such as the hermetic PostgreSQL fixture); any other
+        # lookup failure still raises so a published conversion never
+        # reports success for unwired credentials. Only the savepoint
+        # rolls back so already-migrated secrets in the outer transaction
+        # are preserved.
+        try:
+            await probe.rollback()
+        except Exception:
+            # The rewire read already failed; a failed savepoint rollback
+            # must not mask the classification below.
+            pass
+        if _is_absent_table_error(exc):
+            return []
+        raise
     rewired: list[dict[str, Any]] = []
     for profile in profiles:
         refs = dict(getattr(profile, "secret_refs", None) or {})
