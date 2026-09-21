@@ -530,7 +530,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      # Routing can wait 120s for outgoing pollers to expire. Allow startup
+      # and bounded transient RPC recovery before counting failed probes;
+      # a successful /readyz probe still marks the service healthy at once.
+      start_period: 3m
     depends_on:
       temporal:
         condition: service_started
