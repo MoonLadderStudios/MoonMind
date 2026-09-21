@@ -1072,6 +1072,18 @@ interface ClaudeEnrollmentState {
    * behind an ambiguous acquisition.
    */
   retryIdempotencyKey?: string | null;
+  /**
+   * Client-generated request identity sent as `Idempotency-Key` on the
+   * enrollment POST. Doubles as the queue-status poll key: the server
+   * derives the same deterministic lease owner from it.
+   */
+  idempotencyKey: string | null;
+  /** Epoch millis when the current `validating_token` attempt started. */
+  validatingStartedAt: number | null;
+  /** Whole seconds since `validatingStartedAt`, refreshed by status polling. */
+  validatingElapsedSec: number;
+  /** Latest best-effort queue snapshot while validating (OpenCode only). */
+  queueStatus: EnrollmentQueueStatus | null;
 }
 
 interface ClaudeManualAuthResult {
@@ -1222,6 +1234,117 @@ function extractRetryIdempotencyKey(payload: unknown): string | null {
 
 interface EnrollmentRequestError extends Error {
   retryIdempotencyKey?: string | null;
+}
+
+/**
+ * Upper bound for one API-key enrollment POST. Validation chains a
+ * maintenance-lease drain wait, a host drain, and a pinned-runtime Docker
+ * probe, so a slow-but-healthy request takes minutes; beyond this the drawer
+ * fails closed with a retryable timeout instead of hanging on
+ * "validating token" forever. Retrying reuses the same idempotency key, so
+ * the retry reattaches to the same deterministic lease owner.
+ */
+export const ENROLLMENT_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Best-effort queue-status poll cadence while an enrollment is validating. */
+const ENROLLMENT_STATUS_POLL_INTERVAL_MS = 5000;
+
+export class EnrollmentRequestTimeoutError extends Error {
+  constructor(readonly timeoutMs: number = ENROLLMENT_REQUEST_TIMEOUT_MS) {
+    super(
+      `Enrollment validation timed out after ${Math.round(timeoutMs / 60000)} minutes. ` +
+        'It is safe to retry with the same request.',
+    );
+    this.name = 'EnrollmentRequestTimeoutError';
+  }
+}
+
+export class EnrollmentRequestCancelledError extends Error {
+  constructor() {
+    super('Enrollment validation was cancelled before completing. Your saved credentials have not changed.');
+    this.name = 'EnrollmentRequestCancelledError';
+  }
+}
+
+function newEnrollmentIdempotencyKey(): string {
+  try {
+    const candidate = globalThis.crypto?.randomUUID?.();
+    if (candidate) return candidate;
+  } catch {
+    // Fall through to the Math.random fallback below.
+  }
+  return `enroll-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  // DOMException (what fetch rejects with on abort) does not inherit from
+  // Error in every DOM implementation, so match on the name only.
+  return (
+    !!error &&
+    typeof error === 'object' &&
+    (error as { name?: unknown }).name === 'AbortError'
+  );
+}
+
+/**
+ * POST one enrollment request with a caller-abort signal and a hard timeout.
+ * User cancellation rejects with {@link EnrollmentRequestCancelledError};
+ * an expired timeout rejects with {@link EnrollmentRequestTimeoutError}.
+ */
+async function postEnrollmentRequest(
+  url: string,
+  init: RequestInit,
+  options: { timeoutMs?: number; signal?: AbortSignal | null },
+): Promise<Response> {
+  const timeoutMs = options.timeoutMs ?? ENROLLMENT_REQUEST_TIMEOUT_MS;
+  const externalSignal = options.signal ?? null;
+  if (externalSignal?.aborted) {
+    throw new EnrollmentRequestCancelledError();
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  const onExternalAbort = () => controller.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) {
+      throw new EnrollmentRequestTimeoutError(timeoutMs);
+    }
+    if (isAbortError(error)) {
+      throw new EnrollmentRequestCancelledError();
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
+  }
+}
+
+interface EnrollmentQueueStatus {
+  known: boolean;
+  waiters: number | null;
+  position: number | null;
+  leaseHeld: boolean;
+  leaseCount: number | null;
+}
+
+function normalizeEnrollmentQueueStatus(payload: unknown): EnrollmentQueueStatus | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const numberOrNull = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
+  return {
+    known: record.known === true,
+    waiters: numberOrNull(record.exclusive_maintenance_waiters),
+    position: numberOrNull(record.waiter_position),
+    leaseHeld: record.lease_held === true,
+    leaseCount: numberOrNull(record.execution_lease_count),
+  };
 }
 
 /**
@@ -1418,6 +1541,40 @@ function apiKeyEnrollmentCopy(profile: ProviderProfile): ApiKeyEnrollmentCopy {
       `Use an API key from ${profile.provider_label || profile.provider_id} for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.`,
     readyLabel: 'OpenCode API key ready',
   };
+}
+
+/**
+ * Human-readable progress while an OpenCode enrollment POST is in flight.
+ * Replaces the static "validating token" hang with queue position when the
+ * maintenance-status poll knows it, a drain-wait hint when a consumer holds
+ * the profile, and elapsed time otherwise.
+ */
+function opencodeValidationProgressText(enrollment: ClaudeEnrollmentState): string {
+  const elapsed = ` (${enrollment.validatingElapsedSec}s elapsed)`;
+  const status = enrollment.queueStatus;
+  if (status?.known) {
+    if (status.position != null) {
+      const total = status.waiters ?? status.position;
+      return (
+        `Waiting in the credential queue: position ${status.position} of ${total}. ` +
+        `Validation starts after earlier requests finish.${elapsed}`
+      );
+    }
+    if (!status.leaseHeld && (status.leaseCount ?? 0) > 0) {
+      return (
+        'A running workflow is using this profile; validation waits for it to release the profile. ' +
+        `You can wait or cancel and retry later.${elapsed}`
+      );
+    }
+    return (
+      'Validation lease acquired; running the pinned-runtime probe. ' +
+      `This can take a few minutes.${elapsed}`
+    );
+  }
+  return (
+    'This runs a host drain plus a pinned-runtime probe and can take a few minutes. ' +
+    `The request times out automatically after ${Math.round(ENROLLMENT_REQUEST_TIMEOUT_MS / 60000)} minutes.${elapsed}`
+  );
 }
 
 function activationStatusLabel(profile: ProviderProfile): string | null {
@@ -1734,6 +1891,7 @@ export function ProviderProfilesManager({
   const [claudeEnrollment, setClaudeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
   const claudeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
   const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
+  const claudeEnrollmentAbortRef = useRef<AbortController | null>(null);
   const [creationCapabilities, setCreationCapabilities] =
     useState<ProviderProfileCreationCapabilities | null>(null);
   const [creationCapabilitiesError, setCreationCapabilitiesError] = useState<string | null>(null);
@@ -2619,6 +2777,11 @@ export function ProviderProfilesManager({
       failureReason: null,
       statusLabel: authModel.kind === 'claude_credentials' ? authModel.statusLabel : null,
       readiness: authModel.kind === 'claude_credentials' ? authModel.readiness : null,
+      retryIdempotencyKey: null,
+      idempotencyKey: null,
+      validatingStartedAt: null,
+      validatingElapsedSec: 0,
+      queueStatus: null,
     });
     onNotice(null);
   };
@@ -2637,17 +2800,20 @@ export function ProviderProfilesManager({
     mutationFn: async ({
       profileId,
       submittedToken,
+      signal,
     }: {
       profileId: string;
       submittedToken: string;
+      signal: AbortSignal | null;
     }) => {
-      const response = await fetch(
+      const response = await postEnrollmentRequest(
         `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/manual-auth/commit`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: submittedToken }),
         },
+        { signal },
       );
       const payload: unknown = await response.json().catch(() => ({}));
 
@@ -2663,6 +2829,9 @@ export function ProviderProfilesManager({
         step: 'validating_token',
         token: '',
         failureReason: null,
+        validatingStartedAt: Date.now(),
+        validatingElapsedSec: 0,
+        queueStatus: null,
       }));
     },
     onSuccess: async (result, { profileId }) => {
@@ -2684,6 +2853,8 @@ export function ProviderProfilesManager({
         failureReason: null,
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
+        validatingStartedAt: null,
+        queueStatus: null,
       }));
       if (!defaultNoticePosted) {
         onNotice({
@@ -2696,6 +2867,18 @@ export function ProviderProfilesManager({
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
+      if (error instanceof EnrollmentRequestCancelledError) {
+        updateClaudeEnrollmentForProfile(profileId, (current) => ({
+          ...current,
+          step: 'failed',
+          token: '',
+          failureReason: error.message,
+          validatingStartedAt: null,
+          validatingElapsedSec: 0,
+          queueStatus: null,
+        }));
+        return;
+      }
       const failureReason =
         error instanceof Error
           ? redactClaudeSecretText(error.message, submittedToken)
@@ -2705,12 +2888,19 @@ export function ProviderProfilesManager({
         step: 'failed',
         token: '',
         failureReason: failureReason ?? 'Anthropic API key validation failed.',
+        validatingStartedAt: null,
+        queueStatus: null,
       }));
+    },
+    onSettled: (_data, _error, { profileId }) => {
+      if (claudeEnrollmentProfileIdRef.current === profileId) {
+        claudeEnrollmentAbortRef.current = null;
+      }
     },
   });
 
   const submitClaudeEnrollment = () => {
-    if (!claudeEnrollment) return;
+    if (!claudeEnrollment || claudeEnrollmentMutation.isPending) return;
     const profileId = claudeEnrollment.profile.profile_id;
     const submittedToken = claudeEnrollment.token.trim();
     if (!submittedToken) {
@@ -2718,7 +2908,13 @@ export function ProviderProfilesManager({
       return;
     }
 
-    claudeEnrollmentMutation.mutate({ profileId, submittedToken });
+    const controller = new AbortController();
+    claudeEnrollmentAbortRef.current = controller;
+    claudeEnrollmentMutation.mutate({ profileId, submittedToken, signal: controller.signal });
+  };
+
+  const cancelClaudeValidation = () => {
+    claudeEnrollmentAbortRef.current?.abort();
   };
 
   useEffect(() => {
@@ -2743,6 +2939,7 @@ export function ProviderProfilesManager({
   const [opencodeEnrollment, setOpencodeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
   const opencodeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
   const opencodeEnrollmentProfileIdRef = useRef<string | null>(null);
+  const opencodeEnrollmentAbortRef = useRef<AbortController | null>(null);
 
   const updateOpencodeEnrollmentForProfile = (
     profileId: string,
@@ -2772,6 +2969,10 @@ export function ProviderProfilesManager({
       statusLabel: authModel.kind === 'opencode_credentials' ? authModel.statusLabel : null,
       readiness: authModel.kind === 'opencode_credentials' ? authModel.readiness : null,
       retryIdempotencyKey: null,
+      idempotencyKey: null,
+      validatingStartedAt: null,
+      validatingElapsedSec: 0,
+      queueStatus: null,
     });
     onNotice(null);
   };
@@ -2792,23 +2993,26 @@ export function ProviderProfilesManager({
       submittedToken,
       profile,
       idempotencyKey,
+      signal,
     }: {
       profileId: string;
       submittedToken: string;
       profile: ProviderProfile;
-      idempotencyKey: string | null;
+      idempotencyKey: string;
+      signal: AbortSignal | null;
     }) => {
       const copy = apiKeyEnrollmentCopy(profile);
-      const response = await fetch(
+      const response = await postEnrollmentRequest(
         `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/credentials/api-key`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+            'Idempotency-Key': idempotencyKey,
           },
           body: JSON.stringify({ api_key: submittedToken }),
         },
+        { signal },
       );
       const payload: unknown = await response.json().catch(() => ({}));
 
@@ -2826,12 +3030,16 @@ export function ProviderProfilesManager({
 
       return payload as ClaudeManualAuthResult;
     },
-    onMutate: ({ profileId }) => {
+    onMutate: ({ profileId, idempotencyKey }) => {
       updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'validating_token',
         token: '',
         failureReason: null,
+        idempotencyKey,
+        validatingStartedAt: Date.now(),
+        validatingElapsedSec: 0,
+        queueStatus: null,
       }));
     },
     onSuccess: async (result, { profileId, profile }) => {
@@ -2852,6 +3060,8 @@ export function ProviderProfilesManager({
         retryIdempotencyKey: null,
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
+        validatingStartedAt: null,
+        queueStatus: null,
       }));
       if (!defaultNoticePosted) {
         onNotice({
@@ -2860,9 +3070,22 @@ export function ProviderProfilesManager({
         });
       }
     },
-    onError: (error, { profileId, submittedToken, profile }) => {
+    onError: (error, { profileId, submittedToken, profile, idempotencyKey }) => {
       const copy = apiKeyEnrollmentCopy(profile);
       if (opencodeEnrollmentProfileIdRef.current !== profileId) {
+        return;
+      }
+      if (error instanceof EnrollmentRequestCancelledError) {
+        updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+          ...current,
+          step: 'failed',
+          token: '',
+          failureReason: error.message,
+          idempotencyKey: idempotencyKey ?? current.idempotencyKey,
+          validatingStartedAt: null,
+          validatingElapsedSec: 0,
+          queueStatus: null,
+        }));
         return;
       }
       const failureReason =
@@ -2871,7 +3094,7 @@ export function ProviderProfilesManager({
           : `${copy.credentialLabel} validation failed.`;
       const retryIdempotencyKey =
         error instanceof Error
-          ? (error as EnrollmentRequestError).retryIdempotencyKey ?? null
+          ? (error as EnrollmentRequestError).retryIdempotencyKey ?? idempotencyKey ?? null
           : null;
       updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
@@ -2879,12 +3102,19 @@ export function ProviderProfilesManager({
         token: '',
         failureReason: failureReason ?? `${copy.credentialLabel} validation failed.`,
         retryIdempotencyKey,
+        validatingStartedAt: null,
+        queueStatus: null,
       }));
+    },
+    onSettled: (_data, _error, { profileId }) => {
+      if (opencodeEnrollmentProfileIdRef.current === profileId) {
+        opencodeEnrollmentAbortRef.current = null;
+      }
     },
   });
 
   const submitOpencodeEnrollment = () => {
-    if (!opencodeEnrollment) return;
+    if (!opencodeEnrollment || opencodeEnrollmentMutation.isPending) return;
     const profile = opencodeEnrollment.profile;
     const copy = apiKeyEnrollmentCopy(profile);
     const profileId = opencodeEnrollment.profile.profile_id;
@@ -2894,13 +3124,88 @@ export function ProviderProfilesManager({
       return;
     }
 
+    // The first submit mints the client request identity; retries reuse it
+    // so the retry reattaches to the same deterministic lease owner.
+    const idempotencyKey =
+      opencodeEnrollment.retryIdempotencyKey ??
+      opencodeEnrollment.idempotencyKey ??
+      newEnrollmentIdempotencyKey();
+    const controller = new AbortController();
+    opencodeEnrollmentAbortRef.current = controller;
     opencodeEnrollmentMutation.mutate({
       profileId,
       submittedToken,
       profile,
-      idempotencyKey: opencodeEnrollment.retryIdempotencyKey ?? null,
+      idempotencyKey,
+      signal: controller.signal,
     });
   };
+
+  const cancelOpencodeValidation = () => {
+    opencodeEnrollmentAbortRef.current?.abort();
+  };
+
+  useEffect(() => {
+    if (!opencodeEnrollment || opencodeEnrollment.step !== 'validating_token') return;
+    const profileId = opencodeEnrollment.profile.profile_id;
+    const idempotencyKey = opencodeEnrollment.idempotencyKey;
+    let stopped = false;
+    const poll = async () => {
+      if (stopped) return;
+      setOpencodeEnrollment((current) => {
+        if (
+          !current ||
+          current.profile.profile_id !== profileId ||
+          current.step !== 'validating_token' ||
+          current.validatingStartedAt == null
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          validatingElapsedSec: Math.max(
+            0,
+            Math.floor((Date.now() - (current.validatingStartedAt as number)) / 1000),
+          ),
+        };
+      });
+      if (!idempotencyKey) return;
+      try {
+        const response = await fetch(
+          `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/credential-maintenance-status?idempotency_key=${encodeURIComponent(idempotencyKey)}`,
+          { headers: { Accept: 'application/json' } },
+        );
+        if (!response.ok || stopped) return;
+        const payload: unknown = await response.json().catch(() => null);
+        const status = normalizeEnrollmentQueueStatus(payload);
+        if (!status || stopped) return;
+        setOpencodeEnrollment((current) => {
+          if (
+            !current ||
+            current.profile.profile_id !== profileId ||
+            current.step !== 'validating_token'
+          ) {
+            return current;
+          }
+          return { ...current, queueStatus: status };
+        });
+      } catch {
+        // Best-effort: a failed poll keeps the elapsed-time progress text.
+      }
+    };
+    void poll();
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, ENROLLMENT_STATUS_POLL_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    opencodeEnrollment?.profile.profile_id,
+    opencodeEnrollment?.step,
+    opencodeEnrollment?.idempotencyKey,
+  ]);
 
   useEffect(() => {
     if (!opencodeEnrollment) return;
@@ -4439,8 +4744,17 @@ export function ProviderProfilesManager({
           ) : null}
 
           {['validating_token', 'saving_secret', 'updating_profile'].includes(claudeEnrollment.step) ? (
-            <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
-              Processing Anthropic API key enrollment: {formatStatusLabel(claudeEnrollment.step)}
+            <div className="mt-5 space-y-3 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
+              <div>
+                Processing Anthropic API key enrollment: {formatStatusLabel(claudeEnrollment.step)}
+              </div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg border border-sky-300 dark:border-sky-700 px-3 py-1.5 text-xs font-semibold text-sky-800 dark:text-sky-200 transition hover:border-sky-400 dark:hover:border-sky-500"
+                onClick={cancelClaudeValidation}
+              >
+                Cancel validation
+              </button>
             </div>
           ) : null}
 
@@ -4559,8 +4873,18 @@ export function ProviderProfilesManager({
           ) : null}
 
           {['validating_token', 'saving_secret', 'updating_profile'].includes(opencodeEnrollment.step) ? (
-            <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
-              Processing {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel} enrollment: {formatStatusLabel(opencodeEnrollment.step)}
+            <div className="mt-5 space-y-3 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
+              <div>
+                Processing {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel} enrollment: {formatStatusLabel(opencodeEnrollment.step)}
+              </div>
+              <div>{opencodeValidationProgressText(opencodeEnrollment)}</div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg border border-sky-300 dark:border-sky-700 px-3 py-1.5 text-xs font-semibold text-sky-800 dark:text-sky-200 transition hover:border-sky-400 dark:hover:border-sky-500"
+                onClick={cancelOpencodeValidation}
+              >
+                Cancel validation
+              </button>
             </div>
           ) : null}
 

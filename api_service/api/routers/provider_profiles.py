@@ -221,10 +221,37 @@ async def _credential_maintenance_guard(
             },
         ) from exc
     try:
-        await drain_profile_bound_hosts(
-            profile_id=profile.profile_id,
-            operation_id=operation_id,
-        )
+        try:
+            await drain_profile_bound_hosts(
+                profile_id=profile.profile_id,
+                operation_id=operation_id,
+            )
+        except TimeoutError as exc:
+            # The janitor drain never answered. Rotation is atomic, so the
+            # saved credential is unchanged; retrying with the same
+            # Idempotency-Key reattaches to the same deterministic lease
+            # owner instead of orphaning a competing one.
+            logger.warning(
+                "Provider credential host drain timed out: runtime_id=%s "
+                "profile_id=%s operation_id=%s error=%s",
+                profile.runtime_id,
+                profile.profile_id,
+                operation_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "provider_credential_manager_unavailable",
+                    "refusal": "credential_host_drain_timeout",
+                    "message": (
+                        "Credential setup could not start because the profile "
+                        "host drain timed out. Your saved credentials have not "
+                        "changed. Try again."
+                    ),
+                    "retry_idempotency_key": operation_id,
+                },
+            ) from exc
         yield guard
     finally:
         await guard.release()
@@ -2292,6 +2319,49 @@ async def preview_model_tiers(
         "advisory": True,
         "items": items,
     }
+
+
+@router.get(
+    "/{profile_id}/credential-maintenance-status",
+)
+async def credential_maintenance_status(
+    profile_id: str,
+    idempotency_key: str | None = None,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Report one profile's credential-maintenance queue position.
+
+    Best-effort polling surface for the enrollment drawer while it shows
+    "validating token": waiter identities other than the caller's
+    deterministic owner are never projected, and manager unavailability
+    degrades to ``known: False`` instead of failing the poll.
+    """
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_profile_management(profile, current_user)
+    from moonmind.provider_profiles.lease_client import (
+        CredentialLeasePurpose,
+        deterministic_lease_owner_id,
+    )
+    from moonmind.provider_profiles.maintenance import (
+        query_credential_maintenance_status as _query_maintenance_status,
+    )
+
+    owner_id: str | None = None
+    if idempotency_key and idempotency_key.strip():
+        owner_id = deterministic_lease_owner_id(
+            profile_id=profile.profile_id,
+            purpose=CredentialLeasePurpose.CREDENTIAL_VALIDATION,
+            idempotency_key=idempotency_key.strip(),
+        )
+    return await _query_maintenance_status(
+        runtime_id=profile.runtime_id,
+        profile_id=profile.profile_id,
+        owner_id=owner_id,
+    )
 
 
 @router.post(
