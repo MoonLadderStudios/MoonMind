@@ -105,7 +105,11 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
         elif concurrent_update == "server":
             monkeypatch.setattr(deployment_identity, "resolve_deployed_server_build_digest", lambda: "sha256:" + "3" * 64)
         elif concurrent_update == "host":
-            monkeypatch.setattr(deployment_identity, "_resolve_deployed_host_image_ref", lambda _: current_host.replace("2" * 64, "3" * 64))
+            # MoonLadderStudios/MoonMind#4503: same-repository host digest
+            # drift is a compatible rebuild within the installed family and
+            # must proceed without a new policy/version ladder. Fence only a
+            # genuinely different host image family here.
+            monkeypatch.setattr(deployment_identity, "_resolve_deployed_host_image_ref", lambda _: "ghcr.io/example/other-host@sha256:" + "3" * 64)
         return SimpleNamespace(
             envelope=SimpleNamespace(payload=plan_payloads[-1]),
             binding=binding.model_copy(update={
