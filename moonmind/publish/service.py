@@ -122,6 +122,9 @@ def push_env_from_bound_credential(
                 if key in bound_env:
                     env[key] = bound_env[key]
         except ValueError:
+            # Invalid repository/endpoint for the bound credential-helper
+            # contract; keep the PAT-compatible GITHUB_TOKEN/GH_TOKEN env
+            # so the push still authenticates without the helper layer.
             pass
     return env, (token,)
 
