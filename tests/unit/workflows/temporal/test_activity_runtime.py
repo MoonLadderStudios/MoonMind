@@ -3626,6 +3626,196 @@ async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_actio
             AgentRunResult(**result.model_dump(mode="json", by_alias=True))
 
 
+async def _publish_moonspec_verify_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+    *,
+    run_id: str = "verify-run-native",
+) -> dict[str, Any]:
+    """Publish one moonspec-verify JSON through the real producer boundary."""
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
+            verify_path.parent.mkdir(parents=True, exist_ok=True)
+            verify_path.write_text(json.dumps(payload), encoding="utf-8")
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId=run_id,
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities,
+                "execution_notify_completion",
+                _skip_notify,
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:verify",
+                    workflow_run_id="child-run-verify-native",
+                ),
+            )
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed.",
+                    metadata={
+                        "agentRunId": run_id,
+                        "verify_artifact_path": (
+                            "var/artifacts/moonspec-verify/final.json"
+                        ),
+                    },
+                )
+            )
+            return dict(result.metadata["moonSpecVerify"])
+
+
+async def test_native_missing_action_defaults_to_blocked_not_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: a native NO_DETERMINATION result
+    without an explicit action and without current-runtime recovery must carry
+    an explicit ``blocked`` continuation, never an implicit ``needs_human``."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "recoverableInCurrentRuntime": False,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-missing",
+    )
+    assert verify_payload["recommendedNextAction"] == "blocked"
+
+
+async def test_native_invalid_action_defaults_to_blocked_not_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: an unrecognized native action on an
+    unrecoverable NO_DETERMINATION result falls back to ``blocked``."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "recommendedNextAction": "create_pull_request",
+            "recoverableInCurrentRuntime": False,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-invalid",
+    )
+    assert verify_payload["recommendedNextAction"] == "blocked"
+    assert verify_payload["rawRecommendedNextAction"] == "create_pull_request"
+
+
+async def test_native_explicit_human_stop_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: a genuine explicit ``needs_human``
+    decision from the verifier survives native canonicalization."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "recommendedNextAction": "needs_human",
+            "recoverableInCurrentRuntime": False,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-explicit",
+    )
+    assert verify_payload["recommendedNextAction"] == "needs_human"
+    assert "rawRecommendedNextAction" not in verify_payload
+
+
+async def test_native_recoverable_missing_action_requests_reattempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: a recoverable NO_DETERMINATION
+    result without an action keeps the explicit ``reattempt_current_step``
+    continuation instead of implying a human decision."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "recoverableInCurrentRuntime": True,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-recoverable",
+    )
+    assert verify_payload["recommendedNextAction"] == "reattempt_current_step"
+
+
+async def test_native_low_confidence_missing_action_defaults_to_blocked_not_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: low confidence without an explicit
+    action and without current-runtime recovery carries ``blocked``."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "confidence": "low",
+            "recoverableInCurrentRuntime": False,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-low-confidence",
+    )
+    assert verify_payload["recommendedNextAction"] == "blocked"
+
+
+async def test_native_missing_tools_missing_action_defaults_to_blocked_not_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: a report describing missing local
+    tools without an explicit action carries ``blocked``, never ``needs_human``."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "confidence": "low",
+            "feedback": "missing local tool: container python-tests unavailable",
+            "recoverableInCurrentRuntime": False,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-missing-tools",
+    )
+    assert verify_payload["recommendedNextAction"] == "blocked"
+
+
 async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
