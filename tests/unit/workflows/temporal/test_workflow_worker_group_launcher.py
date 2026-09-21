@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
+import re
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 LAUNCHER_PATH = (
@@ -65,6 +68,36 @@ class FakeProcess:
         if self.returncode is None:
             raise subprocess.TimeoutExpired("fake-worker", timeout)
         return self.returncode
+
+
+def test_compose_startup_grace_allows_routing_convergence() -> None:
+    from moonmind.workflows.skills.deployment_tools import (
+        RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS,
+    )
+    from moonmind.workflows.temporal.release_routing import (
+        _ROUTE_DEATH_POLL_SECONDS,
+        _ROUTE_DEATH_TIMEOUT_SECONDS,
+    )
+
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
+    healthcheck = compose["services"]["temporal-worker-workflow"]["healthcheck"]
+
+    def seconds(duration):
+        units = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
+        return sum(
+            float(amount) * units[unit]
+            for amount, unit in re.findall(r"([\d.]+)(ms|h|m|s)", duration)
+        )
+
+    grace = seconds(healthcheck["start_period"])
+    # Startup may need the full old-poller expiry window and one more
+    # observation. Docker must not fail the update during that normal wait.
+    assert grace > _ROUTE_DEATH_TIMEOUT_SECONDS + _ROUTE_DEATH_POLL_SECONDS
+    assert (
+        grace + seconds(healthcheck["interval"]) * healthcheck["retries"]
+        < RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS
+    )
+    assert "/readyz" in " ".join(healthcheck["test"])
 
 
 def test_child_environments_preserve_independent_workflow_lane_defaults() -> None:
