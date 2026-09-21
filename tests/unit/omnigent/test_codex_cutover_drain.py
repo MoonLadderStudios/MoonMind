@@ -201,6 +201,46 @@ def test_boundary_coverage_names_changed_boundaries():
         assert coverage, boundary
 
 
+def _write_qualification_artifact(tmp_path, dimensions, observed_result="passed"):
+    import hashlib
+    import json
+
+    payload = {"observed_result": observed_result, "dimensions": dict(dimensions)}
+    content = json.dumps(payload, sort_keys=True).encode("utf-8")
+    path = tmp_path / "generic-codex-qualification.json"
+    path.write_bytes(content)
+    return str(path), hashlib.sha256(content).hexdigest()
+
+
+def _selection_dimensions(selection):
+    return {
+        "image": selection["image"],
+        "runtime_pack": selection["runtime_pack"],
+        "materializer": selection["materializer"],
+        "ownership_mode": selection["ownership_mode"],
+        "capabilities": list(selection["capabilities"]),
+    }
+
+
+def _linked_env_with_artifact(tmp_path, selection, **overrides):
+    import json
+
+    ref, digest = _write_qualification_artifact(
+        tmp_path, _selection_dimensions(selection)
+    )
+    env = {
+        "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF": ref,
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST": digest,
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT": "passed",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS": json.dumps(
+            _selection_dimensions(selection)
+        ),
+    }
+    env.update(overrides)
+    return env
+
+
 def _linked_env(selection, **overrides):
     import json
 
@@ -237,7 +277,36 @@ def test_linked_qualification_rejects_bad_digest():
         resolve_linked_generic_qualification(env)
 
 
-def test_generic_promotion_requires_linked_evidence_for_new_defaults():
+def test_linked_qualification_rejects_fabricated_ref_without_artifact():
+    """P1: a bare ref plus digest without resolvable bytes never promotes."""
+
+    selection = _selection()
+    env = _linked_env(
+        selection,
+        MOONMIND_CODEX_GENERIC_QUALIFICATION_REF="artifact://fabricated/q.json",
+        MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST="c" * 64,
+    )
+    with pytest.raises(ValueError, match="linked_qualification_ref_"):
+        resolve_linked_generic_qualification(env)
+    assert generic_codex_promotion_permitted(selection, env) is False
+
+
+def test_linked_qualification_rejects_digest_mismatch(tmp_path):
+    selection = _selection()
+    ref, _digest = _write_qualification_artifact(
+        tmp_path, _selection_dimensions(selection)
+    )
+    env = _linked_env(
+        selection,
+        MOONMIND_CODEX_GENERIC_QUALIFICATION_REF=ref,
+        MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST="0" * 64,
+    )
+    with pytest.raises(ValueError, match="linked_qualification_digest_mismatch"):
+        resolve_linked_generic_qualification(env)
+    assert generic_codex_promotion_permitted(selection, env) is False
+
+
+def test_generic_promotion_requires_linked_evidence_for_new_defaults(tmp_path):
     selection = _selection()
     # No linked evidence declared: preserve the existing boolean promotion so
     # the usable path is not removed before its qualified replacement exists.
@@ -247,12 +316,16 @@ def test_generic_promotion_requires_linked_evidence_for_new_defaults():
         )
         is True
     )
-    # Linked exact evidence promotes.
+    # Linked exact evidence promotes only when the referenced artifact
+    # resolves and its bytes match the declared digest.
     assert (
-        generic_codex_promotion_permitted(selection, _linked_env(selection)) is True
+        generic_codex_promotion_permitted(
+            selection, _linked_env_with_artifact(tmp_path, selection)
+        )
+        is True
     )
     # Dimension mismatch never falls back to another runtime/path.
-    bad = _linked_env(selection)
+    bad = _linked_env_with_artifact(tmp_path, selection)
     import json
 
     dims = json.loads(bad["MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS"])
@@ -260,9 +333,14 @@ def test_generic_promotion_requires_linked_evidence_for_new_defaults():
     bad["MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS"] = json.dumps(dims)
     assert generic_codex_promotion_permitted(selection, bad) is False
     # Declared linked evidence with no verifiable selection fails closed.
-    assert generic_codex_promotion_permitted(None, _linked_env(selection)) is False
+    assert (
+        generic_codex_promotion_permitted(
+            None, _linked_env_with_artifact(tmp_path, selection)
+        )
+        is False
+    )
     # Boolean false stays disabled even with linked evidence present.
-    env = _linked_env(selection)
+    env = _linked_env_with_artifact(tmp_path, selection)
     env["MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"] = "false"
     assert generic_codex_promotion_permitted(selection, env) is False
 
@@ -708,9 +786,10 @@ def test_recorded_launch_inputs_decode_across_retained_schema_shapes():
     assert_new_admission_allowed("omnigent", env=env, now=now)
 
 
-def test_legacy_default_preserved_until_exact_promotion_succeeds():
+def test_legacy_default_preserved_until_exact_promotion_succeeds(tmp_path):
     """Review body P1: legacy row retires only on promoted, not raw boolean."""
 
+    import hashlib
     import json
 
     from moonmind.omnigent.runtime_provider_rollout import (
@@ -722,18 +801,28 @@ def test_legacy_default_preserved_until_exact_promotion_succeeds():
         "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true",
         "MOONMIND_CODEX_GENERIC_SELECTION": json.dumps(selection),
     }
+
+    def _artifact_env(dimensions):
+        payload = {"observed_result": "passed", "dimensions": dict(dimensions)}
+        content = json.dumps(payload, sort_keys=True).encode("utf-8")
+        path = tmp_path / f"qualification-{len(content)}.json"
+        path.write_bytes(content)
+        return {
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF": str(path),
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST": hashlib.sha256(
+                content
+            ).hexdigest(),
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT": "passed",
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS": json.dumps(
+                dimensions
+            ),
+        }
+
     # Linked evidence mismatched: generic stays explicit-only and legacy stays
     # the default so the proven path is preserved.
     bad_env = dict(base_env)
     bad_env.update(
-        {
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF": "artifact://q/generic.json",
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST": "c" * 64,
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT": "passed",
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS": json.dumps(
-                {**selection, "materializer": "different-materializer@9"}
-            ),
-        }
+        _artifact_env({**selection, "materializer": "different-materializer@9"})
     )
     rules = {
         rule.target_id: rule
@@ -745,16 +834,7 @@ def test_legacy_default_preserved_until_exact_promotion_succeeds():
     )
     # Exact linked evidence promotes generic and retires legacy together.
     good_env = dict(base_env)
-    good_env.update(
-        {
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF": "artifact://q/generic.json",
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST": "c" * 64,
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT": "passed",
-            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS": json.dumps(
-                selection
-            ),
-        }
-    )
+    good_env.update(_artifact_env(selection))
     rules = {
         rule.target_id: rule
         for rule in default_runtime_provider_rollout_policy(env=good_env).rules
@@ -782,6 +862,18 @@ def test_direct_launch_readiness_reflects_deployment_cutoff(monkeypatch):
     assert status.as_dict()["directLaunchAllowed"] is True
     monkeypatch.setenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", "2026-01-01T00:00:00Z")
     assert status.as_dict()["directLaunchAllowed"] is False
+    # Single deployment-owned cutoff: phase alone never closes the lane, so
+    # a DISABLED phase with no cutoff still publishes the direct path.
+    disabled = EffectivePhase(
+        configured_phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        deployed_phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        evidence_ref=None,
+        evidence={},
+        blockers=(),
+    )
+    monkeypatch.delenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", raising=False)
+    assert disabled.as_dict()["directLaunchAllowed"] is True
 
 
 def test_codex_direct_drain_report_registered_as_temporal_activity():

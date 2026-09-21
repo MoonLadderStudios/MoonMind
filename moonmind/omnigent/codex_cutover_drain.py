@@ -31,11 +31,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import importlib
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import unquote, urlparse
 
 #: The single deployment-owned cutoff. ISO-8601 instant after which no new
 #: work may enter the retired direct-Codex lane. Unset means the lane is not
@@ -355,15 +358,42 @@ def resolve_generic_codex_selection(
     return dict(payload)
 
 
+def _resolve_qualification_artifact_path(ref: str) -> Path:
+    """Resolve only deployment-local qualification evidence.
+
+    Remote refs are never promotion authority: a fabricated ``artifact://``
+    or ``https://`` reference must fail closed instead of promoting.
+    """
+
+    parsed = urlparse(ref)
+    if parsed.scheme == "file":
+        if parsed.netloc not in {"", "localhost"}:
+            raise ValueError(
+                "linked_qualification_ref_not_local:"
+                " qualification evidence ref must be deployment-local"
+            )
+        return Path(unquote(parsed.path))
+    if parsed.scheme:
+        raise ValueError(
+            "linked_qualification_ref_not_local:"
+            " qualification evidence ref must be deployment-local"
+        )
+    return Path(ref)
+
+
 def resolve_linked_generic_qualification(
     env: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return the deployment-declared linked qualification, if any.
 
     ``None`` means no linked evidence is declared and the caller defers to the
-    existing boolean qualification chain. A declared reference with a bad
-    digest, a non-pass observed result, or missing dimensions raises: declared
-    evidence is verified exactly, never inferred.
+    existing boolean qualification chain. A declared reference is verified
+    exactly: its bytes must resolve through the deployment-local boundary,
+    match the declared SHA-256 digest, and carry an observed ``passed``
+    result with the exact qualified dimensions. Declared-but-unresolvable,
+    digest-mismatched, non-pass, or dimension-missing evidence raises:
+    declared evidence is verified, never inferred from a bare reference,
+    a bare digest, or self-declared dimensions alone.
     """
 
     values = os.environ if env is None else env
@@ -378,16 +408,71 @@ def resolve_linked_generic_qualification(
     if str(values.get(LINKED_QUALIFICATION_RESULT_ENV) or "").strip() != "passed":
         raise ValueError("linked_qualification_not_observed: observed_result must be passed")
     raw_dimensions = str(values.get(LINKED_QUALIFICATION_DIMENSIONS_ENV) or "").strip()
+    declared_dimensions: Any = None
+    if raw_dimensions:
+        try:
+            declared_dimensions = json.loads(raw_dimensions)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "support_dimension_mismatch: qualification dimensions missing"
+            ) from exc
+        if not isinstance(declared_dimensions, Mapping):
+            raise ValueError(
+                "support_dimension_mismatch: qualification dimensions missing"
+            )
     try:
-        dimensions = json.loads(raw_dimensions) if raw_dimensions else None
-    except json.JSONDecodeError as exc:
+        artifact_path = _resolve_qualification_artifact_path(ref)
+        content = artifact_path.read_bytes()
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"linked_qualification_ref_unreadable:{ref!r}"
+        ) from exc
+    if hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError("linked_qualification_digest_mismatch: artifact bytes differ")
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise ValueError(
+            "support_dimension_mismatch: qualification artifact is not JSON"
+        ) from exc
+    if not isinstance(payload, Mapping):
         raise ValueError(
             "support_dimension_mismatch: qualification dimensions missing"
-        ) from exc
+        )
+    observed = payload.get("observed_result", payload.get("observedResult"))
+    if observed != "passed":
+        raise ValueError("linked_qualification_not_observed: observed_result must be passed")
+    dimensions = payload.get("dimensions")
     if not isinstance(dimensions, Mapping):
         raise ValueError(
             "support_dimension_mismatch: qualification dimensions missing"
         )
+    if isinstance(declared_dimensions, Mapping):
+        for dimension in REQUIRED_SUPPORT_DIMENSIONS:
+            expected = declared_dimensions.get(dimension)
+            observed_dimension = dimensions.get(dimension)
+            if isinstance(expected, (list, tuple)) or isinstance(
+                observed_dimension, (list, tuple)
+            ):
+                if sorted(str(item) for item in (expected or [])) != sorted(
+                    str(item)
+                    for item in (
+                        observed_dimension
+                        if isinstance(observed_dimension, (list, tuple))
+                        else []
+                    )
+                ):
+                    raise ValueError(
+                        "support_dimension_mismatch: declared dimensions differ "
+                        "from qualification artifact"
+                    )
+            elif str(observed_dimension or "").strip() != str(
+                expected or ""
+            ).strip():
+                raise ValueError(
+                    "support_dimension_mismatch: declared dimensions differ "
+                    "from qualification artifact"
+                )
     return {
         "linked_qualification_ref": ref,
         "qualification_digest": digest,
