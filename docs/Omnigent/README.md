@@ -45,6 +45,11 @@ interchangeable responsibilities.
 - Direct Codex / direct Claude paths remain labeled compatibility paths until
   their retirement rows close.
 
+> Transition note: the exact-combination qualification rules above describe the
+> currently implemented contract. `PrimaryRuntimeProviderStrategy.md` revises
+> them as a desired target; until the owning migrations land, this page stays
+> authoritative for current behavior.
+
 ## Status vocabulary
 
 | Term | Meaning |

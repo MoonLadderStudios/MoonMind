@@ -136,7 +136,16 @@ An unambiguous obsolete value may be migrated once or reported as an unused warn
 
 ## 13. Rollback runbook
 
-The supported operational owner is the [portable deployment controller](../Steps/DockerComposeUpdateSystem.md), with local durable intent/progress and recovery independent of healthy MoonMind orchestration. A bounded maintenance window can stop incompatible new writers while actual old work is completed or drained. This document does not introduce another runbook engine or authorize any live operation.
+The six rollback controls in §7 remain wired through `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK` (see `.env-template`), `docker-compose.yaml`, and `moonmind/omnigent/runtime_provider_rollout.py`, and they affect future admission only. Until their consumers are migrated, retain this control-specific procedure; the [portable deployment controller](../Steps/DockerComposeUpdateSystem.md) owns general deployment repair, not these per-harness steps:
+
+1. Read `GET /api/omnigent/runtime-provider-migration` and confirm the affected combination's `targetId`, `rolloutState`, `rolloutGeneration`, and `applicableRollbackControls`.
+2. Set `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK` to the narrowest control that covers the incident. Prefer one per-harness control (`stop_new_generic_codex_admission`, `stop_new_generic_claude_admission`, or `stop_new_opencode_shared_image_admission`) over `stop_all_new_omnigent_work`.
+3. If new work must keep flowing on a compatibility path, add `restore_legacy_or_direct_default` explicitly. Stopping generic admission alone fails closed by design.
+4. Restart the API and worker services so the new policy is read.
+5. Confirm in the migration status view that `activeRollbackControls` lists the control and the affected rows report the expected `defaultStatus`.
+6. Active executions keep running under their recorded plan and realizer. Historical reads, replay, artifacts, and cleanup are unaffected in every mode.
+
+A bounded maintenance window can stop incompatible new writers while actual old work is completed or drained. This document does not introduce another runbook engine or authorize any live operation.
 
 Retirement evidence is proportional to the component: actual active session/credential/cleanup uses, necessary replay/reset support, and required data preservation must be resolved. Missing visibility is unknown, not permission to delete. A dead alias or unused reader does not require every live-provider criterion or nine separate removal stages.
 
