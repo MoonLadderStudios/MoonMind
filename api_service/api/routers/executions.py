@@ -19089,6 +19089,24 @@ async def rerun_execution(
     # Fetch the original execution
     original = await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
+    # MoonLadderStudios/MoonMind#4189: fail fast for retired ManifestIngest
+    # sources before any canonical load or launch side effect. Historical
+    # rows stay readable via list/detail/history/artifact reads; rerun never
+    # recreates Manifest work. Server validation is authoritative even when a
+    # cached UI exposes a stale rerun action.
+    if _enum_value(getattr(original, "workflow_type", None)) == "MoonMind.ManifestIngest":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "manifest_retired",
+                "message": (
+                    "MoonMind.ManifestIngest was retired "
+                    "(MoonLadderStudios/MoonMind#4192): rerun cannot recreate "
+                    "manifest ingest work. Historical execution remains readable."
+                ),
+            },
+        )
+
     # Fetch the canonical record to get full initial_parameters
     canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
 
