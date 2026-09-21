@@ -95,11 +95,15 @@ def test_static_host_block_carries_the_marker_write_everywhere() -> None:
 
     block = _static_host_github_block()
 
-    assert 'printf \'version: "1"\\n\' > "$github_version_tmp"' in block
+    assert "printf 'version: \"1\"\\n'" in block
     # Guarded on the live credential, not on a supplied token, so a restart
     # that carries no new token still repairs a pre-marker projection.
-    assert 'if [ -f "$github_config_dir/hosts.yml" ]; then' in block
-    assert 'mv "$github_version_tmp" "$github_config_dir/config.yml"' in block
+    assert 'if [ -f "$github_config_dir/hosts.yml" ]' in block
+    assert 'mv "$github_version_tmp" "$github_config_file"' in block
+    # config.yml also holds operator settings (editor, aliases, prompt), so
+    # the marker is merged into the existing file, never written over it.
+    assert "grep -q '^version:'" in block
+    assert 'cat "$github_config_file"' in block
     # No deletion path may enter the block with the marker write.
     assert "rm " not in block
 
@@ -155,6 +159,24 @@ def test_static_host_projection_declares_the_gh_schema_version(
         result = run({})
         assert result.returncode == 0, result.stderr
         assert (config_dir / "config.yml").read_text() == 'version: "1"\n'
+
+        # config.yml is also where gh keeps operator settings. Repairing a
+        # pre-marker projection adds the key and keeps everything else.
+        (config_dir / "config.yml").write_text(
+            "editor: vim\naliases:\n    co: pr checkout\n"
+        )
+        result = run({})
+        assert result.returncode == 0, result.stderr
+        repaired = (config_dir / "config.yml").read_text()
+        assert 'version: "1"' in repaired
+        assert "editor: vim" in repaired
+        assert "co: pr checkout" in repaired
+
+        # A projection that already declares the version is left untouched.
+        before = repaired
+        result = run({})
+        assert result.returncode == 0, result.stderr
+        assert (config_dir / "config.yml").read_text() == before
     finally:
         for name in ("hosts.yml", "config.yml"):
             (config_dir / name).unlink(missing_ok=True)

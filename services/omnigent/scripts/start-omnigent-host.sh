@@ -164,11 +164,21 @@ fi
 # fails every gh command in the host -- including the --version build probe.
 # Declare the schema version the projection above already satisfies. This runs
 # for a preserved restart too, repairing a config written before the marker.
-if [ -f "$github_config_dir/hosts.yml" ]; then
+# config.yml is also where gh keeps operator settings (editor, git_protocol,
+# aliases, prompt), so the key is merged into whatever is already there and a
+# config that already declares a version is left untouched.
+github_config_file=$github_config_dir/config.yml
+if [ -f "$github_config_dir/hosts.yml" ] \
+  && ! grep -q '^version:' "$github_config_file" 2>/dev/null; then
   umask 077
-  github_version_tmp=$github_config_dir/config.yml.tmp.$$
-  printf 'version: "1"\n' > "$github_version_tmp"
-  mv "$github_version_tmp" "$github_config_dir/config.yml"
+  github_version_tmp=$github_config_file.tmp.$$
+  {
+    printf 'version: "1"\n'
+    if [ -f "$github_config_file" ]; then
+      cat "$github_config_file"
+    fi
+  } > "$github_version_tmp"
+  mv "$github_version_tmp" "$github_config_file"
 fi
 unset github_token GH_TOKEN GIT_TOKEN GITHUB_TOKEN
 
