@@ -1,564 +1,173 @@
 # Omnigent Primary Runtime Provider Strategy
 
-**Status:** Canonical desired state; support, default promotion, and retirement are evidence-gated per combination  
+**Status:** Canonical desired state; implementation and deployment evidence remain separate  
 **Document Class:** System / Product Architecture  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-06  
-**Authority:** Long-term runtime-provider direction for MoonMind
+**Last updated:** 2026-09-21  
+**Authority:** Long-term runtime-provider direction under reliability-first simplification
 
 ## Related documents
 
-- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
-- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
-- [`docs/MoonMindArchitecture.md`](../MoonMindArchitecture.md)
-- [`docs/MoonMindRoadmap.md`](../MoonMindRoadmap.md)
-- [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
-- [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
-- [`docs/Omnigent/OpenCodeHost.md`](./OpenCodeHost.md)
-- [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md)
-- [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md)
-- [`docs/Omnigent/AgentProfiles.md`](./AgentProfiles.md)
-- [`docs/UI/WorkflowChatPanel.md`](../UI/WorkflowChatPanel.md)
-- [`docs/Omnigent/CodexSupportAndCutover.md`](./CodexSupportAndCutover.md)
-- [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md)
-- [`docs/Omnigent/ControlPlaneConcurrencyAndFencing.md`](./ControlPlaneConcurrencyAndFencing.md)
-- [`docs/Omnigent/ConformanceAndLiveSmoke.md`](./ConformanceAndLiveSmoke.md)
-- [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
-- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+[AGENTS.md](../../AGENTS.md), [Single-User Application Design](../SingleUserApplicationDesign.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Shared Host Image](SharedHostImage.md), [runtime selection and transition](RuntimeProviderRollout.md), [Provider Profiles](../Security/ProviderProfiles.md), [Workflow Chat](../UI/WorkflowChatPanel.md), [repository access and durable work](../RepositoryAccessAndWorkspaceDesign.md), and [deployment updates](../Steps/DockerComposeUpdateSystem.md).
 
 ## Advance organizer
 
-**One sentence:** Omnigent is to become MoonMind's primary runtime provider over time, with Codex, Claude Code, OpenCode, and future approved harnesses entering one generic Omnigent execution plane instead of accumulating separate MoonMind runtime architectures.
+Omnigent is the destination for one agent-runtime lifecycle behind Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
 
-**One paragraph:** MoonMind will continue to own durable Temporal orchestration, Provider Profiles, OAuth enrollment, secret references, workspace authority, policies, Skills, publication, evidence, checkpointing, remediation, and cleanup. Omnigent will become the normal host, runner, harness, session, and live interaction substrate beneath those controls. Codex, Claude Code, and OpenCode should share one digest-pinned MoonMind Omnigent host image and one generic host lifecycle wherever technically possible. Genuine differences are isolated behind small trusted runtime-pack descriptors, credential materializers, and exact-host probes. Existing direct and legacy profile-bound paths remain available only as explicit migration, replay, rollback, and historical-read compatibility until evidence-backed retirement criteria pass.
+This strategy revises the earlier exact-combination promotion and staged-retirement requirements. It does not claim that their current code has been removed. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for concrete historical interpretation. Old machinery is not a permanent requirement merely because it exists. Until the owning migrations land, `README.md` exact-qualification rules, `ContractOwnership.md` per-combination and staged-retirement assignments, and `SharedHostImage.md` §§5–6 remain the authoritative implemented contract for current behavior; this document states the desired target and must not be read as having already removed those controls.
 
 ## 1. Decision
 
-MoonMind adopts the following long-term product and architecture decision:
-
-> **Omnigent is the preferred and eventually primary runtime provider for MoonMind-managed coding agents.**
-
-This is a directional commitment, not an immediate claim that every runtime has already completed cutover. A runtime becomes the default Omnigent-backed path only after its exact image, harness, credential, model, policy, lifecycle, and user journey have passing support evidence.
-
-The destination is not a MoonMind runtime implementation for every provider CLI. The destination is one MoonMind-to-Omnigent platform boundary with registered harness integrations.
+**Omnigent becomes the single normal agent runtime provider.** Harness-specific behavior belongs in thin trusted adapters. Replacing direct/profile-bound paths must preserve supported behavior and actual active work, but narrow reliability fixes do not wait for every harness, static mode, connector, or migration to finish.
 
 ### 1.1 Seven required product outcomes
 
-These outcomes govern implementation and acceptance. They are not a claim that every deployment or harness already satisfies them.
-
 | Outcome | Required behavior |
 | --- | --- |
-| Primary runtime container | The Omnigent host is the normal execution container for qualified MoonMind coding-agent work. It does not absorb the API, Temporal orchestration, artifact service, or other control-plane services. |
-| On-demand Codex, Claude Code, and OpenCode | Each supported harness can launch in an attempt-owned Omnigent host through the same generic lifecycle. Ordinary use does not require a permanently running host for each vendor. Static-connected hosts remain an explicitly selected, separately qualified deployment option. |
-| Workflow Detail interactions | Workflow Detail exposes the bound Omnigent session through the provider-maintained native chat, including supported turns, events, tools, approvals, terminals, and resources under MoonMind authority. Loading HTML alone is not readiness. Essential failures must be visible, terminal evidence must remain reachable, and no second MoonMind composer or unrestricted host-management UI is introduced. |
-| Retry, checkpoint, and artifact parity | Omnigent sessions participate in the same MoonMind recovery and durable-evidence contracts as other runtimes. Bounded retry, authorized continuation or restore, checkpointing, and preservation of useful artifacts must survive worker or host loss where the recorded recovery authority permits. See section 5.11. |
-| Shared implementation | Planning, admission, leases, host lifecycle, workspace handling, session/turn mutation, recovery, evidence, and cleanup have shared owners. Runtime packs, credential materializers, and truthful capability adapters contain only genuine harness differences. |
-| Reusable OAuth Provider Profiles | An existing Codex or Claude Code OAuth Provider Profile is usable with the corresponding qualified Omnigent harness. MoonMind reuses its identity, enrollment-owned credential state, generation, and capacity authority. A second account, copied OAuth home, or Omnigent-specific login is not required. |
-| One ordinary Profile choice | Runtime stays visible and names a stable family. One user-facing Profile selects the account and resolves its compatible execution configuration. Internal Agent Profile, Host Class, runtime pack, materializer, launch policy, and realizer details do not become additional required choices, including behind Advanced mode. |
+| Primary runtime container | The Omnigent host runs admitted agent work, without absorbing the API, Temporal, artifact service, or privileged deployment controller. |
+| On-demand Codex, Claude Code, and OpenCode | Supported harnesses use the shared attempt-owned lifecycle. Ordinary use does not need one permanent vendor host. Explicit static operation is optional and supported only where its own behavior is established. |
+| Workflow Detail interactions | Native chat exposes the bound session's supported turns, events, tools, approvals, terminals, and resources through existing authorization. Loading HTML is not readiness. Failures and durable results remain accessible without a second composer or host-management dashboard. |
+| Retry, checkpoint, and artifact parity | Existing recovery and preservation owners handle interruption, continuation, restore, and saved output. Where the original host is unavailable, recovery uses actual durable evidence rather than restarting completed work. |
+| Shared implementation | One owner handles each launch, session/turn mutation, capture, publication, and cleanup responsibility. Persistent records support those owners instead of becoming parallel orchestrators. |
+| Reusable OAuth Provider Profiles | Existing Codex/Claude Profiles retain their identities, enrollment-owned homes, credential generation, and capacity ownership. No duplicate account, copied home, or second login is required. |
+| One ordinary Profile choice | The existing Runtime and one Profile authoring boundary remains. Internal harness/configuration/Host Class/materializer/realizer identities do not become additional required selectors. |
 
-Support is demonstrated through the complete applicable user journey, not inferred from a registered harness, installed binary, successful unit suite, or closed implementation issue. Source implementation, exact-artifact qualification, protected-live qualification, default promotion, and legacy retirement remain distinct outcomes. Existing providing documents and the primary-runtime epic own the detailed contracts and evidence; this outcome contract does not create another rollout system.
+These are required outcomes, not a claim of current support or a fixed test inventory. Prove the relevant production boundaries and reuse shared evidence. Do not silently relabel unfinished required capability as unsupported to close the program.
 
 ## 2. What “primary runtime provider” means
 
-“Primary runtime provider” has a specific meaning in this architecture.
+Omnigent provides the host/runner protocol, harness execution, live provider sessions, and native interactions. MoonMind's existing Temporal and module owners retain admission, workflow/step identity, selected Profile/model policy, credentials/capacity, workspace and context authority, Skills/tools, durable evidence, recovery, publication, and cleanup.
 
-Omnigent becomes the normal provider of:
+A durable event store and the lifecycle consuming it are not necessarily competing systems. Remove duplicate independent mutations, not persistence that keeps transcripts, commands, artifacts, and historical diagnostics useful after a host disappears. The bridge is not replaced by another session engine.
 
-- host registration and runner connectivity
-- harness discovery and execution
-- provider-session creation and attachment
-- live turns, events, tools, approvals, tasks, subagents, terminals, and resources where supported
-- harness-native session behavior
-- the native Workflow Chat application and protocol surface
-
-MoonMind remains the authority for:
-
-- Workflow, run, Step Execution, AgentRun, session, and turn ownership
-- Temporal durability and reconciliation
-- Agent Profile and Provider Profile selection
-- OAuth enrollment, credential generation, capacity, cooldown, and revocation
-- secret resolution and credential materialization
-- repository and workspace authorization
-- Skills, mounted tools, context, and retrieval policy
-- host class, launch, resource, network, and egress policy
-- model and effort selection
-- checkpoint, resume, branch, and remediation decisions
-- publication and approval authority
-- artifacts, evidence, observability, audit, and historical reads
-- cleanup, janitor ownership, fencing, and rollback
-
-Omnigent becoming primary does not transfer MoonMind's security or workflow authority to Omnigent. It consolidates the runtime and harness substrate beneath MoonMind's authority.
+One operator per instance can use multiple accounts and concurrent workflows. Independent deployments do not share a database, rollout decision, or drain observation by assumption. No tenant or human-role system is required.
 
 ## 3. Stable product identity
 
-All Omnigent-backed harnesses use the same top-level execution identity:
+Omnigent-backed execution keeps `agentKind=external` and `agentId=omnigent`. The selected harness has its own nested identity, such as `codex-native`, `claude-native`, or `opencode-native`.
 
-```text
-agentKind = external
-agentId   = omnigent
-```
+Product family, harness, Provider Profile runtime, and vendor command/display names remain different domains. Reuse the existing pure harness registry for registration-level consumers and the existing resolver for executable choices. Registry membership is not permission, while temporary lack of capacity is not loss of registration.
 
-The selected harness remains nested immutable authority:
-
-```text
-codex-native
-claude-native
-opencode-native
-<future approved harness>
-```
-
-MoonMind does not introduce permanent top-level product identities such as `omnigent_codex`, `omnigent_claude`, or `omnigent_opencode`.
-
-The dashboard may display friendly target names, but authoring and execution resolve one Omnigent Agent Profile, one harness implementation, one Provider Profile, one Host Class, one runtime pack, one materializer, one model configuration, one launch policy, and one execution realizer.
+New producers use one canonical runtime-input boundary. Known legacy values can be converted by an identified migration/ingress owner without changing their meaning. Unknown or conflicting explicit input never becomes another runtime. Keep original historical decoding where required, not duplicate alias maps throughout the core or a global ban on vendor names.
 
 ## 4. Current transition state
 
-The repository currently contains three important generations of runtime behavior:
+At the September 21 review baseline `6fdaab848e8f9fd9c5279ea36186482cab05733d`, the repository contains direct compatibility paths, Codex profile-bound supervision, generic realizer routing, runtime-provider rollout rules, and a code-owned retirement inventory. The static-Claude module already declares a retained optional path. These are source observations, not deployed support claims.
 
-1. Direct managed Codex and Claude Code paths.
-2. A proven Codex profile-bound Omnigent specialization with legacy OAuth-host lifecycle code.
-3. A generic Omnigent harness platform and generic host realizer proven first through OpenCode.
+The desired steady state does not preserve the old Codex phase machine, per-combination canaries, six rollback switches, nine ordered removal stages, or a permanent inventory of deleted components. Simplify them through their existing consumers. Do not just set every gate true, install another policy facade, or strip an active resource owner without a safe transition.
 
-The third generation is the destination. The first two remain explicit compatibility implementations while the generic path reaches equivalent or better support.
-
-Which generation a product surface offers is no longer implied by code paths or scattered boolean flags. One versioned runtime-provider rollout policy governs each exact combination independently, and every authoring and follow-up surface reads that one decision through one shared selection and admission boundary. [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) is the authority for the rollout states, the exact compatibility dimensions, the canary and rollback controls, the operator-visible migration status view, and the migration telemetry contract.
-
-Direct Codex and direct Claude Code are labeled compatibility choices in Runtime.
-Legacy profile-bound paths remain labeled in diagnostics and history; they cannot
-rename the Omnigent family or become independent authoring controls. Promotion
-governs the resolved execution path and cannot displace an explicit Profile or
-pinned compatible configuration.
-
-No current path is silently reclassified as generic. Existing execution plans and Temporal histories continue to invoke the realizer and compatibility version they recorded, and every admitted plan freezes the rollout decision generation that admitted it.
-
-Every retained component of the first two generations carries a **retirement
-class** in `moonmind/omnigent/legacy_retirement.py`. That class, not a document,
-is the single authority for whether a component still admits new work and the
-earliest stage at which it can be deleted; this document deliberately records no
-snapshot of which class each row currently holds. See
-[Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners)
-for the inventory and the staging rules.
+The existing shared selection boundary remains the integration point. Actual implementation and migration work is tracked by #3931, #3932, #3935, and #3835. [RuntimeProviderRollout.md](RuntimeProviderRollout.md) distinguishes the target from currently readable legacy fields and controls.
 
 ## 5. Governing principles
 
 ### 5.1 One generic control plane
 
-Codex, Claude Code, OpenCode, and future approved harnesses should use the same canonical:
-
-- immutable execution plan
-- fenced runtime binding
-- Provider Profile lease coordination
-- host binding and host lease
-- workspace preparation
-- Skill and tool delivery
-- restricted egress realization
-- Omnigent session and turn ownership
-- bridge, event, resource, and Workflow Chat contracts
-- publication and checkpoint integration
-- cancellation, cleanup, and janitor behavior
-
-Adding a harness must not create a new top-level Temporal workflow or another lifecycle coordinator merely because its CLI differs.
+Reuse existing plans, runtime bindings, Profile capacity, workspace, session/turn, evidence, and cleanup owners. Do not add a supervisor around a generic realizer that already owns the lifecycle. A new harness must not need another Workflow, session database, finalizer, or rollback service.
 
 ### 5.2 One shared host image where practical
 
-MoonMind should reuse one digest-pinned Omnigent runtime host image for Codex, Claude Code, and OpenCode when the image can contain their supported runtime binaries without weakening isolation or producing unmanageable release coupling.
+Use the deployment's installed managed host image, shared across harnesses where practical. Images are built from trusted inputs, contain no provider secrets, and have recorded immutable provenance. Sharing binaries does not share credentials, OAuth homes, sessions, or launch permission.
 
-The intended neutral image is conceptually:
-
-```text
-ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
-```
-
-The current `omnigent-host-opencode` image lineage is the starting point because it already derives from the stock Omnigent host and adds a pinned OpenCode runtime. During migration, the old image name may remain as an alias to the same manifest digest.
-
-One shared image does not mean one shared credential home, one shared Host Class, or one support claim for every installed harness.
+One deployment owner resolves and updates the needed server/host artifacts. A changed SHA, digest, or patch version is not itself incompatibility. Do not introduce a replacement all-fields compatibility fingerprint. Integrity of a selected artifact and compatibility between components are separate checks.
 
 ### 5.3 Separate Host Classes may share one image
 
-Each supported harness combination retains an explicit Host Class even when several Host Classes point to the same image digest.
-
-For example:
-
-```text
-omnigent-codex@1     -> shared-image@sha256:...
-omnigent-claude@1    -> shared-image@sha256:...
-omnigent-opencode@2  -> shared-image@sha256:...
-```
-
-Separate Host Classes preserve independent:
-
-- harness declarations
-- runtime dependency requirements
-- materializer allowlists
-- launch-policy compatibility
-- qualification evidence
-- rollout and rollback state
-- support-combination identity
-
-A newly published shared image can therefore be qualified and promoted for one harness without automatically promoting the other harnesses.
+Retain Host Class distinctions only for genuine launch, isolation, or capability needs. A separate class for every harness/image/model combination is not a strategic requirement. Reuse existing descriptors rather than adding another support catalog. Preserve explicitly selected policy and supported host behavior.
 
 ### 5.4 Runtime differences belong in a trusted runtime pack
 
-The generic host lifecycle consumes a versioned trusted `HarnessRuntimePack` or equivalent descriptor.
-
-A runtime pack contains only genuine harness-specific details such as:
-
-- harness id
-- provider runtime id
-- binary name and supported version range
-- credential mount and staging requirements
-- forbidden ambient credential variables
-- readiness and authentication probes
-- model-catalog probe when required
-- runner environment passthrough
-- static and on-demand host compatibility
-
-Runtime packs are deployment-owned registrations. Workflows and Agent Profiles cannot author arbitrary commands, mount paths, or environment variables through them.
-
-The generic launcher, runtime script builder, attestor, and cleanup system must consume the selected runtime pack rather than accumulating `if harness == ...` branches.
+Trusted descriptors/adapters contain genuine CLI, credential-path, environment, and protocol differences. Workflows cannot supply arbitrary commands, mounts, or environment allowlists through them. Reuse the existing registry and generation path. Do not fetch live model catalogs during schema import or mirror registry data into a second authority.
 
 ### 5.5 Credential materialization remains runtime-specific and minimal
 
-Credential formats and mutation behavior genuinely differ. Those differences remain isolated behind approved materializers.
+The existing materializer owns the selected credential format and lifecycle. Run-owned material is cleaned after its consumers stop. Profile-owned OAuth homes are released, not deleted by ordinary run cleanup. Host-owned credentials are not copied or silently claimed. Credentialless execution creates no dummy secret and does not inherit keyed credentials or billing policy.
 
-The intended initial set is:
-
-| Harness | Materializer | Credential ownership | Runtime behavior |
-| --- | --- | --- | --- |
-| OpenCode, keyed Go route | `opencode-auth-json@1` | Run-owned | Read-only source is staged into a writable runtime home and destroyed after cleanup |
-| OpenCode, credentialless Zen route | `none@1` | None | No credential state or dummy secret is created; the selected Provider Profile still owns routing and capacity policy |
-| Codex | `codex-oauth-home@1` | Provider Profile-owned | Writable OAuth home is mounted exclusively for the acquired generation |
-| Claude Code | `claude-oauth-home@1` | Provider Profile-owned | Writable credential bundle supports every required Claude user-level path |
-
-A credential handle declares whether its backing state is:
-
-```text
-run_owned
-profile_owned
-host_owned
-```
-
-Cleanup follows that ownership. Run-owned secrets are destroyed. Profile-owned OAuth homes are unmounted and released but are not deleted by ordinary run cleanup. Host-owned authentication is observed but not copied or claimed by MoonMind. The `none@1` route creates no credential state to clean up and must not inherit another route's credentials or billing authority.
+Materialization, renewal, and cleanup use existing operation/ownership records. Do not create another generation service or universal token-file mechanism. Preserve the actual process boundary, not only a label claiming isolation.
 
 ### 5.6 MoonMind owns OAuth enrollment
 
-MoonMind Settings remains the user-facing OAuth enrollment authority for Codex and Claude Code.
-
-The normal sequence is:
-
-```text
-Settings OAuth connection
-  -> validated Provider Profile and credential generation
-  -> execution-plan selection
-  -> Provider Profile lease
-  -> generic materializer binds the selected generation
-  -> shared Omnigent host starts non-interactively
-  -> exact-host auth probe succeeds
-```
-
-An Omnigent host must not start another interactive login ceremony. It consumes only the Provider Profile generation selected and leased by MoonMind.
-
-The same Codex `codex_cli` / `openai` or Claude Code `claude_code` / `anthropic` Provider Profile remains the account authority for its compatible Omnigent execution configuration. A subordinate Omnigent Agent Profile describes execution, not a second user account or a second OAuth enrollment. Direct compatibility and Omnigent consumers must honor the same credential-generation and capacity owner. Sharing an image or supporting both paths does not authorize concurrent writers to a mutable OAuth home.
+Existing Settings/Profile enrollment supplies the admitted account. Corresponding Omnigent execution reuses it without a second login or new Profile type. Codex and Claude Profiles retain their underlying `codex_cli` and `claude_code` identities. Concurrent direct, static, and on-demand consumers cannot write the same mutable OAuth home without its existing exclusive authority.
 
 ### 5.7 Credential isolation is stricter than image isolation
 
-A shared image may contain several CLIs. A running host receives credentials only for the one selected harness and Provider Profile.
-
-The following must remain true:
-
-- A Codex execution cannot read Claude or OpenCode credential state.
-- A Claude execution cannot read Codex or OpenCode credential state.
-- An OpenCode execution cannot read Codex or Claude credential state.
-- Ambient API-key and configuration selectors are cleared or rejected according to the selected runtime pack.
-- Image contents never grant permission to use an installed harness.
-- Exact plan, Host Class, runtime pack, materializer, and attestation authority determine what the host may run.
+A host receives only its admitted model/repository credentials. Scrub conflicting ambient selectors through existing trusted delivery. Managed-publisher destination credentials stay outside the agent. Read-only token files or a helper returning a broad token are not confinement against arbitrary code. Preserve explicit exposure/high-security policy without building a new proxy merely to claim support.
 
 ### 5.8 Support is exact and evidence-gated
 
-A shared image digest is not proof that every contained harness is supported.
+Evidence identifies the actual code, image, harness, credential boundary, model, and operations exercised. Compatibility depends on required interfaces and behavior. Evidence for one adapter does not prove a different credential or session protocol, but common production mechanisms can share representative tests instead of independently repeating the full cross-product.
 
-Support remains specific to:
-
-```text
-MoonMind commit
-+ Omnigent server and host build
-+ shared host image digest and architecture
-+ harness implementation
-+ runtime-pack version
-+ vendor CLI version and digest
-+ Agent Profile version
-+ Provider Profile compatibility class and credential generation class
-+ credential materializer version
-+ Host Class and launch policy
-+ normalized model configuration
-+ execution realizer version
-+ required capabilities
-```
-
-Each claimed combination requires deterministic conformance and the protected live evidence required by policy.
+Use existing current-candidate CI and focused real-boundary tests. Keep live-provider qualification separately authorized and honestly limited. Neither an installed binary nor a success flag qualifies a product journey. Conversely, absent live access for an unrelated deleted alias is not a reason to prohibit safe repository cleanup or burn implementation retries.
 
 ### 5.9 No silent fallback
 
-A plan records its execution realizer before side effects.
+Preserve admitted harness, account, model/cost/privacy, source, host-mode constraints, and publication intent. Failure cannot silently select a direct path, another realizer, or broader authority. Recover using the existing bounded owner, distinguishing capacity waits, unavailable observations, and actual incompatibility.
 
-A generic Codex, Claude, or OpenCode execution that fails does not silently switch to:
-
-- a direct runtime
-- the legacy Codex profile-bound realizer
-- another harness
-- another Provider Profile
-- another host mode
-- another model
-- a broader policy
-
-Rollback changes future admission or creates an explicit new execution. It does not reinterpret the failed plan.
+A compatible installation update for future work is not an unrequested account/harness change. Already-started attempts retain their actual provenance. A genuinely changed execution objective or authority uses existing fresh admission, not a rewritten old plan.
 
 ### 5.10 Replay and historical truth outlive cutover
 
-Existing plans and Temporal histories retain their recorded runtime and realizer identities.
+Recorded inputs, digests, results, and histories keep their meaning. Preserve executable compatibility only for actual active, pending, replay/reset, or cleanup consumers. Read-only historical access need not keep an old launcher or supervisor running forever.
 
-Legacy modules may remain as bounded replay-visible wrappers after new selection has moved to the generic realizer. They are removed only after the code-owned retirement checks prove:
-
-- no new plans select them
-- no active execution or cleanup authority uses them
-- supported histories replay
-- historical Workflow Detail and artifacts remain readable
-- rollback no longer depends on them
-- retention policy permits removal
+A maintenance window can stop incompatible writers but cannot make incompatible recorded histories safe. Use relevant replay evidence or a controlled transition. No history deletion, arbitrary retention reduction, or permanent retained fleet is implied by simplification.
 
 ### 5.11 Recovery and preservation parity
 
-Omnigent execution is not exempt from MoonMind's common retry, remediation, checkpoint, and artifact contracts. Recovery is derived from the selected capabilities and recorded authority, not implemented as another Codex-, Claude-, or OpenCode-specific workflow. The existing Temporal, session/turn, workspace, artifact, publication, and cleanup owners retain their responsibilities.
+Reconcile the recorded attempt, session/turn effects, phase receipts, and saved results before retrying. Live-session continuation and restoration into a fresh execution are different operations. Restoring files does not revive credentials, leases, approvals, or permission to repeat remote effects.
 
-An Activity retry reconciles the recorded execution plan, runtime binding, terminal evidence, and remaining side effects before starting work again. An authorized live-session continuation and a fresh session restored from a checkpoint are different operations. Restoring files does not recreate a provider session, lease, approval, or credential generation. Unsupported reattachment must produce an explicit supported recovery path or an actionable unavailable result, never silently substitute another runtime or account.
+Persist confirmed compute and required saved-content evidence before later publication/reporting or destructive cleanup. A failed publication does not erase a valid save. Successful saving does not upgrade failed/canceled compute. Verified artifact storage can supply save-only durability without a GitHub identity; a remote recovery push still needs admitted destination authority. A local path or incomplete upload is not a durable saved result.
 
-Finalization preserves independently verified compute evidence before a publication failure can erase that handoff. Required checkpoint and artifact preservation must be verified before cleanup destroys the sole useful workspace copy. A successful save does not turn failed or cancelled compute into success, and failed remote publication does not erase an already verified saved result. Transcripts, logs, output artifacts, and checkpoint references remain readable under their access and retention policies after the host is removed. A live host path, process exit, uploaded object without its required manifest, or successful cleanup report is not sufficient durability evidence.
-
-This requirement does not silently replace the existing recovery-checkpoint policy or declare artifact-backed recovery implemented. Any change to what satisfies a required checkpoint must be reconciled in the canonical recovery and workspace contracts. Where preservation cannot complete, retain only bounded, fenced, recoverable work under an explicit existing owner and expose its pending or unavailable state. Worker restart and janitor execution must honor the same durable preservation decision.
-
-Stopping credential consumers, retaining non-sensitive work, and deleting runtime resources are distinct obligations. Credentials and capacity are released only after verified consumer teardown and the durable release decision, not merely because a workflow is terminal. Retaining saved work must not require keeping model credentials or a live agent indefinitely. Recovery and cleanup remain idempotent and generation-fenced, with no second finalization coordinator.
+The existing finalization and janitor owners share a durable preservation decision across restart. Retain failed saves only under bounded quota/recovery policy and report incompleteness. Release model capacity and credentials after their consumers are confirmed stopped under existing authority, independently of non-sensitive content retention. No second finalizer or permanent live host is required merely to retain files.
 
 ## 6. Target topology
 
-```text
-Workflow authoring
-  -> external/omnigent
-  -> immutable Omnigent Agent Profile
-  -> immutable execution plan
-       harness implementation
-       Provider Profile selection
-       runtime pack
-       credential materializer
-       shared-image Host Class
-       launch policy
-       model configuration
-       generic-omnigent-host@1
-  -> fenced runtime binding
-       acquired Provider Profile generation
-       credential attachments
-       host lease and exact shared image
-       exact-host harness and runtime attestation
-       workspace and Skill realization
-  -> generic Omnigent host lifecycle
-  -> Omnigent runner and selected harness
-  -> canonical Omnigent session and turn control plane
-  -> bridge, Workflow Chat, evidence, publication, checkpoint, and cleanup
-```
+Ordinary authoring resolves one meaningful selection into an existing plan, workspace, and attempt-owned Omnigent host. The canonical session/turn boundary serves interactions and records evidence. Existing capture, publisher, recovery, and cleanup owners finish the operation.
 
-Provider-specific logic stops at the registered runtime pack, credential materializer, and truthful capability adapter unless Omnigent exposes a genuinely different protocol.
+Reduce idle services first by removing unused/default-on work. Combine worker responsibilities only when trust, resource, and restart requirements actually permit it. Reuse fleet-specific dependencies and the existing worker lifecycle. Queue names alone do not establish process isolation or aggregate concurrency. Preserve responsive cancellation and cleanup without another worker supervisor or service-count quota.
 
 ## 7. Shared image contract
 
-The shared-image rules are owned by
-[`SharedHostImage.md`](./SharedHostImage.md) §1. The durable rule this
-strategy relies on: the image derives from an immutable compatible base,
-installs runtimes at build time only, publishes SBOM/provenance and immutable
-multi-architecture digests, embeds no provider credentials, and never makes
-every installed CLI active by default. An OpenCode upgrade may produce a new
-image digest without asserting that the Codex or Claude support row has been
-requalified.
+[SharedHostImage.md](SharedHostImage.md) owns build and artifact details. Keep trusted build-time tools, immutable selected artifacts, architecture support, and relevant SBOM/provenance. Its descriptions of old exact-combination promotion are transition context, not an obligation to reconstruct this strategy's retired rollout machinery. Reconcile providing implementations as they change.
 
 ## 8. Runtime-pack contract
 
-The runtime-pack descriptor rules are owned by
-[`SharedHostImage.md`](./SharedHostImage.md) §2, which holds the per-pack
-table (harness, vendor range, credential home). The durable rules this
-strategy relies on: references are versioned, descriptors contain no secrets
-and are never workflow-authored, commands are bounded and allowlisted by
-trusted code, the execution plan records the selected runtime-pack ref, and
-exact-host evidence records the observed pack and runtime identity.
+The existing pack/materializer owners define executable interfaces. Keep descriptors small, trusted, secret-free, and versioned where their actual wire behavior requires it. Tool-version inspection must not require provider authentication. Runtime readiness still checks the real capabilities and credentials that the requested operation needs.
 
 ## 9. Product selection and defaults
 
-Ordinary authoring exposes an always-visible Runtime selector and one Profile
-selector. Runtime labels identify stable families, such as Omnigent; the Profile
-identifies the account and owns its subordinate execution configuration. Within
-Omnigent, Profiles are grouped by their underlying provider runtime.
-
-1. Select or accept Runtime and Profile.
-2. Resolve the Profile's pinned configuration or compatible default/sole configuration.
-   Unresolved ambiguity requires a choice in Profile settings.
-3. Set workspace, Skills and publication intent. Model and host-policy overrides
-   use the existing Advanced mode control where supported.
-4. Submit the Profile and the displayed configuration's immutable reference for
-   validation at admission, then compile one `external/omnigent` execution plan.
-
-Execution configuration and rollout target are resolved subordinate values.
-Migration metadata must not introduce additional required authoring controls.
-Target, Harness, Agent Profile, Host Class and Realizer are not independent
-selectors. The configuration's harness determines the execution description;
-the first rollout row cannot rename the Omnigent family.
-
-The displayed selection, submitted expectation and admitted plan must agree.
-A changed configuration produces an actionable conflict before execution. An
-explicit Profile, pinned configuration or supported override is never displaced
-by discovery response ordering or a newly available harness. Temporary capacity
-or discovery changes retain the Profile's identity and show waiting or setup
-status. Direct runtime compatibility is never an automatic recovery path.
-
-Direct Codex and direct Claude Code may remain visible during migration when policy permits them. They must be labeled as direct compatibility paths rather than equal long-term architecture choices.
+Preserve the existing Runtime and one Profile authoring boundary and actual server-side agreement checks. Advanced details are not a chain of mandatory Target/Harness/Agent Profile selectors. Profile choice preserves account, model policy, and supported explicit configuration. Advisory discovery/capacity failures preserve valid inventory and drafts rather than selecting another account.
 
 ### One shared selection boundary
 
-`moonmind/workflows/executions/runtime_target_selection.py` resolves the runtime target for every surface that chooses one:
-
-- new Workflow Create
-- presets and preset expansion
-- schedules and recurring occurrences
-- edit and rerun
-- retry as a fresh execution
-- Checkpoint Branch create, continue, and fork
-- remediation authoring
-- linked continuation
-- any API or MCP submission
-- worker step normalization
-- the dashboard's runtime-target catalog projection
-
-No surface reconstructs a default from an environment variable or a hard-coded runtime map, and a source-kind difference changes policy and evidence rather than creating a second resolver.
+`runtime_target_selection.py` remains the integration point for Create, presets, schedules, edits/reruns, fresh retries, branches, remediation, continuation, API/MCP, and worker normalization. Simplify its providers and remove redundant defaults with their callers. Do not add a parallel selector or duplicate frontend policy.
 
 ### Default promotion is per combination
 
-Default migration is staged independently per exact combination, not per product area. Each combination carries its own versioned rollout state, generation, canary allowlists, and rollback controls, so promoting Codex never promotes Claude Code or OpenCode. The set of governed surfaces still includes Workflow Create, presets, schedules, reruns and edits, Checkpoint Branches, remediation, and Workflow Chat and continuation — but a surface reads one decision instead of owning a stage of its own.
-
-No default changes until the exact target combination has passing evidence and an operator-visible rollback path. A `preferred` or `new_work_default` state is demoted to explicit-only, with an exact reason, whenever required evidence is missing, stale, or expired, or the target is not launch-ready, model-qualified, architecture-supported, host-mode-available, or Provider-Profile-available.
+This former heading is retained for existing references, not as a requirement for per-combination promotion. The target has one installed managed runtime selection with actual capability/authority checks. Independent canary policy, qualification booleans, rollout generations, and display ordering must not compete to choose it. Unknown or incompatible explicit selections remain actionable.
 
 ### Preserved identity on continuation
 
-An existing execution retains its recorded plan and realizer. A rerun may reuse the recorded target or explicitly upgrade to a currently qualified target. Schedules pin a target version or follow a separately versioned default-update policy, and changing a schedule's default advances the schedule revision. A historical selection that is no longer qualified stays visible and requires an explicit replacement before new submission.
-
-See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) for the exact dimensions, states, reason vocabulary, and configuration.
+Already-started work retains its recorded meaning and evidence. New launches, including recurring occurrences, follow installed runtime selection while preserving authored harness/Profile, model/cost/privacy, source, and publication intent. Schedules do not independently pin image digests or runtime-provider rollout versions. Preserve schedule identity, cadence, paused state, and meaningful choices during migration. A patch update alone must not require recreating or reapproving every schedule.
 
 ## 10. Migration stages
 
-These stages define dependency and acceptance boundaries, not a blanket completion claim. Implemented mechanisms, qualified support rows, deployment promotion, and actual removal must be reported separately through their existing owners. In particular, a required-row catalog is not protected-live evidence, and a retirement inventory is not retired code.
+There is no mandatory six-phase product migration or nine-stage deletion sequence. Use one bounded transition through existing deployment ownership: establish the replacement behavior, stop incompatible new admissions, reconcile actual old work and retained-history requirements, switch the existing selection, and remove the obsolete path with its consumers. This is an operational dependency, not another persisted state machine.
 
-### Stage 1: Reuse the image without changing execution ownership
+Use current records and scoped observation tools for the affected deployment. Missing visibility is unknown, not clean drainage. An unused config alias needs appropriate caller/serialization evidence, not a live provider canary. An active OAuth consumer or history-visible command needs its actual safety evidence. Do not apply every product criterion to every file.
 
-- Publish the OpenCode-derived image under a neutral shared name.
-- Verify Codex, Claude Code, OpenCode, and Omnigent in the exact image.
-- Point current host services and generic launches at the same digest where compatible.
-- Preserve existing execution realizers and credential paths.
-
-### Stage 2: Introduce runtime packs and shared Host Class configuration
-
-- Register trusted runtime-pack descriptors.
-- Generalize host bootstrap and image resolution around one shared image authority.
-- Register separate Codex, Claude, and OpenCode Host Classes that reference the shared digest.
-- Make startup, attestation, and model probing descriptor-driven.
-
-### Stage 3: Generalize credential materialization
-
-- Add credential ownership to materialization handles.
-- Complete `codex-oauth-home@1` for the generic realizer.
-- Complete `claude-oauth-home@1` for the generic realizer.
-- Preserve OpenCode's run-owned keyed materialization and credentialless `none@1` route without cross-route fallback.
-- Prove rotation, fencing, cleanup, and cross-runtime isolation.
-
-### Stage 4: Qualify and canary generic Codex and Claude
-
-- Produce exact-artifact and protected-live support evidence.
-- Allow selected new Codex and Claude Agent Profiles to choose `generic-omnigent-host@1`.
-- Canary static and on-demand modes independently.
-- Keep legacy realizers available for recorded work and explicit migration rollback.
-
-### Stage 5: Make Omnigent the normal default
-
-**Rollout mechanism implemented; promotion remains per combination.** The mechanism is in place and the promoted rows are deployment-owned:
-
-- A versioned runtime-provider rollout policy controls each exact combination, and the decision plus its generation is frozen into the immutable execution plan.
-- One shared selection and admission boundary serves Workflow Create, presets, schedules, edit, rerun, retry as a fresh execution, Checkpoint Branch, remediation, linked continuation, and API/MCP submissions.
-- Direct paths are labeled compatibility choices in Runtime; legacy path labels
-  remain in diagnostics and history. Generic promotion respects the selected
-  Profile and its pinned compatible configuration.
-- Continuation, remediation, checkpoint, steering, approval, and Workflow Chat turns enter the canonical Omnigent session and turn-command path.
-- Unsupported combinations stay unavailable with an exact reason rather than silently using a direct runtime.
-- Exact canary allowlists, six independent rollback controls, an operator-visible migration status view, and eleven bounded migration metric families — each emitted by one production owner across the selection boundary, plan compilation, the generic host lifecycle, and the canonical-turn wrapper — make the migration observable and reversible.
-
-Promoting an individual harness row still requires that deployment's exact support evidence: the generic Codex, Claude Code, and OpenCode rows are promoted by their own qualification gates.
-
-### Stage 6: Retire duplicate runtime architecture
-
-Retirement is code-owned and staged. The retirement class of each component
-decides what may happen to it; the class advances only when its evidence
-permits, and it never advances as a side effect of another component retiring.
-
-- Stop admitting new legacy Codex profile-bound plans after parity and rollback criteria pass. New admission is enforced at plan compilation and runtime selection from the component's retirement class, so a trusted default, an explicit client selection, a schedule, and a preset are held to the same state.
-- Stop defaulting to direct Codex and direct Claude after their Omnigent combinations pass. Direct Codex and direct Claude are separate generations with separate rows and separate decisions; neither is forced to retire because the other did.
-- Consolidate duplicate Compose startup scripts and environment variables. Legacy image and environment identities produce an actionable startup failure during their deprecation window instead of being silently ignored.
-- Reduce legacy modules to replay and historical-read adapters, then remove them only when retirement guards permit it. Removal proceeds one `RemovalStage` at a time (product selectors → new-write API paths → composition-root registrations → startup and Compose → image and environment aliases → OAuth-host orchestration → launch-only code → replay wrappers → historical readers), and each removal PR cites the inventory rows it removes and the guard tests that prove them eligible.
-
-A component becomes removal-eligible only when **all** of the following hold:
-its class no longer admits new work; every declared active owner has fresh,
-successful, zero-count drain evidence; its replay, historical-read, and rollback
-windows have closed; a fresh, exactly-scoped rollback exercise was recorded; and
-every applicable retirement criterion passes. Missing evidence never reads as
-"drained".
+Fresh installs without old consumers should not perform a permanent retirement census. Independent deployments are updated and observed independently. Preserve operator URLs, settings, data, credentials, and the only recoverable work. Recovery uses the same portable controller, with rollback only where schema/data/history compatibility permits it.
 
 ## 11. Required acceptance gates
 
-The strategy is complete only when all applicable gates pass:
+The shared normal path must demonstrate launch, usable session/chat, correctly scoped credentials, saved results, and relevant retry/cancel/recovery behavior. Existing Profile enrollment and canonical command delivery must work through actual consumers. Required source and publication behavior remains with its existing owners, not a new umbrella test suite.
 
-- One shared image is built and verified by immutable digest for every supported architecture.
-- Separate Host Classes can reference the same digest without conflating support state.
-- Runtime packs drive startup, credential staging, environment, readiness, model discovery, and attestation.
-- The generic host lifecycle contains no top-level provider-specific orchestration branches.
-- Codex and Claude OAuth enrollment remains owned by MoonMind Settings.
-- Generic Codex and Claude materializers preserve exclusive writable OAuth state and acquired generation fencing.
-- OpenCode run-owned credentials remain isolated and are destroyed after cleanup; credentialless execution creates no credential material and never inherits the keyed route.
-- Non-selected runtime credentials are absent from every exact host.
-- Codex, Claude, and OpenCode normal product journeys run through `generic-omnigent-host@1` for supported combinations.
-- Each claimed on-demand combination demonstrates launch, native Workflow Detail interaction, authorized recovery, artifact/checkpoint access after host removal, and verified cleanup through its actual production boundaries.
-- Fault-injection evidence covers interrupted execution/finalization, publication failure, cancellation, worker restart, stale generations, and janitor recovery without losing the required durable handoff or duplicating completed compute.
-- Continuations and other follow-up sources use one canonical session and turn-command boundary.
-- Exact-artifact and protected-live reports identify image, harness, runtime pack, materializer, model, policy, and realizer.
-- New authoring defaults prefer Omnigent only for qualified combinations, through one versioned per-combination rollout policy and one shared selection and admission boundary.
-- Every admitted plan freezes the rollout decision and generation that admitted it, so a later policy change cannot reinterpret it.
-- Operator status and bounded migration telemetry explain the current state of every combination without exposing credentials, provider-session ids, raw host paths, or image authority.
-- Explicit generic selections never silently fall back.
-- Existing histories remain replayable and historically truthful throughout migration.
-- Duplicate runtime and host code is removed only after machine-checkable retirement criteria pass.
+Use common-path CI plus tests for genuinely different credential, storage, or protocol boundaries. Validate real replay changes with appropriate histories. Report source inspection, fixtures, current CI, live observations, and deployed state separately. Missing required evidence cannot become success, while unrelated qualification is not a blanket gate on simplification.
+
+The change must remove competing mechanisms, not just hide them or rename a registry. No fixed class/phase/metric count, whole-catalog conformance ledger, or documentation-wording test is required.
 
 ## 12. Non-goals
 
-This strategy does not require:
-
-- one Host Class for every harness in the shared image
-- one credential format across runtimes
-- sharing OAuth homes between Codex and Claude Code
-- installing every future Omnigent harness in the shared image
-- allowing workflows to select arbitrary images, runtime packs, probes, or mounts
-- moving MoonMind workflow, policy, credential, workspace, evidence, or cleanup authority into Omnigent
-- claiming support merely because a binary exists in an image
-- removing direct or legacy runtime paths before replay and rollback obligations are satisfied
-- silently converting active or historical executions to another realizer
+No new rollout service, retirement inventory, compatibility fingerprint, session orchestrator, shared raw-credential home, account/tenant model, or mandatory static vendor host. No arbitrary workflow-authored image or privileged mount. No weakening of real security, active-work, data-integrity, or historical interpretation requirements.
 
 ## 13. Documentation rule
 
-Documents that describe current runtime behavior must distinguish:
-
-- **current supported path**
-- **migration compatibility path**
-- **desired primary path**
-- **qualified support combination**
-
-The phrase “Omnigent is the primary runtime provider” describes the durable destination. Current support claims remain exact and evidence-gated until each migration stage is complete.
+Distinguish desired primary behavior, actual supported paths, and temporary compatibility. A design change is not a live cutover. Remove conflicting old requirements rather than append more validators or exceptions. Keep operational instructions with existing issues/update owners and concise providing contracts. The historical strategy remains in Git, not another permanent active checklist.
