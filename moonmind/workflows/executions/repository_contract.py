@@ -198,7 +198,10 @@ class GitHubAppCredential(BaseModel):
     is a distinct discriminated variant carrying only references (definition
     and installation identity), never raw token material. ``keyRef`` names
     the managed secret holding the App signing key; ``account`` optionally
-    pins the expected installation account owner.
+    pins the expected installation account owner. ``permittedRepositories``
+    records the enrollment-time repository restriction inside the persisted
+    credential metadata so issuance scope survives a database reload (the
+    connection-level ``allowedRepositoryIds`` is not a persisted column).
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
@@ -207,6 +210,9 @@ class GitHubAppCredential(BaseModel):
     installation_ref: str = Field(alias="installationRef", min_length=1)
     key_ref: str | None = Field(default=None, alias="keyRef")
     account: str | None = Field(default=None)
+    permitted_repositories: tuple[str, ...] = Field(
+        default=(), alias="permittedRepositories"
+    )
 
 
 RepositoryCredential = Annotated[

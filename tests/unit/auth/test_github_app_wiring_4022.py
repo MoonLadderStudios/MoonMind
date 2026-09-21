@@ -66,7 +66,7 @@ def test_production_issuer_maps_github_app_to_adapter() -> None:
     conn = _app_connection()
 
     async def _post_ok(*, jwt: str, payload: dict):
-        assert payload["repositories"] == REPOS
+        assert payload["repositories"] == ["repo"]
         assert set(payload.keys()) == {"repositories", "permissions"}
         return {
             "token": "ghs_opaque_prod_wiring_xyz",
@@ -387,3 +387,177 @@ def test_setup_save_mounts_existing_connection_writer() -> None:
         assert saved_retry.id == "repository-connection:app"
 
     asyncio.run(_run())
+
+
+def test_github_api_base_rejects_untrusted_endpoints() -> None:
+    from moonmind.auth.bound_acquisition import BoundAccessError
+    from moonmind.auth.github_app_wiring import github_api_base_for
+
+    assert github_api_base_for("") == "https://api.github.com"
+    assert github_api_base_for("https://github.com") == "https://api.github.com"
+    # A free-form endpoint never receives a signed App JWT.
+    import pytest
+
+    with pytest.raises(BoundAccessError):
+        github_api_base_for("https://untrusted.example.com/hook")
+    # Enterprise hosts resolve only from explicit administrator allowlists.
+    with pytest.raises(BoundAccessError):
+        github_api_base_for("https://ghe.example.com")
+    assert (
+        github_api_base_for("https://ghe.example.com", allowed_hosts=["ghe.example.com"])
+        == "https://ghe.example.com/api/v3"
+    )
+
+
+def test_acquire_rejects_operations_outside_connection_policy() -> None:
+    import asyncio
+
+    import pytest
+
+    from moonmind.auth.bound_acquisition import BoundAccessError
+    from moonmind.auth.github_app_wiring import acquire_bound_credential_for_connection
+
+    conn = _app_connection()
+    # Read-only connection must never issue a write-scoped token, even
+    # without route context (no identity/assignment supplied).
+    conn_read = conn.model_copy(update={"allowedOperations": ["read"]})
+    with pytest.raises(BoundAccessError):
+        asyncio.run(
+            acquire_bound_credential_for_connection(
+                conn_read,
+                operations=["merge_request"],
+                principal_ref="principal:alice",
+                principal_scope=("system", None),
+                execution_owner="exec:ops-policy",
+            )
+        )
+
+
+def test_acquire_delegates_snapshot_to_selector_with_identity() -> None:
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from moonmind.auth.bound_acquisition import BoundAccessError
+    from moonmind.auth.github_app_wiring import acquire_bound_credential_for_connection
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryAssignment,
+        RepositoryIdentity,
+    )
+
+    conn = _app_connection()
+    identity = RepositoryIdentity.model_validate(
+        {
+            "endpoint": "https://github.com",
+            "providerRepoId": "repo-id-1",
+            "displayName": "acme/repo",
+        }
+    )
+
+    async def _post_ok(*, jwt: str, payload: dict):
+        return {
+            "token": "ghs_opaque_selector_xyz",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+            "permissions": dict(payload["permissions"]),
+            "repositories": list(payload.get("repositories") or []),
+        }
+
+    async def _get_installation(*, jwt: str):
+        return {
+            "app_ref": APP_REF,
+            "installation_ref": INSTALLATION_REF,
+            "account": ACCOUNT,
+            "repositories": list(REPOS),
+            "suspended": False,
+        }
+
+    edge = {
+        "resolve_secret": lambda _ref: b"fake-pem",
+        "make_jwt": lambda _key: "jwt",
+        "http_post": _post_ok,
+        "get_installation": _get_installation,
+        "expected_account": ACCOUNT,
+        "permitted_repositories": list(REPOS),
+        "app_id": "123456",
+        "installation_id": "123",
+    }
+    assignment = RepositoryAssignment.model_validate(
+        {
+            "connectionId": conn.id,
+            "identity": identity.model_dump(by_alias=True, mode="json"),
+            "operations": ["read"],
+            "revision": 1,
+            "verified": True,
+        }
+    )
+    acquired = asyncio.run(
+        acquire_bound_credential_for_connection(
+            conn,
+            operations=["read"],
+            principal_ref="principal:alice",
+            principal_scope=("system", None),
+            execution_owner="exec:selector",
+            identity=identity,
+            assignment=assignment,
+            **edge,
+        )
+    )
+    assert acquired.binding.adapter_kind == "github_app"
+    assert acquired.binding.access_mode == "explicit"
+
+    # The selector owns assignment admission: the connection allows write
+    # but the assignment grants only read, so a write request fails. The
+    # legacy constructor (connection policy only) would have admitted it.
+    with pytest.raises(BoundAccessError):
+        asyncio.run(
+            acquire_bound_credential_for_connection(
+                conn,
+                operations=["write"],
+                principal_ref="principal:alice",
+                principal_scope=("system", None),
+                execution_owner="exec:selector-denied",
+                identity=identity,
+                assignment=assignment,
+                **edge,
+            )
+        )
+
+
+def test_acquire_uses_injected_service_backed_revision_reader() -> None:
+    import asyncio
+
+    import pytest
+
+    from moonmind.auth.bound_acquisition import ActiveRevision, BoundAccessError
+    from moonmind.auth.github_app_wiring import acquire_bound_credential_for_connection
+
+    conn = _app_connection()
+
+    async def _disabled_reader(connection_id: str) -> ActiveRevision:
+        assert connection_id == conn.id
+        return ActiveRevision(
+            credential_revision=conn.credential_revision,
+            connection_revision=conn.policy_revision,
+            policy_revision=1,
+            status="disabled",
+            adapter_kind="github_app",
+        )
+
+    with pytest.raises(BoundAccessError):
+        asyncio.run(
+            acquire_bound_credential_for_connection(
+                conn,
+                operations=["read"],
+                principal_ref="principal:alice",
+                principal_scope=("system", None),
+                execution_owner="exec:stale-revoked",
+                revision_reader=_disabled_reader,
+                resolve_secret=lambda _ref: b"fake-pem",
+                make_jwt=lambda _key: "jwt",
+                http_post=lambda **kwargs: {},
+                get_installation=lambda **kwargs: {},
+                app_id="123456",
+                installation_id="123",
+            )
+        )

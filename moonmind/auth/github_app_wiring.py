@@ -29,6 +29,52 @@ DEFAULT_KEY_SECRET_REF = "db://github-app-key/default"
 
 _GITHUB_API_BASE = "https://api.github.com"
 
+#: Hosts the deployment administrator trusts for GitHub API traffic besides
+#: the default ``github.com`` SaaS host. Never populated from connection
+#: input: GitHub Enterprise hosts enter here from server configuration only.
+TRUSTED_GITHUB_API_HOSTS: tuple[str, ...] = ()
+
+
+def github_api_base_for(endpoint_ref: str = "", *, allowed_hosts: Sequence[str] = ()) -> str:
+    """Derive the API base for the configured host (api.github.com default).
+
+    Only the default ``github.com`` host and explicitly allowlisted
+    enterprise hosts resolve to an API base: a free-form or mistyped
+    endpoint never receives a freshly signed App JWT. GitHub Enterprise
+    Server exposes the API under ``/api/v3``.
+    """
+
+    from moonmind.auth.bound_acquisition import BOUND_DENIED, BoundAccessError
+
+    raw = str(endpoint_ref or "").strip()
+    if not raw:
+        return _GITHUB_API_BASE
+    candidate = raw if "://" in raw else f"https://{raw}"
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError as exc:
+        raise BoundAccessError(BOUND_DENIED, "GitHub endpoint is not a valid URL") from exc
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise BoundAccessError(BOUND_DENIED, "GitHub endpoint is not a valid URL")
+    if parsed.username or parsed.password:
+        raise BoundAccessError(BOUND_DENIED, "GitHub endpoint must not embed credentials")
+    host = parsed.hostname.lower()
+    allowlisted = {str(name or "").strip().lower() for name in allowed_hosts if str(name or "").strip()}
+    allowlisted.update(TRUSTED_GITHUB_API_HOSTS)
+    if host in {"github.com", "api.github.com"}:
+        return _GITHUB_API_BASE
+    if host in allowlisted:
+        base = candidate.rstrip("/")
+        if not base.endswith("/api/v3"):
+            base += "/api/v3"
+        return base
+    raise BoundAccessError(
+        BOUND_DENIED,
+        f"GitHub endpoint host {host!r} is not an allowlisted API host",
+    )
+
 #: Credential-source -> bound-acquirer adapter kind. Single owner for the
 #: mapping shared by :func:`revision_reader_for` and
 #: :func:`build_bound_acquirer_for_connection` so the production issuer and
@@ -42,8 +88,21 @@ _ADAPTER_KIND_FOR_SOURCE = {
 
 
 def permitted_repositories_for(connection: Any) -> tuple[str, ...]:
-    """Derive the permitted repository set from the connection's scope."""
+    """Derive the permitted repository set from the connection's scope.
 
+    The persisted credential restriction wins: it survives a database
+    reload, while the connection-level allowlist is in-memory authority
+    for the freshly enrolled object.
+    """
+
+    credential = getattr(connection, "credential", None)
+    stored = tuple(
+        str(name or "").strip()
+        for name in (getattr(credential, "permitted_repositories", ()) or ())
+        if str(name or "").strip()
+    )
+    if stored:
+        return stored
     allowed = tuple(
         str(name or "").strip()
         for name in (getattr(connection, "allowed_repository_ids", ()) or ())
@@ -88,6 +147,7 @@ def issuer_for_connection(
     expected_account: str = "",
     permitted_repositories: Sequence[str] = (),
     key_secret_ref: str = "",
+    target_repository: str = "",
 ) -> Any:
     """Build the production issuer for one connection on the acquirer seam."""
 
@@ -140,6 +200,12 @@ def issuer_for_connection(
         )
         if not permitted:
             permitted = permitted_repositories_for(connection)
+        target = (target_repository or "").strip()
+        if target and target not in permitted:
+            raise BoundAccessError(
+                BOUND_DENIED,
+                "requested repository is outside the connection allowlist",
+            )
         return GitHubAppAdapter(
             app_ref=app_ref,
             installation_ref=installation_ref,
@@ -150,6 +216,7 @@ def issuer_for_connection(
             get_installation=get_installation,
             expected_account=expected_account_for(connection, override=expected_account),
             permitted_repositories=permitted,
+            target_repository=target,
         )
     raise BoundAccessError(BOUND_DENIED, f"unsupported credential source {source!r}")
 
@@ -195,21 +262,6 @@ def revision_reader_for(connections: Mapping[str, Any]) -> Callable[[str], Any]:
 # ---------------------------------------------------------------------------
 # Production HTTP/JWT defaults (real GitHub contracts, injectable in tests).
 # ---------------------------------------------------------------------------
-
-
-def github_api_base_for(endpoint_ref: str = "") -> str:
-    """Derive the API base for the configured host (api.github.com default)."""
-
-    raw = str(endpoint_ref or "").strip().lower()
-    if "ghe" in raw or (
-        "github" not in raw and raw.startswith("https://") and "." in raw
-    ):
-        # GitHub Enterprise Server exposes the API under /api/v3.
-        base = raw.rstrip("/")
-        if not base.endswith("/api/v3"):
-            base += "/api/v3"
-        return base or _GITHUB_API_BASE
-    return _GITHUB_API_BASE
 
 
 def make_github_app_jwt(
@@ -293,6 +345,7 @@ async def fetch_installation_record(
 
 __all__ = [
     "DEFAULT_KEY_SECRET_REF",
+    "TRUSTED_GITHUB_API_HOSTS",
     "acquire_bound_credential_for_connection",
     "acquire_bound_headers_for_connection",
     "build_bound_acquirer_for_connection",
@@ -455,9 +508,12 @@ def build_bound_acquirer_for_connection(
     app_id: str = "",
     installation_id: str = "",
     api_base: str = "",
+    allowed_api_hosts: Sequence[str] = (),
     key_secret_ref: str = "",
     expected_account: str = "",
     permitted_repositories: Sequence[str] = (),
+    target_repository: str = "",
+    revision_reader: Callable[[str], Any] | None = None,
 ) -> Any:
     """Build the production ``BoundCredentialAcquirer`` for one connection.
 
@@ -468,6 +524,13 @@ def build_bound_acquirer_for_connection(
     ``github_app`` sources enter bound acquisition here: ``github_resolver``
     stays on the historical ``resolve_github_credential`` path and unknown
     sources fail closed.
+
+    ``revision_reader`` injects the service-backed ACTIVE-revision read
+    (for example over ``RepositoryConnectionService`` snapshots) so
+    disablement, deletion, rotation, or policy-revision advances after the
+    connection object was loaded still revoke issuance. Without it the
+    acquirer reads the supplied connection object, which is only valid
+    for the instant it was loaded.
     """
 
     from moonmind.auth.bound_acquisition import (
@@ -494,7 +557,8 @@ def build_bound_acquirer_for_connection(
             override=installation_id,
         )
         resolved_base = str(api_base or "").strip() or github_api_base_for(
-            str(getattr(connection, "endpoint_ref", "") or "")
+            str(getattr(connection, "endpoint_ref", "") or ""),
+            allowed_hosts=allowed_api_hosts,
         )
         issuer = issuer_for_connection(
             connection,
@@ -511,6 +575,7 @@ def build_bound_acquirer_for_connection(
             expected_account=expected_account,
             permitted_repositories=permitted_repositories,
             key_secret_ref=key_secret_ref,
+            target_repository=target_repository,
         )
     else:  # secret_ref -> PAT through the connection's own SecretRef.
         issuer = issuer_for_connection(
@@ -533,7 +598,9 @@ def build_bound_acquirer_for_connection(
         return issuer
 
     return BoundCredentialAcquirer(
-        revision_reader=revision_reader_for({str(connection.id): connection}),
+        revision_reader=revision_reader
+        if revision_reader is not None
+        else revision_reader_for({str(connection.id): connection}),
         issuer_for=_issuer_for,
         cache=cache if cache is not None else BoundCredentialCache(),
     )
@@ -550,6 +617,7 @@ async def acquire_bound_credential_for_connection(
     endpoint: str = "",
     route_id: str = "",
     repository_display: str = "",
+    repository: str = "",
     role: str = "reader",
     cache: Any | None = None,
     resolve_secret: Callable[[str], Awaitable[str | bytes] | str | bytes] | None = None,
@@ -559,9 +627,13 @@ async def acquire_bound_credential_for_connection(
     app_id: str = "",
     installation_id: str = "",
     api_base: str = "",
+    allowed_api_hosts: Sequence[str] = (),
     key_secret_ref: str = "",
     expected_account: str = "",
     permitted_repositories: Sequence[str] = (),
+    revision_reader: Callable[[str], Any] | None = None,
+    identity: Any | None = None,
+    assignment: Any | None = None,
 ) -> Any:
     """Acquire an ``AcquiredCredential`` for one admitted server-side operation.
 
@@ -571,6 +643,15 @@ async def acquire_bound_credential_for_connection(
     revocation/rotation checks stay in the bound acquirer; renewal keeps the
     same installation, repositories, operations, and intent with no PAT
     fallback.
+
+    ``identity`` (with optional ``assignment``) delegates snapshot
+    construction to ``select_repository_authority``, the existing owner of
+    ownership, assignment, lifecycle, repository-allowlist, and
+    ``allowed_operations`` checks. Without route context the snapshot is
+    built from the connection directly, but the requested operations are
+    still compared to the connection policy so a read-only connection can
+    never issue a write-scoped token. ``repository`` narrows issuance to
+    one allowlisted repository and fails closed outside the allowlist.
     """
 
     from datetime import datetime, timezone
@@ -581,6 +662,7 @@ async def acquire_bound_credential_for_connection(
         AcquisitionRequest,
         BoundAccessError,
         SelectionSnapshot,
+        select_repository_authority,
     )
     from moonmind.workflows.executions.repository_contract import normalize_scope
 
@@ -601,6 +683,28 @@ async def acquire_bound_credential_for_connection(
         raise BoundAccessError(
             BOUND_DENIED, "bound acquisition requires an execution/use owner"
         )
+    # The requested operations are always compared to the connection
+    # policy: a read-only connection never issues a write-scoped token,
+    # whether or not the caller supplied route context.
+    missing_ops = [
+        op for op in admitted if op not in tuple(connection.allowed_operations or ())
+    ]
+    if missing_ops:
+        raise BoundAccessError(
+            BOUND_DENIED,
+            f"connection does not allow {','.join(missing_ops)}",
+        )
+    target_repository = (repository or "").strip()
+    effective_permitted = tuple(
+        str(name).strip()
+        for name in (permitted_repositories or ())
+        if str(name).strip()
+    ) or permitted_repositories_for(connection)
+    if target_repository and target_repository not in effective_permitted:
+        raise BoundAccessError(
+            BOUND_DENIED,
+            "requested repository is outside the connection allowlist",
+        )
     scope_type, scope_ref = normalize_scope(principal_scope[0], principal_scope[1])
     display = str(repository_display or "").strip() or str(connection.id)
     acquirer = build_bound_acquirer_for_connection(
@@ -613,27 +717,46 @@ async def acquire_bound_credential_for_connection(
         app_id=app_id,
         installation_id=installation_id,
         api_base=api_base,
+        allowed_api_hosts=allowed_api_hosts,
         key_secret_ref=key_secret_ref,
         expected_account=expected_account,
         permitted_repositories=permitted_repositories,
+        target_repository=target_repository,
+        revision_reader=revision_reader,
     )
-    snapshot = SelectionSnapshot(
-        principalRef=principal_ref.strip(),
-        scopeType=scope_type,
-        scopeRef=scope_ref,
-        endpoint=str(endpoint or "").strip() or str(connection.endpoint_ref),
-        routeId=str(route_id or "").strip() or display,
-        repositoryDisplay=display,
-        role=str(role or "").strip() or "reader",
-        operations=admitted,
-        accessMode=AccessMode.EXPLICIT,
-        policyRevision=int(connection.policy_revision),
-        connectionId=str(connection.id),
-        connectionPolicyRevision=int(connection.policy_revision),
-        credentialRevision=int(connection.credential_revision),
-        selectionOrigin="github-app-wiring",
-        authorizedAt=datetime.now(timezone.utc).isoformat(),
-    )
+    if identity is not None:
+        # Route-aware callers admit through the existing selector: its
+        # ownership, assignment, lifecycle, allowlist, and operation
+        # checks own the snapshot instead of this constructor.
+        snapshot = select_repository_authority(
+            access_mode=AccessMode.EXPLICIT,
+            principal_ref=principal_ref.strip(),
+            principal_scope=(scope_type, scope_ref),
+            identity=identity,
+            role=str(role or "").strip() or "reader",
+            requested_operations=admitted,
+            policy_revision=int(connection.policy_revision),
+            explicit_connection=connection,
+            explicit_assignment=assignment,
+        )
+    else:
+        snapshot = SelectionSnapshot(
+            principalRef=principal_ref.strip(),
+            scopeType=scope_type,
+            scopeRef=scope_ref,
+            endpoint=str(endpoint or "").strip() or str(connection.endpoint_ref),
+            routeId=str(route_id or "").strip() or display,
+            repositoryDisplay=target_repository or display,
+            role=str(role or "").strip() or "reader",
+            operations=admitted,
+            accessMode=AccessMode.EXPLICIT,
+            policyRevision=int(connection.policy_revision),
+            connectionId=str(connection.id),
+            connectionPolicyRevision=int(connection.policy_revision),
+            credentialRevision=int(connection.credential_revision),
+            selectionOrigin="github-app-wiring",
+            authorizedAt=datetime.now(timezone.utc).isoformat(),
+        )
     return await acquirer.acquire(
         AcquisitionRequest(
             snapshot=snapshot,
@@ -654,6 +777,7 @@ async def acquire_bound_headers_for_connection(
     endpoint: str = "",
     route_id: str = "",
     repository_display: str = "",
+    repository: str = "",
     role: str = "reader",
     cache: Any | None = None,
     resolve_secret: Callable[[str], Awaitable[str | bytes] | str | bytes] | None = None,
@@ -663,9 +787,13 @@ async def acquire_bound_headers_for_connection(
     app_id: str = "",
     installation_id: str = "",
     api_base: str = "",
+    allowed_api_hosts: Sequence[str] = (),
     key_secret_ref: str = "",
     expected_account: str = "",
     permitted_repositories: Sequence[str] = (),
+    revision_reader: Callable[[str], Any] | None = None,
+    identity: Any | None = None,
+    assignment: Any | None = None,
 ) -> tuple[dict[str, str], tuple[str, ...]]:
     """Acquire bound headers plus redaction values for one admitted operation.
 
@@ -691,6 +819,7 @@ async def acquire_bound_headers_for_connection(
         endpoint=endpoint,
         route_id=route_id,
         repository_display=repository_display,
+        repository=repository,
         role=role,
         cache=cache,
         resolve_secret=resolve_secret,
@@ -700,9 +829,13 @@ async def acquire_bound_headers_for_connection(
         app_id=app_id,
         installation_id=installation_id,
         api_base=api_base,
+        allowed_api_hosts=allowed_api_hosts,
         key_secret_ref=key_secret_ref,
         expected_account=expected_account,
         permitted_repositories=permitted_repositories,
+        revision_reader=revision_reader,
+        identity=identity,
+        assignment=assignment,
     )
     headers: dict[str, str] = {}
     redact: list[str] = []

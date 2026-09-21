@@ -377,6 +377,7 @@ class OmnigentWorkspacePublicationService:
         repository: str,
         github_token: str | None,
         accepted_published_head: Mapping[str, Any] | None = None,
+        bound_credential: Any | None = None,
     ) -> dict[str, Any]:
         normalized_mode = str(publish_mode or "none").strip().lower()
         if normalized_mode not in {"branch", "pr"}:
@@ -593,6 +594,7 @@ class OmnigentWorkspacePublicationService:
                 run_command=run_command,
                 repo=str(repository or "").strip() or None,
                 github_token=token or None,
+                bound_credential=bound_credential,
                 publish_existing_commits=True,
                 verify_remote=True,
             )
