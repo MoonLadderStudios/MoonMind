@@ -18,7 +18,6 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
-    RecurringWorkflowScopeType,
     User,
 )
 from api_service.services.provider_profile_runtime import (
@@ -210,13 +209,12 @@ def _serialize_definition(
 
 def _action_permissions_for_definition(
     definition: RecurringWorkflowDefinition,
-    *,
-    user: User | None = None,
 ) -> RecurringWorkflowActionPermissionsModel:
     # Single-user (#4351): the admitted operator manages every instance
     # schedule. Legacy scope/owner values are provenance, never an action
     # gate. Execution-state and approval validation remain at their owning
-    # boundaries.
+    # boundaries. The ``user`` argument was removed with its callers;
+    # admission owns access via get_current_user.
     return RecurringWorkflowActionPermissionsModel(
         can_edit=True,
         can_run_now=True,
@@ -244,16 +242,6 @@ def _serialize_run(
         created_at=run.created_at,
         updated_at=run.updated_at,
     )
-
-def _require_operator_for_global_scope(
-    *,
-    scope: RecurringWorkflowScopeType,
-    user: User | None = None,
-) -> None:
-    # Single-user (#4351): no human-owner gate. The shared admission boundary
-    # (get_current_user) owns operator access; scope is history-compatible
-    # provenance. Retained as a no-op for call-site compatibility.
-    return None
 
 def _log_route_exception(
     *, action: str, definition_id: UUID | None, user_id: UUID | None, exc: Exception
@@ -433,17 +421,14 @@ def _matches_recurring_filters(
 
 async def _list_all_definitions(
     service: RecurringWorkflowsService,
-    *,
-    scope: str,
-    user_id: UUID | None,
 ) -> list[RecurringWorkflowDefinition]:
+    # Single-user (#4351): instance listing. No scope/user predicate;
+    # the deprecated HTTP ``scope`` value is never forwarded.
     definitions: list[RecurringWorkflowDefinition] = []
     offset = 0
     page_size = 500
     while True:
         page = await service.list_definitions(
-            scope=scope,
-            user_id=user_id,
             limit=page_size,
             offset=offset,
         )
@@ -552,7 +537,14 @@ def _map_error(exc: Exception) -> HTTPException:
 @router.get("", response_model=RecurringWorkflowDefinitionListResponse)
 async def list_recurring_workflows(
     *,
-    scope: Literal["personal", "global"] = Query("personal"),
+    scope: Literal["personal", "global"] = Query(
+        "personal",
+        deprecated=True,
+        description=(
+            "Legacy scope selector, ignored. Schedules are instance resources; "
+            "every scope is listed together. Removal tracked by #4354."
+        ),
+    ),
     limit: int = Query(200, ge=1, le=500),
     cursor: Optional[str] = Query(None),
     sort: Literal[
@@ -580,16 +572,14 @@ async def list_recurring_workflows(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowDefinitionListResponse:
-    # Single-user (#4351): instance listing. Scope is history-compatible
-    # provenance and never gates on a human owner; the service returns
-    # every scope for any requested value.
-    requested_scope = RecurringWorkflowScopeType(scope)
-    _require_operator_for_global_scope(scope=requested_scope, user=user)
-    user_id = getattr(user, "id", None)
+    # Single-user (#4351): instance listing. The deprecated ``scope`` value
+    # is accepted for frontend compat (?scope=personal) but never forwarded
+    # and never partitions visibility; admission owns access.
+    # Removal of the query value tracked by #4354.
+    _ = (scope, user)
 
     offset = _offset_from_cursor(cursor)
     page_size = max(1, min(int(limit), 500))
-    user_uuid = user_id if isinstance(user_id, UUID) else None
     requires_derived_list = any(
         value.strip()
         for value in (
@@ -606,11 +596,7 @@ async def list_recurring_workflows(
     ) or sort != "updatedAt"
 
     if requires_derived_list:
-        definitions = await _list_all_definitions(
-            service,
-            scope=scope,
-            user_id=user_uuid,
-        )
+        definitions = await _list_all_definitions(service)
         runtime_summaries = await service.runtime_summaries_for_definitions(definitions)
         filtered_definitions = [
             item
@@ -644,21 +630,12 @@ async def list_recurring_workflows(
         )
     else:
         page_items = await service.list_definitions(
-            scope=scope,
-            user_id=user_uuid,
             limit=page_size,
             offset=offset,
         )
         runtime_summaries = await service.runtime_summaries_for_definitions(page_items)
-        count = await service.count_definitions(
-            scope=scope,
-            user_id=user_uuid,
-        )
-        metric_definitions = await _list_all_definitions(
-            service,
-            scope=scope,
-            user_id=user_uuid,
-        )
+        count = await service.count_definitions()
+        metric_definitions = await _list_all_definitions(service)
         active_count, next_24h_count, attention_count = _recurring_metrics(
             metric_definitions,
             {},
@@ -679,10 +656,7 @@ async def list_recurring_workflows(
             _serialize_definition(
                 item,
                 runtime_summary=runtime_summaries.get(item.id),
-                action_permissions=_action_permissions_for_definition(
-                    item,
-                    user=user,
-                ),
+                action_permissions=_action_permissions_for_definition(item),
             )
             for item in page_items
         ],
@@ -703,9 +677,8 @@ async def create_recurring_workflow(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowDefinitionModel:
-    scope = RecurringWorkflowScopeType(payload.scope_type)
-    _require_operator_for_global_scope(scope=scope, user=user)
-
+    # Single-user (#4351): admission owns access. Stored scope_type is legacy
+    # provenance (frontend compat), never a visibility or action gate.
     # Single-user (#4351): new schedules carry no human owner. Legacy
     # ``owner_user_id`` values persist as provenance on old rows.
     owner_user_id = None
@@ -754,7 +727,7 @@ async def create_recurring_workflow(
     )
     return _serialize_definition(
         definition,
-        action_permissions=_action_permissions_for_definition(definition, user=user),
+        action_permissions=_action_permissions_for_definition(definition),
     )
 
 @router.get("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
@@ -763,26 +736,24 @@ async def get_recurring_workflow(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowDefinitionModel:
-    user_id = getattr(user, "id", None)
+    # Single-user (#4351): admission owns access; control reads the instance
+    # record directly. Legacy owner/scope are provenance.
+    _ = user
     try:
-        definition = await service.require_authorized_definition(
-            definition_id=definition_id,
-            user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=True,
-        )
+        definition = await service.get_definition(definition_id)
         runtime_summary = await service.runtime_summary_for_definition(definition)
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(
             action="get_recurring_workflow",
             definition_id=definition_id,
-            user_id=user_id if isinstance(user_id, UUID) else None,
+            user_id=None,
             exc=exc,
         )
         raise _map_error(exc) from exc
     return _serialize_definition(
         definition,
         runtime_summary=runtime_summary,
-        action_permissions=_action_permissions_for_definition(definition, user=user),
+        action_permissions=_action_permissions_for_definition(definition),
     )
 
 @router.patch("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
@@ -792,13 +763,13 @@ async def update_recurring_workflow(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowDefinitionModel:
+    # Single-user (#4351): admission owns access; control reads the instance
+    # record directly.
+    _ = user
     user_id = getattr(user, "id", None)
+    user_uuid = user_id if isinstance(user_id, UUID) else None
     try:
-        definition = await service.require_authorized_definition(
-            definition_id=definition_id,
-            user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=True,
-        )
+        definition = await service.get_definition(definition_id)
         updated = await service.update_definition(
             definition,
             name=payload.name,
@@ -828,13 +799,13 @@ async def update_recurring_workflow(
     _audit_schedule_action(
         action="recurring_schedule.update",
         outcome="success",
-        user_id=user_id if isinstance(user_id, UUID) else None,
+        user_id=user_uuid,
         definition_id=updated.id,
         scope=updated.scope_type.value,
     )
     return _serialize_definition(
         updated,
-        action_permissions=_action_permissions_for_definition(updated, user=user),
+        action_permissions=_action_permissions_for_definition(updated),
     )
 
 
@@ -849,13 +820,12 @@ async def run_recurring_workflow_now(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowRunModel:
+    # Single-user (#4351): admission owns access; control reads the instance
+    # record directly.
+    _ = user
     user_id = getattr(user, "id", None)
     try:
-        definition = await service.require_authorized_definition(
-            definition_id=definition_id,
-            user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=True,
-        )
+        definition = await service.get_definition(definition_id)
         run = await service.create_manual_run(definition, request_id=idempotency_key)
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(
@@ -887,13 +857,12 @@ async def delete_recurring_workflow(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> Response:
+    # Single-user (#4351): admission owns access; control reads the instance
+    # record directly.
+    _ = user
     user_id = getattr(user, "id", None)
     try:
-        definition = await service.require_authorized_definition(
-            definition_id=definition_id,
-            user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=True,
-        )
+        definition = await service.get_definition(definition_id)
         await service.delete_definition(definition)
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(
@@ -926,13 +895,12 @@ async def list_recurring_workflow_runs(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowRunListResponse:
+    # Single-user (#4351): admission owns access; control reads the instance
+    # record directly.
+    _ = user
     user_id = getattr(user, "id", None)
     try:
-        definition = await service.require_authorized_definition(
-            definition_id=definition_id,
-            user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=True,
-        )
+        definition = await service.get_definition(definition_id)
         runs = await service.list_runs(definition_id=definition.id, limit=limit)
         started_at_by_workflow_id = await service.started_at_by_workflow_id(
             item.temporal_workflow_id for item in runs if item.temporal_workflow_id
