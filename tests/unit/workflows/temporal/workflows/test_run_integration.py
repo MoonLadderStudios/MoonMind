@@ -7644,6 +7644,92 @@ def test_moonspec_contract_repair_feedback_for_degraded_verify_output(
     )
 
 
+def test_moonspec_report_recovery_repairs_at_most_once(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R2: a malformed final report gets at
+    most one report-only correction. Retained histories keep the legacy
+    budget instead of gaining new scheduling on replay."""
+    from moonmind.workflows.temporal.workflows.run import (
+        _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS,
+    )
+
+    assert _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS == 2
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 2
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+    )
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
+
+
+def test_moonspec_contract_repair_preserves_original_findings(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R1/R2: the bounded repair carries the
+    original bounded findings as untrusted data instead of dropping them."""
+    execution_result = {
+        "outputs": {
+            "moonSpecVerify": {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "create_pull_request",
+                "feedback": "original verifier note",
+                "issues": [
+                    {
+                        "severity": "error",
+                        "description": "original gap",
+                        "evidence": "gap evidence",
+                    }
+                ],
+            }
+        }
+    }
+    node_inputs = {"selectedSkill": "moonspec-verify"}
+    assert (
+        mock_run_workflow._moonspec_verify_contract_repair_feedback(
+            execution_result=execution_result,
+            tool_name="auto",
+            node_inputs=node_inputs,
+        )
+        is not None
+    )
+    preserved = mock_run_workflow._moonspec_contract_repair_issues(
+        execution_result=execution_result,
+        tool_name="auto",
+        node_inputs=node_inputs,
+    )
+    assert len(preserved) == 1
+    assert preserved[0]["description"] == "original gap"
+
+    assert (
+        mock_run_workflow._moonspec_contract_repair_issues(
+            execution_result={
+                "outputs": {
+                    "moonSpecVerify": {
+                        "verdict": "FULLY_IMPLEMENTED",
+                        "recommendedNextAction": "advance",
+                    }
+                }
+            },
+            tool_name="auto",
+            node_inputs=node_inputs,
+        )
+        == ()
+    )
+    assert (
+        mock_run_workflow._moonspec_contract_repair_issues(
+            execution_result=execution_result,
+            tool_name="auto",
+            node_inputs={"selectedSkill": "jira-issue-updater"},
+        )
+        == ()
+    )
+
+
 def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
