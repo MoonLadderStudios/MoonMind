@@ -70,14 +70,41 @@ async def test_plan_deployment_identity_rejects_stale_server_before_launch(
 
 
 @pytest.mark.asyncio
-async def test_plan_deployment_identity_rejects_stale_opencode_host_before_launch(
+async def test_plan_deployment_identity_allows_compatible_opencode_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-repository host digest drift launches on the installed target."""
+
+    from moonmind.omnigent.harness_platform import host_classes
+
+    server_digest = "sha256:" + "a" * 64
+    current_host = "ghcr.io/example/opencode@sha256:" + "b" * 64
+    rebuilt_host = "ghcr.io/example/opencode@sha256:" + "c" * 64
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: server_digest,
+    )
+    monkeypatch.setattr(
+        host_classes,
+        "get_opencode_host_image_ref",
+        lambda: current_host,
+    )
+
+    await deployment_identity.assert_plan_matches_deployed_runtime(
+        _opencode_plan_payload(server_digest, rebuilt_host)
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_deployment_identity_rejects_foreign_opencode_family(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.omnigent.harness_platform import host_classes
 
     server_digest = "sha256:" + "a" * 64
     current_host = "ghcr.io/example/opencode@sha256:" + "b" * 64
-    stale_host = "ghcr.io/example/opencode@sha256:" + "c" * 64
+    foreign_host = "ghcr.io/example/other-host@sha256:" + "c" * 64
     monkeypatch.setattr(
         deployment_identity,
         "resolve_deployed_server_build_digest",
@@ -91,22 +118,45 @@ async def test_plan_deployment_identity_rejects_stale_opencode_host_before_launc
 
     with pytest.raises(
         deployment_identity.OmnigentDeploymentIdentityConflict,
-        match="host image that is no longer deployed",
+        match="family",
     ):
         await deployment_identity.assert_plan_matches_deployed_runtime(
-            _opencode_plan_payload(server_digest, stale_host)
+            _opencode_plan_payload(server_digest, foreign_host)
         )
 
 
 @pytest.mark.asyncio
-async def test_plan_deployment_identity_rejects_stale_pi_host_before_launch(
+async def test_plan_deployment_identity_allows_compatible_pi_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-repository host digest drift launches on the installed target."""
+
+    from moonmind.omnigent.harness_platform import host_classes
+
+    server_digest = "sha256:" + "a" * 64
+    current_host = "ghcr.io/example/pi@sha256:" + "b" * 64
+    rebuilt_host = "ghcr.io/example/pi@sha256:" + "c" * 64
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: server_digest,
+    )
+    monkeypatch.setattr(host_classes, "get_pi_host_image_ref", lambda: current_host)
+
+    await deployment_identity.assert_plan_matches_deployed_runtime(
+        _pi_plan_payload(server_digest, rebuilt_host)
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_deployment_identity_rejects_foreign_pi_family(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.omnigent.harness_platform import host_classes
 
     server_digest = "sha256:" + "a" * 64
     current_host = "ghcr.io/example/pi@sha256:" + "b" * 64
-    stale_host = "ghcr.io/example/pi@sha256:" + "c" * 64
+    foreign_host = "ghcr.io/example/other-host@sha256:" + "c" * 64
     monkeypatch.setattr(
         deployment_identity,
         "resolve_deployed_server_build_digest",
@@ -116,10 +166,10 @@ async def test_plan_deployment_identity_rejects_stale_pi_host_before_launch(
 
     with pytest.raises(
         deployment_identity.OmnigentDeploymentIdentityConflict,
-        match="host image that is no longer deployed",
+        match="family",
     ):
         await deployment_identity.assert_plan_matches_deployed_runtime(
-            _pi_plan_payload(server_digest, stale_host)
+            _pi_plan_payload(server_digest, foreign_host)
         )
 
 

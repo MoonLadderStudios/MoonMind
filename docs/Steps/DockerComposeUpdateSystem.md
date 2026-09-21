@@ -163,7 +163,7 @@ An unavailable optional integration is reported separately. Missing mandatory ve
 
 Coordinate the installed Omnigent server and required host images in this same update. Reconcile uncertain recreations before repeating them. Future launches follow the installed runtime while preserving explicit harness/provider choices.
 
-Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
+Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran. The routine release path records the installed digests, recreates onto them, and verifies; it performs no policy cuts, schedule refreshes, catalog syncs, or drift fences. Fresh managed-attempt admission resolves the installed target and binds it to that attempt, so compatible same-repository rebuilds launch without a new version ladder while genuinely different image families or denied authority still block with diagnostics.
 
 ### 10.9 Capture after state
 
