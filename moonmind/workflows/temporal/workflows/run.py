@@ -8366,7 +8366,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return ()
         if not (gate_result.invalid or gate_result.degraded):
             return ()
-        return tuple(gate_result.issues)
+        if gate_result.issues:
+            return tuple(gate_result.issues)
+        # A missing-verdict envelope locates no verdict-keyed source, so the
+        # canonical parse cannot bind its issues. Carry the bounded raw
+        # findings as untrusted repair data instead of dropping them,
+        # mirroring the parser's dict-only ceiling.
+        for source in self._moonspec_verify_sources(outputs):
+            issues_raw = source.get("issues")
+            if isinstance(issues_raw, list):
+                raw_issues = [
+                    issue for issue in issues_raw[:20] if isinstance(issue, dict)
+                ]
+                if raw_issues:
+                    return tuple(raw_issues)
+        return ()
 
     def _moonspec_verify_contract_repair_feedback(
         self,

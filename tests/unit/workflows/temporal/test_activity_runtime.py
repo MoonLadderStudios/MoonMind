@@ -3775,6 +3775,47 @@ async def test_native_recoverable_missing_action_requests_reattempt(
     assert verify_payload["recommendedNextAction"] == "reattempt_current_step"
 
 
+async def test_native_low_confidence_missing_action_defaults_to_blocked_not_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: low confidence without an explicit
+    action and without current-runtime recovery carries ``blocked``."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "confidence": "low",
+            "recoverableInCurrentRuntime": False,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-low-confidence",
+    )
+    assert verify_payload["recommendedNextAction"] == "blocked"
+
+
+async def test_native_missing_tools_missing_action_defaults_to_blocked_not_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: a report describing missing local
+    tools without an explicit action carries ``blocked``, never ``needs_human``."""
+    verify_payload = await _publish_moonspec_verify_payload(
+        tmp_path,
+        monkeypatch,
+        {
+            "schemaVersion": "moonspec-verify.issue_brief.v1",
+            "verdict": "NO_DETERMINATION",
+            "confidence": "low",
+            "feedback": "missing local tool: container python-tests unavailable",
+            "recoverableInCurrentRuntime": False,
+            "remainingWork": [],
+        },
+        run_id="verify-run-native-missing-tools",
+    )
+    assert verify_payload["recommendedNextAction"] == "blocked"
+
+
 async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
