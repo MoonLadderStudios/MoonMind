@@ -801,6 +801,14 @@ RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
 RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH = (
     "run-moonspec-gate-contract-single-repair-v1"
 )
+# MoonLadderStudios/MoonMind#4472: version the NO_DETERMINATION gate-stop
+# semantics change from NEEDS_HUMAN to automation-owned BLOCKED. Retained
+# histories without this marker keep the previously recorded NEEDS_HUMAN
+# continuation and terminal manifest interpretation so replay preserves
+# recorded state and publish context.
+RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH = (
+    "run-moonspec-gate-blocked-continuation-v1"
+)
 RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH = (
     "run-bounded-story-loop-progress-budget-v1"
 )
@@ -2529,6 +2537,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ):
             return _MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_MAX_ATTEMPTS
         return _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
+
+    def _moonspec_gate_blocked_continuation_enabled(self) -> bool:
+        """Return True when this history uses automation-owned blocked stops.
+
+        New histories carry RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH and
+        interpret an action-less NO_DETERMINATION as blocked; retained
+        histories without the marker keep the legacy needs_human
+        interpretation so replay preserves recorded continuation state,
+        publish context, and terminal manifest status.
+        """
+        return self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH
+        )
 
     def _step_execution_uses_fresh_source(
         self,
@@ -8935,6 +8956,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 else None
             ),
+            blocked_continuation_enabled=(
+                self._moonspec_gate_blocked_continuation_enabled()
+            ),
         )
         if (
             gate.verdict == "ADDITIONAL_WORK_NEEDED"
@@ -13665,8 +13689,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     honor_explicit_stop = workflow.patched(
                         RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
                     )
+                    blocked_continuation_enabled = (
+                        self._moonspec_gate_blocked_continuation_enabled()
+                    )
                     terminal_disposition = terminal_disposition_for_gate_stop(
-                        review_verdict, honor_explicit_stop=honor_explicit_stop
+                        review_verdict,
+                        honor_explicit_stop=honor_explicit_stop,
+                        blocked_continuation_enabled=blocked_continuation_enabled,
                     )
                     terminal_status = (
                         "blocked" if terminal_disposition == "blocked" else "failed"
@@ -13720,6 +13749,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     missing_evidence_summary = (
                         "Structured gate passed without accepted output evidence"
                     )
+                    missing_evidence_action = (
+                        "blocked"
+                        if self._moonspec_gate_blocked_continuation_enabled()
+                        else "needs_human"
+                    )
                     self._upsert_step_check(
                         node_id,
                         kind="approval_policy",
@@ -13729,7 +13763,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         artifact_ref=gate_result_ref,
                         metadata={
                             **gate_check_metadata,
-                            "recommendedNextAction": "blocked",
+                            "recommendedNextAction": missing_evidence_action,
                         },
                     )
                     self._mark_step_terminal(
@@ -13750,7 +13784,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         updated_at=workflow.now(),
                         reason=attempt_reason,
                         status="failed",
-                        terminal_disposition="blocked",
+                        terminal_disposition=missing_evidence_action,
                         budget=review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
@@ -13761,7 +13795,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 consecutive_no_progress_attempts
                             ),
                             verdict=review_verdict.verdict,
-                            recommended_next_action="blocked",
+                            recommended_next_action=missing_evidence_action,
                         ),
                     )
                     gate_stop_requested = True

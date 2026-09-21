@@ -551,3 +551,23 @@ def test_terminal_disposition_preserves_explicit_stops_without_human_default():
         )
         == "blocked"
     )
+
+
+def test_legacy_histories_keep_needs_human_default_for_replay():
+    """Retained histories without the blocked-continuation marker keep the
+    previously recorded needs_human interpretation."""
+    assert (
+        recommended_next_action_for_verdict(
+            "NO_DETERMINATION",
+            recoverable_in_current_runtime=False,
+            blocked_continuation_enabled=False,
+        )
+        == "needs_human"
+    )
+    assert (
+        terminal_disposition_for_gate_stop(
+            ReviewVerdict(verdict="NO_DETERMINATION"),
+            blocked_continuation_enabled=False,
+        )
+        == "needs_human"
+    )

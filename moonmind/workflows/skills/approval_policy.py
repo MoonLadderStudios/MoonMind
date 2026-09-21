@@ -50,6 +50,7 @@ def recommended_next_action_for_verdict(
     verdict: Any,
     *,
     recoverable_in_current_runtime: bool = False,
+    blocked_continuation_enabled: bool = True,
 ) -> str | None:
     """Return the default next action for a canonical gate verdict.
 
@@ -58,6 +59,11 @@ def recommended_next_action_for_verdict(
     automation-owned ``blocked`` continuation. An explicitly requested
     ``needs_human`` remains expressible through the compatible-actions set
     and is preserved verbatim by the gate parser.
+
+    ``blocked_continuation_enabled=False`` preserves the legacy
+    ``needs_human`` default for retained Temporal histories so replay keeps
+    their previously recorded interpretation (see
+    RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH).
     """
 
     normalized = str(verdict or "").strip().upper()
@@ -70,7 +76,7 @@ def recommended_next_action_for_verdict(
         return (
             "reattempt_current_step"
             if recoverable_in_current_runtime
-            else "blocked"
+            else ("blocked" if blocked_continuation_enabled else "needs_human")
         )
     if normalized in {"BLOCKED", "FAILED_UNRECOVERABLE"}:
         return "blocked"
@@ -825,7 +831,8 @@ def review_gate_verdict_made_progress(verdict: Any) -> bool:
 
 
 def terminal_disposition_for_gate_stop(
-    verdict: Any, *, honor_explicit_stop: bool = True
+    verdict: Any, *, honor_explicit_stop: bool = True,
+    blocked_continuation_enabled: bool = True,
 ) -> str:
     """Return the terminal disposition when a gate stops the workflow.
 
@@ -834,6 +841,10 @@ def terminal_disposition_for_gate_stop(
     and unrecognized verdicts — carries the automation-owned ``blocked``
     disposition so ordinary report/evidence failures never acquire a new
     human-review requirement.
+
+    ``blocked_continuation_enabled=False`` preserves the legacy
+    ``needs_human`` fallthrough for retained Temporal histories (see
+    RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH).
     """
     normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
     action = getattr(verdict, "recommended_next_action", None)
@@ -851,7 +862,7 @@ def terminal_disposition_for_gate_stop(
         return "environment_contaminated_by_skill_projection"
     if normalized == "ADDITIONAL_WORK_NEEDED":
         return "failed_with_remaining_work"
-    return "blocked"
+    return "blocked" if blocked_continuation_enabled else "needs_human"
 
 
 def is_review_gate_active(

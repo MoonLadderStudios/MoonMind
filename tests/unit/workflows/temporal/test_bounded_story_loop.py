@@ -644,6 +644,27 @@ def test_no_determination_without_explicit_human_stop_is_blocked(
     assert decision.reason == expected_reason
 
 
+def test_no_determination_legacy_histories_keep_needs_human_for_replay() -> None:
+    """Retained histories without the blocked-continuation marker keep the
+    previously recorded needs_human fallthrough so replay is stable."""
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(
+            verdict="NO_DETERMINATION",
+            terminalDisposition="failed_with_remaining_work",
+        ),
+        budget=_budget(),
+        checkpoint_available=True,
+        policy_allowed=True,
+        recommended_next_action=None,
+        blocked_continuation_enabled=False,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.state == "needs_human"
+    assert decision.reason == "no_determination"
+
+
 def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
     failed = _attempt()
     assert failed.checkpoint_before_ref == "artifact://checkpoint/before"
