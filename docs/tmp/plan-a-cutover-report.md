@@ -52,7 +52,7 @@ counts, so a full host count never blocks an agent's own test job.
 
 ## Verification evidence (MoonLadderStudios/MoonMind#4457)
 
-Tested content: `001d47fa4240a87916d67510f8ed226b2c57ba66` (qualification
+Tested content: `b40c0141cf63c5de01b06182485da8f44f2d734f` (qualification
 journey + handoff, committed: production `LABEL_CONTAINER_JOB` import fix
 for Docker-gated pre-creates and hermetic OS-level before-start worker-death
 test) plus the working-tree remediation to
@@ -63,7 +63,9 @@ worker process applies the container start, dies by SIGKILL while holding
 the backend capacity-lock key with no userspace cleanup, the survivor
 observes the daemon ledger holding its slot and reconciles with no
 duplicate start) and this handoff revision-line fix.
-21 test defs. No production-code change in the remediation pass:
+21 test defs, 3 of them Docker-gated, so the expected journey result at the
+reviewed revision is **18 passed, 3 skipped**. No production-code change in
+the remediation pass:
 the new boundary tests confirm the existing daemon/lock mechanism, so it
 is retained. Preserved hermetic suites untouched.
 
@@ -72,9 +74,13 @@ per AGENTS.md), all green:
 
 - `moonmind container python-tests
   tests/integration/reliability/test_container_job_plan_a_qualification_journey.py
-  --timeout-seconds 900` → **17 passed, 3 skipped**
+  --timeout-seconds 900` → expected **18 passed, 3 skipped** at the reviewed
+  revision `b40c0141` (21 test defs; prior recorded run
   (`container-job:eb6a946172a242d5937e32bdbbfd2118`, logsRef
-  `art_01M3093PTWJ5PZS0DWJ3TEXPPP`). The skips are the three Docker-gated
+  `art_01M3093PTWJ5PZS0DWJ3TEXPPP`) covered the earlier 20-test revision
+  with 17 passed plus 3 skipped, so the new after-start SIGKILL case is
+  covered by the required-CI rerun at `b40c0141`, not by the earlier
+  evidence). The skips are the three Docker-gated
   cases (`test_real_docker_inspect_shows_stock_fixed_limits`,
   `test_real_docker_two_workers_race_final_slot`,
   `test_real_docker_lost_start_ack_reconciles_before_retry`): no reachable
