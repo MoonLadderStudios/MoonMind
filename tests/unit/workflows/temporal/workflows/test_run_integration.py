@@ -7644,6 +7644,26 @@ def test_moonspec_contract_repair_feedback_for_degraded_verify_output(
     )
 
 
+def test_moonspec_contract_repair_bound_is_single_report_only_correction(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#4472: a malformed final verify report receives at most one
+    report-only correction. Retained histories without the single-repair
+    marker keep the legacy bound so replay preserves their command sequence."""
+    # Retained history: legacy bound preserved for replay safety.
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 2
+
+    # New history: exactly one report-only correction.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH,
+    )
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
+
+
 def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

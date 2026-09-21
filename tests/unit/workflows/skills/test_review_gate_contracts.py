@@ -18,8 +18,10 @@ from moonmind.workflows.skills.approval_policy import (
     build_review_prompt,
     parse_step_gate_result,
     parse_review_verdict,
+    recommended_next_action_for_verdict,
     recommended_next_actions,
     step_gate_contract_violations,
+    terminal_disposition_for_gate_stop,
 )
 
 # ── ApprovalPolicyPolicy ──────────────────────────────────────────────────
@@ -480,3 +482,72 @@ def test_gate_verdict_action_compatibility_fails_closed(
     assert legacy.verdict == verdict
     assert legacy.recommended_next_action == action
     assert not legacy.invalid
+
+
+# ── Native-verifier default continuation (MoonMind#4472) ──────────────────
+#
+# Ordinary report/evidence failures must not implicitly become needs_human.
+# An unrecoverable or action-less NO_DETERMINATION carries the automation-owned
+# blocked continuation; explicit needs_human decisions stay expressible and
+# are preserved verbatim by the parser and compatibility set above.
+
+
+@pytest.mark.parametrize(
+    ("verdict", "recoverable", "expected"),
+    [
+        ("FULLY_IMPLEMENTED", False, "advance"),
+        ("ADDITIONAL_WORK_NEEDED", False, "reattempt_current_step"),
+        ("NO_DETERMINATION", True, "reattempt_current_step"),
+        ("NO_DETERMINATION", False, "blocked"),
+        ("BLOCKED", False, "blocked"),
+        ("FAILED_UNRECOVERABLE", False, "blocked"),
+    ],
+)
+def test_default_next_action_never_implies_human_for_report_failures(
+    verdict, recoverable, expected
+):
+    assert (
+        recommended_next_action_for_verdict(
+            verdict, recoverable_in_current_runtime=recoverable
+        )
+        == expected
+    )
+
+
+def test_explicit_human_stop_remains_expressible_for_no_determination():
+    assert "needs_human" in recommended_next_actions("NO_DETERMINATION")
+    gate = parse_step_gate_result(
+        {"verdict": "NO_DETERMINATION", "recommendedNextAction": "needs_human"}
+    )
+    assert gate.verdict == "NO_DETERMINATION"
+    assert gate.recommended_next_action == "needs_human"
+    assert not gate.invalid
+
+
+def test_terminal_disposition_preserves_explicit_stops_without_human_default():
+    assert (
+        terminal_disposition_for_gate_stop(
+            ReviewVerdict(
+                verdict="NO_DETERMINATION",
+                recommended_next_action="needs_human",
+            )
+        )
+        == "needs_human"
+    )
+    assert (
+        terminal_disposition_for_gate_stop(
+            ReviewVerdict(
+                verdict="NO_DETERMINATION",
+                recommended_next_action="blocked",
+            )
+        )
+        == "blocked"
+    )
+    # Ordinary report/evidence failures without an explicit stop carry the
+    # automation-owned blocked disposition instead of a new human requirement.
+    assert (
+        terminal_disposition_for_gate_stop(
+            ReviewVerdict(verdict="NO_DETERMINATION")
+        )
+        == "blocked"
+    )

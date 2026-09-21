@@ -933,9 +933,14 @@ def evaluate_attempt_continuation(
             reason="verification_failed_unrecoverable",
             diagnostics_ref=gate.diagnostics_ref,
         )
+    # MoonMind#4472: an inconclusive report without an explicit human stop
+    # (missing tools, low confidence, recoverable=false) carries the
+    # automation-owned blocked handoff with a concrete recovery reason.
+    # Explicit needs_human/blocked stops are honored above and never reach
+    # this fallthrough.
     return _stop(
         attempt,
-        state=LoopStopState.NEEDS_HUMAN,
+        state=LoopStopState.BLOCKED,
         reason="no_determination",
         remaining_work_ref=gate.remaining_work_ref,
         diagnostics_ref=gate.diagnostics_ref,

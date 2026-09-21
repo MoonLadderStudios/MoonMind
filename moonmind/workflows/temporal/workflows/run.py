@@ -392,7 +392,12 @@ _MOONSPEC_GATE_PASSING_VERDICTS = frozenset({"FULLY_IMPLEMENTED"})
 # Bounded budget for re-running a moonspec-verify step whose structured gate
 # output violated the canonical contract (a parse problem, not a verifier
 # judgment). Remediation implement cycles cannot fix malformed JSON.
+# MoonMind#4472: at most one report-only correction per verify execution. The
+# legacy bound of 2 is retained for histories that recorded the original
+# contract-repair patch so retained command sequences replay unchanged (see
+# RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH).
 _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS = 2
+_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_MAX_ATTEMPTS = 1
 _MOONSPEC_GATE_BLOCKING_VERDICTS = frozenset(
     {
         "ADDITIONAL_WORK_NEEDED",
@@ -789,6 +794,13 @@ RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH = (
     "run-moonspec-title-remediation-detection-v1"
 )
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
+# MoonLadderStudios/MoonMind#4472: bound the report-only correction to a single
+# attempt for new histories. Histories that recorded only the original repair
+# patch keep the legacy bound of 2 so their recorded command sequence replays
+# unchanged.
+RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH = (
+    "run-moonspec-gate-contract-single-repair-v1"
+)
 RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH = (
     "run-bounded-story-loop-progress-budget-v1"
 )
@@ -2504,6 +2516,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._fresh_source_step_execution_attempts.add(
             self._step_execution_launch_block_key(logical_step_id, next_attempt)
         )
+
+    def _moonspec_contract_repair_max_attempts(self) -> int:
+        """Return the report-only correction budget for this history.
+
+        New histories allow at most one correction (MoonMind#4472); retained
+        histories without the single-repair marker keep the legacy bound so
+        replay preserves their recorded command sequence.
+        """
+        if self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH
+        ):
+            return _MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_MAX_ATTEMPTS
+        return _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
 
     def _step_execution_uses_fresh_source(
         self,
@@ -13337,7 +13362,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     if (
                         contract_repair_feedback
                         and moonspec_contract_repair_attempts
-                        < _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
+                        < self._moonspec_contract_repair_max_attempts()
                     ):
                         moonspec_contract_repair_attempts += 1
                         loop_context = self._publish_context.setdefault(
@@ -13704,7 +13729,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         artifact_ref=gate_result_ref,
                         metadata={
                             **gate_check_metadata,
-                            "recommendedNextAction": "needs_human",
+                            "recommendedNextAction": "blocked",
                         },
                     )
                     self._mark_step_terminal(
@@ -13725,7 +13750,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         updated_at=workflow.now(),
                         reason=attempt_reason,
                         status="failed",
-                        terminal_disposition="needs_human",
+                        terminal_disposition="blocked",
                         budget=review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
@@ -13736,7 +13761,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 consecutive_no_progress_attempts
                             ),
                             verdict=review_verdict.verdict,
-                            recommended_next_action="needs_human",
+                            recommended_next_action="blocked",
                         ),
                     )
                     gate_stop_requested = True
