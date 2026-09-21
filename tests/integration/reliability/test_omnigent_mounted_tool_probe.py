@@ -10,13 +10,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_services import attestation
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from tests.integration.reliability.helpers import load_replay
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.integration,
+    pytest.mark.reliability_journey,
+]
 
 
 @pytest.mark.parametrize(
@@ -71,6 +75,11 @@ async def test_declared_tool_probe_reaches_exact_host(
     image_ref = "example/host@sha256:" + "1" * 64
     build_digest = "sha256:" + "2" * 64
 
+    # A version probe attests the delivered build, so it runs through the
+    # cleared-environment wrapper rather than inheriting the host's runtime
+    # configuration. Match the transport on that exact builder.
+    probe_prefix = attestation.mounted_tool_probe_argv("replay-host", "", [])[:6]
+
     class Backend(DockerCommandBackend):
         async def inspect_container(self, _name):
             return {
@@ -117,10 +126,10 @@ async def test_declared_tool_probe_reaches_exact_host(
                 return await super().run(argv[3:], **kwargs)
             if argv[3:6] == ["/bin/sh", "-ceu", 'sha256sum "$1"']:
                 return await super().run(argv[3:], **kwargs)
-            if argv[:2] == ["docker", "exec"] and len(argv) > 3 and argv[3] == str(bundle / "bin/moonmind"):
+            if argv[:6] == probe_prefix:
                 probes.append((argv, kwargs))
                 # Substitute only Docker transport: execute the real mounted
-                # CLI probe in a local process.
+                # CLI probe, under the same cleared environment, locally.
                 return await super().run(argv[3:], **kwargs)
             if argv[:2] == ["docker", "exec"] and "sha256sum" in argv[5]:
                 probes.append((argv, kwargs))
