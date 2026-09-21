@@ -84,6 +84,35 @@ def test_generic_host_projection_declares_the_gh_schema_version() -> None:
     assert syntax.returncode == 0, syntax.stderr
 
 
+def test_static_host_block_carries_the_marker_write_everywhere() -> None:
+    """CI runners cannot execute the block, so prove its shape unconditionally.
+
+    The packaged entrypoint only admits a GitHub config home under
+    ``/home/app/.cache``, which a hermetic runner does not have, so the
+    end-to-end test below skips there. This keeps the static host's half of
+    the invariant covered on every runner.
+    """
+
+    block = _static_host_github_block()
+
+    assert 'printf \'version: "1"\\n\' > "$github_version_tmp"' in block
+    # Guarded on the live credential, not on a supplied token, so a restart
+    # that carries no new token still repairs a pre-marker projection.
+    assert 'if [ -f "$github_config_dir/hosts.yml" ]; then' in block
+    assert 'mv "$github_version_tmp" "$github_config_dir/config.yml"' in block
+    # No deletion path may enter the block with the marker write.
+    assert "rm " not in block
+
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=block,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+
 def test_static_host_projection_declares_the_gh_schema_version(
     tmp_path: Path,
 ) -> None:
