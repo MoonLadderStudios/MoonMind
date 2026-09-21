@@ -166,33 +166,27 @@ async def _load_exact_execution_owner_binding(
         return owner_type or None, owner_id or None
 
 async def _require_observability_access(record: object, user: User) -> None:
-    if getattr(user, "is_superuser", False):
-        return
-
+    # Single-user (#4351): agent-run observability is instance-visible to
+    # the admitted operator. The shared admission boundary (get_current_user)
+    # owns access; retained owner bindings persist as provenance and never
+    # gate reads. State/source/approval validation stays at owning bounds.
     workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
     if not workflow_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to access observability for this run.",
         )
-
-    owner_type, owner_id = await _load_execution_owner_binding(workflow_id)
-    if owner_type != "user" or owner_id != str(user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access observability for this run.",
-        )
+    return None
 
 async def _require_agent_run_access(agent_run_id: str, user: User) -> None:
-    if getattr(user, "is_superuser", False):
-        return
-
-    owner_type, owner_id = await _load_execution_owner_binding(agent_run_id)
-    if owner_type != "user" or owner_id != str(user.id):
+    # Single-user (#4351): agent-run and session projections are
+    # instance-visible to the admitted operator. See above.
+    if not str(agent_run_id or "").strip():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to access this agent run or its session projection.",
         )
+    return None
 
 def _session_projection_not_found() -> None:
     raise HTTPException(

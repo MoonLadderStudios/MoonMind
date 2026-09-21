@@ -498,6 +498,16 @@ This is an API-layer auth choice. It does **not** require public object-storage 
 Native chat and upstream runtime access stay behind the qualified same-origin
 binding facade, not an unrestricted upstream proxy.
 
+## 9.6 Single-user operation (#4351)
+
+Artifacts are instance resources for the admitted operator: the stable
+`operator`/`system` principal (and legacy human-owner UUID strings as
+provenance) inspects and controls instance artifacts and saved-work reads
+without a human-owner lookup. `workflow:`/`service:` machine principals
+stay execution-bound via owner-equality and linked-execution checks.
+Restricted raw bytes, quarantine, redaction, and explicit-grant gates are
+unchanged. See [Single-User Application Design](../SingleUserApplicationDesign.md).
+
 ---
 
 ## 10. Size limits and transfer strategy
