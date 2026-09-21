@@ -68,6 +68,17 @@ bounded cached evidence. Unknown or stale evidence makes readiness unavailable;
 it does not block liveness or Temporal progress. Supervisors reuse each child's
 single readiness response, including diagnostics returned with HTTP 503.
 
+During startup routing convergence, transient Temporal overload, unavailable,
+and deadline errors use the existing bounded startup retry loop while pollers
+remain running. Each retry observes server state before another handoff; if a
+previous handoff applied but its confirmation failed, ordinary workflow traffic
+must still pass verification before readiness is reported. Exhausted retries and
+non-retryable errors retain their original diagnostics and fail startup.
+The workflow group's Compose health check allows a three-minute startup grace
+period for the old-poller expiry window and transient recovery. It continues to
+probe `/readyz`, accepts successful readiness immediately, and retains the same
+steady-state interval and failure threshold.
+
 `release.inspect` is registered on every affected worker queue and verifies the
 installed content digest. The deployment controller waits for Temporal to
 register all candidate queues before admitting its pinned cross-queue canary.

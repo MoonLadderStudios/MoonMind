@@ -58,6 +58,7 @@ async def version_availability(
     """
     import re
     from datetime import datetime, timezone
+
     from temporalio.api.enums.v1 import DescribeTaskQueueMode
     from temporalio.api.taskqueue.v1 import TaskQueue
     from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
@@ -178,6 +179,7 @@ async def await_registered_queues(
 async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=120):
     """Prove ordinary unpinned traffic on every registered workflow queue."""
     import hashlib
+
     from temporalio.api.enums.v1 import TaskQueueType
     from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
     from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -552,6 +554,8 @@ async def bootstrap_version_routing(client, spec):
     if not spec.workflows:
         return {"status": "workflow_fleet_owns_routing"}
     target = f"{spec.deployment_id}.{spec.build_id}"
+    verification_owed = False
+    verification_canary_id = f"mm-startup-reverify-{uuid4().hex}"
     for attempt in range(60):
         try:
             snapshot = await routing_snapshot(client, spec.deployment_id)
@@ -562,6 +566,16 @@ async def bootstrap_version_routing(client, spec):
             )
             if current and not never_routed:
                 if current == target:
+                    if verification_owed:
+                        # A prior attempt may have changed routing before its
+                        # acknowledgement or verification read failed. Observe
+                        # that effect instead of promoting again, but still
+                        # prove ordinary traffic before reporting readiness.
+                        await verify_ordinary_route(
+                            client,
+                            version=target,
+                            canary_id=verification_canary_id,
+                        )
                     return {
                         "status": "current",
                         "currentVersion": current,
@@ -586,10 +600,21 @@ async def bootstrap_version_routing(client, spec):
                 RPCStatusCode.NOT_FOUND,
                 RPCStatusCode.FAILED_PRECONDITION,
                 RPCStatusCode.ABORTED,
+                RPCStatusCode.RESOURCE_EXHAUSTED,
+                RPCStatusCode.UNAVAILABLE,
+                RPCStatusCode.DEADLINE_EXCEEDED,
             }:
                 raise
             if attempt == 59:
                 raise
+            verification_owed = True
+            logger.warning(
+                "Release routing startup observation failed (%s); "
+                "retrying with pollers running (attempt %s/60): %s",
+                exc.status.name,
+                attempt + 1,
+                exc,
+            )
             await _routing_sleep(1)
     raise RuntimeError("Release routing initialization did not converge")
 

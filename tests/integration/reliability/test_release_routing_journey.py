@@ -23,9 +23,11 @@ from temporalio.common import (
     VersioningBehavior,
     WorkerDeploymentVersion,
 )
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker, WorkerDeploymentConfig
 
 from moonmind import release_identity
+from moonmind.workflows.temporal import release_routing
 from moonmind.workflows.temporal.release_routing import (
     bootstrap_version_routing,
     current_version,
@@ -174,8 +176,28 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
     async with worker_for(old):
         await bootstrap_version_routing(client, spec(old))
     current = install("current")
+    # Reproduce the updater incident: the server applies the handoff, then
+    # its confirmation query temporarily exhausts the consistent-query
+    # buffer. Keep all routing, canaries, and subsequent schedules real.
+    snapshot = release_routing.routing_snapshot
+    injected = False
+
+    async def overloaded_confirmation(client, deployment):
+        nonlocal injected
+        result = await snapshot(client, deployment)
+        if not injected and current_version(result) == f"{deployment}.{current}":
+            injected = True
+            raise RPCError(
+                "consistent query buffer is full",
+                RPCStatusCode.RESOURCE_EXHAUSTED,
+                None,
+            )
+        return result
+
+    monkeypatch.setattr(release_routing, "routing_snapshot", overloaded_confirmation)
     async with worker_for(current):
         converged = await bootstrap_version_routing(client, spec(current))
+        assert injected
         assert converged["status"] == "current"
         assert converged["currentVersion"] == f"{deployment}.{current}"
         schedule = await client.create_schedule(
@@ -501,6 +523,7 @@ async def test_unversioned_inflight_workflow_moves_to_qualified_release(
 
 async def test_manual_trigger_correlates_authored_identity_and_reports_overlap():
     from datetime import datetime, timezone
+
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     client = await connect()
@@ -534,6 +557,7 @@ async def test_manual_trigger_correlates_authored_identity_and_reports_overlap()
             result = await adapter.trigger_schedule(
                 definition_id=definition, request_id=str(uuid4()), scheduled_at=marker
             )
+
             async def _observe_trigger():
                 return await adapter.observe_schedule_trigger(
                     definition_id=definition, scheduled_at=marker
