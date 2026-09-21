@@ -84,21 +84,51 @@ async def drain_profile_bound_hosts(
     bound = (
         CREDENTIAL_DRAIN_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     )
+    # One monotonic deadline covers the complete host drain: connection,
+    # workflow start, and janitor result share the documented bound instead
+    # of each receiving a fresh timeout (which could triple the wait).
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + bound
+
+    def _remaining() -> float:
+        return max(0.0, deadline - loop.time())
+
+    workflow_id = f"omnigent-oauth-host-drain:{operation_id}"
+    handle: Any = None
     try:
         client = await asyncio.wait_for(
-            TemporalClientAdapter().get_client(), timeout=bound
+            TemporalClientAdapter().get_client(), timeout=_remaining()
         )
         handle = await asyncio.wait_for(
             client.start_workflow(
                 "MoonMind.OmnigentOAuthHostJanitor",
                 {"profile_id": profile_id, "force": True},
-                id=f"omnigent-oauth-host-drain:{operation_id}",
+                id=workflow_id,
                 task_queue=get_workflow_task_queue(),
             ),
-            timeout=bound,
+            timeout=_remaining(),
         )
-        result = await asyncio.wait_for(handle.result(), timeout=bound)
-    except TimeoutError as exc:
+        result = await asyncio.wait_for(handle.result(), timeout=_remaining())
+    except (TimeoutError, asyncio.TimeoutError) as exc:
+        # asyncio.wait_for cancels only the local wait; the remote janitor
+        # can keep running and remove hosts launched after the caller
+        # releases the maintenance lease. Best-effort cancel the janitor
+        # before failing closed so the retryable 503 does not collide
+        # with the still-running workflow ID.
+        if handle is not None:
+            try:
+                cancel = getattr(handle, "cancel", None)
+                if callable(cancel):
+                    await asyncio.wait_for(cancel(), timeout=min(10.0, bound))
+            except Exception:
+                logger.warning(
+                    "Timed-out janitor drain could not be cancelled: "
+                    "profile_id=%s operation_id=%s workflow_id=%s",
+                    profile_id,
+                    operation_id,
+                    workflow_id,
+                    exc_info=True,
+                )
         raise TimeoutError(
             f"profile host drain timed out after {bound:g}s "
             f"for profile {profile_id}"

@@ -1253,7 +1253,8 @@ export class EnrollmentRequestTimeoutError extends Error {
   constructor(readonly timeoutMs: number = ENROLLMENT_REQUEST_TIMEOUT_MS) {
     super(
       `Enrollment validation timed out after ${Math.round(timeoutMs / 60000)} minutes. ` +
-        'It is safe to retry with the same request.',
+        'The request may still be processing on the server. ' +
+        'It is safe to retry with the same request, which reattaches to the same operation instead of starting a conflicting one.',
     );
     this.name = 'EnrollmentRequestTimeoutError';
   }
@@ -1261,7 +1262,11 @@ export class EnrollmentRequestTimeoutError extends Error {
 
 export class EnrollmentRequestCancelledError extends Error {
   constructor() {
-    super('Enrollment validation was cancelled before completing. Your saved credentials have not changed.');
+    super(
+      'Enrollment validation was cancelled before completing. ' +
+        'The request may still be processing on the server, so verify the saved profile before assuming credentials are unchanged. ' +
+        'Retrying with the same request reattaches to the same operation.',
+    );
     this.name = 'EnrollmentRequestCancelledError';
   }
 }
@@ -3114,7 +3119,18 @@ export function ProviderProfilesManager({
   });
 
   const submitOpencodeEnrollment = () => {
-    if (!opencodeEnrollment || opencodeEnrollmentMutation.isPending) return;
+    if (!opencodeEnrollment) return;
+    if (opencodeEnrollmentMutation.isPending) {
+      // The shared enrollment mutation stays pending while another profile's
+      // validation is still running. Tell the operator instead of dropping
+      // the submit silently; the in-flight request keeps its identity and
+      // the second drawer can retry once it settles.
+      onNotice({
+        level: 'error',
+        text: 'Another enrollment validation is still in progress. Wait for it to finish, then try again.',
+      });
+      return;
+    }
     const profile = opencodeEnrollment.profile;
     const copy = apiKeyEnrollmentCopy(profile);
     const profileId = opencodeEnrollment.profile.profile_id;

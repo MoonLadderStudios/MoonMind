@@ -22,6 +22,20 @@ class _HangingHandle:
         return {}
 
 
+class _CancellableHangingHandle:
+    """Hanging janitor handle that records best-effort cancellation."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def result(self):
+        await asyncio.sleep(30)
+        return {}
+
+    async def cancel(self):
+        self.cancelled = True
+
+
 class _FakeClient:
     def __init__(self, handle):
         self._handle = handle
@@ -73,6 +87,69 @@ async def test_drain_times_out_when_janitor_result_hangs(
         await maintenance.drain_profile_bound_hosts(
             profile_id="p", operation_id="op-1", timeout_seconds=0.05
         )
+
+
+@pytest.mark.asyncio
+async def test_drain_cancels_janitor_before_reporting_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handle = _CancellableHangingHandle()
+    _install_adapter(monkeypatch, handle)
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        await maintenance.drain_profile_bound_hosts(
+            profile_id="p", operation_id="op-cancel", timeout_seconds=0.05
+        )
+
+    assert handle.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_drain_applies_one_deadline_to_the_complete_host_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Later drain phases must receive only the remaining bound."""
+    import asyncio as _asyncio
+
+    seen_timeouts: list[float] = []
+    real_wait_for = _asyncio.wait_for
+
+    async def _recording_wait_for(awaitable, timeout=None):
+        if timeout is not None:
+            seen_timeouts.append(float(timeout))
+        return await real_wait_for(awaitable, timeout=timeout)
+
+    async def _slow_get_client():
+        await _asyncio.sleep(0.05)
+        return _FakeClient(_ImmediateHandle({"cleaned": 1}))
+
+    class _SlowAdapter:
+        async def get_client(self):
+            return await _slow_get_client()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter", _SlowAdapter
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_catalog.get_workflow_task_queue",
+        lambda: "test-queue",
+    )
+    monkeypatch.setattr(
+        "moonmind.provider_profiles.maintenance.asyncio.wait_for",
+        _recording_wait_for,
+    )
+
+    result = await maintenance.drain_profile_bound_hosts(
+        profile_id="p", operation_id="op-deadline", timeout_seconds=5.0
+    )
+
+    assert result == {"cleaned": 1}
+    # Three waits ran (connect, start, result); a fresh bound per phase
+    # would record 5.0 every time, while the shared deadline shrinks.
+    assert len(seen_timeouts) == 3
+    assert seen_timeouts[0] == 5.0
+    assert seen_timeouts[1] < seen_timeouts[0]
+    assert seen_timeouts[2] <= seen_timeouts[1]
 
 
 def test_maintenance_status_from_state_reports_queue_position() -> None:
