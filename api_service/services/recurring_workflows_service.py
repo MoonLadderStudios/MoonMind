@@ -435,7 +435,7 @@ class RecurringWorkflowsService:
     async def list_definitions(
         self,
         *,
-        scope: str,
+        scope: str | None = None,
         user_id: UUID | None = None,
         include_disabled: bool = True,
         limit: int = 200,
@@ -444,10 +444,14 @@ class RecurringWorkflowsService:
         # Single-user (#4351): schedules are instance resources. ``user_id``
         # remains accepted for caller compatibility but is never a visibility
         # predicate; legacy ``owner_user_id`` values are provenance and stay
-        # readable. Scope filtering is retained for history compatibility.
-        scope_type = _normalize_scope_type(scope)
+        # readable. ``scope=None``/``"all"`` lists every scope (instance);
+        # an explicit personal/global value filters for history
+        # compatibility only.
         stmt: Select[tuple[RecurringWorkflowDefinition]] = select(RecurringWorkflowDefinition)
-        stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
+        normalized = str(scope or "").strip().lower()
+        if normalized and normalized != "all":
+            scope_type = _normalize_scope_type(scope)
+            stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
         stmt = stmt.order_by(
@@ -460,14 +464,17 @@ class RecurringWorkflowsService:
     async def count_definitions(
         self,
         *,
-        scope: str,
+        scope: str | None = None,
         user_id: UUID | None = None,
         include_disabled: bool = True,
     ) -> int:
         # Single-user (#4351): instance visibility; ``user_id`` ignored.
-        scope_type = _normalize_scope_type(scope)
+        # ``scope=None``/``"all"`` counts every scope.
         stmt = select(func.count()).select_from(RecurringWorkflowDefinition)
-        stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
+        normalized = str(scope or "").strip().lower()
+        if normalized and normalized != "all":
+            scope_type = _normalize_scope_type(scope)
+            stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
         result = await self._session.execute(stmt)
@@ -562,8 +569,16 @@ class RecurringWorkflowsService:
         return payload
 
     def _owner_search_attributes(self, owner_user_id: UUID | None) -> dict[str, str]:
+        # Single-user (#4351): new instance schedules carry no human owner
+        # but Temporal requires trusted owner metadata
+        # (run.py::_trusted_owner_metadata). Emit the instance owner so
+        # scheduled MoonMind.UserWorkflow starts carry mm_owner_type/
+        # mm_owner_id and can execute; legacy rows keep their USER attrs.
         if owner_user_id is None:
-            return {}
+            return {
+                "mm_owner_type": "system",
+                "mm_owner_id": "system",
+            }
         return {
             "mm_owner_type": "user",
             "mm_owner_id": str(owner_user_id),

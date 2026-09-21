@@ -1621,23 +1621,29 @@ class TemporalArtifactService:
     def _is_instance_operator_principal(principal: str | None) -> bool:
         """Single-user (#4351): admitted-operator instance visibility.
 
-        The operator (stable ``operator``/``system`` principals and legacy
-        human-owner UUID strings) sees instance artifacts without a
-        human-owner lookup. ``workflow:``/``service:`` machine principals
-        remain execution-bound and are never instance operators. Raw
-        restricted bytes, quarantine, and mutation of execution-owned links
-        keep their owning checks; this predicate only widens metadata/
-        collection visibility and operator control, never raw secrets or
-        agent policy permissions.
+        The operator is the HTTP operator identity: the stable ``operator``
+        principal (local single-user admission without a persisted account
+        row) and legacy human-owner UUID strings (persisted operator
+        accounts). ``system`` is a machine owner value, never an operator
+        identity: workflow executions run with an execution-scoped
+        ``workflow:<id>`` principal and remain execution-bound.
+        ``workflow:``/``service:`` machine principals are never instance
+        operators. Raw restricted bytes, quarantine, and mutation of
+        execution-owned links keep their owning checks; this predicate only
+        widens metadata/collection visibility and operator control, never
+        raw secrets or agent policy permissions.
         """
         text = str(principal or "").strip()
         if not text:
             return False
         if text.startswith("service:") or text.startswith("workflow:"):
             return False
-        if text in {"operator", "system"}:
+        if text == "operator":
             return True
-        # Legacy human-owner strings (UUIDs) are operator provenance.
+        # Legacy human-owner strings (UUIDs) are operator provenance for the
+        # HTTP operator identity. The bare ``system`` owner value is not.
+        if text == "system":
+            return False
         try:
             from uuid import UUID as _UUID
 
@@ -1645,6 +1651,15 @@ class TemporalArtifactService:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _workflow_id_for_principal(principal: str | None) -> str | None:
+        """Return the workflow id for an execution-scoped principal."""
+        text = str(principal or "").strip()
+        if not text.startswith("workflow:"):
+            return None
+        candidate = text[len("workflow:"):].strip()
+        return candidate or None
 
     @staticmethod
     def _read_candidates(
@@ -1708,13 +1723,29 @@ class TemporalArtifactService:
         admitted_principal: str | None = None,
     ) -> None:
         # Single-user (#4351): instance-operator visibility. The admitted
-        # operator inspects any instance artifact without a human-owner
+        # HTTP operator inspects any instance artifact without a human-owner
         # lookup; legacy owner strings stay as provenance. Machine
-        # (workflow:/service:) readers remain execution-bound below.
+        # (workflow:/service:, bare system) readers remain execution-bound
+        # below.
         if self._is_instance_operator_principal(
             principal
         ) or self._is_instance_operator_principal(admitted_principal):
             return
+        # Execution-scoped workflow principals may read artifacts linked to
+        # their own execution without an operator bypass.
+        for candidate in (principal, admitted_principal):
+            workflow_id = self._workflow_id_for_principal(candidate)
+            if workflow_id is None:
+                continue
+            try:
+                links = await self._repository.list_links(artifact.artifact_id)
+            except Exception:
+                links = []
+            if any(
+                str(getattr(link, "workflow_id", "") or "").strip() == workflow_id
+                for link in links
+            ):
+                return
         try:
             self._assert_read_access(
                 artifact, principal=principal, admitted_principal=admitted_principal
@@ -3280,8 +3311,19 @@ class TemporalArtifactService:
         execution_ref: dict[str, Any] | ExecutionRef,
     ) -> db_models.TemporalArtifactLink:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_mutation_access(artifact, principal=principal)
         coerced_execution_ref = self._coerce_execution_ref(execution_ref)
+        # Single-user (#4351): execution-scoped workflow principals may link
+        # to their own execution without an operator bypass; linking to any
+        # other execution still requires owner/operator mutation access.
+        workflow_id = self._workflow_id_for_principal(principal)
+        if (
+            workflow_id is not None
+            and str(getattr(coerced_execution_ref, "workflow_id", "") or "").strip()
+            == workflow_id
+        ):
+            pass
+        else:
+            self._assert_mutation_access(artifact, principal=principal)
         from moonmind.workflows.temporal.report_artifacts import (
             validate_report_artifact_contract,
         )

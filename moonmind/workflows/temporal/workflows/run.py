@@ -312,6 +312,7 @@ JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
+RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
 
 
 
@@ -23887,6 +23888,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._update_memo()
 
     def _principal(self) -> str:
+        # Single-user (#4351): workflow activities act with an
+        # execution-scoped principal, never the raw ``system`` owner value.
+        # The HTTP operator identity (``operator``/UUID) keeps the instance
+        # operator bypass in TemporalArtifactService; machine work stays
+        # execution-bound via workflow: linkage/ownership. Versioned behind
+        # a patch so retained histories replay on their original principal.
+        try:
+            workflow_id = str(workflow.info().workflow_id or "").strip()
+        except Exception:
+            workflow_id = ""
+        if workflow_id:
+            try:
+                if workflow.patched(RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH):
+                    return f"workflow:{workflow_id}"
+            except Exception:
+                # Outside a replay-safe workflow context (unit tests), fall
+                # through to the execution-scoped default below.
+                return f"workflow:{workflow_id}"
         if not self._owner_id:
             raise ValueError("Trusted owner metadata is required")
         return self._owner_id
