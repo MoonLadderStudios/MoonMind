@@ -612,7 +612,7 @@ def test_r1_preserved_restrictions_boundary_assignment():
     # stays forbidden for a non-superuser; ownerless workspace profiles
     # remain operator-managed without broadening private visibility.
     private = SimpleNamespace(owner_id="owner-a", visibility="private")
-    with _pytest.raises(HTTPException):
+    with pytest.raises(HTTPException):
         agent_router._assert_owner(
             private, SimpleNamespace(id="owner-b", is_superuser=False)
         )
