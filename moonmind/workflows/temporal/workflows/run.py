@@ -2539,11 +2539,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         """Return the report-only correction budget for this history.
 
         New histories allow at most one correction (MoonMind#4472); retained
-        histories without the single-repair marker keep the legacy bound so
-        replay preserves their recorded command sequence.
+        histories without either repair marker keep the legacy bound so
+        replay preserves their recorded command sequence. Both the
+        single-repair and report-recovery markers denote the same
+        single-correction lineage introduced on parallel branches.
         """
         if self._patched_or_false_outside_workflow(
             RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH
+        ) or self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH
         ):
             return _MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_MAX_ATTEMPTS
         return _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
@@ -8369,20 +8373,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 if gate_result_ref:
                     return gate_result_ref
         return None
-
-    def _moonspec_contract_repair_max_attempts(self) -> int:
-        """Bounded report-only corrections for one malformed final report.
-
-        MoonLadderStudios/MoonMind#4472 allows at most one correction within
-        the existing verification recovery budget. Retained histories without
-        the report-recovery marker keep the legacy budget so replay never
-        gains or loses scheduled re-verification commands.
-        """
-        if self._patched_or_false_outside_workflow(
-            RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH
-        ):
-            return 1
-        return _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
 
     def _moonspec_contract_repair_issues(
         self,
