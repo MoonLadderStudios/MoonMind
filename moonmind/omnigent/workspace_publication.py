@@ -663,6 +663,12 @@ class OmnigentWorkspacePublicationService:
         workspace_spec = (
             request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
         )
+        normalized_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        if normalized_mode not in {"branch", "pr"}:
+            # Save-only/credentialless work needs no publication authority:
+            # resolve nothing remote (especially no GitHub credential) when
+            # there is no publication to perform.
+            return {"push_status": "skipped"}
         workspace_locator = workspace_spec.get("workspaceLocator")
         if not isinstance(workspace_locator, Mapping):
             raise HarnessPlatformError(
