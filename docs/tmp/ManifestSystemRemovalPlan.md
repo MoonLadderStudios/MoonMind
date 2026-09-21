@@ -1,227 +1,100 @@
 # Manifest System Removal Plan
 
 **Document Class:** Imperative working document
-**Status:** Active
-**Canonical Target:** [Workflow Type Catalog and Lifecycle](../Temporal/WorkflowTypeCatalogAndLifecycle.md), [LlamaIndex Manifest System](../Rag/LlamaIndexManifestSystem.md), [Manifest Ingest Design](../Rag/ManifestIngestDesign.md), [Manifests Page](../UI/ManifestsPage.md), and the owning system architecture/product/visibility docs that still describe Manifest as supported (see §1). This plan is not actionable until those canonical targets authorize retirement; per the canonical-vs-canonical precedence ladder this working document never governs desired state itself.
-**Delete/Archive Trigger:** Delete or archive when the Manifest removal implementation and bounded cutover are complete and the canonical targets above record the retired state.
-
-Reviewed: September 9, 2026. Source baseline: `7bd159dafb44770278e8c5563d47667de6e7c491` on `main`. Repository searches used the immediately preceding indexed revision and targeted source reads were pinned to the baseline. Re-audit callers and overlapping PRs at the implementation revision.
-
-This is temporary execution scaffolding under `docs/tmp/`, as required by [AGENTS.md](../../AGENTS.md). Keep lasting product rules in the existing canonical architecture, execution, context, and operator documents when their implementations change. Delete or archive this plan once implementation and the bounded cutover are complete.
+**Status:** Remaining repository work and separately authorized rollout
+**Reviewed:** 2026-09-20
+**Product owner:** [Workflow Type Catalog and Lifecycle](../Temporal/WorkflowTypeCatalogAndLifecycle.md)
+**Deployment owner:** [Docker Compose Update System](../Steps/DockerComposeUpdateSystem.md)
+**Tracking:** [#4187](https://github.com/MoonLadderStudios/MoonMind/issues/4187), with live obligations retained in [#4189](https://github.com/MoonLadderStudios/MoonMind/issues/4189)
 
 ## 1. Decision and target state
 
-Remove the complete native **Manifest product**, including its vector-free successor. MoonMind no longer owns a declarative source-ingestion, transformation, evaluation, or Manifest-to-workflow subsystem. This is feature retirement, not a rename, optional integration, external endpoint for the same backend, or another generic pipeline framework.
+Remove MoonMind's native Manifest product, including the vector-free source-reader, transform, evaluation, and compiler successor. Do not rename it, put it behind an optional switch, wrap it in a Skill, or create a replacement ingestion framework.
 
-This removal decision is proposed here and is authorized only by the canonical targets named in the header. Active canonical documents such as `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md` (§11.2 `MoonMind.ManifestIngest` lifecycle), `docs/Rag/LlamaIndexManifestSystem.md`, `docs/Rag/ManifestIngestDesign.md`, and `docs/UI/ManifestsPage.md` still define Manifest as supported; the implementation must update those owning canonical desired-state documents first, and this plan must not be treated as actionable until they do. This document does not implement removal, change existing issues, authorize a deployment, or authorize deletion of operator data.
+The operator has explicitly chosen removal. Current canonical lifecycle guidance marks `MoonMind.ManifestIngest` retired. The earlier requirement to wait for another documentation authorization is obsolete. Reconcile contradictory owning guidance with the affected work, not through another approval gate. This working plan still does not authorize production mutation or invent desired behavior independently of the operator and canonical owners.
 
-The September 7 Qdrant removal epic deliberately preserved generic ManifestIngest. This decision supersedes that preservation requirement. It does not supersede the epic's requirements to preserve ordinary orchestration, authorized context, durable evidence, or operator-controlled data. [S1]
+Preserve normal UserWorkflow execution, generic child/dependency and scheduling primitives, explicit scoped context, chat, Skills, artifacts, publication, and supported recovery. A retired submission must not silently become a successful ordinary workflow.
 
-After removal:
+Preserve checkpoint/recovery/saved-work, Skill/capability, Vite, image-provenance, and GitHub App manifests. A user file named `manifest.yaml` is ordinary content. Target actual retired contracts and registrations, not a blanket word or filename ban.
 
-- There is no Manifest page, registry, authoring schema, CLI command group, run submission path, ingestion pipeline, or registered `MoonMind.ManifestIngest` workflow.
-- Existing normal workflow and Skill interfaces remain the way to submit work. Generic child workflows, dependency graphs, schedules, and artifact handoffs remain where they already serve supported work. No replacement Manifest abstraction is required.
-- MoonMind does not ship or initialize a native RAG/indexing platform. Independently managed retrieval can be used through an already-supported, explicit, scoped Skill, tool, or artifact interface. Building or bundling such a replacement is not part of this project.
-- Historical executions and artifacts remain readable through authorized generic evidence surfaces. Historical readability does not make the retired workflow launchable, editable, rerunnable, or resumable in the new release.
-- Default startup and ordinary workflows need no Manifest configuration, source-reader credentials, embedding credentials, or feature-disable flag.
+## 2. Current evidence and its limits
 
-## 2. What the review established
+Source review at `65e1cf06b8bc82cab3a8ccf5c880d2cea7681b72` found existing retirement handling and tests, not an untouched implementation backlog. The lifecycle document already excludes ManifestIngest from new-release controls, and `moonmind/gates/manifest_ingest_drain.py` supplies an existing known-versus-unavailable observation boundary. Reuse those owners instead of adding another gate or retirement ledger.
 
-### The vector-free rewrite has not removed the product
+`tests/unit/config/test_manifest_retirement_qualification_4193.py` includes request/model/import checks and source-scan helpers. Those can establish narrower facts, not a full served UI-to-runtime journey or deployed drainage. Its historical status descriptions must not be mistaken for current execution results. Add only missing real boundary coverage.
 
-The current operator guide calls the system vector-free and retains source readers, transforms, evaluation, local execution, compilation, and Temporal execution. The current pipeline rejects retired vector blocks but still owns reader dispatch, fetch/transform results, HTML conversion, chunking, and metadata enrichment. Removing Qdrant alone therefore does not achieve this request. [S2, S3]
+The [original September 9 plan and source map](https://github.com/MoonLadderStudios/MoonMind/blob/65e1cf06b8bc82cab3a8ccf5c880d2cea7681b72/docs/tmp/ManifestSystemRemovalPlan.md) remain available as historical evidence. Old file lists, package counts, and pending labels are not instructions to restore deleted code or repeat finished work.
 
-### The removal crosses shared application boundaries
+## 3. Remaining work packages
 
-`ManifestsService` owns registry operations, creates YAML artifacts, submits a Temporal execution, bootstraps compilation, and updates Manifest-specific projection metadata. The REST router exposes registry reads/writes, run submission, and a worker state callback. The frontend queries the shared executions API using `entry=manifest`, so removing the dedicated router alone is insufficient. The shared Temporal lifecycle service also imports Manifest models and projection helpers. [S4, S5, S6, S7]
-
-### There are two historical execution contracts
-
-The canonical registered class explicitly distinguishes `manifest_ref`, which compiles and summarizes, from `manifestArtifactRef`, which orchestrates nodes. It rejects inputs containing both. The class includes patch markers for historical commands and recurring scheduled starts. Do not reinterpret one input as the other or replace the class with a successful no-op. [S8]
-
-Issue #3948 still requests work on public compile/execute semantics, authorization, node mapping, and child terminal evidence. Full feature-completion work is no longer the desired investment. Preserve only the safety obligations required for the selected bounded retirement path. [S9]
-
-### Registration removal can affect historical visibility
-
-`workflow_registry.py` derives product workflow types and projection scope from registered classes. `TemporalExecutionService` consumes those helpers. Removing the Manifest registration must not inadvertently hide old evidence or cause unrelated execution listing to fail. Historical decoding/visibility and new execution admission need separate decisions at the existing boundaries. Do not keep an executable workflow registered merely to display its name. [S7, S10]
-
-### Packaging cleanup is still material
-
-At the reviewed revision, `pyproject.toml` still describes a RAG application and declares `llama-index`, several LlamaIndex reader packages, and `qdrant-client`. This review does not claim the Qdrant epic is complete. Coordinate final dependency removal with #4111 and recheck actual surviving imports before deleting shared libraries. [S11]
-
-## 3. Scope and concrete change map
-
-Paths below are source-backed starting points, not a claim that search returned every caller. The implementation must produce a final caller/disposition audit at its own revision.
-
-| Area | Remove or simplify | Preserve |
-| --- | --- | --- |
-| Manifest implementation | `moonmind/manifest/`, including loader, interpolation, validator, runner, sync, pipeline, adapters, reader registry, CLI helpers, and Manifest-owned evaluation | A utility only when a concrete supported non-Manifest caller requires it. Move that smallest utility to its existing owning module rather than keeping the package |
-| Authoring schemas | `manifest.schema.json`, `moonmind/schemas/manifest_models.py`, `manifest_v0_models.py`, `manifest_ingest_models.py`, and their re-exports | Generic plan, artifact, runtime, Skill, and recovery schemas |
-| Submission contracts | `moonmind/workflows/executions/manifest_contract.py`, `manifest_errors.py`, and package exports | Shared authentication, authorization, credential references, security scanning, and ordinary workflow validation |
-| Registry/API | `api_service/api/routers/manifests.py`, `api_service/services/manifests_service.py`, `manifest_sync_service.py`, Manifest models in `api_service/api/schemas.py`, and router imports | Generic execution and artifact APIs. Remove only Manifest branches from shared routers |
-| Temporal implementation | `moonmind/workflows/temporal/workflows/manifest_ingest.py`, Manifest-only helpers in `temporal/manifest_ingest.py`, `TemporalManifestActivities` and Manifest bindings in `activity_runtime.py` | Normal UserWorkflow execution, child workflow primitives, artifact Activities, and runtime workers |
-| Shared orchestration | Manifest entries/imports in `workflow_registry.py`, `worker_runtime.py`, `activity_catalog.py`, `temporal/__init__.py`, and Manifest branches in `service.py` and shared execution schemas | Supported product/operator workflows, existing status taxonomy, authorization, retry/cancel, and generic historical metadata |
-| Dashboard | `frontend/src/entrypoints/manifests.tsx`; registrations in `dashboard-app.tsx`, `frontend/src/lib/dashboardRoutes.ts`, and `api_service/api/routers/workflow_console.py` including the legacy `/manifests/new` redirect handler (`task_manifest_submit_route`), plus `/manifests` and `/manifests/{name}`; related boot payloads, capabilities, filters, controls, styles, and tests | General workflow list/detail and artifact viewing. Keep unrelated dashboard pages and shared UI components |
-| CLI/configuration | Manifest commands and imports in `moonmind/cli.py`; `TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD` in settings and constructor callers | Non-Manifest CLI groups and UserWorkflow continuation controls |
-| Scheduling | Manifest target support, saved targets, and the `manifest_run` conversion in `scripts/migrate_to_temporal_schedules.py` | Scheduling of supported ordinary workflows. Do not silently convert retired schedules into ordinary runs |
-| Persistence | `ManifestRecord` and its `manifest` table after preservation and migration gates; Manifest-only fields in shared execution records only after a separate historical-read decision | Shared execution records, immutable payloads, ownership, workflow/run IDs, lineage, timestamps, artifact links, and recovery evidence |
-| Docs/build/test assets | Dedicated Manifest docs, examples, generated API/catalog entries, CLI help, Manifest-only tests and fixtures once cutover obligations end | Generic database guidance even when located under `docs/Rag/`, Vite asset-manifest infrastructure, generic security and reliability tests |
-
-### Explicit exclusions: do not delete by the word “manifest”
-
-Retain failed-run recovery manifests, saved-work and checkpoint manifests, Skill snapshot manifests, tool/capability inventories, Omnigent effective-capability manifests, Vite build manifests, image/runtime provenance, and GitHub App installation manifests. In particular, `moonmind/workflows/temporal/recovery_manifest.py`, `moonmind/omnigent/effective_capabilities.py`, and `tools/verify_vite_manifest.py` are not the ingestion product.
-
-A user repository may contain a file named `manifest.yaml`, and a normal workflow may legitimately read or produce it. Retirement validation targets MoonMind's retired execution contracts and package ownership, not arbitrary filenames, user prose, or artifact contents.
-
-## 4. Implementation work packages
+These are existing owners, not new engines, serial approval phases, or independently selectable runtime modes. Inspect current code and PRs before implementing a former checklist item.
 
 ### MR1. Retire producers and remove authoring surfaces
 
-Inventory and change every entry that can create Manifest work: the dedicated API, shared execution submission, inline/registry UI submission, CLI, saved definitions, recurring schedules, trigger/backfill paths, clones/reruns, updates, presets, and any integration caller discovered during the audit. Check direct Temporal schedule actions as well as API-mediated submissions.
+Owner: #4188. Finish only remaining actual API, CLI, UI, preset, shared submission/control, and saved schedule/draft consumers. Reject retired intent before reader/network access, registry/artifact writes, host launches, or child work. Ordinary unsupported-route behavior is sufficient once a temporary response has no caller.
 
-Use the existing unsupported-workflow/capability validation boundary. During cutover, reject explicit new Manifest intent before registry mutation, manifest processing, reader/network access, artifact creation, Temporal start, host launch, or child work. Do not strip the requested feature and report success as an ordinary workflow. Keep generic artifact upload usable for arbitrary user files.
-
-Remove `/manifests`, `/manifests/new` (the legacy `task_manifest_submit_route` 307 redirect to `/manifests` in `api_service/api/routers/workflow_console.py`), and `/manifests/{name}` from both server and client route registries, navigation, lazy page imports, and page/boot types. Remove Manifest-specific controls from shared workflow detail and creation surfaces. Retire `/api/manifests` and its state callback in the coordinated release. Ordinary unsupported-route behavior is sufficient in the final application. A temporary retirement response is justified only by an identified cutover consumer, not permanent compatibility policy. Leaving `/manifests/new` registered while `/manifests` is removed would keep a Manifest UI route in OpenAPI that redirects users to a removed page, contradicting the final unsupported-route behavior and the no-Manifest-UI-route acceptance criteria.
-
-Inspect saved drafts and schedules for both workflow-type and legacy target representations. Preserve a private export before changing persisted definitions. Disable retired producers with a clear reason and no automatic reactivation. Old browser state and explicit API payloads must fail visibly rather than discard required semantics. Do not silently rewrite a Manifest schedule as UserWorkflow.
-
-Acceptance: every new-write/trigger path rejects retired work without side effects, removed pages are absent from navigation and bundles, and ordinary creation/scheduling remains usable without new configuration.
+Remove obsolete navigation, redirects, generated client contracts, and controls with their consumers. Server admission remains authoritative when an old browser or saved input presents stale intent. Direct privileged Temporal administration is a deployment concern, not a guarantee supplied by deleting an HTTP route. Never silently convert retired schedules into ordinary work.
 
 ### MR2. Preserve historical reads and control the cutover
 
-Start this work alongside MR1, before deleting handlers or enum values. Reuse existing Temporal, artifact, deployment, and Qdrant-cutover owners. Do not create a new migration service, coordinator, or permanent retirement framework.
+Owner: #4189. Separate historical readability from launchability. Preserve exact workflow/run/type identity, source/result references, child lineage, timestamps, and recorded domain outcome through existing generic readers.
 
-Inventory each deployment separately. Include all three independently operated MoonMind deployments and every affected namespace/task queue actually found. Do not infer shared state or successful drainage from another device. Repository review cannot establish these live counts. Before recreating the API on any deployment, record that deployment's existing published bindings and operator URLs so the post-cutover operator-URL verification gate (MR6) can check the same paths.
+Both original input meanings survive: `manifest_ref` compiles/summarizes, while `manifestArtifactRef` executes nodes. Do not reinterpret them, invoke the retired parser to display them, or return successful no-op results. Missing or degraded status/metadata must remain safely readable or explicitly unavailable rather than acquiring fabricated ownership or success.
 
-The private inventory must cover active parents, sleeping/scheduled executions, pending and retryable Activities, children, outstanding controls, recurring producers, stored definitions, registry rows, and evidence references. Identify both persisted Manifest input contracts and any older stored job payloads actually present. Missing inventory is unknown, not zero.
-
-**Preferred cutover:** stop producers, let identified work finish on the existing matching release or cancel it deliberately, verify the children and outstanding work, then deploy the release without Manifest support. Do not assume a general system pause affects Manifest workflows or that canceling a parent has stopped every child/external effect.
-
-If live counts are zero, skip temporary drain machinery and ship the cohesive removal directly. If an existing versioned-worker mechanism is genuinely needed, name its owner, exact consumers, image revision, isolation/routing, and finite removal condition. Do not run incompatible old/new workers against an undifferentiated shared queue. Old executable support belongs to the bounded old-release path, not the target application.
-
-Preserve the existing compilation/node history fixtures for the cutover rehearsal. Test either safe compatibility at the transition or explicit old-release drain. Once the workflow is removed, do not claim the new release replays it; retain the pinned old release and fixtures for the agreed recovery window instead of shipping the class indefinitely.
-
-For closed executions, retain authorized generic list/detail and artifact reads from stored immutable identity/evidence. Make these reads independent of launchability. Historical reads must tolerate degraded status values (blank, unknown, or newly introduced `mm_state`/lifecycle values) with a safe read-only generic response. Remove rerun, retry-node, update, resume, and reset affordances that would recreate the retired feature. A historical response decoder must not grant system ownership or make arbitrary unknown workflow types executable.
-
-Acceptance: no unowned outstanding Manifest work, no silently altered history, old evidence remains readable, and no new-release execution path exists for a retired type.
+New-release rerun/reset/resume/update/clone operations cannot recreate the retired type. Any bounded old-release operation required for actual active work remains separately authorized and scoped. New-release historical decoding is not a claim that the new binary replays a deleted workflow.
 
 ### MR3. Delete implementation and simplify shared orchestration
 
-After the history/cutover decision, remove the Manifest package, schema families, registry services, contract modules, canonical workflow class, helper implementation, Activities, and re-exports. Remove Manifest-only evaluation rather than converting it into a new native evaluation subsystem.
+Owner: #4190. Remove remaining product packages, schemas, services, worker/Activity registrations, compiler/evaluation paths, and their dead callers. Keep only utilities needed by a real supported non-Manifest caller, under that caller's existing owner.
 
-Delete the registration and all current/legacy Manifest-specific Activity bindings identified by the audit. `manifest.compile` and `manifest.write_summary` are confirmed current bindings. Check older underscore-named handlers and patch-protected commands against the MR2 inventory before their final removal. Preserve shared `artifact.read` and every other generic artifact operation.
-
-Simplify shared execution creation, mutation, status queries, node pagination, compilation/bootstrap, projection, continuation, and serialization code. Remove Manifest-only constructor parameters from callers such as `execution_integrations.py` and `workflow_console.py`, not the routers themselves. Remove obsolete queue-vs-Temporal Manifest response branches instead of retaining unreachable compatibility DTOs.
-
-Do not implement the unfinished public execute path from #3948 as a prerequisite. Do not rename `MoonMind.ManifestIngest` to a generic batch workflow, wrap the retired compiler in a Skill, or replace it with a successful no-op. Preserve only already-supported generic primitives and concrete surviving utility callers.
-
-Acceptance: API, CLI, worker discovery, and catalog generation import without the deleted package. No Manifest workflow or Activity is registered in the target fleet. Ordinary workflow behavior and the MR2 read-only history path remain intact.
+Do not complete the unfinished old feature to preserve its tests. Do not retain executable registration merely to display history or introduce a compatibility backend for hypothetical consumers. Necessary old-release support has identified work, isolation, and a finite removal condition.
 
 ### MR4. Apply a forward persistence migration
 
-Before dropping registry state, preserve exact YAML, version/hash, state, and last-run references in protected operator-controlled storage where they are needed. Treat historical YAML and state as potentially sensitive. Do not commit exports or put them in public issues, and do not embed large exports in Temporal history.
+Owner: #4191. Use the existing versioned migration, artifact, and deployment owners. Preserve needed private registry content and references before destructive changes and verify the preservation can be used. Old registry YAML and state may be sensitive; they do not belong in public Git, issue comments, or large Temporal payloads.
 
-Remove `ManifestRecord` and the `manifest` table using a forward Alembic migration after producers/callbacks are retired and preservation is verified. Keep the existing migration chain usable for both fresh installation and upgrades. Do not delete applied revisions merely to erase the word Manifest. Historical migrations must not depend on runtime modules being removed.
+Keep shared history rows, stable IDs, artifact links, original inputs, and decodable historical type/state fields. Applied migration chains remain usable without importing deleted live packages. Required conversion failures stop unsafe exposure rather than pretending an empty or partial result succeeded.
 
-Inspect Manifest-only columns and enum use in shared execution tables separately. Preserve immutable type strings, original inputs, artifact refs, lineage, and result evidence where needed for generic historical reads. Removing an active enum member or response-model variant must not make existing rows undecodable. Do not delete an entire execution row or shared artifact because it originated from a Manifest.
-
-Use existing artifact retention and authorization. Retirement is not authorization to purge MinIO, PostgreSQL, workspaces, saved-work evidence, or unrelated volumes. Record the irreversible migration boundary and recovery procedure. Rolling back code after a destructive schema migration is not sufficient; rehearse restoration with the matching database/export and old release without discarding unrelated newer work.
-
-Acceptance: fresh migration and old-database upgrade pass, former Manifest executions remain readable, preserved exports are recoverable, and unsupported rollback paths stop actionably rather than booting broken code.
+Prefer transactional rollback of incomplete database work and existing forward repair after committed changes. A code rollback alone cannot undo a destructive schema change. Never restore an entire shared PostgreSQL/Temporal snapshot over newer work or purge unrelated volumes, artifacts, credentials, or checkpoints.
 
 ### MR5. Remove dependencies, obsolete assets, and contradictory documentation
 
-Coordinate with #4111. Remove LlamaIndex/readers and other dependencies whose last supported caller disappears, then regenerate the lockfile and any maintained dependency exports. Verify direct and transitive dependencies in a clean resolved installation and built images, not only the edited TOML. Do not delete shared HTTP, YAML, provider SDK, or artifact libraries by association. Remaining native-RAG consumers belong to the existing Qdrant retirement work, not a reason to preserve Manifest indefinitely.
+Owner: #4192, reusing existing dependency and generated-catalog tooling. Remove dependencies whose last supported caller disappeared, obsolete configuration/initialization, build assets, and dedicated product examples. Verify actual imports, clean installation/build, startup, and generated contracts, not only package-name text.
 
-Inspect Dockerfile copies, package data, Compose mounts/commands, examples, test setup, startup hooks, maintenance tools, and configuration exports for Manifest-only assumptions. Do not invent a new service or feature flag. Preserve existing deployment access, credentials, volumes, and unrelated service responsibilities.
-
-Delete active standalone Manifest guidance:
-
-- `docs/Rag/LlamaIndexManifestSystem.md`
-- `docs/Rag/ManifestIngestDesign.md`
-- `docs/UI/ManifestsPage.md`
-- Manifest-only example YAML and the dedicated schema.
-
-Reconcile incoming links and assumptions in README, package description, roadmap, API contracts, workflow catalog/lifecycle/product/visibility docs, scheduling guidance, UI architecture, Skill instructions, and CLI help. Keep useful non-RAG context assembly guidance and general database documentation rather than deleting `docs/Rag/` wholesale. Prefer existing canonical documents over a new permanent “Manifest replacement” document.
-
-Update the sources of generated OpenAPI/TypeScript definitions and Temporal catalogs, then regenerate them with their existing tooling, including `tools/generate_temporal_catalog.py`. Remove only the retired dashboard chunk, not Vite's asset manifest or validation tools. Update #4103/#4113/#4114/#4115 instructions that still say generic ManifestIngest must survive.
-
-Acceptance: clean installation/build/startup has no Manifest dependency, configuration requirement, executable registration, supported API schema, UI route, command, or active product promise. Residual references are limited to explicit historical/migration evidence, negative assertions, or unrelated retained systems.
+Keep real shared YAML/HTTP/provider/artifact utilities, general database guidance, and Vite asset support. Owning docs should describe removal, retained generic behavior, and necessary historical exceptions without creating a replacement Manifest document or a new inventory service.
 
 ### MR6. Qualify the integrated removal
 
-Use impact-selected `./tools/test_unit.sh` and `./tools/test_integration.sh` coverage, the existing frontend test/typecheck/build commands, clean package/image checks, and the real production registration and API boundaries. Do not substitute a grep-only gate or mocked constructor test for the integrated acceptance matrix below.
+Owner: #4193. Reuse child tests and the existing API, browser, PostgreSQL, Temporal, runtime, and artifact runners. Add only missing tests at real changed boundaries: retired-intent rejection with no effects, production registration, populated migration/history reads, and a representative ordinary workflow through its required runtime/artifact result.
 
-Existing tests such as `tests/unit/api/routers/test_manifests.py`, `tests/unit/api/test_manifest_run_request_schema.py`, `tests/unit/services/test_manifests_service.py`, `test_manifest_sync_service.py`, and the Temporal Manifest unit tests need explicit disposition. Delete tests that only prove the retired feature works. Preserve or replace security, history, and shared-boundary assertions. Audit test collection and shared mocks so removing an import does not break unrelated suites.
+Preserve relevant access, cancellation, interruption, and lost-acknowledgment coverage at their existing owners. A thin harness-specific difference requires a test where affected, not a duplicate full product matrix for every harness and historic release. Old-release replay fixtures serve actual transition questions; do not ship the removed feature to run them.
 
-`tests/integration/workflows/temporal/test_manifest_registration_boundary.py` already exercises compilation/artifacts and a separate node path with real children. Use its histories and controls for the bounded old-release rehearsal, then replace active-fleet expectations with retirement checks. Its existing fixture plan is not proof of complete public Manifest execution, and that missing feature is not work to add now. [S12]
+Use targeted development tests and current-candidate GitHub Actions for broader verification. Keep required selection and failure aggregation truthful. A short PR account of outcomes and gaps is enough; no fixed test count, permanent plan-coverage ledger, universal scanner, paid-model trial, documentation-wording test, or broad local-suite prerequisite is required.
 
-| Gate | Required evidence |
-| --- | --- |
-| Admission | Dedicated and shared submissions, CLI, stale drafts, schedules/triggers, rerun/reset/resume, and integration inputs cannot start retired work or silently become normal workflows |
-| No effects on rejection | No reader/network call, registry write, compile, host launch, paid execution, or child workflow occurs because of a rejected Manifest request |
-| Fleet removal | Actual production worker composition and catalogs contain no Manifest workflow or current/legacy Manifest Activity after the cutover gate |
-| Historical safety | Both old entry contracts are covered by the selected replay/drain rehearsal; old execution identity and authorized artifacts survive the database upgrade and remain read-only. Add a workflow-boundary regression for degraded status values: an old execution carrying a blank, unknown, or newly introduced `mm_state`/lifecycle value through the changed projection and status-normalization path (after deleting Manifest registration and `build_manifest_status_snapshot`) must still produce a safe read-only generic response rather than fail serialization or disappear. Cover this alongside the historical decoder tests |
-| Ordinary workflow regression | Real UI/API submission through UserWorkflow, supported runtime launch, explicit input/context, chat, artifacts, terminal evidence, retry/cancel, and supported recovery continue to work |
-| Shared primitives | Ordinary recurring schedules, dependency/child execution, Skill snapshots, saved-work/recovery manifests, and artifact retention continue without Manifest imports |
-| Isolation | Old records, exported YAML, artifact refs, and failed access never acquire broader owner/system authority or weaken existing access controls |
-| Defaults and packaging | Fresh default startup and upgraded startup require no Manifest/vector settings; test both omitted/default and explicit equivalent supported inputs; clean dependencies and images pass |
-| UI and generated contracts | Removed routes/chunks/controls are absent, generic history still renders, and regenerated OpenAPI/TypeScript/catalog outputs agree with production behavior |
-| Deployed operator-URL verification | For every one of the three deployments, record the existing published API bindings and operator URLs before recreating the API, then verify `/healthz`, the dashboard and its assets, and a read-only API request through the actual operator hostname and port afterward, including `python tools/verify_deployed_ui_assets.py --base-url <operator-url>` for each deployment. Container health and container-local or host-local `localhost` checks are not proof that a LAN/VPN/proxy operator path works; a stale image or broken operator path fails this gate even when source and container-level gates pass |
-| No reintroduction | Targeted ownership/import/registration checks reject the retired product, while legitimate recovery/Skill/Vite manifests and arbitrary user files remain allowed |
+## 4. Repository completion versus rollout
 
-Test every runtime/harness configuration currently supported by the changed path, including the applicable Codex, Claude Code, and OpenCode modes. Preserve truthful support status; this project does not promise new support for combinations that are not yet qualified.
+Repository completion means the product is removed from actual supported admission, registration, implementation, packaging, persistence ownership, UI/CLI, and generated interfaces while retained behavior has relevant execution evidence. An absent page, passing grep, or closed-ticket count is insufficient.
 
-Publish exact test commands/results and clearly separate hermetic evidence from live deployment verification. A repository test fixture cannot certify drainage on any of the three deployments. The cutover gate requires the per-deployment operator-URL verification above; hermetic source, container-level, and `localhost` evidence alone do not satisfy it.
+This can be reported independently of live rollout if any remaining deployment and retention obligations stay explicitly tracked in #4189. A unavailable live device is not a failed implementation test and must not consume repeated code-remediation attempts. No fixture, current-candidate CI run, or model verdict certifies a production inventory or cutover.
 
-## 5. Sequence and release boundaries
+The operator uses three independent deployments. Each targeted deployment is observed separately when authorized. Evidence from one neither certifies another nor imposes an all-three readiness gate on a safe individual update or on repository CI. Do not claim the whole fleet migrated until all relevant observations actually exist.
 
-Start MR1's caller audit, MR2's historical-state analysis, and MR6's test design together. Stop producers before draining. MR3's deletion depends on the cutover decision, not on finishing the retired feature. MR4's destructive migration depends on producer retirement and verified preservation. MR5 accompanies the affected code rather than leaving a broken package or contradictory docs for a later cleanup. MR6 verifies the integrated result.
+## 5. Bounded per-deployment procedure
 
-These six packages are reviewable work units, not a requirement for six independently deployed revisions. Ship a coherent application/schema/dependency/UI revision. Keep temporary old-release support only when real outstanding work requires it. Do not create a long-lived split architecture to make the deletion look incremental.
+Use existing authorized deployment/Temporal/state tools, not a new preflight service or background retirement controller. Establish whether legacy state actually exists. A fresh installation with no retained legacy state does not need historical cleanup receipts. An upgraded deployment cannot infer absence from a failed query or a missing file alone.
 
-No active work means a simpler release: verify the empty inventory, preserve historical data as needed, run the upgrade/read tests, and deploy the removal without compatibility workers. With active work, the terminal gate includes parents, children, pending/retryable Activities, scheduled starts, and recurring producers, not only a parent workflow count.
+Stop relevant producers before final consumer observation. Include actual direct schedules, sleeping/active parents, pending/retryable work, child/external effects, delayed callbacks, and registry references where they can still create work or hold data. Keep pagination and unavailable results honest. Parent cancellation is not proof that every child or cleanup stopped.
 
-## 6. Existing backlog reconciliation
+If positive observations show no consumers, skip compatibility machinery. Otherwise finish or deliberately cancel the identified work on its matching existing release, under explicit authority, and reconcile remaining effects/evidence before removal. Do not introduce permanent candidate/retained fleets, unsafe shared-queue mixing, or successful no-op Activities.
 
-These are proposed dispositions. This plan does not mutate the issues.
+Apply the normal in-place update with required preservation and migration checks. Keep deployment-owned configuration, keys, mounts, published bindings, and ingress protection. Verify the actual configured operator hostname/port, dashboard/assets, and relevant API path after the operation. Container health or a different localhost path does not prove LAN/VPN/proxy access. Use existing probes, including the deployed UI asset verifier where applicable, without requiring a healthy application as the sole repair path.
 
-| Existing work | Required reconciliation |
-| --- | --- |
-| #4103, #4108 | Supersede the explicit generic-ManifestIngest preservation requirement. Keep native-vector retirement and data/evidence safety. Do not reopen completed vector deletion merely to rebuild Manifest |
-| #3948 | Supersede feature-completion work after recording any remaining retirement-critical history, authorization, cancellation, and evidence obligations under MR2/MR6. Do not close it as successfully implemented Manifest functionality |
-| #4111, #4112, #4113 | Coordinate dependency/image cleanup, CLI removal, docs/examples, and product wording. Remove obsolete instructions to preserve Manifest commands or ingestion contracts |
-| #4114, #4115 | Replace the target-release expectation that ManifestIngest survives with rejection plus read-only historical evidence. Keep both historical input contracts in bounded cutover fixtures and preserve real operator gates |
-| #3944, #3959 | Reuse replay-safety and generated-catalog ownership rather than introducing duplicate mechanisms |
-| #2618, #2215 | Reassess reader-abstraction and retrieval-evaluation work. Retire native-ingestion-only scope; preserve an independent concrete requirement only if it has a supported owner, without a speculative replacement platform |
-| #3939 | Reconcile the CLI plan's old requirement to preserve the Manifest command group. Ordinary authenticated workflow CLI work remains valuable |
+Record actual observed operation/result and unresolved work in the existing local/protected records. Retain old image/evidence only for real recovery obligations. Cleanup affects only positively owned resources after their last consumer and retention obligation end. No production mutation is authorized by writing this plan.
 
-Check issue and PR state again when assigning work. Concurrent Qdrant, authentication, and orchestration changes may already have removed some targets. Coordinate shared files without mixing unrelated refactors into this project.
+## 6. Backlog reconciliation and documentation lifetime
 
-## 7. Completion and limits of this review
+The removal target supersedes old requirements to preserve generic ManifestIngest in the vector-removal work and to finish native reader/compiler features. Reuse existing replay, artifact, dependency, CLI, and catalog work instead of reopening it as another project. Surviving normal workflow capabilities keep their original owners.
 
-Removal is complete when the native Manifest product is absent from implementation, admission, worker registration, schemas, persistence ownership, CLI, UI, shipped dependencies, generated contracts, and active documentation, with the historical-data and normal-workflow gates above satisfied. An absent page or workflow class alone is not completion.
+Current issue descriptions own remaining scope. Historical maps are reference material, not another backlog to execute. Feature changes update their owning docs and tests together; no documentation-approval pipeline is required.
 
-Retain immutable history and operator exports according to the existing retention policy. Delete bounded compatibility scaffolding after its verified final consumer is gone. Archive/delete this temporary plan when its implementation and cutover obligations are resolved.
-
-This plan is based on current repository source, documentation, and issue review. No application tests, live workflow inventory, production database export, deployment change, or data deletion were performed. A local checkout was unavailable, so a full repository-wide import/collection audit remains an implementation task rather than a claimed result.
-
-## Source references
-
-All source links below are pinned to the reviewed revision. Issue links represent the reviewed backlog and may change.
-
-- [S1: Qdrant removal epic #4103](https://github.com/MoonLadderStudios/MoonMind/issues/4103)
-- [S2: Current Manifest operator guide](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/docs/Rag/LlamaIndexManifestSystem.md)
-- [S3: Vector-free Manifest pipeline](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/moonmind/manifest/pipeline.py)
-- [S4: Manifest registry service](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/api_service/services/manifests_service.py)
-- [S5: Manifest REST router](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/api_service/api/routers/manifests.py)
-- [S6: Manifest frontend](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/frontend/src/entrypoints/manifests.tsx)
-- [S7: Shared Temporal lifecycle service](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/moonmind/workflows/temporal/service.py)
-- [S8: Canonical workflow and historical entries](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/moonmind/workflows/temporal/workflows/manifest_ingest.py)
-- [S9: Remaining Manifest feature work #3948](https://github.com/MoonLadderStudios/MoonMind/issues/3948)
-- [S10: Production registration and projection classification](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/moonmind/workflows/temporal/workflow_registry.py)
-- [S11: Package metadata and dependencies](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/pyproject.toml)
-- [S12: Existing Manifest integration boundary tests](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/tests/integration/workflows/temporal/test_manifest_registration_boundary.py)
-- [S13: Existing Qdrant cutover runbook](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/docs/tmp/QdrantCutoverRunbook-4115.md)
-- [S14: Manifest registry table and shared execution models](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/api_service/db/models.py)
-- [S15: Current product and runtime direction](https://github.com/MoonLadderStudios/MoonMind/blob/7bd159dafb44770278e8c5563d47667de6e7c491/README.md)
+Archive or remove this temporary plan after needed guidance is in the canonical owners and concrete deployment/recovery references have another home. Pending real obligations may remain in #4189 without preserving an obsolete permanent architecture. This review did not run application tests, inspect live inventories, export production data, or perform any deployment or deletion.
