@@ -556,3 +556,35 @@ async def test_stored_outcomes_scrub_sensitive_top_level_keys(tmp_path):
         assert stored["items"] == [{"slug": "s"}]
         blob = str(result.to_sanitized_dict())
         assert "raw-token-material" not in blob
+
+
+@pytest.mark.asyncio
+async def test_profile_rewire_tolerates_absent_profile_table(tmp_path):
+    """An absent provider-profile table means nothing to rewire, not failure.
+
+    Partial schemas (like the hermetic PostgreSQL fixture, which creates
+    only the tables under test) have no ``managed_agent_provider_profiles``
+    table. The profile-secrets transform must still publish instead of
+    raising ``UndefinedTable``/``no such table`` out of the rewire step.
+    """
+    from api_service.db.models import ManagedAgentProviderProfile, ManagedSecret
+    from api_service.services import single_user_conversion as suc
+
+    engine, factory = _factory(tmp_path, name="conv4461-absent-profiles.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            ManagedAgentProviderProfile.__table__.drop, checkfirst=True
+        )
+    async with factory() as session:
+        from api_service.db.models import UserProfile
+
+        u = await _mk_user(session)
+        session.add(UserProfile(user_id=u.id, openai_api_key_encrypted="tok-absent"))
+        await session.commit()
+        result = await suc.run_guarded_upgrade(session, operator_authorized=True)
+        assert result.published is True
+        assert result.transforms["profile_secrets"]["rewired_profiles"] == 0
+        assert len((await session.execute(select(ManagedSecret))).scalars().all()) == 1
+        assert "tok-absent" not in str(result.to_sanitized_dict())
