@@ -1,79 +1,66 @@
 # Workflow Remediation
 
-**Document class:** Canonical declarative system / feature design.
-**Status:** Accepted
-**Owners:** MoonMind Platform and dashboard.
+**Document class:** Canonical declarative system / feature design.  
+**Status:** Accepted desired behavior, not a claim of complete implementation.  
+**Owners:** MoonMind Platform and dashboard.  
+**Updated:** 2026-09-21
 
 ## 1. Purpose
 
-Workflow Remediation lets a normal MoonMind Workflow investigate another Workflow, attempt an authorized repair, verify the resulting work, and propose separately reviewable prevention changes. The target's original failure remains immutable. A successful repair is recorded on the remediation relationship and the resulting recovery execution or Checkpoint Branch, not by changing the failed source into a success.
+Workflow Remediation lets an ordinary MoonMind Workflow diagnose a pinned failure, attempt an authorized repair, verify the resulting candidate, and produce separate prevention work. The source failure remains immutable. Successful repair is recorded on the relationship and resulting execution or Checkpoint Branch, not by turning the failed source into success.
 
-A target is identified by workflow and pinned run. The remediator is a separate `MoonMind.UserWorkflow`. Immediate repair addresses the target objective or a specific operational condition. Prevention changes MoonMind, a preset, configuration, documentation, or a portable Skill to reduce recurrence. Either output may be useful independently, but neither may be mislabeled as the other.
-
-This document owns cross-workflow remediation, action authority, and repair-result interpretation. [Remediation Verification Cadence](RemediationVerificationCadence.md) owns bounded in-workflow repair attempts. [Workflow Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-failed-step-recovery-semantics) owns unchanged-input recovery. [Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md) and [Checkpoint Branches](CheckpointBranchSystem.md) own checkpoint and branch mechanics.
+[AGENTS.md](../../AGENTS.md) and the [single-user design](../SingleUserApplicationDesign.md) govern simplicity and admission. This document owns cross-workflow remediation and result interpretation. [Verification Cadence](RemediationVerificationCadence.md) owns in-workflow repair attempts, [Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-failed-step-recovery-semantics) unchanged-input recovery, and [Checkpointing](../Steps/StepExecutionsAndCheckpointing.md) and [Checkpoint Branches](CheckpointBranchSystem.md) their mechanics.
 
 ## 2. Why a separate system is required
 
-A remediation relationship is not `dependsOn`. Ordinary dependencies wait for prerequisite success. Remediation often starts because the target failed, stalled, or requested attention, and must be able to inspect that failure without waiting for it to disappear.
-
-The relationship grants no transitive authority. If B remediates A and C remediates B, C does not gain access to A. Target visibility, evidence access, model spending, operational mutation, approval, and repository publication are separate permissions.
+The separate concept is a remediation relationship, not another runtime or scheduler. Unlike `dependsOn`, it can inspect failed work without waiting for that failure to disappear. Relationship A → B → C grants no transitive evidence, credential, spending, or mutation authority.
 
 ## 3. Design goals
 
-The normal product journey must provide understandable authoring, pinned evidence, bounded diagnosis, the smallest safe intervention, durable action and verification evidence, cumulative progress, and an actionable terminal result. Missing evidence must lead to a bounded degraded diagnosis, explicit unavailability, or escalation, never fabricated success or an infinite wait.
-
-Security, resilience, and observability apply equally to Codex, Claude Code, and OpenCode through the generic Omnigent plane. Equivalent lifecycle guarantees do not imply identical provider-session capabilities or blanket support for every combination.
+The default journey provides useful diagnosis, the smallest safe intervention, preserved cumulative content, exact-result verification, and an understandable next action. Unavailable evidence is handled through bounded recovery and honest limits, not fabricated success or an unbounded wait. A narrow repair does not depend on every harness, optional integration, or release-matrix row.
 
 ## 4. Non-goals
 
-Remediation does not grant host shell, Docker socket, arbitrary SQL, unrestricted mounts or networking, storage keys, raw secret reads, or redaction bypass. It does not guarantee that every failure is repairable. It does not automatically merge prevention changes, promote repair branches, or spawn an administrator agent for every failure.
-
-It must not introduce a second runtime coordinator, session model, checkpoint store, publication engine, approval owner, or verification policy implemented alongside the existing portable Skills.
+No new repair engine, session coordinator, checkpoint store, approval service, action ledger, or duplicate verifier policy. Remediation grants no raw host shell, Docker socket, arbitrary SQL, unrestricted network/mounts, storage keys, or secret reads. It does not automatically merge prevention changes, promote branches, or enable autonomous administration.
 
 ## 5. Architectural stance
 
 ### 5.1 Remediation Workflow Executions remain `MoonMind.UserWorkflow`
 
-Remediation uses the ordinary Workflow create/admission path, Step Execution ledger, artifacts, cancellation, and finalization. Its nested remediation object marks the relationship. The execution API and Workflow schema own the outer request envelope and historical `task` versus `workflow` decoding. A remediation-only serializer must not become a second authority or silently reinterpret retained input snapshots.
+Use normal create/admission, Step Executions, artifacts, controls, and finalization. The execution schema owns the request envelope and historical decoding. Do not add a remediation-only serializer or rewrite stored input digests.
 
 ### 5.2 Remediation is a relationship, not a dependency
 
-Persist both directions of the relationship before exposing accepted remediation. Pin target workflow, run, selected steps, and relevant checkpoint identity. The target may remain failed throughout a successful linked repair.
+Persist accepted forward/reverse linkage to the source workflow, pinned run, and selected steps/checkpoint through the existing owner. The source can stay failed while its linked repair succeeds.
 
 ### 5.3 Control remains separate from observation
 
-Logs, native chat, and event streams are observations. Actions use authenticated typed control boundaries. Untrusted issue text, repository content, transcripts, diagnostics, or model proposals cannot change policy, choose credentials, authorize actions, or declare their own verification success.
+Logs, native chat, issue text, and diagnostics are untrusted observations. Actual actions use authenticated typed operations. A model proposal or report cannot grant itself permission or declare an external effect complete.
 
 ### 5.4 Source of truth remains unchanged
 
-Temporal owns execution lifecycle. The plan and immutable input artifacts own authored work. Step Execution and checkpoint owners own progress and restoration evidence. Canonical session/turn owners govern live interaction. Result, publication, cleanup, and remediation read models project those owners without replacing them.
-
-A refreshed database row is not automatically a fresh observation of Temporal, a provider process, or a host. Each operational claim identifies its actual owner and observation freshness.
+Temporal owns execution lifecycle. Immutable inputs, Step Execution/checkpoint records, and canonical session/turn owners retain their responsibilities. Database and UI projections do not become another execution authority. Refreshing a row is not proof of a fresh provider, host, or historical-run observation.
 
 ### 5.5 Remediation reuses existing repair and evidence substrates
 
-[Primary Runtime Provider Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md) and [Harness Platform Design](../Omnigent/OmnigentHarnessPlatformDesign.md) apply to diagnosis, recovery, repair branches, verification, and prevention work.
+Use the [primary-runtime strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md), shared Omnigent implementation, workspace, artifact, and publisher owners. Record actual attempt provenance and preserve meaningful harness/Profile/model/cost/privacy/source/publication choices. Compatibility follows required behavior, not equal SHAs, patch versions, or another all-fields fingerprint.
 
-New qualified coding-agent work uses `agentKind=external`, `agentId=omnigent`, with the exact harness, configuration, model, Host Class, materializer, and realizer recorded in its immutable execution plan. Runtime-specific differences remain small capability adapters. Direct and profile-bound paths are explicit, independently qualified compatibility paths, not silent recovery fallbacks.
-
-A new repair branch has independently admitted execution authority. Its source checkpoint supplies content and lineage, not an active lease, old credential generation, approval, or an execution plan that may be blindly reused for changed work. Same-session continuation instead uses its existing canonical session/turn owner and cannot silently change immutable session dimensions.
+Saved source content and destination execution authority are separate. Same-session work retains its live session constraints. A fresh authorized branch receives normal destination admission. An automatic child cannot widen parent authority. These distinctions do not require three new execution systems.
 
 ## 6. Core invariants
 
-- Original source input, plan, failure, and accepted-step evidence remain immutable. New work has explicit lineage and semantic Step Execution identity.
-- A workspace checkpoint, provider-session continuity, a Git output branch, and publication evidence are different things. One does not prove another.
-- Source preservation and destination admission are checked independently. Valid saved bytes do not authorize model spending, a different account, or repository mutation.
-- Every mutation is policy-bound, expected-state-bound, conflict-controlled, idempotently identified, and auditable. An ambiguous acknowledgment requires reconciliation before repeat mutation.
-- Successful compute, saved work, action delivery, verified repair, prevention, publication, and cleanup have separate outcomes.
-- Missing support, changed authority, or invalid evidence is visible before mutation. Temporary capacity waits do not substitute another Profile, model, harness, host mode, or billing route.
-- No checkpointless path may infer authority from a local pathname, a surviving container, a branch name, or an agent's statement that files were saved.
-- Artifacts and historical results remain readable under their authorization and retention rules after hosts disappear. Recovery does not require keeping model credentials leased merely to retain non-sensitive work.
+- Source failure, original input, recorded plan, and accepted-step evidence remain unchanged. A new result has explicit lineage.
+- Saved bytes, provider-session continuity, credentials, approvals, and publication authority are different things. Restoring content restores none of the others.
+- Reconcile uncertain effects before retrying. Preserve confirmed compute, save, and publication through later failures and resume only the unfinished phase.
+- A pending repair is not no-change or failure merely because an observation window ended. Verification follows the exact result, not the latest source row.
+- Keep actual access, resource, and side-effect safeguards. Capacity waits never select another account or silently expand authority.
+- Verify the required save before deleting the only recoverable workspace. Readable retained results must not depend on a live host or indefinitely held model credentials.
 
 ## 7. Submission contract
 
 ### 7.1 Canonical create path
 
-Use ordinary `POST /api/executions` admission. The following is an illustrative **nested remediation object**, not an independent complete create-request schema:
+Use ordinary `POST /api/executions`. The nested remediation object identifies the target, mode, and policy references within that owner's schema. Its illustrative shape remains:
 
 ```json
 {
@@ -90,378 +77,316 @@ Use ordinary `POST /api/executions` admission. The following is an illustrative 
 }
 ```
 
-The server resolves the authorized immutable policy version. A policy name or browser-provided readiness flag is not approval or execution authority.
+This is not a second full request schema. Policy names and caller-supplied readiness fields do not confer authority.
 
 ### 7.2 Canonical normalized field
 
-The nested remediation contract travels with the normal immutable Workflow input. Existing `task.remediation` consumers and retained payloads must be reconciled through the providing execution-schema owner. New authoring must follow that owner's canonical envelope, reject conflicting aliases, and preserve source bytes/digests needed for history. This document does not create a second envelope or require a schema migration merely to repair the feature.
+The providing execution schema owns normalized fields and retained `task.remediation` interpretation. Resolve conflicting new-write aliases at that boundary. Do not add duplicate normalization or a migration merely to change prose.
 
 ### 7.3 Field semantics
 
-`target.workflowId` is required. An omitted `target.runId` is resolved once at creation and persisted. Step selectors and AgentRun refs are bounded and must belong to that pinned run.
-
-Modes are `snapshot`, `live_follow`, and `snapshot_then_follow`; the last is the normal default. Live observation remains optional and cannot be the only evidence path.
-
-Ordinary manual authority modes are `observe_only` and `approval_gated`. `admin_auto` is reserved for separately qualified autonomous rollout and is rejected by ordinary authoring while that gate is closed. `evidencePolicy`, approval rules, locks, budgets, and triggers are validated hints or references under server-owned policy, never self-issued privileges.
-
-Trigger origin distinguishes manual, failure, attention, stuck, policy, and promoted-proposal origins where supported. An origin label cannot enable automatic mutation.
+Resolve an omitted source run once at admission and persist it. Selected steps and AgentRuns must belong to that run. Existing `snapshot`, `live_follow`, and default `snapshot_then_follow` behavior remains, but live follow is optional. `observe_only` and `approval_gated` retain their policy meanings. `admin_auto` remains separately closed. Trigger origin is provenance, not permission.
 
 ### 7.4 Create-time validation
 
-Resolve visibility, target type, pinned run, selected steps/AgentRuns, checkpoint linkage, policy and principal permissions, evidence/data-use scope, and nested-remediation limits. Reject self-targeting, conflicting identity, unsupported authority, and stale draft expectations before paid or mutating work. Persist an idempotent forward/reverse remediation link.
+Use existing operator/machine admission, source/evidence permissions, policy, spending limits, and nested-remediation checks. Reject self-targeting, stale draft expectations, or unauthorized scope before effects. Persist one idempotent relationship rather than another admission registry.
 
 ### 7.5 Convenience API
 
-A supported `POST /api/executions/{workflowId}/remediation` convenience route expands into the same create/admission contract. It cannot bypass visible authoring, policy, budget, or target validation.
+Any supported `/api/executions/{workflowId}/remediation` convenience route expands through the same admission contract. It does not bypass policy or create an independently interpreted launch path.
 
 ### 7.6 Future automatic self-healing policy
 
-Automatic creation is an independently authorized, bounded layer. Separate diagnosis-only automation from mutating automation. Freeze trigger, allowed action set, budget, concurrency, cooldown, maximum depth, and release-policy version. Keep manual diagnosis usable without enabling autonomous mutation.
+Automatic diagnosis and automatic mutation are different grants. Additional automation requires explicit supported policy with bounded scope, budget, depth, and cancellation. Passing operator-initiated tests does not enable autonomous mutation or authorize extra paid work.
 
 ### 7.7 Create-page first remediation flow
 
-`Remediate` opens `/workflows/new?intent=remediate&draftId=…`; it never immediately submits a hidden run. The operator sees immutable target identity and editable repair intent before submission.
+The operator's Remediate action opens the existing visible Create draft, not a hidden execution. Keep Runtime and one Profile with meaningful optional overrides. Internal harness/configuration/Host Class/materializer/realizer identities are not extra required selectors. Preserve explicit edits under delayed discovery and capacity changes.
 
-Normal execution authoring exposes **Runtime and one Profile**. Execution configuration, harness, Host Class, materializer, launch policy, and realizer are subordinate resolved authority, not another required selector chain, including behind Advanced mode. Genuinely optional supported model/effort or policy overrides remain available. Existing Codex and Claude OAuth Provider Profiles are reused rather than cloned into Omnigent-specific accounts.
-
-The draft may suggest the target's compatible selection, but must preserve explicit edits and disclose unavailable historical choices. Displayed selection, submitted request, and admitted plan must agree. Incompatible or stale choices remain recoverable drafts with focused remedies, not silent defaults. These rules also apply to schedules, reruns, branch continue/fork, API, and MCP consumers.
-
-Keep the target repository/workspace, repair destination, and prevention repository distinct. MoonMind's repository may be selected for platform prevention work, but is not a substitute for the failed target's source. Publication remains a separate explicit choice.
-
-Drafts remain tab-scoped, schema-versioned, timestamped, and bounded to the existing two-hour import lifetime. Successful complete import or explicit discard removes the stored draft. Missing, malformed, expired, and cross-tab drafts have distinct safe errors and do not partially import. Presence markers contain no repair content. Draft import, metadata refresh, and immediate submission must preserve explicit input and current request identity.
+Retain current tab-scoped, versioned draft handling, including the existing two-hour import lifetime and complete-import/discard behavior. Missing, malformed, expired, or cross-tab drafts do not partially submit. Keep the target workspace, repair destination, and prevention repository distinct. Existing admitted API/automation flows remain separate from the browser interaction requirement.
 
 ## 8. Identity, linkage, and read models
 
 ### 8.1 Why both `workflowId` and `runId` are required
 
-The workflow detail route anchors on logical identity. Evidence and actions pin exact run/step/attempt identity. Continue-As-New, rerun, or another actor's recovery cannot silently retarget a remediation.
+Logical identity locates the detail page. Evidence and actions identify the actual run, step, and attempt. A later rerun or Continue-As-New does not silently retarget a pinned repair.
 
 ### 8.2 Link directions
 
-Both target-to-remediators and remediator-to-target views link the pinned source, selected evidence, and resulting recovery workflow, branch, turn, or operational resource.
+Both source and remediator link the exact resulting recovery execution, branch/turn, or operational resource. A link grants no additional read or mutation permission.
 
 ### 8.3 Durable linkage requirements
 
-Persist the source identity, admitted repair intent, phase, action/approval/lock refs, cumulative attempt/head identity, resulting execution/branch/turn identity, verification target and scope, repair outcome, prevention outcome, and unresolved cleanup/operator work. A ref names evidence but does not grant access.
+Reuse existing link/action/result fields for source, destination, candidate, current phase, relevant approval/operation references, and pending verification. Add only missing data to that owner, not a parallel result database or mandatory full-record copy.
 
 ### 8.4 Read model expectations
 
-Project graph persistence, launch acceptance, running/terminal repair execution, verification pending/terminal, publication, promotion, archive, and cleanup independently. The immutable source may be `failed` while a linked result is verified to satisfy the repaired objective. Do not derive repair failure solely from the source row, or repair success solely from a branch's process exit.
+Show launch acceptance, compute, saving, verification, publication, promotion, and cleanup according to their actual owners. Separate source failure from repair result. A process exit or persisted branch graph is not proof of the coding objective.
 
 ### 8.5 Reverse lookup API
 
-Existing inbound/outbound remediation reads under `/api/executions/{workflowId}/remediations` project authorized links, compact evidence availability, action capabilities, approvals, branch state, and result lineage. They do not expose arbitrary runtime bindings or implement lifecycle decisions in the browser.
+Existing inbound/outbound remediation reads project authorized links and compact state. Keep list/query work bounded and use the existing projection repair path. A missing projection cannot justify rerunning the action.
 
 ### 8.6 Approval and Workflow operator APIs
 
-Approval decisions use the existing `/api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}` contract with approved/rejected decision and optional bounded comment. The persisted owner may use `denied` internally; transport spelling is normalized by that owner.
-
-Takeover uses supported ordinary Workflow controls. Pause/Resume of orchestration is not failed-step recovery and is not proof that every external process stopped. Cancellation uses `/api/executions/{workflowId}/cancel`. Use the supported Update/Signal protocol of the actual target type rather than an action-name-derived universal protocol.
+Reuse current approval and Workflow control endpoints. Pause/Resume of orchestration is not failed-step recovery or physical host quiescence. Invoke the supported Update/Signal/command protocol of the actual target, not an inferred managed-session ID.
 
 ## 9. Evidence and context model
 
 ### 9.1 Evidence sources
 
-Read authorized execution and step evidence, recovery/incident/Step Execution manifests, checkpoint and branch records, adapter capture/resource/terminal evidence, managed or canonical-session diagnostics and continuity, and durable logs. Native Omnigent interactions remain on the bound Workflow Chat surface. A provider URL or session ID is metadata, not artifact authority.
+Read admitted step/checkpoint/branch results, runtime/session evidence, and durable logs through their owners. A provider URL, host pathname, or opaque session ID is not artifact access authority. No native RAG or Manifest system is recreated for remediation.
 
 ### 9.2 Remediation Context Builder
 
-Reuse the existing builder and artifact services. `reports/remediation_context.json` is a bounded index, not another evidence store. Prefer authoritative recovery and Step Execution manifests before log-derived hypotheses. Include the selected evidence scope, availability/freshness, source and candidate identity, policy/approval/lock snapshot, and live cursor when supported.
+Reuse the bounded context builder and artifact readers. The context is an index into existing evidence, not a new store. Prefer actual result and recovery records over log-derived hypotheses. Materialize the bytes a Skill needs outside workflow history.
 
 ### 9.3 Context artifact shape
 
-The context records a schema version, generation and observation times, remediator and pinned target identities, selected steps, artifact refs, bounded diagnosis hints, per-class available/partial/unavailable/denied results, retrieval/data-use scope, and policy refs. Exact schema serialization belongs to its providing model. Missing data is not a successful empty result.
+The providing schema owns source/candidate identity, observation times, evidence availability, refs, and relevant policy. Missing, partial, denied, and unavailable data stay distinct. Do not invent a new schema to restate that distinction.
 
 ### 9.4 Boundedness rule
 
-Enforce count, byte, token, time, page, and retry bounds before expansion. Large evidence remains artifact-backed outside workflow history. Referenced content must actually be materialized through authorized readers when a Skill or verifier needs its bytes. Record residual truncation and exclusions rather than claiming complete inspection.
+Apply existing count/byte/token/time/page/retry limits before expanding evidence. Record truncation and exclusions. Optional enrichment failure must not erase the usable core evidence or start another full implementation attempt.
 
 ### 9.5 Evidence access surface for remediation Workflow Executions
 
-Reuse `remediation.get_context`, bounded target artifact/log/event/checkpoint readers, `remediation.list_allowed_actions`, and typed `remediation.execute_action` through the existing API/Activity/MCP boundary. Live follow is optional. No dashboard scraping or broad proxy is required.
-
-`actionCapabilities` distinguishes `requestable`, `dryRunSupported`, `executionBackendReady`, `approvalBackendReady`, `verificationBackendReady`, exact runtime/host support, required evidence, and bounded blocked reasons. `allowedActions` contains only requestable rows. Catalog membership, a registered classifier, or the presence of a worker handler is necessary evidence where applicable, not proof of a qualified end-to-end operation.
+Reuse existing context/read tools and typed action dispatch. UI and tools consume the same readiness projection. A registered action/classifier is not proof of actual execution and verification wiring. Do not add another capability catalog or promote an unsupported mutation.
 
 ### 9.6 Live follow semantics
 
-Follow only authorized active targets whose canonical stream supports it. Persist cursors, bound reconnect/replay, distinguish gaps and epoch boundaries, and degrade to retained evidence without restarting business work. Projection/stream failure cannot change canonical execution outcome.
+Use bounded existing cursor/reconnect behavior and fall back to authorized retained observations when the stream is unavailable. Never restart business work to repair its display. A stream is not the sole source of terminal evidence.
 
 ### 9.7 Evidence freshness before action
 
-Revalidate target run, resource ownership/generation, expected state, policy/revocation, lock, approval, candidate head, and current action readiness at the trusted effect boundary. A stale page or earlier diagnosis is insufficient. Read failures remain unavailable rather than proof of absence or safe cleanup.
+Check actual target/run, resource generation, policy/revocation, expected state, and required approval at the effect boundary. A failed inspection is unknown, not absence. Advisory status and unrelated release-monitoring health must not become duplicate authorization checks.
 
 ### 9.8 Immediate repair and prevention workflow
 
-Choose the smallest safe action, verify its exact postcondition, then determine whether prevention work is warranted. A restored lease or resumed orchestration proves only that operational postcondition, not necessarily completion of the coding objective. A reviewable prevention PR does not prove the immediate repair worked.
-
-Record attempted/skipped/denied/unsafe decisions, action and verification refs, resulting work identity, root-cause hypothesis and confidence limits, prevention branch/PR and its independent verification, and remaining operator work. Required publication is not silently changed to save-only success when credentials are missing.
+Verify the smallest actual postcondition. Operational recovery may be useful without completing the coding objective. Prevention is independently scoped and verified. A prevention PR does not prove immediate repair, and missing requested publication remains an unmet effect even when saved work is valid.
 
 ### 9.9 Checkpoint-backed repair
 
-Unchanged-input failed-step recovery preserves the original specification and resumes at a checkpoint-defined phase. Corrected instructions, changed model/effort, Profile, policy, retrieval, repository branch, publication choice, or other immutable authority requires a separately admitted Checkpoint Branch or fresh execution. Do not overload `RecoverFromFailedStep` with corrective text.
+Unchanged-input recovery uses the existing failed/selected-step path. Corrected instructions or materially changed authority use normal new branch/execution admission. Do not insert hidden corrective text into an unchanged-input retry.
 
-A repair branch records source workflow/run/step/ordinal/boundary and checkpoint digest, immutable new instruction refs/digest, destination selection and plan, workspace policy, isolated work branch where applicable, remediation provenance, and idempotency identity. Validate source content separately from destination authority. A supported fresh branch can use a currently authorized credential generation for the explicitly selected Profile; that does not revive the old lease or qualify same-session reattachment.
+Validate saved source and exact predecessor separately from destination authority. Fresh restoration may use the current authorized generation of the same selected Profile and a compatible installed runtime. It does not revive an old lease or qualify live reattachment. Actual revocation, denied content, or incompatible behavior still blocks the affected action.
 
-Create, continue, and fork use the existing branch-turn owner. Continuation starts from the selected predecessor's committed candidate, not repeatedly from the root baseline. Compare is read-only. Publish, promote, and archive are separately authorized effects. Publication is not promotion, and archive cannot destroy content retained by another consumer.
+Continue/fork from the committed predecessor candidate, not the root baseline. Expected-head conflict protection prevents late results from overwriting progress. Compare is read-only. A derived work branch is not another publication grant. Publish, promote, and archive retain their distinct existing authorization and retention rules.
 
 ### 9.10 Omnigent-backed remediation
 
-Use the generic realizer, canonical workspace owner, session/turn commands, and shared finalization. A semantic branch or cold destination gets fresh session/host ownership as required; retries reconcile the same admitted attempt instead of launching another one.
-
-Explicit supported same-session interaction uses the canonical session supervisor and turn command boundary. Remediation never sends hidden corrective messages into a parent session or treats the existence of a supervisor as blanket resume support. Native chat readiness and historical evidence access remain independently observable.
+Use one existing generic host/session/turn lifecycle and the correct workspace owner. Reconcile duplicate create/send acknowledgments before another provider effect. Do not wrap the generic realizer in an additional supervisor or infer fresh execution authority from a source plan.
 
 ## 10. Security and authority model
 
 ### 10.1 Authority modes
 
-`observe_only` allows scoped reads and diagnosis, not mutation. `approval_gated` allows proposals and supported dry runs and executes only according to enforced approval policy. Future `admin_auto` requires server-owned release admission and a narrow authorized action set. It is not enabled by examples, a draft, a schedule, or an LLM decision.
+`observe_only` allows scoped diagnosis, not mutation. `approval_gated` permits actions only under the existing enforced policy. `admin_auto` remains unavailable until its separately authorized implementation and safeguards exist. A draft, schedule, model response, or passing test cannot enable it.
 
 ### 10.2 Execution principal
 
-Audit the requesting actor and the named principal/security policy used by the trusted action owner. A model runtime may propose privileged actions without receiving the owner's host credentials or unrestricted operational permissions. A security-policy reference is not a second model-account Profile.
+One human operator may use several accounts and concurrent workflows. An agent or machine capability remains limited to its admitted target and operations. A policy principal is not a second human account or model Profile.
 
 ### 10.3 Permission model
 
-Check target visibility, evidence and raw-artifact access, remediator creation/model spending, action execution, approval, audit access, and each repository role independently. Source, collaboration, and publication credentials follow their providing connection/binding owners. Restoring a workspace restores none of these permissions.
+Preserve separate evidence, raw-artifact, spending, action, approval, and repository-role permissions under single-user admission. Do not implement human tenancy or admin/member inheritance to satisfy predecessor language. Explicitly configured stronger policy and existing enforcement require a deliberate migration, never an implicit bypass.
 
 ### 10.4 Secret handling
 
-Secret-reference, scanning, redaction, and data-use rules apply before model disclosure and at outbound effects. No raw credentials, OAuth homes, approval grants, signed download URLs, or reusable capability secrets enter durable context, histories, logs, or archives. Retain only necessary bounded authority metadata under authorization.
+Keep reusable credentials, OAuth homes, signed download URLs, approval grants, and sensitive configuration out of ordinary context, logs, archives, and workflow history. Use existing secret resolution, redaction, and outbound controls. A content digest does not make secret-bearing bytes safe to disclose.
 
 ### 10.5 Artifact and log access mediation
 
-Use authorized artifact/default-read projections. Safe preview access does not grant raw restore/publication permission. Denied raw content is not an invitation to read a local path or fall back to unrestricted storage. Validate digests, source identity, schema, completeness, retention, and freshness at use time.
+Preview rights do not grant raw restore or publication access. Use the authorized reader and validate required content/identity. Denial is not permission to read a local path or use a broader storage credential.
 
 ### 10.6 High-risk actions
 
-Force termination, destructive cleanup, session replacement, and reruns with external effects require their explicit policy/approval and verified ownership. They are not automatic responses to capacity waits, missing logs, or an uncertain result. Stop/fence credential consumers before release and before destructive operations on their resources.
+Destructive cleanup, forced termination, session replacement, and replay of external effects need their actual policy, approval, ownership, and postcondition. Missing logs or capacity pressure is not sufficient justification. Preserve necessary consumer fencing and save-before-delete behavior.
 
 ### 10.7 Visibility and redaction posture
 
-Non-admin visibility remains owner-scoped. Unauthorized direct refs must not leak target existence. Administrative scope does not bypass artifact policy. Cache and asynchronous response identity include principal and exact target/result scope.
+Use operator admission plus scoped machine/resource access, not a human-role matrix. Unauthorized identifiers do not disclose target existence. Cache and asynchronous-response identity must preserve the admitted target/evidence scope.
 
 ## 11. Remediation action registry
 
 ### 11.1 Rationale
 
-Extend the existing typed registry and subsystem owners. An action is a scoped primitive, not another native implementation of portable Skill reasoning.
+Reuse the existing typed operations and adapters. A small useful subset is better than another administrator-action platform. Native plumbing does not duplicate portable Skill reasoning.
 
 ### 11.2 Canonical action kinds
 
-Keep existing execution pause/resume/cancel/force-terminate/rerun, session controls, provider/host/lease reconciliation, helper-container, targeted cleanup, and Checkpoint Branch families. Do not promise every registered family is executable. Enable only operations with real owning adapters, authorization, evidence, and the required verifier.
-
-The historical `execution.retry_failed_step_with_remediation_context` name must not create a competing corrective retry engine. New corrective authoring uses explicit Checkpoint Branch intent. Any retained historical request is either deliberately translated under its recorded contract to a separately authorized branch or rejected before mutation. Keep compatibility only for demonstrated persisted consumers.
+Keep currently supported execution/session controls, targeted resource reconciliation, and branch/recovery handoffs. Optional unsupported destructive actions stay unavailable. A required useful capability cannot be declared optional merely to close an issue. The historical corrective-retry name does not create another repair engine.
 
 ### 11.3 Action semantics notes
 
-`execution.resume` resumes paused orchestration; it is not checkpoint recovery. A supported active-run rerun may Continue-As-New; terminal rerun creates a linked fresh execution and cannot update a closed Temporal run. Session operations use exact canonical session/turn/epoch capability rather than constructing a managed-session route from a runtime label for every harness.
-
-Lease eviction or host/helper cleanup invokes its owning reconciliation mechanism. Age, workflow terminality, or an unresponsive process is not sufficient proof that a credential resource can be released or an unrelated workspace deleted. Targeted janitor actions cannot silently become global cleanup.
-
-`checkpoint_branch.create_from_remediation_context` shares the public branch-turn execution owner. Its response distinguishes persisted graph, accepted launch, active/terminal turn, and verification. It never reports verified repair merely because creation succeeded.
+Resume means resume paused orchestration, not checkpoint restoration. Terminal rerun uses a linked fresh execution. Generic session commands resolve actual bindings rather than guessing direct-managed IDs. Cleanup and lease actions use their real bounded resource owners. Branch creation is delivery, not verified repair.
 
 ### 11.4 Action request contract
 
-Persist action ID and kind, authenticated actor/remediator, exact target workflow/run/resource, expected state/generation, normalized parameter digest, selected policy/approval/lock authority, stable idempotency key, dry-run meaning, before evidence, and verification contract. Bound all payloads. An unchanged key with changed semantic input is a conflict, not a replay.
+Persist normalized intent and its existing operation identity before effects. Bind target/run/resource, relevant expected state, policy/approval, and observed baseline. Changed intent under the same key is a conflict. Use existing schemas instead of a new universal action envelope.
 
 ### 11.5 Action result contract
 
-Distinguish accepted/queued, applied, no-op, approval-required, denied, precondition-failed, delivery-unknown, timed-out, failed, and canceled states according to the providing schema. Include the canonical operation and exact resulting workflow/run/branch/turn/resource identity, before/after refs, and unfinished verification/cleanup obligations.
-
-Transport acceptance is not effect completion. A lookup failure or lost acknowledgment cannot be turned into a safe no-op or a fresh mutation request. Reconcile the original operation identity first.
+Keep accepted/queued delivery, confirmed effect, no-op, denied/unknown/failure, and pending verification distinct through existing result fields. A lost acknowledgment is not denied delivery or permission to retry from scratch. Resolve the original operation first.
 
 ### 11.6 Risk tiers and verification
 
-Every mutating action declares low/medium/high risk, preconditions, an evidence owner, postcondition, stabilization/deadline policy, and required verification scope. A contract may prove operational control completion without proving the original business objective. Expose that distinction.
+Verification scope follows the action's actual postcondition. A pause can be operationally verified without proving the original business objective. A coding repair needs the intended candidate acceptance evidence. Reuse the existing verifier and valid matching results rather than automatically running another paid full check.
 
 ### 11.6.1 Trusted post-action verification phase
 
-Preserve the existing typed verification phase and outcome vocabulary: `verified_resolved`, `verified_no_change`, `still_failed`, `regressed`, `evidence_unavailable`, `approval_required`, `verification_failed`, and `canceled`. A separate lifecycle field represents verification that is pending or waiting for a result; do not overload a terminal outcome to mean that future work is still running.
+Retain the existing outcomes: `verified_resolved`, `verified_no_change`, `still_failed`, `regressed`, `evidence_unavailable`, `approval_required`, `verification_failed`, and `canceled`. Pending/waiting is a lifecycle fact, not a terminal no-change outcome.
 
-Persist the action result before verification. Read fresh owner-backed evidence, never an adapter-supplied `verification` mapping or the pre-action cache. Bind the verifier to exact action, source, resulting execution/branch/turn, candidate digest, specification scope, and policy. Enforce identity even when a later run shares the same workflow ID.
+Persist the action result and verification obligation through the existing action/link/orchestration owner. Bind exact resulting workflow/run/branch/turn/candidate and objective scope, with the source pin separate. Enforce the run in the actual reader. Follow a successor only through supported recorded linkage. A latest row or unrelated later success is not evidence for this repair.
 
-For a repair branch or recovery workflow, verify its exact completed candidate and required downstream objective evidence. Do not require the immutable failed source row to become completed. Conversely, a later unrelated success of the source workflow cannot prove this repair. Branch process success alone is not objective verification, and an operational pause/cancel acknowledgment is not global host quiescence.
+A source can remain failed while its linked candidate verifies successfully. Graph persistence and branch compute are insufficient without required objective evidence. Conversely, source failure is not proof that the branch failed. Keep operational verification distinct from full objective verification and physical cleanup.
 
-Long-running repair verification has a durable pending obligation under the existing orchestration/action owner. Bounded polls may observe progress, but an HTTP/Activity polling window is not the lifetime of the repair. A terminal event or bounded durable reconciliation resumes verification without repeating the action. Browser disconnect, worker loss, delayed terminal evidence, and lost publication of a verification artifact preserve this obligation and its deadline.
+Use an existing result notification or bounded durable wait. The repair lifetime is not the HTTP/Activity polling window. Browser closure, worker restart, delayed result, or report-upload failure must leave the same obligation recoverable without redelivering the action. Deadline expiry retains actual evidence and a truthful incomplete disposition, not invented completion. No new polling daemon or verifier scheduler is required.
 
-Record before, immediate-after, and stabilized observations when actually observed. Do not reconstruct a missing pre-action snapshot after retry, treat a failed later read as fresh earlier success, or invent no-change evidence for an ambiguous action. Verification-only retry does not repeat completed compute or mutation. A committed verdict is reused only for the same evidence and policy; a changed candidate requires a new verification attempt.
+Keep before/after observations as actually collected. Never fabricate a missing baseline from later state. Reuse a verdict only for the same candidate/scope/policy. A new candidate needs matching evidence. Cancellation of observation does not undo the underlying effect or discharge its remaining reconciliation.
 
 ## 12. Locking, idempotency, and loop prevention
 
 ### 12.1 Why locks are required
 
-Use the existing remediation link/action ledger and actual resource owners, not a second global scheduler. Several workflow IDs may contend for the same host, credential, workspace, or publication destination.
+Concurrent workflows can contend for the same credential, workspace, host, or destination. Reuse existing resource ownership and action/link records. Do not introduce a lock service for every descriptive field.
 
 ### 12.2 Lock scopes
 
-Retain target-execution, AgentRun, managed/canonical session, provider-profile lease, and workload-container scopes as appropriate. The normal target mutation lock is exclusive. Read-only parallel diagnosis is permitted only under its evidence and budget policy.
+Use only the relevant existing target/resource scope. Mutation is exclusive where necessary. Bounded parallel read-only diagnosis does not automatically need the same mutation lock.
 
 ### 12.3 Lock contract
 
-Persist holder and exact target run/resource, generation/fence, expiry, and release/reconciliation state. A lost or expired lock prevents new mutation. Its expiry alone is not proof that the old consumer stopped. Stale completion cannot overwrite or release a replacement owner's resources.
+Preserve holder, target, fence/generation, and release semantics through the existing owner. Expiry prevents new writes but does not prove a consumer stopped. Stale completion cannot release or modify a replacement's resources.
 
 ### 12.4 Action idempotency
 
-Bind the action key to normalized intent, target, policy, and expected state. Commit intent before effect, persist result before verification, and reconcile ambiguous acknowledgments through the effect owner. A narrow execution-update cache is not the remediation action ledger. Do not promise exactly-once external effects or billing when the external system cannot prove them.
+Reconcile intent, original effect, and persisted result at the actual provider/subsystem boundary. An idempotency-key string alone does not guarantee exactly-once external effects or billing. Do not create another ledger to compensate for a missing consumer handoff.
 
 ### 12.5 Retry budget and cooldowns
 
-Persist maximum actions, per-kind attempts, branch count, full-verifier attempts, elapsed time, model budget, cooldown, and escalation disposition. A typical policy may allow three actions and two per kind, but examples do not override admitted limits. Count repeated requests separately from newly admitted semantic attempts.
-
-Cumulative repair attempts follow [Verification Cadence](RemediationVerificationCadence.md). No-progress uses validated candidate/evidence changes, not repeated verdict labels or changing timestamps. Checkpointless admission is limited to that document's explicit remotely verified exact-head contract and is not cold checkpoint recovery.
+Use the existing admitted action/attempt/time/model bounds. Preserve consumed budget, latest report, candidate, and pending operation through restart. Infrastructure recovery does not grant a fresh semantic budget. No-progress uses meaningful candidate/evidence changes, not timestamps or reordered report text. Cadence and supported checkpointless-source rules remain with their existing owners.
 
 ### 12.6 Nested remediation defaults
 
-No self-targeting or automatic remediation of a remediator by default. Any explicitly enabled nested use has bounded depth and independently admitted scope, not inherited transitive privileges.
+No self-targeting or automatic remediation of a remediator by default. Explicit nested use has bounded depth and independent scope. Relationships never grant transitive privileges.
 
 ### 12.7 Target-change guard
 
-Changed run, checkpoint, candidate, policy, credential/resource generation, or expected state requires an explicit conflict, new diagnosis/admission, or policy-permitted no-op. An approval cannot bless a different target. Changes to a live target do not retarget a pinned historical repair result.
+A changed target, candidate, or action intent requires the existing conflict/new-admission path. Do not confuse a meaningful authority change with incidental installed patch provenance. Preserve strict live-session and resource fencing.
 
 ## 13. Runtime lifecycle
 
 ### 13.1 Remediation phases
 
-Use existing Workflow lifecycle plus bounded remediation phases such as collecting evidence, diagnosing, awaiting approval, acting, verifying, resolved, escalated, and failed. Waiting for capacity, target action, or verification is explicit and does not require another top-level workflow engine.
+Use the ordinary Workflow lifecycle and existing phase metadata for diagnosis, action, verification, and finalization. Waiting for capacity, an action result, or evidence is explicit, not another top-level Workflow type.
 
 ### 13.2 Recommended lifecycle
 
-Collect evidence, diagnose, propose, acquire/revalidate mutation authority and approval, execute, verify, record repair/prevention, and release/reconcile. A diagnosis-only result may complete without mutation. Terminal escalation retains evidence and uncompleted obligations.
+Read evidence, diagnose, authorize the smallest required action, execute/reconcile, verify its exact result, and retain repair/prevention outcomes. Diagnosis-only can complete without mutation. Exhaustion preserves the candidate and unresolved obligations.
 
 ### 13.3 Recommended step structure
 
-Skills own diagnosis, coherent repairs, and objective-verification semantics. Native orchestration owns scope, admission, artifact delivery, execution scheduling, and result validation. Full objective verification is attempt-scoped; each independently risky administrative effect still gets its own targeted verification.
+Resolved Skills own diagnosis, coherent semantic repairs, and objective verification. Native orchestration owns admission, bounded artifact delivery, durable scheduling, and result consumption. Full semantic verification is attempt-scoped; independently risky operations keep their targeted checks. Do not create another native copy of the Skill or a full verifier for each helper action.
 
 ### 13.4 Cancellation semantics
 
-Canceling the remediator does not implicitly cancel or mutate the target. Canceling the target does not automatically cancel the remediator. Already accepted actions remain independently reconcilable. Requesting cancellation is not proof that an agent stopped.
+Canceling the remediator does not automatically cancel the target or undo accepted effects. Preserve verified compute/save/publication independently. Before destructive cleanup, verify the required durable copy through the actual workspace owner. Failed saves retain bounded recoverable work under the existing finalizer/janitor decision.
 
-Finalization preserves verified compute and saved evidence before failure-prone publication/reporting. Verify the required durability handoff before deleting the sole useful workspace. Stopping credential consumers and releasing model capacity is separate from retaining non-sensitive content. Failed capture has a bounded fenced retention/reconciliation disposition, not unconditional cleanup or indefinite credential retention. All janitors honor the same persisted decision.
-
-Required checkpoint/durability policy remains owned by checkpoint, publication, and [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md). Proposed artifact-only or credentialless recovery requires the owning policy reconciliation and implementation; it is not permission to bypass a currently required remote checkpoint.
+Credential consumers must stop and their safe release must be recorded before reuse. Retaining non-sensitive content or publishing optional diagnostics does not require indefinitely held model capacity. [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md) and [Workflow Publishing](WorkflowPublishing.md) own save-only versus remote-publication semantics. Verified artifact-backed saving does not require a new GitHub credential; requested publication remains separate. A pathname or incomplete upload is not durability evidence.
 
 ### 13.5 Rerun semantics
 
-A new recovery execution or branch is a new result owner linked to the pinned failure. Exact rerun, edited retry, failed-step recovery, publication-only retry, and pause/resume remain distinct. Never silently turn failed recovery into fresh paid compute.
+Resume only the unfinished supported phase: restore, failed semantic step, gate, downstream work, or publication through its existing owner. Accepted predecessor outputs must actually be loaded into the destination, not merely listed as reused. Corrected instructions use branch/new admission. Never silently replace failed recovery with a full paid rerun.
 
 ### 13.6 Continue-As-New state integrity
 
-Preserve pinned target, source/candidate refs, immutable selection, action/approval/lock and pending verification identities, attempt/action/model budgets, cooldown/deadline, live cursor, and cleanup obligations. Retained histories use their recorded commands and digests; changes require deliberate versioning and replay evidence.
+Preserve source/result pins, accepted progress, current candidate/report, operation/approval identity, budgets/deadline, and pending verification/cleanup. Actual command or payload changes require relevant retained-history replay or a controlled migration. Historical hashes are not rewritten to fit new defaults.
 
 ## 14. Artifacts, summaries, and audit
 
 ### 14.1 Required remediation artifacts
 
-Reuse the existing artifact contracts and stable per-action/attempt labels:
-
-- `reports/remediation_context.json` (`remediation.context`) and `reports/remediation_plan.json` (`remediation.plan`).
-- `logs/remediation_decision_log.ndjson` (`remediation.decision_log`).
-- `reports/remediation_action_request-<n>.json` and `reports/remediation_action_result-<n>.json` (`remediation.action_request` / `remediation.action_result`).
-- `reports/remediation_verification-<n>.json` (`remediation.verification`) and `reports/remediation_summary.json` (`remediation.summary`).
-- Immutable `remediation.approval_request` and `remediation.approval_decision` artifacts where approval is required.
-
-Missing optional preview/report output must not erase a committed valid result. Required evidence remains an unmet obligation when absent. Preview and raw access follow [Artifact Presentation](../Artifacts/ArtifactPresentationContract.md).
+Reuse current context, plan, action request/result, verification, summary, decision-log, and approval artifacts. Their existing schemas own exact labels and filenames. Keep required evidence durable without requiring every possible report channel for a diagnosis-only result. Optional preview failure cannot erase committed work. [Artifact Presentation](../Artifacts/ArtifactPresentationContract.md) governs safe access.
 
 ### 14.2 Target-side artifacts
 
-Link subsystem-native control, continuity/reset, diagnostics, and resource evidence rather than copying it into a new lifecycle store. Target annotations link the repair without rewriting the original outcome.
+Link authoritative subsystem evidence instead of copying it into a second lifecycle store. Target annotations preserve the original outcome.
 
 ### 14.3 Remediation summary block
 
-The summary separates source failure, action delivery, repair execution, verification target/scope/outcome, resulting workflow/branch/turn, prevention and its verification, publication, save/retention, cleanup, and remaining operator work. A final `resolved_after_action` requires the relevant verified postcondition, with operational versus objective scope explicit.
-
-Retain diagnosis-only, no-action-needed, escalated, unsafe-to-act, lock-conflict, evidence-unavailable, and failed dispositions. `NO_COMMIT` or a prevention PR is not by itself a repair verdict.
+Separate source failure, action delivery, exact repair result, verification scope/status, prevention, saving, publication, and pending work. A branch, `NO_COMMIT`, or prevention PR is not itself a repair verdict. Use existing fields without another summary schema.
 
 ### 14.4 Target-side linkage summary
 
-Show inbound remediation count, latest safe status, action, verification and result links, and observation freshness. Unknown projection state is not a reason to rerun work.
+Show compact inbound links and the latest actual repair state with observation freshness. Missing projections remain repairable read-model gaps, not permission to repeat execution.
 
 ### 14.5 Control-plane audit events
 
-Record requester, action principal, source/remediator/result identities, exact policy/approval and expected-state refs, intent/result digests, timestamps, idempotency, observed before/after evidence, verification, and release disposition. Keep metadata bounded, secret-safe, and authorized. Artifacts supply detailed evidence; audit records provide compact queryable linkage.
+Keep bounded actor/operation/target/result linkage, relevant authority refs, observed timestamps, and original errors. Detailed records stay in protected artifacts. Do not add an audit platform or high-cardinality metric inventory as a prerequisite to a narrow repair.
 
 ## 15. Dashboard UX
 
 ### 15.1 Create flow
 
-Offer Remediate from failure/attention/detail surfaces. Show pinned target, selected evidence, diagnosis versus approved repair intent, normal Runtime + Profile, publication choice, budget, and exact unavailable action reasons. Do not make a connection to GitHub a prerequisite for diagnosis where authorized evidence and runtime support suffice.
+Use existing Remediate-to-Create authoring with pinned target, repair intent, Runtime/Profile, limits, and actual unavailable-action reasons. GitHub is not required for scoped diagnosis or supported save-only work.
 
 ### 15.2 Target Workflow detail
 
-Show immutable failure and a separate Remediation Workflows panel with pinned lineage, action/approval/lock state, linked candidate, pending/terminal verification, repair/prevention, and cleanup. A verified linked repair is visible even though the source remains failed.
+Show immutable failure and a linked repair panel. Pending/verified repair is a separate fact from source status. Reuse current panels and read models rather than another dashboard.
 
 ### 15.3 Remediation Workflow detail
 
-Show the Remediation Target panel, authored repair contract, evidence availability, current phase/wait, cumulative attempts and candidate head, full action authority chain, exact result identity, and required operator work. Advanced diagnostics explain execution configuration without creating extra ordinary account selectors.
+Show target, exact candidate, current phase/wait, evidence limitations, and a valid next action. Technical details belong in existing diagnostics. A disabled action should explain the missing capability, not trigger an alternate runtime.
 
 ### 15.4 Evidence presentation
 
-Use existing authorized artifact renderers and server-selected default read refs. Generated content is inert untrusted content, not an executable control surface. Never fall back from a denied preview/raw read to local storage or an upstream provider URL.
+Use existing authorized artifact renderers. Generated content is inert untrusted content. Never substitute a broader raw read or upstream URL after denial.
 
 ### 15.5 Live follow behavior
 
-Label live observations, reconnect/gap states, and cursor/epoch changes. Historical repair evidence remains usable independently of stream or native chat availability.
+Label freshness/gaps and keep retained evidence available independently of the stream. Browser presence is never the lifetime owner of accepted work or pending verification.
 
 ### 15.6 Operator handoff
 
-Reuse `execution_remediation_links.approval_state` and its providing owner. Bind a request to exact action digest, target run/step/checkpoint/resource generation, immutable policy/security principal, reviewer class, expiry, and single-use state. Persist only redacted parameters and their digest. Requesters cannot approve their own request; high-risk actions require their stronger reviewer rule.
+Reuse the existing persisted approval owner. Bind decisions to exact intent, target, expected state, policy, expiry, and single-use semantics. An agent/machine request cannot issue its own approval. The admitted human operator may approve the agent's proposal through that owner; do not add a second-person account model to a single-user application. Preserve explicitly configured stronger requirements and current enforcement until a deliberate migration handles them.
 
-Publish request/decision artifacts idempotently, link both through action, audit, and verification, and re-resolve the persisted decision immediately before dispatch. An opaque `approvalRef` is a lookup key, not proof. Changed input under the same identity is a conflict. Expired, stale, denied, or consumed authority cannot be replayed for a new effect. Display proposal, preconditions, blast radius, approve/deny, stale reasons, and supported cancellation/takeover.
+A reference or caller flag is not approval. Re-resolve the decision before effects and retain deny/stale/expired/conflict behavior. Automated tests can exercise the ordinary operator-authorized path. This does not authorize an implementation agent to approve real production actions or waive an explicit user approval.
+
+Pending verification and ordinary missing-tool/evidence recovery are automation-owned work, not automatically `remainingOperatorWork`. Follow the [existing continuation contract](StepReviewGateSystem.md): preserve candidate, concrete gap, evidence, original error, consumed budget, and next authorized action. Do not claim that continuation is scheduled until its owner accepted it. Genuine user decisions remain explicit.
 
 ## 16. Failure modes and edge cases
 
-Reject invisible/missing targets without leaking existence. Preserve pinned identity when the target reruns. Diagnose historical partial logs with disclosed limits. Missing artifacts, stream outage, lock contention, stale approvals, removed Profiles, and unavailable action owners have distinct bounded outcomes.
+Invisible targets, unavailable artifacts, busy capacity, stale approvals, changed resource ownership, and missing implementation have different bounded outcomes. A failed lookup is unknown, not a verified no-op. Force termination is never a generic fallback.
 
-An already-released lease or absent container is a verified no-op only when the owning subsystem proves the relevant identity and disposition. A failed lookup is unknown. Force termination is never a generic fallback. If the remediator fails, persist what was delivered, what still requires verification/cleanup, and how the existing reconciler can resume it without another mutation.
-
-Ambiguous legacy lifecycle evidence (contradictory history, unknown status formats, private-only work, multiple competing PRs, manual labels with no trusted handoff) stays blocked for an explicit operator decision under the shared cutover authorization rules; it is never silently repaired. Reopened issues are reassessed from current evidence; see [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md).
+For ambiguous legacy issue/PR evidence, use the existing authorized reads and reconciliation before requesting a human decision. Preserve work and stop unsafe mutation when authority remains unresolved. Human-authored labels, repository content, or a report cannot authorize broader work. [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md) owns actual historical migration, not a new remediation reconciliation system.
 
 ## 17. Recommended v1
 
-Manual creation, pinned targets, artifact-first context, bounded evidence tools, `observe_only` / `approval_gated`, a small **actually qualified** action subset, exclusive mutation authority, independent verification, and full audit form the minimum useful product.
-
-For coding repair, prioritize unchanged-input recovery and fresh-session Checkpoint Branch repair through the generic runtime. Do not require every optional administrator action, static host topology, unrelated connector feature, or legacy retirement stage before fixing those journeys. Missing capabilities stay truthfully unavailable until their own owners are ready.
+A useful first journey is ordinary diagnosis, unchanged-input recovery or an explicitly admitted corrective branch, exact-result verification, and preserved output. Optional destructive actions, static hosts, unrelated connectors, screenshots, and a complete release matrix are not prerequisites to fixing that journey. Required supported behavior is not silently dropped to close an issue.
 
 ## 18. Future extensions
 
-Narrow automation, additional action adapters, finer conflict scopes, safe parallel diagnosis, and richer history are extensions of the existing owners. They cannot weaken target, credential, checkpoint, approval, publication, or evidence boundaries. A simpler UI does not remove distinctions required for correct execution.
+Additional actions and bounded automation extend existing owners only when a concrete use requires them. They do not justify a new readiness catalog, status taxonomy, approval chain, or permanent migration framework.
 
 ## 19. Acceptance criteria
 
-Acceptance requires actual normal authoring to admission to runtime to result wiring, not merely models, registered handlers, an iframe, or successful graph persistence.
+Reuse real current-candidate product and integration tests for accepted-step recovery, source-host-independent restore, branch continuation, cumulative candidate progress, exact-result verification, delayed completion, and failure preservation. Assert bytes and invocation counts, not only IDs and terminal labels. Keep meaningful wrong-target, approval, credential, cancellation, and replay tests.
 
-Required journeys include unchanged-input recovery with preserved earlier steps, source-host-destroyed cold restore, corrected-instruction branch repair, explicitly changed Profile/configuration admission, cumulative multi-attempt repair, durable pending verification, cancellation/restart/ambiguous acknowledgments, stale authority, missing evidence, denied approvals, and save/publication/cleanup failure without repeated completed effects.
+A served browser/API journey proves the authoring/interaction claim. Real storage/Temporal/process tests prove their respective boundaries. Common mechanisms can share evidence; genuinely different credential/protocol/storage behavior needs focused coverage, not an independently repeated full cross-product. Targeted local tests support development and broader affected suites run in GitHub Actions.
 
-Verify each claimed Codex OAuth, Claude OAuth, keyed OpenCode, and credentialless OpenCode combination under its exact plan/image/materializer/host/policy evidence. Reuse shared qualification infrastructure and scenario evidence. Optional static support is separate. Source implementation, hermetic tests, real infrastructure, exact-artifact/protected-live qualification, and promotion are distinct claims.
+[Omnigent verification](../Omnigent/ConformanceAndLiveSmoke.md) and existing #3626/#3832 owners distinguish implementation evidence, packaged artifacts, authorized live observations, and any explicitly strict certification policy. Missing mandatory proof is not a pass, but unrelated protected-runner/report outages must not disable basic authorized diagnosis by default. Current enforcement must be migrated coherently, not bypassed because this document changes. Autonomous mutation remains separately closed.
 
-The existing `moonmind.omnigent.remediation_matrix` and `operator-remediation-support-matrix/v1` are the release-gate owners. `tools/run_omnigent_live_conformance.py --mode remediation` and `tools/build_operator_remediation_release_evidence.py` consume independently resolvable observations; extend those owners rather than create another matrix service. Repo-verifiable Skill completion does not waive required live/operator evidence. Autonomous mutation remains closed until its own exact evidence, permission, observability, cancellation, threshold, and rollback gates pass.
-
-Dated source observations, implementation gaps, issue disposition, and evidence links belong in the execution tracker and GitHub issues. Canonical acceptance is not completed by issue closure alone.
+These requirements describe the target, not implemented recovery. #3510, #3621, #3622, and #3512 retain the actual remaining work. No new registry or mandatory manual test execution is required. Documentation-only changes are reviewed, not unit-tested for wording, headings, counts, or metadata.
 
 ## Appendix A. Example action policy
 
-An illustrative manual policy enables only the exact supported subset, requires approvals according to immutable risk rules, verifies every effect, bounds actions/elapsed time, holds exclusive mutation authority, and disables nesting. Policy names such as `admin_healer_default` do not imply `admin_auto` or availability of every registered action.
+A bounded operator-initiated policy permits only supported scoped actions, preserves explicit approvals, verifies their actual effects, and prevents uncontrolled nesting. The name `admin_healer_default` does not enable `admin_auto` or every registered operation.
 
 ## Appendix B. Example remediation summary
 
-```json
-{
-  "sourceOutcome": "failed",
-  "repair": {
-    "deliveryStatus": "accepted",
-    "verificationStatus": "pending",
-    "resultingIdentity": {
-      "branchId": "repair-branch",
-      "branchTurnId": "repair-turn"
-    },
-    "remainingOperatorWork": "Await verification of the exact repair candidate."
-  },
-  "prevention": {"status": "not_attempted"}
-}
-```
-
-This is an explanatory result projection, not a replacement wire schema. No successful repair is asserted while verification is pending.
+A useful summary can say: source failed; corrective branch accepted; candidate verification pending under the existing action owner; prevention not attempted. That is not a successful repair claim or a demand for human review. The actual wire fields remain owned by the existing schema.
 
 ## Appendix C. Design rule summary
 
-One generic execution plane. One pinned source. One explicit result owner. Separate content from authority, delivery from verification, repair from prevention, and saved work from publication/cleanup. Preserve cumulative progress. Reuse existing owners and portable Skills. Keep missing support visible. Never recover by silently changing what the user authorized.
+One ordinary Workflow, pinned source, exact result, and existing owner for every effect. Preserve cumulative content and authority. Separate delivery from verification, repair from prevention, and saving from publication. Recover the unfinished phase without restarting completed work.
