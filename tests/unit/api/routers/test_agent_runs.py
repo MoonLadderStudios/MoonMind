@@ -3156,6 +3156,21 @@ def test_list_session_resources_allows_operator_cross_owner_access() -> None:
     artifact_service = AsyncMock()
     app = _app_with_agent_and_session_routers(user, artifact_service)
 
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_stderr": _build_artifact("art_stderr", "runtime.stderr", label="stderr"),
+        "art_diag": _build_artifact("art_diag", "runtime.diagnostics", label="diagnostics"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+        "art_checkpoint": _build_artifact("art_checkpoint", "session.step_checkpoint", label="checkpoint"),
+        "art_control": _build_artifact("art_control", "session.control_event", label="control"),
+        "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
     with TestClient(app) as test_client:
         with patch(
             "api_service.api.routers.agent_runs.ManagedSessionStore.load",
@@ -3381,6 +3396,21 @@ def test_get_agent_run_artifact_session_projection_allows_operator_cross_owner_a
         is_superuser=False,
     )
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
+
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_stderr": _build_artifact("art_stderr", "runtime.stderr", label="stderr"),
+        "art_diag": _build_artifact("art_diag", "runtime.diagnostics", label="diagnostics"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+        "art_checkpoint": _build_artifact("art_checkpoint", "session.step_checkpoint", label="checkpoint"),
+        "art_control": _build_artifact("art_control", "session.control_event", label="control"),
+        "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
 
     with TestClient(app) as test_client:
         with patch(
