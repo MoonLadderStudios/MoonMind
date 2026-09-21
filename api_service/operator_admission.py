@@ -94,7 +94,10 @@ async def admit_websocket(websocket) -> OperatorAdmission:
 
     Only handshake headers and the connecting peer are consulted; URL
     query parameters are ignored entirely so token-in-URL reconnects
-    cannot acquire operator authority.
+    cannot acquire operator authority. The handshake is treated as
+    origin-sensitive (CORS does not protect WebSockets): a presented
+    foreign Origin/Referer is denied even though the upgrade itself is a
+    GET, so a page on a foreign origin cannot open the loopback socket.
     """
     headers = dict(websocket.headers)
     client_host = websocket.client.host if websocket.client else None
@@ -102,7 +105,10 @@ async def admit_websocket(websocket) -> OperatorAdmission:
         return resolve_operator_admission(
             client_host=client_host,
             host_header=headers.get("host"),
-            method="GET",
+            # WebSocket upgrades are origin-sensitive; validating as an
+            # unsafe method forces Origin/Referer checks that CORS alone
+            # would never provide for sockets.
+            method="POST",
             headers=headers,
         )
     except OperatorAdmissionError as exc:
