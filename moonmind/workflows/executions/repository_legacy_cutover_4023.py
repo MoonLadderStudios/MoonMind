@@ -40,10 +40,12 @@ from moonmind.workflows.executions.repository_contract import (
     REPOSITORY_POLICY_CONFLICT,
     REPOSITORY_ROUTE_CONFLICT,
     REPOSITORY_SETUP_REQUIRED,
+    RepositoryConnection,
     RepositoryIdentity,
     RepositoryRouteError,
     ScopedRouteCandidate,
     admit_scoped_route,
+    validate_scoped_connection_for_write,
 )
 
 LEGACY_CUTOVER_REQUEST_VERSION = "moonmind.repository-legacy-cutover-4023.v1"
@@ -352,6 +354,109 @@ def map_saved_target_to_connection(
     }
 
 
+def is_historical_reader_permitted(
+    *, recorded_before_cutover: bool, migrated_or_expired: bool
+) -> bool:
+    """Narrow historical-reader gate with a removal condition.
+
+    Readers survive only for recorded histories predating the #4023
+    cutover and disappear once those histories are migrated or expire.
+    They never grant new-write authority; new authenticated work must
+    use its admitted connection.
+    """
+
+    return bool(recorded_before_cutover and not migrated_or_expired)
+
+
+def enforce_typed_connection_for_new_write(connection: RepositoryConnection) -> None:
+    """Require a typed SecretRef/App credential for new writes.
+
+    Reuses ``validate_scoped_connection_for_write``: ``github_resolver``
+    ambient credentials are read-only history and cannot authorize new
+    scoped writes.
+    """
+
+    validate_scoped_connection_for_write(connection)
+
+
+def cutover_stop_if_incompatible(
+    *,
+    observed_bundle: str,
+    pinned_bundle: str,
+    action: str,
+    connection_ref: str,
+    backend_ref: str,
+) -> str:
+    """Stop an actually incompatible writer before cutover.
+
+    A SHA or patch difference alone is not incompatible; only a changed
+    tool bundle stops the affected operation. Never restores broad
+    discovery and never overwrites newer shared database work. Returns
+    the safe diagnostic for the permitted path.
+    """
+
+    if not is_worker_compatible(
+        observed_sha256="",
+        pinned_sha256="",
+        observed_version="",
+        pinned_version="",
+        observed_bundle=observed_bundle,
+        pinned_bundle=pinned_bundle,
+    ):
+        raise RepositoryRouteError(
+            REPOSITORY_ROUTE_CONFLICT,
+            cutover_diagnostic(
+                action=action,
+                connection_ref=connection_ref,
+                backend_ref=backend_ref,
+            ),
+        )
+    return cutover_diagnostic(
+        action=action,
+        connection_ref=connection_ref,
+        backend_ref=backend_ref,
+    )
+
+
+def decode_and_map_saved_history(
+    *,
+    repository: str,
+    branch: str | None,
+    recorded_digest: str,
+    connection_ref: str,
+) -> dict[str, Any]:
+    """Decode frozen history, then bind it to an explicit connection.
+
+    Preserves the recorded repository/branch/digest identity from the
+    frozen ``decode_legacy_repository_history_v1`` shape; only the
+    connection binding becomes explicit. Recoverable provenance gaps are
+    resolved from existing evidence (recorded name/branch/digest) before
+    requesting a real choice, so no mass reapproval or recreation.
+    """
+
+    from moonmind.workflows.executions.repository_contract import (
+        decode_legacy_repository_history_v1 as _decode,
+    )
+
+    frozen = _decode(repository, branch)
+    mapped = map_saved_target_to_connection(
+        repository_name=frozen.repository.name,
+        branch_name=frozen.branch.name,
+        recorded_digest=recorded_digest,
+        connection_ref=connection_ref,
+    )
+    if (
+        mapped["repositoryName"] != frozen.repository.name
+        or mapped["branchName"] != frozen.branch.name
+        or mapped["recordedDigest"] != str(recorded_digest or "").strip()
+    ):
+        raise RepositoryRouteError(
+            REPOSITORY_SETUP_REQUIRED,
+            "saved target identity was not preserved",
+        )
+    return mapped
+
+
 def _looks_like_token(value: str) -> bool:
     text = str(value or "").strip()
     if not text:
@@ -415,8 +520,12 @@ __all__ = [
     "CutoverMappingStore",
     "EffectiveLegacyReference",
     "cutover_diagnostic",
+    "cutover_stop_if_incompatible",
+    "decode_and_map_saved_history",
     "determine_effective_legacy_reference",
+    "enforce_typed_connection_for_new_write",
     "fail_selected_backend_without_fallback",
+    "is_historical_reader_permitted",
     "is_worker_compatible",
     "map_saved_target_to_connection",
     "require_explicit_allowlist_match",
