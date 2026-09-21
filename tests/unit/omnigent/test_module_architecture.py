@@ -955,8 +955,17 @@ SHARED_IMAGE_AUTHORITY_MODULES = (
 )
 SHARED_IMAGE_ENV = "OMNIGENT_SHARED_HOST_IMAGE_REF"
 
-# Compose topology is one file plus the test-only project file.
-ALLOWED_COMPOSE_FILES = ("docker-compose.yaml", "docker-compose.test.yaml", "docker-compose.development.yaml")
+# Compose topology is one file plus test-only project files, including the
+# operator-admission isolation topology (#4347) which never ships to
+# production (test scaffolding parsed by
+# tests/unit/security/test_operator_isolation_4347.py, not mounted in
+# api_service.main).
+ALLOWED_COMPOSE_FILES = (
+    "docker-compose.yaml",
+    "docker-compose.test.yaml",
+    "docker-compose.development.yaml",
+    "docker-compose.operator-admission-test.yaml",
+)
 
 _PROVIDER_LIFECYCLE_SUFFIXES = ("Coordinator", "Runtime", "Lifecycle", "Launcher")
 _PROVIDER_NAMES = ("Codex", "Claude", "OpenCode")
