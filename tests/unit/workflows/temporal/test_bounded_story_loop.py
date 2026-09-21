@@ -613,6 +613,37 @@ def test_zero_optional_and_failure_budgets_do_not_stop_before_consumption() -> N
     assert decision.reason == "verification_requested_remediation"
 
 
+@pytest.mark.parametrize(
+    ("recommended_next_action", "expected_state", "expected_reason"),
+    [
+        (None, "blocked", "no_determination"),
+        ("reattempt_current_step", "blocked", "no_determination"),
+        ("blocked", "blocked", "verification_requested_blocked"),
+        ("needs_human", "needs_human", "verification_requested_needs_human"),
+    ],
+)
+def test_no_determination_without_explicit_human_stop_is_blocked(
+    recommended_next_action: str | None, expected_state: str, expected_reason: str
+) -> None:
+    """MoonMind#4472: missing tools, low confidence, or recoverable=false must
+    not implicitly become needs_human. Only an explicit human decision does."""
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(
+            verdict="NO_DETERMINATION",
+            terminalDisposition="failed_with_remaining_work",
+        ),
+        budget=_budget(),
+        checkpoint_available=True,
+        policy_allowed=True,
+        recommended_next_action=recommended_next_action,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.state == expected_state
+    assert decision.reason == expected_reason
+
+
 def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
     failed = _attempt()
     assert failed.checkpoint_before_ref == "artifact://checkpoint/before"
