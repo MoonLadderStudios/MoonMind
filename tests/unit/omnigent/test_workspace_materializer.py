@@ -372,6 +372,136 @@ async def test_materializer_keeps_existing_authoritative_workspace(
 
 
 @pytest.mark.asyncio
+async def test_materializer_reapplies_commit_identity_to_existing_workspace(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """An existing workspace keeps a usable commit identity without a clone.
+
+    Retries reuse the attempt workspace, so clone-time identity never runs
+    for them. Materialization reapplies the resolved identity to the final
+    writable Git workspace without discarding preserved work.
+    """
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+
+    workspace_id = _workspace_id()
+    existing = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    (existing / ".git").mkdir(parents=True)
+    (existing / ".git" / "config").write_text(
+        '[core]\n\trepositoryformatversion = 0\n', encoding="utf-8"
+    )
+    (existing / "KEEP").write_text("x", encoding="utf-8")
+
+    async def fail_runner(argv):  # pragma: no cover - must not run
+        raise AssertionError("clone must not run for an existing workspace")
+
+    await OmnigentWorkspaceMaterializer(
+        command_runner=fail_runner, workspace_root=tmp_path
+    ).materialize(
+        _request(
+            {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": workspace_id,
+                    "relativePath": "repo",
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "main",
+            }
+        ),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+
+    assert (existing / "KEEP").read_text() == "x"
+    config = (existing / ".git" / "config").read_text(encoding="utf-8")
+    assert "repositoryformatversion = 0" in config
+    assert "Deployment Operator" in config
+    assert "operator@example.test" in config
+
+
+@pytest.mark.asyncio
+async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A checkpoint restore cannot leave a stale or missing commit identity.
+
+    An authoritative restore replaces the cloned ``.git/config`` and an
+    additive restore can overwrite it with the imported config, so the
+    resolved identity is reapplied after projection while restored work
+    is preserved.
+    """
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+
+    workspace_id = _workspace_id()
+    existing = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    (existing / ".git").mkdir(parents=True)
+    (existing / ".git" / "config").write_text(
+        '[core]\n\trepositoryformatversion = 0\n', encoding="utf-8"
+    )
+    (existing / "KEEP").write_text("x", encoding="utf-8")
+
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+        stale_config = (
+            b'[core]\n\trepositoryformatversion = 0\n'
+            b'[user]\n\tname = Stale Import\n\temail = stale@example.test\n'
+        )
+        member = tarfile.TarInfo(".git/config")
+        member.size = len(stale_config)
+        bundle.addfile(member, io.BytesIO(stale_config))
+        payload = b"implementation checkpoint\n"
+        member = tarfile.TarInfo("tracked.txt")
+        member.size = len(payload)
+        bundle.addfile(member, io.BytesIO(payload))
+
+    class Artifacts:
+        async def get_metadata(self, **_kwargs):
+            return SimpleNamespace(size_bytes=len(archive.getvalue())), []
+
+        async def read_chunks(self, **_kwargs):
+            return SimpleNamespace(), iter((archive.getvalue(),))
+
+    async def fail_runner(*_args, **_kwargs):  # pragma: no cover - must not run
+        raise AssertionError("existing authoritative checkout must not be cloned")
+
+    await OmnigentWorkspaceMaterializer(
+        command_runner=fail_runner,
+        workspace_root=tmp_path,
+        artifact_service=Artifacts(),
+    ).materialize(
+        _request(
+            {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": workspace_id,
+                    "relativePath": "repo",
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "main",
+                "workspaceCheckpointRestoreRef": "artifact://checkpoint",
+            }
+        ),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+
+    assert (existing / "tracked.txt").read_text() == "implementation checkpoint\n"
+    config = (existing / ".git" / "config").read_text(encoding="utf-8")
+    assert "Stale Import" not in config
+    assert "stale@example.test" not in config
+    assert "Deployment Operator" in config
+    assert "operator@example.test" in config
+
+
+@pytest.mark.asyncio
 async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount(
     tmp_path,
 ):

@@ -11,6 +11,7 @@ from moonmind.config.settings import settings
 from moonmind.omnigent.git_identity import (
     DEFAULT_GIT_USER_EMAIL,
     DEFAULT_GIT_USER_NAME,
+    ensure_workspace_git_identity,
     resolve_git_identity,
 )
 
@@ -89,3 +90,75 @@ def test_repo_local_resolved_identity_commits_without_global_configuration(
 
     author = _git(repo, "log", "-1", "--format=%an <%ae>", env=env)
     assert author.stdout.strip() == f"{name} <{email}>"
+
+
+def _identity_owner() -> tuple[int, int]:
+    import os
+
+    return os.getuid(), os.getgid()
+
+
+def test_ensure_workspace_git_identity_adds_user_section_preserving_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+
+    workspace = tmp_path / "repo"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / "config").write_text(
+        '[core]\n\trepositoryformatversion = 0\n', encoding="utf-8"
+    )
+    (workspace / "KEEP").write_text("x", encoding="utf-8")
+
+    uid, gid = _identity_owner()
+    assert ensure_workspace_git_identity(workspace, runtime_uid=uid, runtime_gid=gid)
+
+    assert (workspace / "KEEP").read_text() == "x"
+    config = (workspace / ".git" / "config").read_text(encoding="utf-8")
+    assert "repositoryformatversion = 0" in config
+    assert '"Deployment Operator"' in config
+    assert '"operator@example.test"' in config
+
+
+def test_ensure_workspace_git_identity_replaces_stale_imported_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An imported config cannot leave stale attribution behind."""
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+
+    workspace = tmp_path / "repo"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / "config").write_text(
+        '[core]\n\trepositoryformatversion = 0\n'
+        '[user]\n\tname = Stale Import\n\temail = stale@example.test\n'
+        '[remote "origin"]\n\turl = https://github.com/org/repo.git\n',
+        encoding="utf-8",
+    )
+
+    uid, gid = _identity_owner()
+    assert ensure_workspace_git_identity(workspace, runtime_uid=uid, runtime_gid=gid)
+
+    config = (workspace / ".git" / "config").read_text(encoding="utf-8")
+    assert "Stale Import" not in config
+    assert "stale@example.test" not in config
+    assert "https://github.com/org/repo.git" in config
+    assert '"Deployment Operator"' in config
+
+
+def test_ensure_workspace_git_identity_skips_non_git_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+
+    workspace = tmp_path / "plain"
+    workspace.mkdir()
+
+    uid, gid = _identity_owner()
+    assert (
+        ensure_workspace_git_identity(workspace, runtime_uid=uid, runtime_gid=gid)
+        is False
+    )
