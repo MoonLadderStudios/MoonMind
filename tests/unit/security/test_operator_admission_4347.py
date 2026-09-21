@@ -55,7 +55,8 @@ def test_local_loopback_admits_without_user_table(monkeypatch):
     assert isinstance(admission, oa.OperatorAdmission)
     assert admission.via == "loopback"
     # The boundary carries no person identity and never resolves one.
-    assert "user" not in admission.describe().lower() or True
+    assert admission.subject is None
+    assert "no application user" in admission.describe().lower()
 
 
 def test_local_non_loopback_denied_without_default_user(monkeypatch):

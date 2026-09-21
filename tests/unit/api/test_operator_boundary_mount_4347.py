@@ -46,20 +46,30 @@ def _admit_headers() -> dict:
 
 
 def test_main_app_mounts_operator_boundary():
+    """Production app exposes the shared primitive, not the demo stack.
+
+    The demonstration routers (status/control/artifacts/events/console)
+    are test scaffolding mounted explicitly in _app() below. Production
+    must not mount a parallel /operator/* API before the real workflow,
+    artifact, stream, and chat consumers migrate through the one shared
+    boundary (open #4347).
+    """
     import api_service.main as main_module
 
     openapi_paths = main_module.app.openapi()["paths"]
-    assert "/api/v1/operator/status" in openapi_paths
-    assert "/api/v1/operator/control" in openapi_paths
-    assert "/api/v1/operator/artifacts/{name}" in openapi_paths
-    assert "/api/v1/operator/events" in openapi_paths
-    # WebSocket routes are not part of OpenAPI: prove the mounted ws
-    # router object carries the console handshake route.
-    ws_paths = {
-        getattr(route, "path", "")
-        for route in main_module.operator_boundary_ws_router.routes
+    assert "/api/v1/operator/status" not in openapi_paths
+    assert "/api/v1/operator/control" not in openapi_paths
+    assert "/api/v1/operator/artifacts/{name}" not in openapi_paths
+    assert "/api/v1/operator/events" not in openapi_paths
+    # The shared primitive stays importable for real-consumer migration.
+    from moonmind.security import operator_admission as oa
+
+    assert callable(oa.resolve_operator_admission)
+    # Demonstration routers remain available as test scaffolding.
+    assert router.prefix == "/api/v1/operator"
+    assert {getattr(route, "path", "") for route in ws_router.routes} == {
+        "/console"
     }
-    assert "/console" in ws_paths
 
 
 def test_http_query_and_mutation_use_real_admission(monkeypatch):
@@ -119,6 +129,8 @@ def test_websocket_first_connection_and_reconnect(monkeypatch):
             try:
                 ws.receive_text()
             except Exception:
+                # The server closes with code 1000 after "close"; the client
+                # raises on the closed socket, which is the expected outcome.
                 pass
 
 
