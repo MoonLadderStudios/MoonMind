@@ -70,6 +70,61 @@ _PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
 _PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
 
+
+def push_env_from_bound_credential(
+    acquired: Any, *, base_env: dict[str, str] | None = None
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Build the git-push env from a bound credential (PAT or App).
+
+    Existing immediate publication consumes App-issued credentials through
+    this same path instead of a parallel App-only implementation: the token
+    enters ``GITHUB_TOKEN``/``GH_TOKEN`` inside the trusted ``use_now``
+    boundary with ``GIT_TERMINAL_PROMPT=0``, and the redaction tuple carries
+    the opaque value for ``run_command``. Server-held credentials stay
+    server-held; diagnostics must use the metadata-only binding.
+    """
+
+    captured: list[str] = []
+
+    def _capture(raw: bytes) -> None:
+        captured.append(bytes(raw).decode("utf-8", errors="strict").strip())
+
+    acquired.credential.use_now(_capture)
+    token = captured[0] if captured else ""
+    if not token or "\n" in token or "\r" in token:
+        raise ValueError("credential material is invalid")
+    env = dict(base_env or {})
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    env["GITHUB_TOKEN"] = token
+    env["GH_TOKEN"] = token
+    return env, (token,)
+
+
+def gh_env_from_bound_credential(
+    acquired: Any, *, base_env: dict[str, str] | None = None
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Build the deferred ``gh`` env projection from a bound credential.
+
+    Shares ``moonmind.auth.github_app.build_gh_env`` so the existing
+    CLI-PR fallback path consumes App credentials with the same
+    server-held/redaction contract as PAT.
+    """
+
+    from moonmind.auth.github_app import build_gh_env
+
+    holder: list[dict[str, Any]] = []
+
+    def _build(raw: bytes) -> None:
+        holder.append(build_gh_env(raw))
+
+    acquired.credential.use_now(_build)
+    projected = holder[0]
+    env = dict(base_env or {})
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    env.update(dict(projected.get("env") or {}))
+    return env, tuple(projected.get("redact") or ())
+
+
 class PublishService:
     """Service to publish changes to Git branches or Pull Requests."""
 
