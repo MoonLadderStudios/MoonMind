@@ -14,7 +14,7 @@
 
 Omnigent is the destination for one agent-runtime lifecycle behind Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
 
-This strategy revises the earlier exact-combination promotion and staged-retirement requirements. It does not claim that their current code has been removed. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for concrete historical interpretation. Old machinery is not a permanent requirement merely because it exists.
+This strategy revises the earlier exact-combination promotion and staged-retirement requirements. It does not claim that their current code has been removed. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for concrete historical interpretation. Old machinery is not a permanent requirement merely because it exists. Until the owning migrations land, `README.md` exact-qualification rules, `ContractOwnership.md` per-combination and staged-retirement assignments, and `SharedHostImage.md` §§5–6 remain the authoritative implemented contract for current behavior; this document states the desired target and must not be read as having already removed those controls.
 
 ## 1. Decision
 

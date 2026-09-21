@@ -79,8 +79,8 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 | --- | --- | --- |
 | `README.md` | Module entrypoint (new, #3962) | Current |
 | `ContractOwnership.md` | Ownership map (new, #3962) | Current |
-| `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion/retirement evidence-gated (#3832–#3835) |
-| `PrimaryRuntimeProviderStrategy.md` | Owner: selection/defaults/stages/gates; §§7–8 point to `SharedHostImage.md` | Canonical desired state, evidence-gated per combination |
+| `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion/retirement evidence-gated (#3832–#3835). Per-combination and staged-retirement assignments below remain authoritative for current behavior until the owning migrations land; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target |
+| `PrimaryRuntimeProviderStrategy.md` | Owner: selection/defaults/stages/gates; §§7–8 point to `SharedHostImage.md` | Desired simplification target; does not remove the implemented per-combination controls by itself |
 | `OmnigentHostOAuth.md` | Owner: materializer mechanisms; §§10–11 point to `SharedHostImage.md` | Current desired state |
 | `OpenCodeHost.md` | Owner: OpenCode runtime contract; §§1–3, 6 point to `SharedHostImage.md` | Current |
 | `OmnigentBridge.md` | Owner: transport and native UI contract | Design with open questions (§21); #3635 |
