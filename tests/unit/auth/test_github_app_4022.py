@@ -551,8 +551,8 @@ async def test_app_consumers_use_bound_http_git_gh_with_redaction() -> None:
 async def test_no_pat_fallback_and_no_app_lease_service() -> None:
     """Renewal keeps installation/repos/ops; no PAT fallback or lease service."""
 
-    import moonmind.auth.bound_acquisition as ba
-    import moonmind.auth.github_app as app_module
+    from moonmind.auth import bound_acquisition as ba
+    from moonmind.auth import github_app as app_module
 
     assert not hasattr(app_module, "AppLeaseService")
     assert not hasattr(app_module, "AppReceiptStore")

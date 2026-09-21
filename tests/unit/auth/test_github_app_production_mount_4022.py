@@ -463,7 +463,7 @@ def test_read_path_consumes_app_connection_with_bound_headers() -> None:
     ):
         # The production read path needs the factory's provider edge; the
         # App adapter seam is injectable, the HTTP assertions below are real.
-        import moonmind.auth.github_app_wiring as wiring
+        from moonmind.auth import github_app_wiring as wiring
 
         real_factory = wiring.build_bound_acquirer_for_connection
 
