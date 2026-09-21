@@ -82,6 +82,12 @@ async def resolve_github_credential(
     An explicitly passed-but-blank token (``""``/whitespace) is a distinct
     configured-empty state and fails closed instead of selecting ambient
     credentials (MoonLadderStudios/MoonMind#4007).
+
+    MoonLadderStudios/MoonMind#4023: historical input only. New
+    authenticated work must use its admitted repository connection via
+    ``moonmind.workflows.executions.repository_legacy_cutover_4023`` and
+    the scoped #4005/#4007 seams, never a search through unrelated
+    available credentials.
     """
 
     if explicit_token is not None and not str(explicit_token).strip():
