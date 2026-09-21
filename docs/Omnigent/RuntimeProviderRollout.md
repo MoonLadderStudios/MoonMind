@@ -1,190 +1,85 @@
 # Runtime-Provider Rollout Policy
 
-**Status:** Implemented
-**Document Class:** Module Contract Specification
-**Owners:** MoonMind Platform
-**Last updated:** 2026-09-04
-**Authority:** Per-combination rollout state, default selection, canary and rollback controls, migration status, and migration telemetry for the Omnigent primary-runtime program
+**Status:** Desired-state simplification with an implemented legacy contract still in use  
+**Document Class:** Module Contract Specification  
+**Owners:** MoonMind Platform  
+**Last updated:** 2026-09-21  
+**Authority:** Runtime selection and bounded transition under the primary-runtime strategy; not a permanent promotion platform
 
 ## Related documents
 
-- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
-- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
-- [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md)
-- [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md)
-- [`docs/Omnigent/CanonicalTurnCommandBoundary.md`](./CanonicalTurnCommandBoundary.md)
-- [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
-- [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
-- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+[Primary runtime strategy](PrimaryRuntimeProviderStrategy.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Canonical Turn Command Boundary](CanonicalTurnCommandBoundary.md), [Provider Profiles](../Security/ProviderProfiles.md), [Single-User Application Design](../SingleUserApplicationDesign.md), and [Docker Compose updates](../Steps/DockerComposeUpdateSystem.md).
 
 ## Advance organizer
 
-**One sentence:** One deployment-owned, versioned rollout policy decides — per exact runtime-provider combination — whether a target is a default for new work, an explicit-only choice, a labeled compatibility path, or unavailable, and every authoring and follow-up surface reads that one decision.
+Use one existing selection/admission boundary and the deployment's installed managed runtime. Preserve the operator's meaningful harness, Profile, model/cost/privacy, source, and publication choices. Do not maintain parallel Codex phases, qualification toggles, per-combination canaries, rollback controls, and independent schedule pins as permanent authorities for the same choice.
 
-**One paragraph:** `moonmind/omnigent/runtime_provider_rollout.py` owns the policy: a set of versioned rules that match a combination by field equality over thirteen exact compatibility dimensions plus its path class, and resolve one of seven rollout states. `moonmind/workflows/executions/runtime_target_selection.py` is the single selection and admission boundary every surface uses — Workflow Create, presets, schedules, edit, rerun, retry as a fresh execution, Checkpoint Branch, remediation, linked continuation, and any API or MCP submission. The trusted planner freezes the resolved decision into the immutable execution plan, so changing the live policy afterwards can never reinterpret an admitted execution or a Temporal history. Denial is always explicit: a missing, stale, unqualified, or rolled-back target names its reason and never silently becomes another harness, realizer, Provider Profile, host mode, or model.
+`moonmind/omnigent/runtime_provider_rollout.py` still implements the earlier policy at reviewed main `6fdaab848e8f9fd9c5279ea36186482cab05733d`. Its fields, states, and existing consumers must be migrated coherently rather than ignored. This document revises the target and retains enough compatibility context to interpret that implementation. It does not change executable behavior or authorize deployment. The [earlier complete contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/RuntimeProviderRollout.md) remains available for precise historical questions.
 
 ## 1. Identity: exact combinations
 
-A rollout decision is scoped to one **exact runtime-provider combination**. Every dimension is a required, non-empty, exact identity; a path that does not own a dimension records the explicit `not-applicable` sentinel rather than an empty string.
+The old `RuntimeProviderCombination` contains exact harness, implementation, Agent Profile compatibility, provider runtime/class, Host Class, runtime pack, materializer, launch policy, host mode, architecture, model class, realizer, and path-class values. Its combination digest and explicit `not-applicable` values retain their original meaning in recorded data.
 
-```text
-harnessId
-harnessImplementationRef
-agentProfileCompatibilityClass
-providerRuntimeId
-providerClass
-hostClassRef
-runtimePackRef
-credentialMaterializerRef
-launchPolicyRef
-hostMode
-architecture
-modelConfigurationClass
-executionRealizerRef
-pathClass
-```
+That hash is not the desired permanent compatibility policy. Actual required interfaces, isolation, credential handling, architecture, and requested capabilities determine whether an operation can run. A SHA, image digest, or patch change alone is not incompatibility. Do not replace exact build matching with a different all-fields fingerprint or broad major/minor equality rule.
 
-`compute_runtime_provider_combination_key` digests all fourteen values into
-
-```text
-omnigent-runtime-provider-combination:sha256:<digest>
-```
-
-Changing any single dimension produces a different combination key. There is no display-name, substring, or prefix routing anywhere in the resolver: `RolloutRule.matches` is field equality only.
-
-### Path classes
-
-```text
-generic_omnigent
-legacy_profile_bound_omnigent
-direct_compatibility
-```
-
-The path class is what makes "Codex via generic Omnigent", "Codex via legacy profile-bound Omnigent", and "Direct Codex compatibility" three distinct, independently governed rows even though the first two submit the same canonical `external/omnigent` identity.
+Keep artifact integrity and source-control concurrency checks. Historical observations must still identify exactly what ran. Removing a runtime-selection fingerprint does not authorize changing the selected account, ignoring a genuinely incompatible payload, or treating a corrupted artifact as valid.
 
 ### Authoring and diagnostic presentation
 
-Ordinary authoring exposes Runtime and one Profile selection. Execution
-configuration and rollout target are resolved subordinate values. Migration
-metadata must not introduce additional required authoring controls, including
-controls hidden behind Advanced mode. Runtime labels identify families; technical
-target labels belong in diagnostics and execution history.
-
-The Profile's pinned or unambiguous compatible configuration owns the harness.
-Neither rollout promotion nor catalog ordering can substitute another Profile
-or configuration. The Create request carries the displayed immutable configuration
-reference as an admission expectation. Admission re-resolves the Profile,
-validates that expectation, and freezes the exact rollout row from the compiled
-plan. An explicitly requested target must also agree with that plan; sharing
-`runtimeId=omnigent` alone is insufficient. Existing recorded plans retain their
-authority independently of changes to authoring defaults.
+Preserve the existing Runtime and one Profile authoring boundary. The Profile's account and meaningful execution choices determine its compatible resolved configuration. Internal target, harness descriptor, Host Class, and realizer are not additional mandatory controls. Displayed/submitted expectations must agree with actual admission, without forcing manual reconfiguration for every compatible installed-image update.
 
 ## 2. Rollout states
 
-| State | Offered as a new-work default | Offered as an explicit choice | Executes recorded authority |
-| --- | --- | --- | --- |
-| `disabled` | no | no | no |
-| `retired_for_new_work` | no | no | yes |
-| `direct_compatibility_only` | no | yes (labeled compatibility) | yes |
-| `explicit_only` | no | yes | yes |
-| `canary` | no | yes (cohort-gated) | yes |
-| `preferred` | yes | yes | yes |
-| `new_work_default` | yes | yes | yes |
+The earlier seven-state vocabulary remains readable while existing consumers require it:
 
-Two predicates express the difference, and callers use exactly one of them:
+| Recorded state | Earlier interpretation, not a new lifecycle to implement |
+| --- | --- |
+| `disabled` | No execution through that row. |
+| `retired_for_new_work` | Not offered for new authoring; recorded work may still use its supported execution path. |
+| `direct_compatibility_only` | Explicit labeled compatibility choice. |
+| `explicit_only` | Explicit choice, not an automatic default. |
+| `canary` | Explicit choice subject to the existing cohort rules. |
+| `preferred`, `new_work_default` | Eligible to be offered as a default under the existing policy. |
 
-- `state_admits_new_authoring` — may an authoring surface *offer* this row?
-- `state_admits_execution` — may a plan still compile and run on this row?
-
-`retired_for_new_work` differs on purpose: it is never offered for new authoring, but recorded authority stays executable so replay, rerun, cleanup, and active executions keep their recorded realizer.
+State names do not grant access, attest a host, or prove current support. Preserve original decode/decision semantics for retained histories. Do not add another set of replacement states just to simplify this table. New implementation should remove overlapping policy decisions through the existing resolver and retain only actual availability, explicit choice, and necessary compatibility behavior.
 
 ## 3. Rules and matching
 
-A `RolloutRule` carries a stable `targetId`, an operator-visible `label`, a `selector`, a `state`, a `generation`, optional support-evidence freshness requirements, an exact canary cohort, and whether the row is restorable as a legacy or direct default.
+The legacy resolver matches exact declared dimensions, uses `*` as its selector wildcard, and applies its existing specificity/order rules. An unmatched combination becomes `explicit_only` with `combination_not_registered`; that is a default-selection result, not independent execution authorization. Preserve the distinction while it has live consumers.
 
-A selector pins only the dimensions the deployment has qualified on; every other dimension carries the explicit `*` wildcard. Matching is deterministic: the rule with the most pinned dimensions wins, and declaration order breaks a tie. A rule may not declare a dimension outside the closed list above.
-
-### Unregistered combinations
-
-A combination no rule matches resolves to `explicit_only` with reason `combination_not_registered`. That is the fail-closed direction for a *default-selection* policy: a missing support row leaves the relevant path explicit rather than promoting it, and a newly registered harness stays launchable without a rollout edit while promotion remains policy-owned.
+The target does not require operator-authored rollout JSON to make ordinary supported work usable. Resolve the installed runtime and required capabilities through existing trusted inputs. Explicit unknown or incompatible choices remain actionable errors before effects, not opportunities to guess another runtime. Registration, temporary availability, and policy permission remain separate facts without another rule engine.
 
 ## 4. Built-in rows
 
-The built-in policy expresses this deployment's current qualification gates as one versioned document instead of scattered boolean checks.
+Existing rows distinguish generic Codex/Claude/OpenCode from legacy profile-bound and direct compatibility. They are implementation history, not six product choices or six permanent independent rollout programs.
 
-| `targetId` | Label | Path class | State |
-| --- | --- | --- | --- |
-| `codex.generic-omnigent` | Codex via generic Omnigent | `generic_omnigent` | `new_work_default` when `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED`, else `disabled` |
-| `codex.legacy-profile-bound-omnigent` | Codex via legacy profile-bound Omnigent | `legacy_profile_bound_omnigent` | `retired_for_new_work` once generic Codex is qualified, else `new_work_default` |
-| `claude.generic-omnigent` | Claude Code via generic Omnigent | `generic_omnigent` | `new_work_default` when `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED`, else `disabled` |
-| `opencode.generic-omnigent` | OpenCode via generic Omnigent | `generic_omnigent` | `new_work_default` when `MOONMIND_OMNIGENT_OPENCODE_ENABLED`, else `disabled` |
-| `codex.direct` | Direct Codex compatibility | `direct_compatibility` | `direct_compatibility_only` |
-| `claude.direct` | Direct Claude compatibility | `direct_compatibility` | `direct_compatibility_only` |
+Known qualification/default fields in current code must be reconciled with their actual consumers when removed. A release does not become usable merely by setting every legacy gate true. Conversely, a shipped compatible path should not require several redundant manual toggles or fresh unrelated live evidence because its patch-level artifact changed.
 
-These six rows distinguish execution paths in admission, diagnostics and history.
-They are not six authoring choices. A friendly target label never becomes a
-runtime-family label or a new runtime id: the first four rows remain within
-`omnigent`, while the last two retain their direct provider runtime ids.
-
-The `State` column is the *authored* state. A promoted row becomes a product default for an execution only when the readiness gate in section 5 also passes for that execution's exact combination.
+No current or historical path is relabeled generic by editing a document. The selected realizer and recorded evidence remain accurate. Retain a direct/static/profile-bound path only for an actual supported consumer during its bounded transition.
 
 ## 5. Fail-closed readiness
 
-A `preferred`, `new_work_default`, or `canary` state is demoted to `explicit_only` with an exact reason when any required input is missing:
+Required operator/resource authority, credential use, safe workspace preparation, and actual runtime capability are enforced at their owning boundary. Missing security or execution prerequisites cannot become a pass. Avoid repeating the same checks in several controllers or mistaking a generic failure for a version mismatch.
 
-```text
-support_evidence_missing
-support_evidence_stale
-target_not_launch_ready
-model_not_qualified
-architecture_unsupported
-host_mode_unavailable
-provider_profile_unavailable
-rollout_canary_cohort_excluded
-```
+Separate a supported-but-busy Profile from an unsupported configuration and an unavailable observation. Advisory catalog/probe refresh failure should preserve valid choices and drafts, not erase configuration or invent denial. Actual controlled actions still perform their required current checks. Bounded waits/retries stay with the existing owner and cannot change identity or billing policy.
 
-Every rule requires support evidence by default (`requiresSupportEvidence: true`) — the built-in rows included — so a promotion without evidence fails closed. Every denial reason is drawn from the closed `RolloutReason` vocabulary, and the UI shows it verbatim next to only the explicitly valid alternatives.
-
-The readiness inputs (`RolloutSelectionContext`) are supplied at plan compilation by `compile_execution_plan`, from the immutable objects that compilation already resolved: the deployment's declared canary cohorts, the Agent Profile snapshot, the single bound Provider Profile, the harness implementation, Host Class, launch policy, qualified model id, architecture, host mode, and the support evidence backing the plan's exact support combination. Evidence provenance is read through `resolve_support_evidence_freshness`, which consults the same tiers, in the same order, on the same matching identity that admission uses (`MOONMIND_OMNIGENT_EVIDENCE_POLICY`), so a rollout demotion never disagrees with what admission will accept. That read is an observation only; admission authority stays with `resolve_execution_evidence`, which fails closed.
-
-Readiness demotion changes the *rollout state frozen into the plan*, not whether the execution runs: a demoted row is still `explicit_only`, so recorded and explicitly-authored work keeps executing while the combination stops being a product default. The authoring catalog reports the rollback-adjusted state without a per-execution readiness context, so an operator-visible default is a policy statement and a frozen plan record is an evidence statement.
+The legacy readiness path can demote a promoted row to `explicit_only`. That state must not be mistaken for complete qualification or for a default that applies to every caller. Simplification removes redundant promotion checks, not meaningful authentication, supported-interface, or resource constraints.
 
 ## 6. Canary cohorts
 
-`RolloutCohort` carries an exact allowlist per dimension:
+Exact canary allowlists are an existing migration feature, not a steady-state requirement for a single-operator installation. Do not extend their dimensions, build a cohort dashboard, or require a canary for unrelated removal of dead configuration.
 
-```text
-ownerCohorts
-agentProfileRefs
-providerProfileRefs
-harnessImplementationRefs
-hostClassRefs
-launchPolicyRefs
-models
-architectures
-hostModes
-```
-
-An empty tuple means the dimension is unrestricted. A non-empty tuple admits only the listed exact values; anything else — including a missing observation — is excluded with `rollout_canary_cohort_excluded`. There is no partial or fuzzy cohort match.
+When a real rollout risk warrants a targeted rehearsal, use the existing CI or authorized deployment operation and record its actual outcome. Evidence for a different credential/protocol boundary does not automatically qualify another. Shared production code can share representative evidence without a permanent all-combination matrix.
 
 ## 7. Rollback controls
 
-Six independently-operable controls change **future admission only**. None transfers ownership of an active execution, rewrites recorded plan authority, or substitutes another runtime for a denied selection.
+The earlier controls stop generic Codex, generic Claude, OpenCode shared-image, native chat, or all Omnigent admissions, or explicitly restore a declared legacy/direct default. They affect future decisions and do not rewrite an active session. Existing explicitly set safety stops must not disappear during migration or silently re-enable work.
 
-| Control | Effect |
-| --- | --- |
-| `stop_new_generic_codex_admission` | Disables the `codex-native` × `generic_omnigent` row |
-| `stop_new_generic_claude_admission` | Disables the `claude-native` × `generic_omnigent` row |
-| `stop_new_opencode_shared_image_admission` | Disables the `opencode-native` × `generic_omnigent` row |
-| `restore_legacy_or_direct_default` | Demotes promoted generic rows to `explicit_only` and promotes every explicitly supported legacy/direct row (`legacyDefaultRestorable`) to `new_work_default` |
-| `disable_native_interactive_chat` | Blocks new interactive native chat; historical reads, diagnostics, and evidence are untouched |
-| `stop_all_new_omnigent_work` | Disables every Omnigent-backed row (generic and legacy) without promoting any direct row |
-
-Control matching is by exact harness identity and path class — never by display name or runtime substring. Stopping generic admission does **not** implicitly restore a legacy default: that is the separate, explicit `restore_legacy_or_direct_default` control, and `restore_legacy_or_direct_default` promotes a row only when that row is declared restorable. Unknown control names fail fast.
+The target reuses actual pause/cancel/operation controls and one deployment repair path instead of six migration-specific switches plus a second rollback engine. A stop does not authorize selecting another account or runtime. Rollback to an older installation is a separately authorized operation subject to real data/schema/history compatibility, not automatic restoration of broad fallback behavior.
 
 ## 8. Frozen execution authority
 
-`compile_execution_plan` resolves the decision for the exact combination it realizes and freezes the compact record into `OmnigentExecutionPlanPayload.runtimeProviderRollout`:
+The existing v1 field `OmnigentExecutionPlanPayload.runtimeProviderRollout` records the earlier admission decision. Its representative shape remains:
 
 ```json
 {
@@ -199,100 +94,65 @@ Control matching is by exact harness identity and path class — never by displa
 }
 ```
 
-The frozen `state` is what the readiness gate in section 5 resolved for *this* plan, not the policy's authored state: a promoted row whose support evidence is missing or lapsed freezes as `explicit_only` with `support_evidence_missing` or `support_evidence_stale`, and the same decision emits `omnigent_migration_support_evidence_denial`.
+This is historical/transition context, not a new request schema or an instruction to keep writing migration fields forever. Original omission and hashing rules remain with the actual loader. Do not retroactively add fields or recompute old hashes. Remove new-write dependence on obsolete metadata only with its real producers/readers, using the existing versioned boundary where necessary rather than a duplicate plan type.
 
-The field is optional for replay compatibility with plans admitted before this contract existed, and it is dropped from the canonical payload bytes when absent, so a historical plan keeps its original digest. New admissions always populate it.
-
-The plan's recorded `executionRealizerRef` and its recorded rollout row always agree, so Workflow Detail and audit evidence show one truthful selected path.
+Already-started attempts retain the identity, meaning, and evidence of what they ran. A fresh admitted recovery can use a compatible installed runtime while preserving meaningful choices and saved work. Restored content never restores old leases, credentials, or approval to repeat effects. Actual replay-sensitive command changes still require appropriate evidence or a controlled transition.
 
 ## 9. Shared selection and admission boundary
 
-`resolve_runtime_target_selection` is the one entry point. Its `AuthoringSurface` vocabulary is closed:
-
-```text
-workflow_create        preset_expansion       schedule
-schedule_occurrence    edit                   rerun
-retry_as_fresh_execution                      checkpoint_branch
-remediation            linked_continuation    api_submission
-mcp_submission         worker_normalization   dashboard_config
-```
-
-A source-kind difference changes policy and evidence. It never creates a second default resolver, and the boundary reads no environment variables of its own.
+`resolve_runtime_target_selection` in `runtime_target_selection.py` remains the integration point for Create, presets, schedules, edits/reruns, fresh retries, Checkpoint Branches, remediation, continuation, API/MCP, worker normalization, and dashboard projections. Remove redundant providers/defaults there rather than build another selector.
 
 ### Recorded authority
 
-`edit`, `rerun`, and `linked_continuation` preserve their recorded target unless the caller passes `upgrade_to_qualified_target=True`. A recorded target that is no longer registered or no longer authorable stays visible with `available=False` and `replacement_required=True`; it never silently becomes a different harness, profile, model, policy, Host Class, runtime pack, materializer, or realizer. `retry_as_fresh_execution` is new work and takes the promoted target. `schedule_occurrence` is new work on every firing and takes the promoted target; a schedule never pins a runtime-provider target of its own.
+Existing recorded-target and explicit-upgrade behavior must remain interpretable for its real consumers. A stale display response cannot override a selected Profile. When a current path is genuinely unavailable or incompatible, report the affected choice and supported correction. Do not silently switch realizer, account, source, model, host-mode constraint, or publication intent.
+
+Preserving historical truth does not require permanently pinning incidental image or rollout generations for new work. Identify which fields express an operator choice and which merely record the old installed implementation before migrating them.
 
 ### Schedules
 
-Every schedule occurrence resolves the current promoted default at launch time, exactly like ad-hoc work. There is one runtime-provider authority for the whole deployment — schedules cannot pin a different target, policy version, or image from the rest of the app. `target.runtimeProviderTarget` on a schedule definition is historical evidence of what the last occurrence used, never launch authority for the next one. The former `target.runtimeProviderTargetUpdatePolicy` (`pinned` / `follow_qualified_default`) is removed: its only remaining behavior is the old `follow_qualified_default`, now unconditional. Already-started occurrences retain their immutable inputs.
+New occurrences follow installed managed runtime selection with their authored harness/Profile, model/cost/privacy, source, and publication intent preserved. Schedules do not have an independent runtime-provider target or image authority. The earlier `runtimeProviderTargetUpdatePolicy` is not restored. Historical target metadata describes past resolution, not permission to ignore current admission.
+
+Keep schedule identity, cadence, paused state, and other explicit choices. Do not recreate or reapprove every schedule on a patch update. Already-started occurrences keep their recorded inputs. A genuine incompatible configuration requires the existing bounded migration/correction, not an unbounded catch-up burst or automatic intent change.
 
 ## 10. Operator-visible migration status
 
-`GET /api/omnigent/runtime-provider-migration` (permission `settings.catalog.read`) returns, per combination: rollout state and generation, current default status, exact Agent Profile compatibility class, Host Class, runtime pack, materializer, launch policy, host mode, architectures, and realizer; the newest deployment-qualified and protected-live evidence with its age and expiry; the last successful protected (canary) run; bounded recent outcome counters; applicable and active rollback controls; and compatibility-path status.
+The existing `/api/omnigent/runtime-provider-migration` projection is a transition consumer. Preserve any real caller while migrating it, then remove or fold redundant presentation into existing Settings/diagnostics. Do not add another dashboard or require every internal rollout field to remain a product feature.
 
-The projection deliberately excludes credentials, provider-session ids, raw host paths, host image digests, and internal endpoint authority. A migration status reader needs support state, not launch authority.
+Useful diagnostics show the selected path, required capability/setup problem, actual operation state, original error, and available evidence. Operator admission and scoped machine/resource restrictions apply without a human role matrix. Metadata access never confers launch authority, and raw credentials or private runtime state must not enter ordinary reports.
 
 ## 11. Migration telemetry
 
-Eleven bounded families live in the one Omnigent metric registry (`moonmind/omnigent/control_plane/metrics.py`):
+Existing bounded telemetry is observational. Its failure must not change selection, execution, save outcome, or cleanup. Keep useful existing measurements and remove obsolete migration families when their consumers disappear. Eleven metric families, exact label inventories, and independent per-combination dashboards are not acceptance requirements.
 
-```text
-omnigent_migration_selected_path                    harness_class, realizer_class, selection_source
-omnigent_migration_rollout_state                    harness_class, realizer_class, rollout_state
-omnigent_migration_launch_readiness                 harness_class, readiness
-omnigent_migration_support_evidence_denial          harness_class, denial_reason
-omnigent_migration_provider_profile_wait_seconds    harness_class
-omnigent_migration_host_latency_seconds             harness_class
-omnigent_migration_first_turn_latency_seconds       harness_class
-omnigent_migration_followup_availability            harness_class, followup_kind, availability
-omnigent_migration_cleanup_outcome                  harness_class, cleanup_outcome
-omnigent_migration_fallback_denied                  harness_class, denial_reason
-omnigent_migration_rollback_activation              rollback_control
-```
-
-Every label value is drawn from a closed vocabulary; an out-of-vocabulary value collapses to `other` and a missing one to `unknown`. No user, workflow, run, session, binding, provider-session, host, runner, profile, credential, repository, or workspace identity may appear — the registry rejects those keys at registration and at record time. `harness_class` is an exact-id lookup, so a new harness collapses to `unregistered` rather than joining another class.
-
-Each family has exactly one production owner, and every call site records through the recorder helpers beside `record_runtime_target_selection` so no site can derive its own `harness_class` or introduce an unbounded label:
-
-| Family | Emitted by |
-| --- | --- |
-| `selected_path`, `rollout_state`, `fallback_denied`, `rollback_activation` | the shared selection and admission boundary, on every authoring surface |
-| `support_evidence_denial` | `compile_execution_plan`, where the readiness demotion is decided |
-| `launch_readiness`, `host_latency_seconds`, `first_turn_latency_seconds`, `provider_profile_wait_seconds`, `cleanup_outcome` | the generic Omnigent host realizer's execution lifecycle |
-| `followup_availability` | the shared canonical-turn delivery wrapper, for every non-`initial` turn source |
-
-`launch_readiness` reports `ready` only for an attested ready host; a session that fails afterwards is not a launch failure. `cleanup_outcome` reports `completed_clean` or `cancelled_clean` only when this owner durably reached the cleaned state; an unreleased outcome stays `cleanup_pending` for the janitor and is reported as `leaked` or `cancelled_incomplete`.
-
-Telemetry is never authority: every emitter records inside a guard (`record_safely` at the lifecycle call sites, the selection boundary's own guard around its block), so a registry, label, or exporter failure cannot change which target was selected, whether a host launched, or how an execution settled.
+Use existing logs and operation records for basic diagnosis. No LLM, metrics exporter, or perfectly current projection is required to read the original failure or recover through the independent deployment owner. Do not build a new telemetry system before deleting unused code.
 
 ## 12. Configuration
 
-| Variable | Purpose |
-| --- | --- |
-| `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLOUT` | Complete deployment-owned policy document (JSON). Invalid configuration fails fast rather than silently reverting to the built-in policy. |
-| `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK` | Comma-separated rollback control list. Unknown values fail fast. |
-| `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_CANARY_COHORTS` | Comma-separated cohort membership for this deployment. |
-| `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED` | Promotes the built-in generic Codex row. |
-| `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED` | Promotes the built-in generic Claude row. |
-| `MOONMIND_OMNIGENT_OPENCODE_ENABLED` | Keeps the built-in generic OpenCode row promoted. |
+The reviewed deployment still exposes the legacy Codex phase/deployed-phase fields and the runtime-provider rollout, rollback, cohort, and qualified/enabled inputs. These are active implementation inputs until coherently migrated, not the desired first-run form.
 
-Omitting every variable exercises the same production path as setting its documented default: the built-in policy is the default policy, and the default runtime id resolves through the same boundary Workflow Create uses.
+#3941 and the runtime-transition owner remove duplication from actual Compose, shell, and application consumers. Keep bootstrap values at the deployment boundary, Preferences in the existing Settings resolver, and Secrets/Profiles separate. Do not move database connectivity into the database or invent a required value the installation can derive.
+
+An unambiguous obsolete value may be migrated once or reported as an unused warning. A conflicting security-sensitive setting must not silently disappear. Preserve explicit stops and real operator choices. No permanent startup census, blanket failure on harmless aliases, or fallback to a different credential source is required.
 
 ## 13. Rollback runbook
 
+The six rollback controls in §7 remain wired through `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK` (see `.env-template`), `docker-compose.yaml`, and `moonmind/omnigent/runtime_provider_rollout.py`, and they affect future admission only. Until their consumers are migrated, retain this control-specific procedure; the [portable deployment controller](../Steps/DockerComposeUpdateSystem.md) owns general deployment repair, not these per-harness steps:
+
 1. Read `GET /api/omnigent/runtime-provider-migration` and confirm the affected combination's `targetId`, `rolloutState`, `rolloutGeneration`, and `applicableRollbackControls`.
-2. Set `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK` to the narrowest control that covers the incident. Prefer one per-harness control over `stop_all_new_omnigent_work`.
+2. Set `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK` to the narrowest control that covers the incident. Prefer one per-harness control (`stop_new_generic_codex_admission`, `stop_new_generic_claude_admission`, or `stop_new_opencode_shared_image_admission`) over `stop_all_new_omnigent_work`.
 3. If new work must keep flowing on a compatibility path, add `restore_legacy_or_direct_default` explicitly. Stopping generic admission alone fails closed by design.
 4. Restart the API and worker services so the new policy is read.
 5. Confirm in the migration status view that `activeRollbackControls` lists the control and the affected rows report the expected `defaultStatus`.
 6. Active executions keep running under their recorded plan and realizer. Historical reads, replay, artifacts, and cleanup are unaffected in every mode.
 
+A bounded maintenance window can stop incompatible new writers while actual old work is completed or drained. This document does not introduce another runbook engine or authorize any live operation.
+
+Retirement evidence is proportional to the component: actual active session/credential/cleanup uses, necessary replay/reset support, and required data preservation must be resolved. Missing visibility is unknown, not permission to delete. A dead alias or unused reader does not require every live-provider criterion or nine separate removal stages.
+
+Use existing records, observations, and tests for the affected deployment. Independent installations are observed separately, not treated as a shared fleet. Remove redundant code, controls, and obsolete assertions with their consumers. Delete the empty retirement framework when it no longer has a real job. Do not delete histories, profile-owned OAuth homes, or the only recoverable workspace to make a gate pass.
+
 ## 14. Non-goals
 
-- Removing direct or legacy implementation code. Retirement is separately gated.
-- Transferring an active session between realizers.
-- Making unsupported combinations available for consistency.
-- Turning Provider Profiles into multi-runtime objects.
-- Treating an installed binary or image build as support evidence.
-- Reimplementing the canonical turn path owned by the canonical turn-command boundary.
+No new policy/retirement registry, compatibility fingerprint, event/state service, permanent candidate/retained fleet, account model, or per-harness lifecycle. No universal manual approval or live-canary prerequisite for all cleanup. No silent authority substitution or weakening of required security and history behavior.
+
+Implementation changes retain focused behavior/replay tests and use existing broader GitHub Actions. Prose, headings, phase counts, and registry-row inventories are not unit-test targets. Report current implementation, desired behavior, candidate CI, and any pending live observations distinctly. A documentation PR does not certify that the transition has shipped.
