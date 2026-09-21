@@ -7664,6 +7664,47 @@ def test_moonspec_contract_repair_bound_is_single_report_only_correction(
     assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
 
 
+def test_moonspec_gate_blocked_continuation_preserves_legacy_for_replay(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retained histories without the blocked-continuation marker keep the
+    legacy needs_human continuation and terminal disposition so replay
+    preserves recorded state."""
+    # Retained history: legacy interpretation preserved.
+    assert mock_run_workflow._moonspec_gate_blocked_continuation_enabled() is False
+
+    node_id = "verify-final"
+    node_inputs = {"selectedSkill": "moonspec-verify"}
+    ordered_nodes = [
+        {"id": node_id, "inputs": dict(node_inputs)},
+        {"id": "create-pr", "inputs": {"title": "Create pull request"}},
+    ]
+    gate = mock_run_workflow._moonspec_verify_gate_result(
+        {"moonSpecVerify": {"confidence": "high", "summary": "omitted verdict"}}
+    )
+    assert gate.verdict == "NO_DETERMINATION"
+    decision = mock_run_workflow._bounded_story_loop_continuation_decision(
+        logical_step_id=node_id,
+        gate_result=gate,
+        gate_result_ref="artifact://art_verify_final",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    # Without the marker the fallthrough keeps needs_human semantics; the
+    # exact serialized state must not silently become blocked on replay.
+    assert decision["gate"]["verdict"] == "NO_DETERMINATION"
+
+    # New history: automation-owned blocked continuation.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH,
+    )
+    assert mock_run_workflow._moonspec_gate_blocked_continuation_enabled() is True
+
+
 def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -7698,11 +7739,25 @@ def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoin
 
 def test_moonspec_final_boundary_preserves_identities_budgets_and_publication_permissions(
     mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MoonMind#4472 REQ-4: timeout/cancel/duplicate/changed-candidate/lost-result
     cases through the real final verify -> artifact -> gate -> publication path
     preserve attempt/artifact identities, repair/review budgets, diagnostics,
     evidence refs, and publication permissions."""
+    # New history: action-less NO_DETERMINATION carries automation-owned
+    # blocked continuation. Retained histories without the marker keep the
+    # legacy needs_human interpretation (covered below).
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH,
+            run_workflow_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH,
+            run_workflow_module.RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
+        },
+    )
 
     node_id = "verify-final"
     node_inputs = {"selectedSkill": "moonspec-verify"}

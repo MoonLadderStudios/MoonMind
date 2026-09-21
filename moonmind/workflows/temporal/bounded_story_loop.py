@@ -842,6 +842,7 @@ def evaluate_attempt_continuation(
     checkpoint_available: bool,
     policy_allowed: bool,
     recommended_next_action: str | None = None,
+    blocked_continuation_enabled: bool = True,
 ) -> LoopStopDecision:
     if not policy_allowed:
         return _stop(
@@ -937,10 +938,16 @@ def evaluate_attempt_continuation(
     # (missing tools, low confidence, recoverable=false) carries the
     # automation-owned blocked handoff with a concrete recovery reason.
     # Explicit needs_human/blocked stops are honored above and never reach
-    # this fallthrough.
+    # this fallthrough. Retained histories without
+    # RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH keep the legacy
+    # NEEDS_HUMAN interpretation so replay preserves recorded state.
     return _stop(
         attempt,
-        state=LoopStopState.BLOCKED,
+        state=(
+            LoopStopState.BLOCKED
+            if blocked_continuation_enabled
+            else LoopStopState.NEEDS_HUMAN
+        ),
         reason="no_determination",
         remaining_work_ref=gate.remaining_work_ref,
         diagnostics_ref=gate.diagnostics_ref,
