@@ -13,10 +13,14 @@ data-conversion entrypoint in
 ``api_service/services/single_user_conversion.py``). The digest unique
 constraint is the mutual-exclusion and idempotency enforcement: a rerun
 with the same digest replays the recorded result instead of duplicating
-work, and a concurrent apply against an ``in_progress`` row fails closed.
+work, and a concurrent apply without a completed winner fails closed.
 ``result_json`` carries only sanitized dispositions (counts, reason
 codes, redacted identifier prefixes) — never credentials or resource
-content.
+content. Only completed conversions are recorded: interruption before
+the single commit leaves nothing behind so a retry converges, and a
+stale ``in_progress`` row from an older revision is reclaimed only
+while holding the conversion-wide claim (which proves no live writer
+exists), never by stealing a live writer.
 
 No existing table, column, constraint, or historical revision is
 altered; user rows, ownership records, secrets, and all existing
