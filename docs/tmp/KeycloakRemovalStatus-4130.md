@@ -123,8 +123,9 @@ qualification.
 
 ## Plan lifecycle
 
-[KeycloakRemovalPlan.md](./KeycloakRemovalPlan.md) stays at
-`Status: Proposed` until execution is complete. Clean it up only then:
-retain the accepted contracts in AuthenticationContracts and its adapter
-companion, resolve backlinks, and archive or remove the temporary plan.
-Do not erase necessary operator upgrade guidance prematurely.
+[KeycloakRemovalPlan.md](./KeycloakRemovalPlan.md) is a superseded scoped
+legacy retirement reference; its account-replacement execution is not
+required. Retain the accepted contracts in AuthenticationContracts and its
+adapter companion, resolve backlinks, and archive or remove the temporary
+plan once its remaining backlinks and real recovery consumers have another
+home. Do not erase necessary operator upgrade guidance prematurely.
