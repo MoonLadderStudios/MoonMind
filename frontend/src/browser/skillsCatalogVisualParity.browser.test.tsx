@@ -56,11 +56,13 @@ function skillsPayload(): BootPayload {
 
 function renderCatalog() {
   return renderWithClient(
-    <MemoryRouter initialEntries={['/skills']}>
-      <Routes>
-        <Route path="/skills" element={<SkillsPage payload={skillsPayload()} />} />
-      </Routes>
-    </MemoryRouter>,
+    <main className="dashboard-root">
+      <MemoryRouter initialEntries={['/skills']}>
+        <Routes>
+          <Route path="/skills" element={<SkillsPage payload={skillsPayload()} />} />
+        </Routes>
+      </MemoryRouter>
+    </main>,
   );
 }
 
@@ -96,6 +98,64 @@ function alphaOf(color: string): number {
   const parts = components.split(',').map((part) => part.trim());
   if (parts.length === 4) return Number(parts[3]);
   return 1;
+}
+
+function parseRgb(color: string): [number, number, number] | null {
+  const rgb = color.match(/rgba?\(([^)]+)\)/);
+  if (rgb?.[1]) {
+    const parts = rgb[1].split(',').map((part) => part.trim());
+    const r = Number(parts[0]);
+    const g = Number(parts[1]);
+    const b = Number(parts[2]);
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return [r, g, b];
+    return null;
+  }
+  const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+  if (hex) {
+    const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+    return [
+      Number.parseInt(full.slice(0, 2), 16),
+      Number.parseInt(full.slice(2, 4), 16),
+      Number.parseInt(full.slice(4, 6), 16),
+    ];
+  }
+  return null;
+}
+
+function relativeLuminance(color: string): number {
+  const rgb = parseRgb(color);
+  if (!rgb) return Number.NaN;
+  const linear = rgb.map((channel) => {
+    const s = channel / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * (linear[0] as number) + 0.7152 * (linear[1] as number) + 0.0722 * (linear[2] as number);
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const fg = relativeLuminance(foreground);
+  const bg = relativeLuminance(background);
+  if (!Number.isFinite(fg) || !Number.isFinite(bg)) return Number.NaN;
+  const [lighter, darker] = fg >= bg ? [fg, bg] : [bg, fg];
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function effectiveBackground(element: HTMLElement): string {
+  let current: HTMLElement | null = element;
+  while (current) {
+    const bg = getComputedStyle(current).backgroundColor;
+    if (bg && alphaOf(bg) > 0.9 && parseRgb(bg)) return bg;
+    current = current.parentElement;
+  }
+  const bodyBg = getComputedStyle(document.body).backgroundColor;
+  if (bodyBg && parseRgb(bodyBg) && alphaOf(bodyBg) > 0.9) return bodyBg;
+  return 'rgb(255, 255, 255)';
+}
+
+function expectLegible(foreground: string, background: string, what: string) {
+  const ratio = contrastRatio(foreground, background);
+  expect(Number.isFinite(ratio), `${what} colors must be parseable: ${foreground} on ${background}`).toBe(true);
+  expect(ratio, `${what} contrast ${ratio.toFixed(2)}:1 (${foreground} on ${background})`).toBeGreaterThanOrEqual(4.5);
 }
 
 function expectTransparent(color: string, what: string) {
@@ -134,6 +194,14 @@ describe('skills catalog visual parity (MoonLadderStudios/MoonMind#3346)', () =>
     const slab = table.closest('.data-table-slab') as HTMLElement | null;
     expect(slab).toBeTruthy();
 
+    // Wait for the catalog rows to resolve: the table renders immediately
+    // with a single loading row while the query is in flight, so capturing
+    // rows straight after the table appears can observe only that row.
+    await screen.findByText('Speckit Orchestrate');
+    await waitFor(() => {
+      expect(table.querySelectorAll('tbody tr').length).toBeGreaterThanOrEqual(REPRESENTATIVE_SKILLS.length);
+    });
+
     const tableStyle = getComputedStyle(table);
     // The table element itself stays transparent: the generic `table` rule
     // paints a panel fill, which would otherwise read as an opaque slab behind
@@ -163,7 +231,7 @@ describe('skills catalog visual parity (MoonLadderStudios/MoonMind#3346)', () =>
     expect(headerStyle.top).toBe('0px');
     expect(headerStyle.borderBottomWidth).toBe('0px');
     expect(alphaOf(headerStyle.backgroundColor)).toBeGreaterThan(0.9);
-    expect(alphaOf(headerStyle.color)).toBeGreaterThan(0.7);
+    expectLegible(headerStyle.color, headerStyle.backgroundColor, 'header text');
 
     // The slab is not a card: no border, transparent fill, desktop overflow
     // visible so the page-sticky header and edge-to-edge bleed are unchanged.
@@ -181,7 +249,7 @@ describe('skills catalog visual parity (MoonLadderStudios/MoonMind#3346)', () =>
     const openLinks = await screen.findAllByRole('link', { name: /Open skill/ });
     expect(openLinks.length).toBeGreaterThan(0);
     const openLink = openLinks[0] as HTMLElement;
-    expect(alphaOf(getComputedStyle(openLink).color)).toBeGreaterThan(0.7);
+    expectLegible(getComputedStyle(openLink).color, effectiveBackground(openLink), 'row action text');
     openLink.focus();
     expect(document.activeElement).toBe(openLink);
 
@@ -202,8 +270,10 @@ describe('skills catalog visual parity (MoonLadderStudios/MoonMind#3346)', () =>
     });
     expectTransparent(getComputedStyle(table).backgroundColor, 'dark table background');
     expectTransparent(getComputedStyle(firstRow as HTMLElement).backgroundColor, 'dark row background');
-    expect(alphaOf(getComputedStyle(firstHeader as HTMLElement).color)).toBeGreaterThan(0.7);
-    expect(alphaOf(getComputedStyle(openLink).color)).toBeGreaterThan(0.7);
+    expectTransparent(getComputedStyle(secondRow as HTMLElement).backgroundColor, 'dark alternating row background');
+    const darkHeaderStyle = getComputedStyle(firstHeader as HTMLElement);
+    expectLegible(darkHeaderStyle.color, darkHeaderStyle.backgroundColor, 'dark header text');
+    expectLegible(getComputedStyle(openLink).color, effectiveBackground(openLink), 'dark row action text');
     document.documentElement.classList.remove('dark');
   });
 
