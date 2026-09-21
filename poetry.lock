@@ -3805,20 +3805,20 @@ typing-extensions = {version = "*", markers = "python_version < \"3.11\""}
 
 [[package]]
 name = "temporalio"
-version = "1.32.0"
+version = "1.33.0"
 description = "Temporal.io Python SDK"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "temporalio-1.32.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:47c128732e5d49235c9daeeb084d55093cee5ebc200ccc3afaeb4468f08d809e"},
-    {file = "temporalio-1.32.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:e78a209dc5ef3303bc6a3033fe11ffd813b778e4b176ec18d20386d65952daa9"},
-    {file = "temporalio-1.32.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a86be3a6d237ea6cc2d632015a5df4cead2aa3143b9601721428b53b87df81e2"},
-    {file = "temporalio-1.32.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4dd44a60ba54901560011a32f085353c0f5e7dac6b8d7a7e0c7c4ba508c6bf5d"},
-    {file = "temporalio-1.32.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:6a7100b1f1bf781f8f1800f89bb787b3dd7ce883e78603442d0c7a40e1143a86"},
-    {file = "temporalio-1.32.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:311abb9f0650f4ad9f24944ef16d8ed47954ddc3075c1e8c73dcd968d70ccdce"},
-    {file = "temporalio-1.32.0-cp310-abi3-win_amd64.whl", hash = "sha256:158386bcd9a6dce1ab63d732fc967c5a5830e15c3012ffaa4b8772bdac099e0f"},
-    {file = "temporalio-1.32.0.tar.gz", hash = "sha256:2cfa50ec7ebdab66902b80c3a09da3258883d68540811ebfbf44f7f293a4d7d0"},
+    {file = "temporalio-1.33.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:152b808c622c83052e17e64e228c1fa0410c515a908ed8981d17cba527183cf9"},
+    {file = "temporalio-1.33.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a46970c35acf77dfe142ee2aa3504462a3ff7aa12abdada57e7e8e2488930cbc"},
+    {file = "temporalio-1.33.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c685f6f4629b72645c0f9a9811cb2275d8a7cd0b2893b3349bd0a53985ff6f46"},
+    {file = "temporalio-1.33.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:efba3fec8735c4592c57a1a7aa4c2e4acf5a0765f53bd7366b94540755dbab0f"},
+    {file = "temporalio-1.33.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:79840232ed78943951d5f0069193b997d24e1da85890784a7d4351a48eb1f166"},
+    {file = "temporalio-1.33.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8f52f2f175aed174de21fc5782e5cba1e9e2e37cfd5687d5a8bd084b4deba483"},
+    {file = "temporalio-1.33.0-cp310-abi3-win_amd64.whl", hash = "sha256:33b5ff39c6737d21c6f16d3fef0c458d64aa9e78ce187e293bda6998d29ea7b8"},
+    {file = "temporalio-1.33.0.tar.gz", hash = "sha256:a1e506bcad08c995df7ec083bfd953f3c85bd1e2f6accbbb7562ef39386b3afb"},
 ]
 
 [package.dependencies]
@@ -3830,6 +3830,7 @@ typing-extensions = ">=4.2.0,<5"
 
 [package.extras]
 aioboto3 = ["aioboto3 (>=10.4.0)", "types-aioboto3[s3] (>=10.4.0)"]
+cloud-run-worker-otel = ["opentelemetry-api (>=1.26,<2)", "opentelemetry-exporter-otlp-proto-grpc (>=1.11.1,<2)", "opentelemetry-sdk (>=1.26,<2)", "protobuf (<7)"]
 deepagents = ["deepagents (>=0.6.12,<0.7) ; python_full_version >= \"3.11.0\"", "langchain (>=1.3.11,<2) ; python_full_version >= \"3.11.0\"", "langchain-core (>=1.4.8,<2) ; python_full_version >= \"3.11.0\""]
 google-adk = ["google-adk (>=2.2.0,<3)", "mcp (>=1.24,<2)"]
 google-genai = ["google-genai (>=2.10.0,<3.0.0)"]
@@ -4565,4 +4566,4 @@ tests = ["aiosqlite", "pytest", "pytest-asyncio", "pytest-mock", "pytest-split",
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "0f539faefd09e61f4d7830b9a0768e938a1e07f4b9161dd0a7860c6ca334d778"
+content-hash = "8eb3e2f43f56e40a99368a807af4939470ca56c6e7bd1c7a822989f300b9c9b3"
