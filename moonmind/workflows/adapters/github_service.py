@@ -657,21 +657,53 @@ class GitHubService:
         if str(head_data.get("ref") or "") != expected_head_ref:
             return False
         if ":" in head:
-            expected_repo_owner = head.split(":", 1)[0]
+            expected_repo_owner = head.split(":", 1)[0].strip()
             head_repo = head_data.get("repo")
             full_name = (
                 str(head_repo.get("full_name") or "")
                 if isinstance(head_repo, Mapping)
                 else ""
             )
-            return bool(full_name) and full_name.startswith(f"{expected_repo_owner}/")
+            # Fork PRs carry the complete source-repository identity in
+            # ``head.repo.full_name``. An owner-name prefix alone is not a
+            # positive ownership match (MoonLadderStudios/MoonMind#4010): the
+            # fork owner must pair with this target's repository name.
+            repo_name = repo.split("/", 1)[1] if "/" in repo else ""
+            if not full_name or not expected_repo_owner or not repo_name:
+                return False
+            return (
+                full_name.lower()
+                == f"{expected_repo_owner}/{repo_name}".lower()
+            )
         head_repo = head_data.get("repo")
         if isinstance(head_repo, Mapping):
             full_name = str(head_repo.get("full_name") or "")
             return full_name == repo
         return False
 
-    async def _find_open_pull_request(
+    @staticmethod
+    def _existing_pr_has_metadata(pr_data: Mapping[str, Any]) -> bool:
+        """Whether the existing PR carries actor-authored title/body content.
+
+        Missing or empty title/body holds nothing a later actor wrote, so
+        initializing it cannot overwrite a later edit.
+        """
+        title = pr_data.get("title")
+        body = pr_data.get("body")
+        return bool(isinstance(title, str) and title) or bool(
+            isinstance(body, str) and body
+        )
+
+    @staticmethod
+    def _existing_pr_metadata_matches(
+        pr_data: Mapping[str, Any], *, title: str, body: str
+    ) -> bool:
+        """Whether the existing PR already carries the requested metadata."""
+        return str(pr_data.get("title") or "") == title and str(
+            pr_data.get("body") or ""
+        ) == body
+
+    async def _find_pull_request_by_state(
         self,
         client: httpx.AsyncClient,
         *,
@@ -679,6 +711,7 @@ class GitHubService:
         head: str,
         base: str,
         headers: Mapping[str, str],
+        state: str,
     ) -> Mapping[str, Any] | None:
         get = getattr(client, "get", None)
         if not callable(get):
@@ -688,7 +721,7 @@ class GitHubService:
                 f"https://api.github.com/repos/{repo}/pulls",
                 headers=dict(headers),
                 params={
-                    "state": "open",
+                    "state": state,
                     "head": self._head_query_for_repo(repo=repo, head=head),
                     "base": base,
                     "per_page": 10,
@@ -724,6 +757,49 @@ class GitHubService:
             ):
                 return item
         return None
+
+    async def _find_open_pull_request(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        repo: str,
+        head: str,
+        base: str,
+        headers: Mapping[str, str],
+    ) -> Mapping[str, Any] | None:
+        return await self._find_pull_request_by_state(
+            client,
+            repo=repo,
+            head=head,
+            base=base,
+            headers=headers,
+            state="open",
+        )
+
+    async def _find_closed_pull_request(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        repo: str,
+        head: str,
+        base: str,
+        headers: Mapping[str, str],
+    ) -> Mapping[str, Any] | None:
+        """Inspect closed/merged outcomes for the same operation.
+
+        Read-only reconciliation consulted by ``create_pull_request`` before
+        another POST so a timeout, lost acknowledgment, or already
+        closed/merged prior result cannot produce a duplicate PR
+        (MoonLadderStudios/MoonMind#4010). Never issues a write.
+        """
+        return await self._find_pull_request_by_state(
+            client,
+            repo=repo,
+            head=head,
+            base=base,
+            headers=headers,
+            state="closed",
+        )
 
     @classmethod
     def _permission_blocker(
@@ -1030,6 +1106,37 @@ class GitHubService:
                             ),
                             head_sha=(existing_pr.get("head") or {}).get("sha"),
                         )
+                    if self._existing_pr_metadata_matches(
+                        existing_pr, title=title, body=body
+                    ):
+                        # Reconciliation only: the existing PR already carries
+                        # the requested metadata, so adoption makes no writes.
+                        return CreatePRResult(
+                            url=existing_url or None,
+                            created=False,
+                            adopted=True,
+                            summary=(
+                                "adopted existing PR without metadata update "
+                                "because it already carries the requested "
+                                f"title/body: {existing_url or 'unknown URL'}"
+                            ),
+                            head_sha=(existing_pr.get("head") or {}).get("sha"),
+                        )
+                    if self._existing_pr_has_metadata(existing_pr):
+                        # A later actor's title/body is present and differs:
+                        # adopt the positively matched PR without overwriting
+                        # it (MoonLadderStudios/MoonMind#4010).
+                        return CreatePRResult(
+                            url=existing_url or None,
+                            created=False,
+                            adopted=True,
+                            summary=(
+                                "adopted existing PR without metadata update "
+                                "to preserve later title/body edits: "
+                                f"{existing_url or 'unknown URL'}"
+                            ),
+                            head_sha=(existing_pr.get("head") or {}).get("sha"),
+                        )
                     update_response = await client.patch(
                         f"{api_url}/{pr_number}",
                         headers=headers,
@@ -1048,6 +1155,34 @@ class GitHubService:
                         head_sha=(
                             updated_pr.get("head") or existing_pr.get("head") or {}
                         ).get("sha"),
+                    )
+                closed_pr = await self._find_closed_pull_request(
+                    client,
+                    repo=repo,
+                    head=head,
+                    base=base,
+                    headers=headers,
+                )
+                if closed_pr is not None:
+                    # A positively matched closed/merged prior result for the
+                    # same operation reconciles the ambiguous create without
+                    # another POST. Closed PRs are never PATCHed here; the
+                    # existing created/adopted distinctions are preserved for
+                    # downstream consumers.
+                    closed_url = str(closed_pr.get("html_url") or "")
+                    closed_state = str(closed_pr.get("state") or "closed")
+                    merged = bool(closed_pr.get("merged"))
+                    return CreatePRResult(
+                        url=closed_url or None,
+                        created=False,
+                        adopted=True,
+                        summary=(
+                            "adopted existing "
+                            f"{'merged' if merged else closed_state} PR "
+                            "without creating a duplicate: "
+                            f"{closed_url or 'unknown URL'}"
+                        ),
+                        head_sha=(closed_pr.get("head") or {}).get("sha"),
                     )
                 response = await client.post(
                     api_url, headers=headers, json=payload
