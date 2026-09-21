@@ -390,6 +390,7 @@ async def test_materializer_reapplies_commit_identity_to_existing_workspace(
     workspace_id = _workspace_id()
     existing = tmp_path / "temporal_sandbox" / workspace_id / "repo"
     (existing / ".git").mkdir(parents=True)
+    (existing / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (existing / ".git" / "config").write_text(
         '[core]\n\trepositoryformatversion = 0\n', encoding="utf-8"
     )
@@ -443,6 +444,7 @@ async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
     workspace_id = _workspace_id()
     existing = tmp_path / "temporal_sandbox" / workspace_id / "repo"
     (existing / ".git").mkdir(parents=True)
+    (existing / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (existing / ".git" / "config").write_text(
         '[core]\n\trepositoryformatversion = 0\n', encoding="utf-8"
     )
@@ -450,6 +452,10 @@ async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
 
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+        head = b"ref: refs/heads/main\n"
+        member = tarfile.TarInfo(".git/HEAD")
+        member.size = len(head)
+        bundle.addfile(member, io.BytesIO(head))
         stale_config = (
             b'[core]\n\trepositoryformatversion = 0\n'
             b'[user]\n\tname = Stale Import\n\temail = stale@example.test\n'

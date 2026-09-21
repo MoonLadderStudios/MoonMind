@@ -106,6 +106,7 @@ def test_ensure_workspace_git_identity_adds_user_section_preserving_rest(
 
     workspace = tmp_path / "repo"
     (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (workspace / ".git" / "config").write_text(
         '[core]\n\trepositoryformatversion = 0\n', encoding="utf-8"
     )
@@ -131,6 +132,7 @@ def test_ensure_workspace_git_identity_replaces_stale_imported_identity(
 
     workspace = tmp_path / "repo"
     (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (workspace / ".git" / "config").write_text(
         '[core]\n\trepositoryformatversion = 0\n'
         '[user]\n\tname = Stale Import\n\temail = stale@example.test\n'
@@ -162,3 +164,22 @@ def test_ensure_workspace_git_identity_skips_non_git_directories(
         ensure_workspace_git_identity(workspace, runtime_uid=uid, runtime_gid=gid)
         is False
     )
+
+
+def test_ensure_workspace_git_identity_skips_git_dir_without_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A bare ``.git`` path (for example from an input projection) is not a repo."""
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+
+    workspace = tmp_path / "repo"
+    (workspace / ".git" / "info").mkdir(parents=True)
+
+    uid, gid = _identity_owner()
+    assert (
+        ensure_workspace_git_identity(workspace, runtime_uid=uid, runtime_gid=gid)
+        is False
+    )
+    assert not (workspace / ".git" / "config").exists()
