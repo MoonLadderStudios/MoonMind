@@ -1159,10 +1159,13 @@ async def test_r2b_scope_cleanup_neither_hides_nor_orphans_legacy(tmp_path: Path
             await session.commit()
 
             # An unrelated operator sees the legacy schedule: no hiding and no
-            # personal/global partition; every viewer lists the same instance.
-            for _viewer in (None, uuid4(), legacy_owner):
-                personal = await service.list_definitions()
-                assert {row.id for row in personal} >= {legacy.id}
+            # personal/global partition. Instance listing has no viewer
+            # predicate, so repeated reads list the same instance.
+            personal = await service.list_definitions()
+            assert {row.id for row in personal} >= {legacy.id}
+            assert {row.id for row in await service.list_definitions()} >= {
+                legacy.id
+            }
             assert await service.count_definitions() >= 1
             # The legacy owner value persists as provenance, not a hidden FK.
             fetched = await service.get_definition(legacy.id)
