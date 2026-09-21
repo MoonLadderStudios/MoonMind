@@ -7973,6 +7973,126 @@ def test_moonspec_native_fault_identities_preserved(
     assert resolve_committed_gate_reuse(committed, changed) is None
 
 
+def test_moonspec_native_fault_timeout_cancel_lost_result_preserve_identities(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4/A4: timeout, cancellation, and
+    lost-result deliveries preserve attempt identities, recovery-budget
+    limits, accepted evidence, and publication permissions."""
+    from moonmind.workflows.skills.approval_policy import parse_step_gate_result
+    from moonmind.workflows.temporal.workflows.run import (
+        resolve_committed_gate_reuse,
+    )
+
+    committed_gate = parse_step_gate_result(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "recommendedNextAction": "reattempt_current_step",
+            "confidence": "medium",
+            "reviewProvenance": {"reviewAttemptIdentity": "attempt-1"},
+        }
+    )
+    committed = {
+        "attempt-1": {
+            "payload": committed_gate.to_payload(),
+            "artifactRef": "artifact://gate/attempt-1",
+        }
+    }
+    mock_run_workflow._committed_review_gates = dict(committed)
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "diagnostics_ref": "artifact://gate/attempt-1",
+        },
+    )
+    assert mock_run_workflow._blocking_moonspec_gate_reason() is not None
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert (
+        mock_run_workflow._publish_context["publicationBlockedBy"]
+        == "moonspec_verify"
+    )
+
+    # Timeout: empty outputs stay non-passing with actionable diagnostics,
+    # never authorize publication as verified work, and never inherit
+    # another attempt's committed decision.
+    timed_out = mock_run_workflow._moonspec_verify_gate_result({})
+    assert timed_out.verdict == "NO_DETERMINATION"
+    assert timed_out.invalid and timed_out.degraded
+    assert timed_out.verdict != "FULLY_IMPLEMENTED"
+    assert resolve_committed_gate_reuse(committed, timed_out) is None
+    assert (
+        mock_run_workflow._committed_review_gates["attempt-1"]["artifactRef"]
+        == "artifact://gate/attempt-1"
+    )
+    assert (
+        mock_run_workflow._publish_context["publicationBlockedBy"]
+        == "moonspec_verify"
+    )
+    # The timeout consumes no report-recovery budget: new histories still
+    # allow at most one report-only correction.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+    )
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
+
+    # Cancellation: a cancel request preserves the committed identities,
+    # accepted evidence, and publication block instead of clearing them,
+    # and a cancel-time duplicate still cannot upgrade the decision.
+    mock_run_workflow._cancel_requested = True
+    try:
+        assert (
+            mock_run_workflow._committed_review_gates["attempt-1"][
+                "artifactRef"
+            ]
+            == "artifact://gate/attempt-1"
+        )
+        assert (
+            mock_run_workflow._publish_context["publicationBlockedBy"]
+            == "moonspec_verify"
+        )
+        cancel_time_redelivery = parse_step_gate_result(
+            {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "advance",
+                "confidence": "high",
+                "reviewProvenance": {"reviewAttemptIdentity": "attempt-1"},
+            }
+        )
+        reused = resolve_committed_gate_reuse(
+            mock_run_workflow._committed_review_gates, cancel_time_redelivery
+        )
+        assert reused is not None
+        assert reused[0].verdict == "ADDITIONAL_WORK_NEEDED"
+        assert reused[1] == "artifact://gate/attempt-1"
+    finally:
+        mock_run_workflow._cancel_requested = False
+
+    # Lost-result: a redelivery without attempt provenance follows the
+    # normal path instead of inheriting a decision, while the stored
+    # committed decision and artifact ref remain intact for replay.
+    lost = parse_step_gate_result(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "recommendedNextAction": "reattempt_current_step",
+            "confidence": "medium",
+        }
+    )
+    assert resolve_committed_gate_reuse(committed, lost) is None
+    assert (
+        mock_run_workflow._committed_review_gates["attempt-1"]["artifactRef"]
+        == "artifact://gate/attempt-1"
+    )
+    assert (
+        mock_run_workflow._publish_context["publicationBlockedBy"]
+        == "moonspec_verify"
+    )
+
+
 def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
