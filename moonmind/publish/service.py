@@ -217,6 +217,7 @@ class PublishService:
         run_command: CommandRunner,
         repo: str | None = None,
         github_token: str | None = None,
+        bound_credential: Any | None = None,
         publish_existing_commits: bool = False,
         publication_branch_name: str | None = None,
         verify_remote: bool = False,
@@ -231,6 +232,12 @@ class PublishService:
             runtime_mode: The runtime that generated the changes (e.g. "codex", "claude").
             repo_dir: Path to the git repository.
             run_command: Async callable that runs a shell command and returns an object with a `stdout` attribute.
+            bound_credential: Optional already-acquired bound credential (PAT or
+                GitHub App) for the admitted operation. When present and no
+                explicit token is given, push/gh env projections consume it
+                through the bound helpers with redaction instead of ambient
+                resolution. Acquire it via
+                ``moonmind.auth.github_app_wiring.acquire_bound_credential_for_connection``.
         """
         if publish_mode == "none":
             return None
@@ -322,6 +329,16 @@ class PublishService:
         token = str(github_token or "").strip()
         push_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         resolved_github_credential = None
+        # A bound acquisition for the admitted operation (PAT or App
+        # installation, already scoped at issuance) sits between an explicit
+        # token and ambient resolution; it needs no repo gate.
+        token_from_bound = False
+        if not token and bound_credential is not None:
+            push_env, bound_redact = push_env_from_bound_credential(
+                bound_credential, base_env=push_env
+            )
+            token = bound_redact[0] if bound_redact else ""
+            token_from_bound = bool(token)
         if repo and not token:
             from moonmind.auth.github_credentials import resolve_github_credential
 
@@ -475,7 +492,7 @@ class PublishService:
                 remote_verified=remote_verified,
             )
 
-        if resolved_github_credential is None:
+        if resolved_github_credential is None and not token_from_bound:
             from moonmind.auth.github_credentials import resolve_github_credential
 
             resolved_github_credential = await resolve_github_credential()
@@ -488,9 +505,15 @@ class PublishService:
             )
 
         verify_cli_is_executable(self._gh_binary)
-        gh_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        gh_env["GITHUB_TOKEN"] = token
-        gh_env["GH_TOKEN"] = token
+        if token_from_bound and bound_credential is not None:
+            gh_env, _gh_bound_redact = gh_env_from_bound_credential(
+                bound_credential,
+                base_env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+        else:
+            gh_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+            gh_env["GITHUB_TOKEN"] = token
+            gh_env["GH_TOKEN"] = token
         if repo:
             gh_env["GH_REPO"] = repo
         await run_command(
