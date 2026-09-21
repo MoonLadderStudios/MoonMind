@@ -152,6 +152,39 @@ def compact_moonspec_verify_metadata(
     if contract_violations:
         compact["contractViolations"] = contract_violations
 
+    # MoonLadderStudios/MoonMind#4491 (P1): the production native-verifier
+    # path compacts the gate before the parent workflow constructs the
+    # contract-repair input. Dropping ``issues`` here starves both the parsed
+    # branch and the raw-source fallback, letting a corrected report approve
+    # without accounting for known gaps. Preserve a bounded projection (the
+    # parser's dict-only ceiling is 20 items) with truncated text so repair
+    # keeps the evidence it must address. The full report remains behind
+    # gateResultRef/artifact refs; this never authorizes advancement.
+    issues_raw = value.get("issues")
+    if isinstance(issues_raw, (list, tuple)):
+        compacted_issues: list[dict[str, str]] = []
+        for issue in issues_raw[:20]:
+            if not isinstance(issue, Mapping):
+                continue
+            compacted_issue: dict[str, str] = {}
+            severity = _compact_workflow_text(issue.get("severity"), max_chars=40)
+            if severity:
+                compacted_issue["severity"] = severity
+            description = _compact_workflow_text(
+                issue.get("description"), max_chars=700
+            )
+            if description:
+                compacted_issue["description"] = description
+            evidence = _compact_workflow_text(issue.get("evidence"), max_chars=700)
+            if evidence:
+                compacted_issue["evidence"] = evidence
+            if compacted_issue:
+                compacted_issues.append(compacted_issue)
+            if len(compacted_issues) >= 20:
+                break
+        if compacted_issues:
+            compact["issues"] = compacted_issues
+
     return compact
 
 

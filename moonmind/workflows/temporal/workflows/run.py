@@ -821,6 +821,16 @@ RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH = (
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
     "run-moonspec-gate-contract-repair-fresh-source-v1"
 )
+# MoonLadderStudios/MoonMind#4472: bounded native report recovery. New
+# histories allow at most one report-only correction of a malformed final
+# verifier envelope, preserve the original bounded findings as untrusted
+# repair data, and default an unrecoverable inconclusive result without an
+# explicit continuation to ``blocked`` instead of implying a human decision.
+# Retained histories without this marker keep their recorded budget, repair
+# inputs, and implicit routing so replay never gains new commands.
+RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH = (
+    "run-moonspec-verify-report-recovery-v1"
+)
 RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-gate-environment-draft-publish-v1"
 )
@@ -2529,11 +2539,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         """Return the report-only correction budget for this history.
 
         New histories allow at most one correction (MoonMind#4472); retained
-        histories without the single-repair marker keep the legacy bound so
-        replay preserves their recorded command sequence.
+        histories without either repair marker keep the legacy bound so
+        replay preserves their recorded command sequence. Both the
+        single-repair and report-recovery markers denote the same
+        single-correction lineage introduced on parallel branches.
         """
         if self._patched_or_false_outside_workflow(
             RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH
+        ) or self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH
         ):
             return _MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_MAX_ATTEMPTS
         return _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
@@ -8360,6 +8374,50 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     return gate_result_ref
         return None
 
+    def _moonspec_contract_repair_issues(
+        self,
+        *,
+        execution_result: Any,
+        tool_name: str,
+        node_inputs: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any], ...]:
+        """Original bounded findings carried as untrusted repair data.
+
+        Returns the parsed gate issues only for moonspec-verify steps whose
+        structured output needs contract repair; ``()`` otherwise (including
+        contract-clean output and non-verify steps). Carrying the findings
+        forward never authorizes advancement: revalidation still applies.
+        """
+        if not self._is_moonspec_verify_step(
+            tool_name=tool_name,
+            node_inputs=node_inputs,
+        ):
+            return ()
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return ()
+        try:
+            gate_result = self._moonspec_verify_gate_result(outputs)
+        except Exception:
+            return ()
+        if not (gate_result.invalid or gate_result.degraded):
+            return ()
+        if gate_result.issues:
+            return tuple(gate_result.issues)
+        # A missing-verdict envelope locates no verdict-keyed source, so the
+        # canonical parse cannot bind its issues. Carry the bounded raw
+        # findings as untrusted repair data instead of dropping them,
+        # mirroring the parser's dict-only ceiling.
+        for source in self._moonspec_verify_sources(outputs):
+            issues_raw = source.get("issues")
+            if isinstance(issues_raw, list):
+                raw_issues = [
+                    issue for issue in issues_raw[:20] if isinstance(issue, dict)
+                ]
+                if raw_issues:
+                    return tuple(raw_issues)
+        return ()
+
     def _moonspec_verify_contract_repair_feedback(
         self,
         *,
@@ -8943,19 +9001,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             grant=grant,
         )
         budget = provisional_state.policy
+        native_action = (
+            gate_result.recommended_next_action
+            if self._patched_or_false_outside_workflow(
+                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+            )
+            else None
+        )
+        if (
+            self._patched_or_false_outside_workflow(
+                RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH
+            )
+            and gate_result.verdict == "NO_DETERMINATION"
+            and native_action is None
+            and not gate_result.recoverable_in_current_runtime
+        ):
+            # MoonLadderStudios/MoonMind#4472: an unrecoverable inconclusive
+            # native result without an explicit continuation stops
+            # ``blocked``. It must not implicitly become ``needs_human``;
+            # genuine explicit human stops pass through unchanged above.
+            native_action = "blocked"
         decision = evaluate_attempt_continuation(
             attempt=attempt,
             gate=gate,
             budget=budget,
             checkpoint_available=True,
             policy_allowed=True,
-            recommended_next_action=(
-                gate_result.recommended_next_action
-                if self._patched_or_false_outside_workflow(
-                    RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
-                )
-                else None
-            ),
+            recommended_next_action=native_action,
             blocked_continuation_enabled=(
                 self._moonspec_gate_blocked_continuation_enabled()
             ),
@@ -13417,7 +13489,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             artifact_ref=None,
                         )
                         previous_review_feedback = contract_repair_feedback
-                        previous_review_issues = ()
+                        if self._patched_or_false_outside_workflow(
+                            RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH
+                        ):
+                            # Carry the original bounded findings as untrusted
+                            # repair data so the single re-verify keeps the
+                            # evidence it was meant to address. Revalidation
+                            # still applies; this never authorizes advancement.
+                            previous_review_issues = (
+                                self._moonspec_contract_repair_issues(
+                                    execution_result=execution_result,
+                                    tool_name=tool_name,
+                                    node_inputs=node_inputs,
+                                )
+                            )
+                        else:
+                            previous_review_issues = ()
                         # The repair budget is tracked separately from the
                         # approval-policy review budget: leave
                         # current_review_attempt unchanged so a contract
