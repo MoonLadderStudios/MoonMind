@@ -72,7 +72,11 @@ _PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
 
 
 def push_env_from_bound_credential(
-    acquired: Any, *, base_env: dict[str, str] | None = None
+    acquired: Any,
+    *,
+    base_env: dict[str, str] | None = None,
+    repository: str = "",
+    endpoint: str = "https://github.com",
 ) -> tuple[dict[str, str], tuple[str, ...]]:
     """Build the git-push env from a bound credential (PAT or App).
 
@@ -82,6 +86,11 @@ def push_env_from_bound_credential(
     boundary with ``GIT_TERMINAL_PROMPT=0``, and the redaction tuple carries
     the opaque value for ``run_command``. Server-held credentials stay
     server-held; diagnostics must use the metadata-only binding.
+
+    When ``repository`` parses as an ``owner/name`` identity, the shared
+    bound-Git credential-helper contract is layered on top so the push to
+    ``origin`` authenticates through the admitted repository's trusted
+    endpoint instead of ambient configuration.
     """
 
     captured: list[str] = []
@@ -97,6 +106,23 @@ def push_env_from_bound_credential(
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
     env["GITHUB_TOKEN"] = token
     env["GH_TOKEN"] = token
+    owner, sep, name = str(repository or "").strip().strip("/").partition("/")
+    if sep and owner.strip() and name.strip() and "/" not in name.strip():
+        try:
+            from moonmind.auth.github_app import build_bound_git_env
+
+            bound = build_bound_git_env(
+                token.encode("utf-8"),
+                repository=f"{owner.strip()}/{name.strip()}",
+                endpoint=endpoint,
+            )
+            bound_env = dict(bound.get("env") or {})
+            for key in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+                        "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1"):
+                if key in bound_env:
+                    env[key] = bound_env[key]
+        except ValueError:
+            pass
     return env, (token,)
 
 
@@ -335,7 +361,9 @@ class PublishService:
         token_from_bound = False
         if not token and bound_credential is not None:
             push_env, bound_redact = push_env_from_bound_credential(
-                bound_credential, base_env=push_env
+                bound_credential,
+                base_env=push_env,
+                repository=str(repo or ""),
             )
             token = bound_redact[0] if bound_redact else ""
             token_from_bound = bool(token)

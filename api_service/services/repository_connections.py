@@ -506,6 +506,25 @@ class RepositoryConnectionService:
             key_ref=key_ref,
         )
 
+    async def get_connection(
+        self,
+        connection_id: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> RepositoryConnection | None:
+        """Return one recorded connection the principal may discover."""
+
+        record = await self._get_record((connection_id or "").strip())
+        if record is None or record.tombstone:
+            return None
+        return self._check_use(
+            record=record,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+            action="discover",
+        )
+
     async def update_connection(
         self,
         connection: RepositoryConnection,

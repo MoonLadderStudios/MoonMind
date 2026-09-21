@@ -126,6 +126,7 @@ class GitHubAppSetupService:
         caller_principal: str,
         caller_scope: tuple[str, str | None],
         destination_connection_id: str,
+        mark_consumed: bool = True,
     ) -> SetupPending:
         """Verify one setup callback at the trusted server boundary."""
 
@@ -144,6 +145,98 @@ class GitHubAppSetupService:
             raise _route_error(REPOSITORY_DENIED, "setup state was already used")
         if time.monotonic() - pending.created_at > self._ttl:
             raise _route_error(REPOSITORY_DENIED, "setup state expired")
+        self._check_callback_binding(
+            pending,
+            installation_ref=installation_ref,
+            provider_installation=provider_installation,
+            caller_principal=caller_principal,
+            caller_scope=caller_scope,
+            destination_connection_id=destination_connection_id,
+        )
+        if mark_consumed:
+            pending.consumed = True
+        return pending
+
+    def consume_setup_state(self, state: str) -> SetupPending:
+        """Mark one verified setup state consumed after its durable outcome.
+
+        Consumption is deferred until the connection save commits so a
+        failed save (or a lost response after a committed save) can retry
+        on the same state while the writer's ``request_id`` identity
+        converges the retry. Replays after consumption still fail closed.
+        """
+
+        from moonmind.workflows.executions.repository_contract import (
+            REPOSITORY_DENIED,
+        )
+
+        raw = _unsign_state(self._secret, state or "")
+        if raw is None:
+            raise _route_error(REPOSITORY_DENIED, "setup state is forged or unknown")
+        pending = self._pending.get(raw)
+        if pending is None:
+            raise _route_error(REPOSITORY_DENIED, "setup state is forged or unknown")
+        if pending.consumed:
+            raise _route_error(REPOSITORY_DENIED, "setup state was already used")
+        pending.consumed = True
+        return pending
+
+    def peek_setup_state(
+        self,
+        *,
+        state: str,
+        installation_ref: str,
+        provider_installation: Mapping[str, Any],
+        caller_principal: str,
+        caller_scope: tuple[str, str | None],
+        destination_connection_id: str,
+    ) -> SetupPending:
+        """Re-validate a setup state without mutating consumption.
+
+        Supports the already-committed retry: when the save succeeded but
+        its response was lost, the state is consumed yet the connection
+        exists under the request identity. The caller re-checks every
+        binding and, only on success, reconciles to the recorded
+        connection instead of saving again.
+        """
+
+        from moonmind.workflows.executions.repository_contract import (
+            REPOSITORY_DENIED,
+        )
+
+        raw = _unsign_state(self._secret, state or "")
+        if raw is None:
+            raise _route_error(REPOSITORY_DENIED, "setup state is forged or unknown")
+        pending = self._pending.get(raw)
+        if pending is None:
+            raise _route_error(REPOSITORY_DENIED, "setup state is forged or unknown")
+        self._check_callback_binding(
+            pending,
+            installation_ref=installation_ref,
+            provider_installation=provider_installation,
+            caller_principal=caller_principal,
+            caller_scope=caller_scope,
+            destination_connection_id=destination_connection_id,
+        )
+        return pending
+
+    def _check_callback_binding(
+        self,
+        pending: SetupPending,
+        *,
+        installation_ref: str,
+        provider_installation: Mapping[str, Any],
+        caller_principal: str,
+        caller_scope: tuple[str, str | None],
+        destination_connection_id: str,
+    ) -> None:
+        """Enforce every state binding shared by verify and peek."""
+
+        from moonmind.workflows.executions.repository_contract import (
+            REPOSITORY_DENIED,
+            REPOSITORY_SETUP_REQUIRED,
+        )
+
         # Single-use: the state stays valid across failed verifications so a
         # legitimate retry can succeed, but the first successful verification
         # consumes it and any replay after that fails closed.
@@ -157,27 +250,27 @@ class GitHubAppSetupService:
             raise _route_error(REPOSITORY_DENIED, "setup destination substitution rejected")
         if not isinstance(provider_installation, Mapping):
             raise _route_error(REPOSITORY_DENIED, "installation verification failed")
-        provider_app = str(provider_installation.get("app_ref") or "").strip()
-        provider_installation_ref = str(
-            provider_installation.get("installation_ref") or ""
-        ).strip()
-        provider_account = str(provider_installation.get("account") or "").strip()
-        provider_repos = [
-            str(name).strip()
-            for name in (provider_installation.get("repositories") or [])
-            if str(name).strip()
-        ]
+        # Production provider records arrive raw (numeric id/app_id,
+        # account object, suspended_at); the setup boundary and tests use
+        # the normalized shape. Normalize once so both bind the same way.
+        from moonmind.auth.github_app import _numeric_key, normalize_installation_record
+
+        normalized = normalize_installation_record(provider_installation)
+        provider_app = normalized.app_key
+        provider_installation_ref = normalized.installation_key
+        provider_account = normalized.account
+        provider_repos = list(normalized.repositories)
         # The browser callback's installation_id is never trusted directly:
         # it must match the verified provider association.
-        if (installation_ref or "").strip() != provider_installation_ref:
+        if _numeric_key(installation_ref) != provider_installation_ref:
             raise _route_error(REPOSITORY_DENIED, "installation association mismatch")
-        if provider_app != pending.expected_app_ref:
+        if provider_app != _numeric_key(pending.expected_app_ref):
             raise _route_error(REPOSITORY_DENIED, "installation App mismatch")
         if not provider_installation_ref:
             raise _route_error(REPOSITORY_DENIED, "installation identity mismatch")
         if pending.expected_account and provider_account != pending.expected_account:
             raise _route_error(REPOSITORY_DENIED, "installation account is not permitted")
-        if bool(provider_installation.get("suspended", False)):
+        if normalized.suspended:
             raise _route_error(REPOSITORY_DENIED, "installation is suspended")
         if pending.permitted_repositories and any(
             repo not in provider_repos for repo in pending.permitted_repositories
@@ -185,8 +278,6 @@ class GitHubAppSetupService:
             raise _route_error(
                 REPOSITORY_SETUP_REQUIRED, "installation repositories are not permitted"
             )
-        pending.consumed = True
-        return pending
 
     def verify_operator_import(
         self,
@@ -208,21 +299,18 @@ class GitHubAppSetupService:
 
         if not isinstance(provider_installation, Mapping):
             raise _route_error(REPOSITORY_DENIED, "installation verification failed")
-        if str(provider_installation.get("app_ref") or "").strip() != (
-            expected_app_ref or ""
-        ).strip():
+        from moonmind.auth.github_app import _numeric_key, normalize_installation_record
+
+        normalized = normalize_installation_record(provider_installation)
+        if normalized.app_key != _numeric_key(expected_app_ref):
             raise _route_error(REPOSITORY_DENIED, "installation App mismatch")
-        if (expected_account or "").strip() and str(
-            provider_installation.get("account") or ""
-        ).strip() != expected_account.strip():
+        if (expected_account or "").strip() and (
+            normalized.account != expected_account.strip()
+        ):
             raise _route_error(REPOSITORY_DENIED, "installation account is not permitted")
-        if bool(provider_installation.get("suspended", False)):
+        if normalized.suspended:
             raise _route_error(REPOSITORY_DENIED, "installation is suspended")
-        provider_repos = {
-            str(name).strip()
-            for name in (provider_installation.get("repositories") or [])
-            if str(name).strip()
-        }
+        provider_repos = set(normalized.repositories)
         for repo in permitted_repositories:
             if str(repo).strip() and str(repo).strip() not in provider_repos:
                 raise _route_error(
@@ -312,6 +400,7 @@ async def save_verified_app_connection(
         raise _route_error(REPOSITORY_SETUP_REQUIRED, "stable request identity required")
     if not isinstance(provider_installation, Mapping):
         raise _route_error(REPOSITORY_SETUP_REQUIRED, "installation verification failed")
+    pending: SetupPending | None = None
     if operator_import:
         setup_service.verify_operator_import(
             provider_installation=provider_installation,
@@ -322,14 +411,58 @@ async def save_verified_app_connection(
     else:
         if state is None or installation_ref is None or caller_scope is None:
             raise _route_error(REPOSITORY_SETUP_REQUIRED, "setup callback needs state")
-        setup_service.verify_setup_callback(
-            state=state,
-            installation_ref=installation_ref,
-            provider_installation=provider_installation,
-            caller_principal=caller_principal,
-            caller_scope=caller_scope,
-            destination_connection_id=destination_connection_id or connection_id,
-        )
+        # Verify without consuming: the state is consumed only after the
+        # durable save below, so a failed commit can retry on the same
+        # state while the writer's request identity converges the retry.
+        try:
+            pending = setup_service.verify_setup_callback(
+                state=state,
+                installation_ref=installation_ref,
+                provider_installation=provider_installation,
+                caller_principal=caller_principal,
+                caller_scope=caller_scope,
+                destination_connection_id=destination_connection_id or connection_id,
+                mark_consumed=False,
+            )
+        except ValueError as exc:
+            if "already used" not in str(exc):
+                raise
+            # Already-committed retry (save succeeded, response lost): the
+            # state is consumed but the connection exists under the request
+            # identity. Re-validate every binding and reconcile to the
+            # recorded connection instead of rejecting the retry as replay.
+            replayed = setup_service.peek_setup_state(
+                state=state,
+                installation_ref=installation_ref,
+                provider_installation=provider_installation,
+                caller_principal=caller_principal,
+                caller_scope=caller_scope,
+                destination_connection_id=destination_connection_id or connection_id,
+            )
+            stable_id = reconcile_setup_save(
+                request_id=replayed.request_id,
+                connection_id=replayed.connection_id,
+                existing_by_request=dict(existing_by_request or {}),
+            )
+            existing = await _read_recorded_connection(
+                connection_service,
+                connection_id=stable_id,
+                principal_ref=replayed.principal_ref,
+                principal_scope=replayed.principal_scope,
+            )
+            if existing is None:
+                raise
+            return existing
+        # The verified pending record owns the enrollment intent: request
+        # identity, destination, principal/scope, and repository bundle.
+        # Callback arguments cannot widen or redirect it; only server-held
+        # configuration (display, endpoint, operations, key ref) applies.
+        request_id = pending.request_id
+        connection_id = pending.connection_id
+        permitted_repositories = pending.permitted_repositories
+        principal_scope = pending.principal_scope
+        principal_ref = pending.principal_ref
+        caller_principal = pending.principal_ref
     # Converge ambiguous retries before touching the existing writer.
     stable_connection_id = reconcile_setup_save(
         request_id=request_id,
@@ -337,10 +470,18 @@ async def save_verified_app_connection(
         existing_by_request=dict(existing_by_request or {}),
     )
     app_ref = str(provider_installation.get("app_ref") or expected_app_ref or "").strip()
-    resolved_installation = str(
-        provider_installation.get("installation_ref") or installation_ref or ""
-    ).strip()
-    account = str(provider_installation.get("account") or expected_account or "").strip()
+    from moonmind.auth.github_app import normalize_installation_record
+
+    normalized_record = normalize_installation_record(provider_installation)
+    resolved_installation = (
+        str(provider_installation.get("installation_ref") or "").strip()
+        or normalized_record.installation_key
+        or str(installation_ref or "").strip()
+    )
+    account = normalized_record.account or str(expected_account or "").strip()
+    permitted = [
+        str(name).strip() for name in permitted_repositories if str(name).strip()
+    ]
     credential: dict[str, Any] = {
         "source": "github_app",
         "appRef": app_ref,
@@ -350,6 +491,11 @@ async def save_verified_app_connection(
         credential["keyRef"] = str(key_ref).strip()
     if account:
         credential["account"] = account
+    if permitted:
+        # Persist the issuance restriction inside the credential metadata
+        # so it survives a database reload (the record has no
+        # allowedRepositoryIds column).
+        credential["permittedRepositories"] = list(permitted)
     scope = principal_scope or ("system", None)
     connection = RepositoryConnection.model_validate(
         {
@@ -359,14 +505,8 @@ async def save_verified_app_connection(
             "displayName": display_name,
             "endpointRef": endpoint_ref,
             "allowedOperations": list(allowed_operations),
-            "allowedRepositoryIds": [
-                str(name).strip() for name in permitted_repositories if str(name).strip()
-            ],
-            "clientPolicy": {
-                "pinnedVersion": "2.46.0",
-                "toolBundleRef": "tool-bundle:git-2.46",
-                "executableSha256": "sha256:git",
-            },
+            "allowedRepositoryIds": list(permitted),
+            "clientPolicy": _deployment_git_client_policy(),
             "credential": credential,
             "lifecycle": "active",
             "policyRevision": 1,
@@ -397,7 +537,48 @@ async def save_verified_app_connection(
     )
     if hasattr(result, "__await__"):
         result = await result
+    if pending is not None and state is not None:
+        setup_service.consume_setup_state(state)
     return result
+
+
+async def _read_recorded_connection(
+    connection_service: Any,
+    *,
+    connection_id: str,
+    principal_ref: str,
+    principal_scope: tuple[str, str | None],
+) -> Any | None:
+    """Return the recorded connection for an already-committed retry."""
+
+    getter = getattr(connection_service, "get_connection", None)
+    if callable(getter):
+        result = getter(
+            connection_id,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+        )
+        if hasattr(result, "__await__"):
+            result = await result
+        return result
+    return None
+
+
+def _deployment_git_client_policy() -> dict[str, Any]:
+    """Pin the deployment's observed Git client instead of placeholders.
+
+    Enrollment records the installer host's real ``git --version`` and
+    executable digest so ``validate_connection_and_client`` admits the
+    connection on normal runtimes instead of failing placeholder evidence.
+    """
+
+    from moonmind.workflows.temporal.runtime.launcher import (
+        resolve_deployment_git_client_policy,
+    )
+
+    return resolve_deployment_git_client_policy().model_dump(
+        by_alias=True, mode="json"
+    )
 
 
 __all__ = [

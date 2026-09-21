@@ -116,7 +116,7 @@ def _provider_edge(token="ghs_opaque_mount_xyz", account=ACCOUNT, repos=None):
         assert str(jwt or "").strip()
         # Exact restrictions: repositories + permissions, never omitted.
         assert set(payload.keys()) == {"repositories", "permissions"}
-        assert payload["repositories"] == list(REPOS)
+        assert payload["repositories"] == ["repo"]
         assert payload["permissions"]
         return {
             "token": token,
@@ -571,3 +571,249 @@ def test_publish_gh_fallback_consumes_bound_credential(tmp_path: Path) -> None:
     assert gh_call["env"]["GH_TOKEN"] == "ghs_opaque_gh_xyz"
     assert gh_call["env"]["GITHUB_TOKEN"] == "ghs_opaque_gh_xyz"
     assert "ghs_opaque_gh_xyz" in gh_call["redaction_values"]
+
+
+def test_enrollment_persists_issuance_scope_across_reload(tmp_path: Path) -> None:
+    """The issuance restriction survives a database reload (P1-0602)."""
+
+    from moonmind.auth.github_app_setup import GitHubAppSetupService
+    from moonmind.auth.github_app_wiring import permitted_repositories_for
+
+    async def _run() -> None:
+        async with _connection_db(tmp_path) as sessions:
+            async with sessions() as session:
+                service = RepositoryConnectionService(session)
+                setup = GitHubAppSetupService(server_secret="mount-server-secret")
+                saved = await service.create_github_app_connection(
+                    setup_service=setup,
+                    provider_installation=_verified_installation(),
+                    expected_app_ref=APP_REF,
+                    request_id="req:mount-reload",
+                    connection_id="repository-connection:app",
+                    expected_account=ACCOUNT,
+                    permitted_repositories=list(REPOS),
+                    operator_import=True,
+                    principal_ref="principal:alice",
+                    principal_scope=("system", None),
+                    owner_ref="owner:team-a",
+                    actor_ref="principal:alice",
+                )
+                assert saved.credential.permitted_repositories == tuple(REPOS)
+            async with sessions() as reloaded_session:
+                reloaded_service = RepositoryConnectionService(reloaded_session)
+                reloaded = await reloaded_service.get_connection(
+                    "repository-connection:app",
+                    principal_ref="principal:alice",
+                    principal_scope=("system", None),
+                )
+                assert reloaded is not None
+                assert permitted_repositories_for(reloaded) == tuple(REPOS)
+
+    asyncio.run(_run())
+
+
+def test_enrollment_records_deployment_git_client_policy(tmp_path: Path) -> None:
+    """Enrolled connections pin the observed client, not placeholders (P1-0701)."""
+
+    from moonmind.auth.github_app_setup import GitHubAppSetupService
+
+    async def _run() -> None:
+        async with _connection_db(tmp_path) as sessions:
+            async with sessions() as session:
+                service = RepositoryConnectionService(session)
+                setup = GitHubAppSetupService(server_secret="mount-server-secret")
+                saved = await service.create_github_app_connection(
+                    setup_service=setup,
+                    provider_installation=_verified_installation(),
+                    expected_app_ref=APP_REF,
+                    request_id="req:mount-policy",
+                    connection_id="repository-connection:app",
+                    expected_account=ACCOUNT,
+                    permitted_repositories=list(REPOS),
+                    operator_import=True,
+                    principal_ref="principal:alice",
+                    principal_scope=("system", None),
+                    owner_ref="owner:team-a",
+                    actor_ref="principal:alice",
+                )
+                assert saved.client_policy.tool_bundle_ref == "repository-client:git-system"
+                digest = saved.client_policy.executable_sha256
+                assert digest.startswith("sha256:")
+                raw_digest = digest.removeprefix("sha256:")
+                assert len(raw_digest) == 64 and all(
+                    ch in "0123456789abcdef" for ch in raw_digest
+                )
+
+    asyncio.run(_run())
+
+
+def test_callback_save_consumes_state_only_after_commit() -> None:
+    """A failed save leaves setup state reusable; success consumes it (P1-0618)."""
+
+    import pytest
+
+    from moonmind.auth.github_app_setup import GitHubAppSetupService, save_verified_app_connection
+    from moonmind.workflows.executions.repository_contract import RepositoryRouteError
+
+    async def _run() -> None:
+        setup = GitHubAppSetupService(server_secret="commit-server-secret")
+        pending = setup.begin_setup(
+            request_id="req:commit-1",
+            connection_id="repository-connection:app",
+            principal_ref="principal:alice",
+            principal_scope=("system", None),
+            expected_app_ref=APP_REF,
+            expected_account=ACCOUNT,
+            permitted_repositories=list(REPOS),
+        )
+        base_kwargs = {
+            "setup_service": setup,
+            "provider_installation": _verified_installation(),
+            "expected_app_ref": APP_REF,
+            "expected_account": ACCOUNT,
+            "permitted_repositories": list(REPOS),
+            "request_id": "req:commit-1",
+            "connection_id": "repository-connection:app",
+            "state": pending.state,
+            "installation_ref": INSTALLATION_REF,
+            "caller_principal": "principal:alice",
+            "caller_scope": ("system", None),
+            "destination_connection_id": "repository-connection:app",
+            "principal_ref": "principal:alice",
+            "principal_scope": ("system", None),
+            "owner_ref": "owner:team-a",
+            "actor_ref": "principal:alice",
+        }
+
+        class _FailingWriter:
+            async def create_connection(self, *args, **kwargs):
+                raise RepositoryRouteError("REPOSITORY_ROUTE_CONFLICT", "boom")
+
+        with pytest.raises(RepositoryRouteError):
+            await save_verified_app_connection(
+                connection_service=_FailingWriter(), **base_kwargs
+            )
+
+        class _SavingWriter:
+            def __init__(self):
+                self.calls = 0
+
+            async def create_connection(
+                self, connection, *, actor_ref, request_id, principal_ref, principal_scope
+            ):
+                self.calls += 1
+                return connection
+
+        writer = _SavingWriter()
+        saved = await save_verified_app_connection(
+            connection_service=writer, **base_kwargs
+        )
+        assert saved.id == "repository-connection:app"
+        assert writer.calls == 1
+
+        # The committed state is consumed: replay fails closed.
+        with pytest.raises(RepositoryRouteError):
+            await save_verified_app_connection(
+                connection_service=writer, **base_kwargs
+            )
+
+    asyncio.run(_run())
+
+
+def test_committed_callback_retry_reconciles_to_recorded_connection(
+    tmp_path: Path,
+) -> None:
+    """A lost response after commit retries to the recorded row (P1-0618)."""
+
+    from moonmind.auth.github_app_setup import GitHubAppSetupService
+
+    async def _run() -> None:
+        async with _connection_db(tmp_path) as sessions:
+            async with sessions() as session:
+                service = RepositoryConnectionService(session)
+                setup = GitHubAppSetupService(server_secret="reconcile-secret")
+                pending = setup.begin_setup(
+                    request_id="req:reconcile-1",
+                    connection_id="repository-connection:app",
+                    principal_ref="principal:alice",
+                    principal_scope=("system", None),
+                    expected_app_ref=APP_REF,
+                    expected_account=ACCOUNT,
+                    permitted_repositories=list(REPOS),
+                )
+                kwargs = {
+                    "setup_service": setup,
+                    "provider_installation": _verified_installation(),
+                    "expected_app_ref": APP_REF,
+                    "expected_account": ACCOUNT,
+                    "permitted_repositories": list(REPOS),
+                    "request_id": "req:reconcile-1",
+                    "connection_id": "repository-connection:app",
+                    "state": pending.state,
+                    "installation_ref": INSTALLATION_REF,
+                    "caller_principal": "principal:alice",
+                    "caller_scope": ("system", None),
+                    "destination_connection_id": "repository-connection:app",
+                    "principal_ref": "principal:alice",
+                    "principal_scope": ("system", None),
+                    "owner_ref": "owner:team-a",
+                    "actor_ref": "principal:alice",
+                }
+                first = await service.create_github_app_connection(**kwargs)
+                assert first.id == "repository-connection:app"
+                # Same callback retried after the committed save: reconciles
+                # to the recorded connection instead of replay rejection.
+                retry = await service.create_github_app_connection(**kwargs)
+                assert retry.id == "repository-connection:app"
+
+    asyncio.run(_run())
+
+
+def test_callback_save_uses_state_bound_intent() -> None:
+    """Callback arguments cannot widen the verified pending intent (P1-0655)."""
+
+    from moonmind.auth.github_app_setup import GitHubAppSetupService, save_verified_app_connection
+
+    async def _run() -> None:
+        setup = GitHubAppSetupService(server_secret="intent-server-secret")
+        pending = setup.begin_setup(
+            request_id="req:intent-1",
+            connection_id="repository-connection:app",
+            principal_ref="principal:alice",
+            principal_scope=("system", None),
+            expected_app_ref=APP_REF,
+            expected_account=ACCOUNT,
+            permitted_repositories=list(REPOS),
+        )
+
+        class _SavingWriter:
+            async def create_connection(
+                self, connection, *, actor_ref, request_id, principal_ref, principal_scope
+            ):
+                return connection
+
+        saved = await save_verified_app_connection(
+            setup_service=setup,
+            connection_service=_SavingWriter(),
+            provider_installation=_verified_installation(),
+            expected_app_ref=APP_REF,
+            expected_account=ACCOUNT,
+            # Divergent callback arguments: the pending record must win.
+            permitted_repositories=["acme/other"],
+            request_id="req:intent-evil",
+            connection_id="repository-connection:evil",
+            state=pending.state,
+            installation_ref=INSTALLATION_REF,
+            caller_principal="principal:alice",
+            caller_scope=("system", None),
+            destination_connection_id="repository-connection:app",
+            principal_ref="principal:mallory",
+            principal_scope=("system", None),
+            owner_ref="owner:team-a",
+            actor_ref="principal:alice",
+        )
+        assert saved.id == "repository-connection:app"
+        assert saved.credential.permitted_repositories == tuple(REPOS)
+        assert saved.allowed_repository_ids == tuple(REPOS)
+
+    asyncio.run(_run())
