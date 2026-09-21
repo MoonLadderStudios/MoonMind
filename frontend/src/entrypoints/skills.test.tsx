@@ -8,6 +8,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { SkillsPage } from './skills';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
+import '../styles/dashboard.css';
 
 // The "Create New Skill" trigger now lives in the masthead nav (outside the
 // SkillsPage subtree these tests mount), so open the drawer the same way the
