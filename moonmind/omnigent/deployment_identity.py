@@ -84,7 +84,12 @@ async def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
 
     The immutable catalog supplies the admitted major.minor independently of
     MoonMind releases. Previously persisted inline version evidence is retained.
-    The pinned host remains launchable when the default host image advances.
+    A compatible same-repository host rebuild (patch/SHA drift within the
+    installed image family) remains launchable without a new policy/version
+    ladder: fresh admission binds the installed target to the attempt while
+    the already-started attempt keeps its recorded evidence. A genuinely
+    different repository (family change), unqualified ref, or denied
+    authority still blocks with useful diagnostics.
     """
 
     if getattr(plan_payload, "executionRealizerRef", None) != (
@@ -171,10 +176,21 @@ async def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
             "execution plan lacks exact host image authority"
         )
     if planned_host != deployed_host:
-        raise OmnigentDeploymentIdentityConflict(
-            "execution plan targets a host image that is no longer "
-            "deployed; create a fresh execution to compile current runtime authority"
-        )
+        from moonmind.omnigent.compatibility import is_same_image_repository
+
+        if not _IMAGE_REF.fullmatch(deployed_host or ""):
+            raise OmnigentDeploymentIdentityConflict(
+                "deployed host image authority is unavailable; the deployment "
+                "owner must restore the installed runtime before launch"
+            )
+        if not is_same_image_repository(planned_host, deployed_host):
+            raise OmnigentDeploymentIdentityConflict(
+                "execution plan targets a host image family that is no longer "
+                "deployed; create a fresh execution to compile current runtime authority"
+            )
+        # Same-repository digest drift is a compatible rebuild within the
+        # installed family: launch proceeds on the installed target without
+        # a new policy/version ladder or schedule re-admission.
 
 
 __all__ = [

@@ -761,8 +761,14 @@ async def verify_installed_fleet(runner, image, *, expected=None, attempts=60):
 async def migrate_omnigent(runner, owner, image, *, actor="release"):
     """Advance the singular Omnigent release; no-op when already aligned.
 
-    Runs inside the primary success path so an omnigent migration failure
-    blocks the release receipt exactly like a fleet verification failure.
+    Installed-runtime mode: records the installed server/host digests and
+    recreates onto them. Never creates policy versions, profile revisions,
+    or schedule re-admissions; fresh admission resolves the installed
+    runtime instead. The controller never imports application
+    policy/schedule services. Runs inside the primary success path so a
+    required-runtime failure blocks the release receipt exactly like a fleet
+    verification failure, while an optional catalog/reporting outage never
+    undoes confirmed Compose work.
     """
     from moonmind.workflows.skills.deployment_execution import (
         FileDesiredStateStore,
