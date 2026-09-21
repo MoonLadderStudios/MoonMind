@@ -3,14 +3,14 @@
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
 **Status:** Proposed  
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-21  
 **Audience:** Workflow and runtime authors, integration authors, security reviewers, operators, and dashboard contributors  
 **Authority:** Feature-level target behavior for optional repository access, connection-bound authentication, durable workspace results, and independently authorized publication  
 **Owning Surface:** Workflow admission, repository access, workspace materialization, publishing, Secrets System, and runtime integration boundaries  
 **Related Docs:** [MoonMind Architecture](MoonMindArchitecture.md), [Workflow Architecture](Workflows/WorkflowArchitecture.md), [Lore VCS Integration](Workflows/LoreVcsIntegrationDesign.md), [Workflow Publishing](Workflows/WorkflowPublishing.md), [Workspace Locators](Workflows/WorkspaceLocators.md), [Secrets System](Security/SecretsSystem.md), [Provider Profiles](Security/ProviderProfiles.md), [Omnigent Harness Platform](Omnigent/OmnigentHarnessPlatformDesign.md), [OpenCode Host](Omnigent/OpenCodeHost.md), [MoonSpec Document Model](Workflows/MoonSpecDocumentModel.md), [Create Page](UI/CreatePage.md), [Input Schema Guidance](Steps/InputSchemaGuidance.md)  
 **Related Implementation:** [`repository_contract.py`](../moonmind/workflows/executions/repository_contract.py), [`workspace_intent.py`](../moonmind/omnigent/workspace_intent.py), [`moonmind/auth/`](../moonmind/auth/), [`moonmind/publish/`](../moonmind/publish/), [`moonmind/omnigent/host_services/`](../moonmind/omnigent/host_services/), and [`SecretsService`](../api_service/services/secrets.py)
 
-> This document describes proposed desired state, not implemented API support or deployment evidence. It expresses the consolidated multi-PAT and workspace-decoupling design. Sequencing, current-state findings, migration inventories, and qualification procedures live in the [temporary implementation plan](tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md), which derives from this design rather than defining a competing target. The single-context publication contract is owned by Workflow Publishing; current helper or seed defaults do not override it.
+> This document describes proposed desired state, not implemented API support or deployment evidence. It expresses the consolidated multi-PAT and workspace-decoupling design. Sequencing, current-state findings, migration inventories, and qualification procedures live in the [temporary implementation plan](tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md), which derives from this design rather than defining a competing target. The single-context publication contract is owned by Workflow Publishing; current helper or seed defaults do not override it. The [Single-User Application Design](SingleUserApplicationDesign.md) governs operator admission and instance resources. Execution, repository, and secret-use restrictions remain without a human-account or tenant model.
 
 ## Advance organizer
 
@@ -123,7 +123,7 @@ Ordinary same-repository work presents one repository and one applicable authore
 | `accessMode` | Authored `connectionRef` | Meaning |
 | --- | --- | --- |
 | `anonymous` | Forbidden | Supported read operations with no credential lookup or injection |
-| `routed` | Absent | Deterministic selection among connections the principal may use |
+| `routed` | Absent | Deterministic selection among connections allowed by the admitted operator/execution context |
 | `explicit` | Required | Validate and use only the named connection |
 
 Anonymous access is not an error fallback. A public-URL import can author it explicitly. A connected repository picker normally authors routed access. Omitted values and documented UI defaults compile to the same intent without inspecting token presence.
@@ -156,15 +156,15 @@ Blank-workspace defaults resolve to no publication. Implementation and batch def
 
 ### CONTRACT-005 RepositoryConnection is the single connection domain
 
-A persistent `RepositoryConnection` owns its stable identity, display name, VCS provider, hosting service where applicable, trusted endpoint, client policy, scoped principal-use policy, allowed operations, typed credential configuration, and lifecycle metadata. It is not mirrored by an independently writable filesystem record or a separate `SourceControlConnection` domain. **Source Control** is the Settings page name.
+A persistent `RepositoryConnection` owns its stable identity, display name, VCS provider, hosting service where applicable, trusted endpoint, client policy, execution-use policy, allowed operations, typed credential configuration, and lifecycle metadata. It is not mirrored by an independently writable filesystem record or a separate `SourceControlConnection` domain. **Source Control** is the Settings page name.
 
 Normalized repository assignments support many repositories per connection and several eligible connections per repository. They carry repository identity, operation policy, revision, and routing defaults. The authenticated actor is distinct from the resource owner or installation.
 
 Repository identity is namespaced by hosting endpoint. A provider repository ID is used where observed, with mutable names retained for display and lookup. Generic Git uses normalized endpoint/remote identity without fabricated GitHub identifiers. Verified renames reconcile aliases; resource-owner transfers require policy revalidation.
 
-System/workspace ownership and secret-use authorization apply from the first supported connection. User-owned connections and complex inheritance are not prerequisites. Discovery, probing, selection, secret attachment, rotation, and deletion enforce the same scope. Knowing a secret reference does not authorize using it.
+Connections are instance resources under the single-user application model. Operator admission and scoped execution/secret-use authority govern discovery, probing, selection, attachment, rotation, and deletion. No human-account lookup, tenant hierarchy, mandatory workspace record, or always-admin substitute is required. Repository and workspace containment remain real execution boundaries, and knowing a secret reference does not authorize using it.
 
-There is at most one default for a scope, repository, and applicable route/capability bundle. Database constraints and transactional writes enforce that rule, including concurrent administrator edits.
+There is at most one default for a meaningful repository and applicable route/capability scope. Database constraints and transactional writes enforce that rule, including concurrent operator edits. Do not preserve unused human-scope dimensions merely to reproduce an older schema.
 
 ### CONTRACT-006 Authentication is a typed acquisition concern
 
@@ -178,17 +178,17 @@ Connection authentication uses discriminated configuration:
 
 The authenticated PAT capability includes fine-grained and classic PATs. Raw values remain in the Secrets System and trusted delivery boundaries. Connections do not introduce another secret parser, user-profile PAT column, or nullable collection of unrelated authentication fields.
 
-Acquisition supports expiring issuance independently of PAT lifetime. Consumers use returned scope and expiry rather than hardcoded token-lifetime assumptions. An App adapter supplies enrollment and acquisition without changing every consumer.
+Acquisition supports expiring issuance independently of PAT lifetime. Consumers use returned scope and expiry rather than hardcoded token-lifetime assumptions. An App adapter supplies enrollment and acquisition through the existing connection, Secrets, and Source Control owners, not another token store or account product. Verify the intended App/installation/account and repository authority through the supported enrollment path. A typed configuration or fake-expiring fixture alone does not implement production App support. One clear enrollment path can be delivered without a marketplace, every optional onboarding variant, or event-triggered workflow dispatch.
 
 OAuth/device enrollment and SSH can be additional qualified adapters. Enrollment method does not imply token lifetime. SSH repository transport does not grant hosting-service issue or PR API authority. Collaboration operations need their own admitted role or an explicit unsupported-capability result.
 
-GitHub.com is the initial GitHub endpoint. Enterprise and other-host support require administrator-controlled endpoint/TLS policy and qualified adapters, not a free-form credential destination exposed to ordinary connection creators.
+GitHub.com is the initial GitHub endpoint. Enterprise and other-host support require operator-controlled endpoint/TLS policy and qualified adapters, not a free-form credential destination exposed to execution content.
 
 ### CONTRACT-007 Selection is deterministic for each declared role
 
-Selection receives target identity, requested capabilities, access mode, requesting principal/workspace, role, and policy version. Anonymous access admits only supported read operations and creates no dummy connection.
+Selection receives target identity, requested capabilities, access mode, admitted operator/execution context, role, and policy version. Anonymous access admits only supported read operations and creates no dummy connection.
 
-For connection-backed access, the principal is authorized before candidate identities or discovery results are exposed. An explicit reference is validated without alternatives. Routed access selects the sole metadata-eligible route or the single applicable default; missing or ambiguous authority is actionable failure. Only the selected credential is acquired or probed.
+For connection-backed access, admission and resource-use policy are checked before candidate identities or discovery results are exposed. An explicit reference is validated without alternatives. Routed access selects the sole metadata-eligible route or the single applicable default; missing or ambiguous authority is actionable failure. Only the selected credential is acquired or probed.
 
 The selected route and policy are persisted before repository access. Exact provider identity and source observations are verified through that selection before mutation. A failing selected route is not removed so another PAT can be tried. Authentication errors, access denial, a hidden-or-missing repository, network failure, and throttling never reroute the execution.
 
@@ -234,7 +234,7 @@ RepositoryAuthorityBinding
   materializerRef
 ```
 
-An immutable repository-access snapshot identifies endpoint/repository, declared role, admitted operations, policy/binding revision, selection origin, and principal/workspace scope. Existing binding-set version/digest infrastructure supplies its immutable linkage. Several mutable plan records do not independently own copies of connection policy.
+An immutable repository-access snapshot identifies endpoint/repository, declared role, admitted operations, policy/binding revision, selection origin, and execution/resource scope. Existing binding-set version/digest infrastructure supplies its immutable linkage. Several mutable plan records do not independently own copies of connection policy. Historical principal fields retain their actual decoding rules without requiring a present-day human account.
 
 Anonymous access has an access snapshot but no credential binding. Scratch has neither repository entry. A credentialless model still uses its normal Provider Profile and `none@1` materializer. Lease, continuation, child planning, serialization, and cleanup dispatch by authority kind. Repository access does not inherit model-account exclusivity, capacity, or cooldown rules.
 
@@ -421,17 +421,19 @@ Compiled `auto` remains Skill-owned. Publication-only recovery does not rerun or
 
 ### CONTRACT-014 Historical interpretation is explicit and bounded
 
-Changed contracts are versioned at their actual owning boundary, not duplicated as a parallel `RepositoryTargetV2` domain. Historical binding loaders verify original parsing and digest rules before interpretation. New-write producers use one canonical contract and reject historical aliases.
+Changed contracts are versioned at their actual owning boundary, not duplicated as a parallel `RepositoryTargetV2` domain. Historical binding loaders verify original parsing and digest rules before interpretation. New-write producers use one canonical contract and reject historical aliases. Retain a compatibility reader only for an actual persisted consumer, with a removal condition.
 
-Recorded workflows retain compatible deterministic decisions and worker support. Versioned execution cannot fall back to a singleton resolver. `repository-connection:git-default` remains the compatibility identity for an explicitly bound effective legacy source, not a live chain of guessed credentials. Detailed migration and retirement mechanics belong in the temporary plan.
+Use the existing versioned migration and [deployment controller](Steps/DockerComposeUpdateSystem.md) for legacy credential mapping. Preserve proven effective references and scopes with transactional or expected-revision protection, and reconcile uncertain commits before repeating them. A brief controlled maintenance window may prevent incompatible writers from racing. Fresh and already-migrated startup must not depend on a permanent census of removed credential sources, another migration ledger, or a second rollout framework. Required migration failures still prevent unsafe exposure or authority changes.
 
-Reconstruction preserves authored, bound, and derived values separately. Proven equal repository/branch copies can collapse; conflicts or unknown origins require review. A coordinator-local None with proven child PR intent reconstructs as one PR scope, not a global None selection. Old literal Auto and recorded None-to-Auto coercion retain their historical execution interpretation but do not become new authoring defaults. Schedule edits and reruns re-admit reviewed intent without rewriting existing children or historical hashes.
+Recorded workflows preserve original bytes, digests, and compatible deterministic decisions. Actual replay-sensitive changes require existing replay evidence or their controlled transition. A different worker/image SHA or patch version alone is not incompatibility and does not require retained fleets. Historical authority never permits reacquiring a revoked credential. `repository-connection:git-default` is only the identity of a proven effective legacy binding, not a fallback chain. Detailed transition mechanics remain in the temporary plan.
+
+Reconstruction preserves authored, bound, and derived values separately. Proven equal repository/branch copies can collapse. Recover missing provenance from available trusted evidence before requiring a real decision; unresolved choices suspend the affected authenticated operation, not unrelated scratch or explicitly anonymous work. An empty or unknown legacy allowlist cannot become wildcard access. A coordinator-local None with proven child PR intent reconstructs as one PR scope, not a global None selection. Old literal Auto and recorded None-to-Auto coercion retain their historical execution meaning but do not become new defaults. Preserve schedule identity and use compatible readers when sufficient instead of reapproving or recreating every schedule. Edits and reruns re-admit actual changed intent without rewriting existing children or historical hashes.
 
 ### QUALITY-007 Failures identify the responsible boundary
 
 Diagnostics identify model eligibility, workspace preparation, repository routing, credential acquisition, capability evidence, artifact saving, or publication as the failing boundary. Expired credentials, organization approval, unknown write evidence, ambiguous routing, throttling, unsafe content, and incomplete restore are not compressed into one Disconnected state.
 
-Audit evidence correlates execution/attempt, principal/workspace, role, connection and credential revision, policy/binding digest, issuance lifecycle, source/candidate identity, and outcome. Values remain secret-free. UI projections consume authoritative records and cannot replace primary success with auxiliary projection lag.
+Audit evidence correlates execution/attempt, admitted access and workspace context, role, connection and credential revision, policy/binding digest, issuance lifecycle, source/candidate identity, and outcome. Values remain secret-free. UI projections consume authoritative records and cannot replace primary success with auxiliary projection lag. Correlation does not require a human-account record or a duplicate audit system.
 
 ## 11. Credential-independent model compute
 
@@ -439,7 +441,7 @@ Audit evidence correlates execution/attempt, principal/workspace, role, connecti
 
 The credentialless OpenCode route retains the `opencode-zen-free` identity and `none@1` materializer, separate from keyed profiles. Explicit operator disable/default choices are preserved. `OPENCODE_API_KEY` is not permission to turn an anonymous execution into a paid/keyed one. A new anonymous auth-state enum or duplicate free profile is not required by this design.
 
-Readiness belongs to the qualified profile, runtime pack, Host Class, and exact image. A shared image or seeded database row alone is not evidence that the complete execution path works.
+Readiness proves the selected profile and installed runtime's required capabilities and behavior. Record the actual image and runtime provenance, but do not require equal image digests or build versions across unrelated components. A shared image or seeded database row alone is not evidence that the complete execution path works.
 
 ### INV-009 Free-model selection cannot change cost or privacy implicitly
 
@@ -463,29 +465,33 @@ The normal creation view presents workspace source, saved results, one publicati
 
 For ordinary repository work, Skill/Preset settings do not repeat repository, branch, or publish-mode controls. Typed context bindings supply equivalent arguments. Read-only explanations identify the workflow context or resolved PR target. Meaningful task options such as filters, verification, review provider, and Merge when ready remain available. Auto explains the selected batch's child outputs and possible merges while distinguishing its coordinator's own no-publication role.
 
-The Source Control wizard accepts a name and token, verifies the actor, selects repositories, and saves/tests the connection. It creates a Managed Secret internally. Authorized reuse of an existing secret is an advanced action. Actor, resource owner, repositories, health, and expiry are prominent; revisions, materializers, detailed probes, and per-operation routing are progressively disclosed.
+The existing Source Control setup supports a named PAT connection or a verified App installation through the same connection lifecycle. PAT setup creates a Managed Secret internally; App signing material also stays in the Secrets System. Authorized reuse of existing secret material is advanced. Actor, resource owner, repositories, health, and expiry are prominent; revisions, materializers, detailed probes, and per-operation routing are progressively disclosed. Do not add another connection wizard or expose token plumbing to implement a new acquisition adapter.
 
-Repository discovery uses a connection the principal may use, deduplicates by endpoint/provider identity, and never depends on a global token. Public URL entry does not require authenticated discovery. Simple routing presents one default; separate read/publication identities remain explicit advanced choices when genuinely required.
+Repository discovery uses authority admitted for the operator or execution, deduplicates by endpoint/provider identity, and never depends on a global token. Public URL entry does not require authenticated discovery. Simple routing presents one default; separate read/publication identities remain explicit advanced choices when genuinely required.
 
 Creation and Workflow Detail always show resolved identity, even when no selector is necessary. Anonymous source plus no publication is labeled as such. Connected work identifies the named connection and authenticated actor, with separate roles when they differ. Stale lookup responses cannot replace a changed source, base, PR, or connection.
 
 ### DOC-REQ-005 Results distinguish saving from publishing
 
-Result views expose actual reports, available downloads, completeness, retention, Continue working, and Publish Saved Work. Inapplicable formats do not appear as broken buttons. Saved-but-not-published is a successful save state, not a credential failure.
+One compact result section in the existing Workflow Detail view exposes actual reports, available downloads, completeness, retention, Continue working, and Publish Saved Work. Report-only and non-Git outputs remain useful. Inapplicable formats do not appear as broken buttons. Saved-but-not-published is a successful save state, not a credential failure.
 
-Compute, save, and publication status remain separately inspectable. Blocked publication offers publication-only recovery. Failed saving reports preserved-workspace and bounded retry state without claiming durable artifacts exist. A change from requested publication to save-only requires an explicit operator choice.
+Compute, save, publication, and cleanup status remain separately inspectable. Failed/canceled compute may have useful saved output. Blocked publication offers publication-only recovery through the existing publisher, without another model run. Continue working uses fresh execution admission rather than reviving old session authority. Failed saving reports preserved-workspace and bounded retry state without claiming durable artifacts exist. A change from requested publication to save-only requires an explicit operator choice.
 
-The displayed authored selection is not replaced by a coordinator's derived None or a resolver's internal Auto. Batch enqueue success is distinct from child publication progress. Details link the actual child outcomes and explain the applicable scope policy. No new editable policy field or duplicate result store is introduced.
+Server-owned result and action evidence selects the exact run/attempt/artifact. Preview permission and a permissive generic metadata default do not prove raw-restore or publication authority. Reuse existing safe renderers, on-demand authorized downloads, operation IDs, and idempotency reconciliation. Late responses and navigation cannot retarget a selected result or repeat accepted work. Instance/resource caches preserve admission invalidation without a human-user partition. Missing projection data stays unavailable rather than becoming a new frontend outcome or permission engine.
+
+The displayed authored selection is not replaced by a coordinator's derived None or a resolver's internal Auto. Batch enqueue success is distinct from child publication progress. Details link the actual child outcomes and explain the applicable scope policy. Existing destination/preview confirmations remain authoritative when required. No new editable policy field, approval system, or duplicate result store is introduced.
 
 ## 13. Conformance obligations
 
 ### TEST-001 Capability qualification covers real authority handoffs
 
-Every advertised runtime × source × access mode × output/publication combination has evidence through its actual admission, workspace, delivery, result, and cleanup boundaries. Unsupported combinations fail before execution. Session reattachment and workspace restoration have separate evidence.
+Every required supported capability needs evidence at its actual admission, workspace, delivery, result, and cleanup boundaries. Reuse representative journeys through a shared production implementation and add focused cases for genuinely different adapters, storage, or authority handoffs. Do not independently repeat the full runtime × source × access mode × output × fault cross-product. An unimplemented required capability, including production App support, cannot be relabeled unsupported to close verification. Unsupported combinations still fail before execution, and session reattachment is not workspace restoration.
 
-Required CI is hermetic and exercises production boundaries with local remotes, controlled identity/expiry endpoints, clocks, and artifact/database services as appropriate. Live provider qualification is separately labeled. A mocked catalog or profile-seeding test alone cannot prove the no-account product journey.
+Required CI is hermetic and exercises production boundaries with local remotes, controlled identity/expiry endpoints, clocks, and artifact/database services as appropriate. Clean startup, image inspection, and browser/API tests that need no private credentials belong in existing CI rather than a compulsory operator rehearsal. Live provider qualification is separately authorized and labeled. A mocked catalog or profile-seeding test alone cannot prove the no-account product journey.
 
-Coverage includes the single authored context and policy across Create, Apply/Reapply, unexpanded Submit, API/MCP, schedules, edit/rerun, and child admission. Coordinator None with PR/Auto descendants, non-default bases, per-PR heads, explicit None, shared-branch conflicts, and required candidate handoffs use the production compiler rather than UI-only fixtures.
+Coverage includes the single authored context and policy across Create, Apply/Reapply, unexpanded Submit, API/MCP, schedules, edit/rerun, and child admission. Coordinator None with PR/Auto descendants, non-default bases, per-PR heads, explicit None, shared-branch conflicts, and required candidate handoffs use the production compiler rather than UI-only fixtures. Existing feature tests supply this evidence where they already exercise the boundary.
+
+Use targeted development tests and broader current-candidate GitHub Actions under AGENTS.md. A short PR explanation links actual results and remaining gaps; no production claim registry, fixed inventory count, filename/wording test, new umbrella runner, or second result aggregator is required. Required missing, failed, canceled, or unexpectedly skipped execution remains non-success. Pending live qualification does not become a code defect or consume repeated implementation attempts, and neither fixtures nor unrelated green CI certify it.
 
 ### TEST-002 Credential isolation survives concurrency and lifecycle changes
 
