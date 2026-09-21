@@ -57,7 +57,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, UniqueConstraint, func, select, text
+from sqlalchemy import String, UniqueConstraint, and_, cast, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -300,17 +300,24 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
 )
 
 # Null-owner rows in these tables are ambiguous retained data, not
-# deployment-owned by assumption. ``workflow_runs`` belongs here: both
-# user columns are nullable with ``ON DELETE SET NULL``, so a retained
-# run whose user was deleted can carry two null owners.
+# deployment-owned by assumption. Each entry names a single owner
+# column whose null (on a non-empty table) refuses conversion.
 _UNOWNED_TRACKED: tuple[tuple[str, str], ...] = (
     ("recurring_workflow_definitions", "owner_user_id"),
     ("presets", "created_by"),
     ("temporal_executions", "owner_id"),
     ("temporal_artifacts", "created_by_principal"),
-    ("workflow_runs", "requested_by_user_id"),
-    ("workflow_runs", "created_by"),
 )
+
+# Multi-column attribution: a row here is unattributed only when *every*
+# listed user column is null. A workflow run with either owner set is
+# attributed to that owner; only a both-null run (e.g. after
+# ``ON DELETE SET NULL`` removed its user) is ambiguous retained data.
+# Recorded under a ``table.col+col`` key so deployment-ownership checks
+# (which split on the table prefix) keep working.
+_UNOWNED_CONJUNCTIONS: dict[str, tuple[str, ...]] = {
+    "workflow_runs": ("requested_by_user_id", "created_by"),
+}
 
 _SUBSYSTEM_BY_SURFACE: dict[str, str] = {
     "user_profile": "profile_secrets",
@@ -538,13 +545,16 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             if table_name == "temporal_executions":
                 owner_type_col = table.c.get("owner_type")
                 if owner_type_col is not None:
+                    # ``owner_type`` is a native PostgreSQL enum, which
+                    # ``lower()`` does not accept: cast to text first so
+                    # the user-qualification works on every backend.
                     nulls = (
                         await session.execute(
                             select(func.count())
                             .select_from(table)
                             .where(
                                 col.is_(None),
-                                func.lower(owner_type_col) == "user",
+                                func.lower(cast(owner_type_col, String)) == "user",
                             )
                         )
                     ).scalar() or 0
@@ -598,6 +608,40 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             continue
         if int(total) > 0 and int(nulls) > 0:
             unowned[f"{table_name}.{column_name}"] = int(nulls)
+
+    for table_name, column_names in _UNOWNED_CONJUNCTIONS.items():
+        table = metadata.tables.get(table_name)
+        if table is None or any(c not in table.c for c in column_names):
+            continue
+        cols = [table.c[c] for c in column_names]
+        key = f"{table_name}.{'+'.join(column_names)}"
+        probe = await session.begin_nested()
+        try:
+            nulls = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(table)
+                    .where(and_(*(c.is_(None) for c in cols)))
+                )
+            ).scalar() or 0
+            total = (
+                await session.execute(select(func.count()).select_from(table))
+            ).scalar() or 0
+            await probe.commit()
+        except Exception as exc:
+            # Same classification as above: absent tables are empty
+            # evidence, anything else is unknown evidence.
+            try:
+                await probe.rollback()
+            except Exception:
+                # The probe already failed; a failed savepoint rollback
+                # must not mask the classification below.
+                pass
+            if not _is_absent_table_error(exc):
+                _record_inventory_error(inv, f"unowned:{key}")
+            continue
+        if int(total) > 0 and int(nulls) > 0:
+            unowned[key] = int(nulls)
     inv.unowned = unowned
 
     # Profile-held secrets (subsystem presence for coverage gating). The
