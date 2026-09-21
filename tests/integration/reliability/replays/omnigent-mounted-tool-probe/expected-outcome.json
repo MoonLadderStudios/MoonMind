@@ -1,6 +1,8 @@
 {
-  "invariant": "Exact-host attestation executes the deployment manifest's probe as literal arguments after verifying the read-only mount and executable presence, recording digest drift as advisory evidence, before publishing readiness.",
-  "versionProbe": ["--help"],
+  "invariant": "Exact-host attestation executes the deployment manifest's probe as literal arguments under a cleared environment -- the probe attests the delivered build, never the host's credential configuration -- after verifying the read-only mount and executable presence, recording digest drift as advisory evidence, before publishing readiness.",
+  "versionProbe": [
+    "--help"
+  ],
   "probeTimeoutSeconds": 10,
   "probeFailureExitCode": 2,
   "failureCode": "OMNIGENT_HARNESS_BUILD_MISMATCH"

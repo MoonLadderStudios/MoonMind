@@ -136,6 +136,12 @@ fi
 # environment selectors after the write removes them from this process only
 # and does not revoke cached credential authority.
 github_token=${GH_TOKEN:-}
+github_config_home=${XDG_CONFIG_HOME:-/home/app/.cache/moonmind-xdg}
+case "$github_config_home" in
+  /home/app/.cache/*) ;;
+  *) echo "unapproved GitHub config home" >&2; exit 64 ;;
+esac
+github_config_dir=$github_config_home/gh
 if [ -n "$github_token" ]; then
   case "$github_token" in
     *[!A-Za-z0-9_]*)
@@ -143,12 +149,6 @@ if [ -n "$github_token" ]; then
       exit 64
       ;;
   esac
-  github_config_home=${XDG_CONFIG_HOME:-/home/app/.cache/moonmind-xdg}
-  case "$github_config_home" in
-    /home/app/.cache/*) ;;
-    *) echo "unapproved GitHub config home" >&2; exit 64 ;;
-  esac
-  github_config_dir=$github_config_home/gh
   github_config_tmp=$github_config_dir/hosts.yml.tmp.$$
   umask 077
   mkdir -p "$github_config_dir"
@@ -158,6 +158,17 @@ if [ -n "$github_token" ]; then
     printf '    git_protocol: https\n'
   } > "$github_config_tmp"
   mv "$github_config_tmp" "$github_config_dir/hosts.yml"
+fi
+# gh migrates an unversioned config on every invocation and reads the account
+# name from api.github.com to do it, so one blocked or throttled provider call
+# fails every gh command in the host -- including the --version build probe.
+# Declare the schema version the projection above already satisfies. This runs
+# for a preserved restart too, repairing a config written before the marker.
+if [ -f "$github_config_dir/hosts.yml" ]; then
+  umask 077
+  github_version_tmp=$github_config_dir/config.yml.tmp.$$
+  printf 'version: "1"\n' > "$github_version_tmp"
+  mv "$github_version_tmp" "$github_config_dir/config.yml"
 fi
 unset github_token GH_TOKEN GIT_TOKEN GITHUB_TOKEN
 
