@@ -3,6 +3,11 @@
 **Document Class:** Canonical declarative  
 **Status:** Product destination, not implementation or deployment evidence  
 **Updated:** 2026-09-21
+**Audience:** Operators and contributors deciding product direction and milestone scope
+**Authority:** Product destinations, sequencing, and durable acceptance-claim meaning; module technical contracts stay with their providing owners
+**Owning Surface:** Product roadmap direction (this document)
+**Related Docs:** [AGENTS.md](../AGENTS.md), [single-user design](SingleUserApplicationDesign.md), [Documentation Architecture](DocumentationArchitecture.md)
+**Related Implementation:** Implementation is tracked in GitHub issues (notably [#3965](https://github.com/MoonLadderStudios/MoonMind/issues/3965)); this roadmap is not implementation evidence
 
 MoonMind is a secure, resilient, and observable single-user application for agentic work. **Reliability through simplification is the first priority.** Make the ordinary execution, chat, saved-work, recovery, and update paths work before expanding the machinery around them.
 
@@ -127,7 +132,7 @@ Prefer one in-place deployment controller and bounded interruption to permanent 
 
 ## Completion and evidence rules
 
-Reuse relevant current-candidate GitHub Actions results and focused local/container reproductions. Shared production mechanisms can share representative journeys, with focused tests for genuinely different adapters or authority/storage boundaries. Do not repeat the full harness/source/profile/image/fault cross-product, introduce a conformance registry, or require broad local suites before an authorized PR.
+Reuse relevant current-candidate GitHub Actions results and focused local/container reproductions. Shared production mechanisms can share representative journeys for the shared mechanism itself, with focused tests for genuinely different adapters or authority/storage boundaries. Each claimed support combination still requires its exact-combination evidence, and evidence gathered through one realizer does not qualify another realizer unless the support matrix explicitly defines and proves a shared observation boundary. Do not repeat the full harness/source/profile/image/fault cross-product, introduce a conformance registry, or require broad local suites before an authorized PR.
 
 Required behavior must be exercised at the boundary claimed. A real database race needs real database evidence, a served browser journey needs its API, and a durable restore needs actual saved content. Missing required functionality cannot be relabeled unsupported to close an issue. Partial, failed, canceled, or unexecuted checks remain explicit. A report validator or green unrelated check is not a product pass.
 
