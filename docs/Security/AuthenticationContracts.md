@@ -385,12 +385,14 @@ The reusable upstream boundary follows the pin recorded in
 before any behavior is relied upon; qualification results name the exact
 pin they ran against.
 
-[KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) stays at
-`Status: Proposed` until execution is complete (see the point-in-time
+[KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) is a superseded
+scoped legacy retirement reference; its account-replacement execution is not
+required (see the point-in-time
 ledger in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)).
-Clean it up only then: retain the accepted contracts in this document and
+Retain the accepted contracts in this document and
 its adapter companion, resolve backlinks, and archive or remove the
-temporary plan. Do not erase necessary operator upgrade guidance
+temporary plan once its remaining backlinks and real recovery consumers have
+another home. Do not erase necessary operator upgrade guidance
 prematurely.
 
 ### 12.4 Advanced-mode logout limitations and MFA qualification (#4124)

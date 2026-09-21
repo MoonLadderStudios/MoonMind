@@ -109,21 +109,33 @@ def _read_text(path: Path) -> str | None:
 
 
 def check_plan_precondition(repo_root: Path = REPO_ROOT) -> StepResult:
-    """Verify the removal plan is present and still pre-cutover (Proposed)."""
+    """Verify the removal plan is present as pre-cutover or superseded reference."""
     content = _read_text(repo_root / PLAN_REL)
     if content is None:
         return StepResult(
             "plan-precondition", "failed",
             f"{PLAN_REL} missing; K6 rehearsal has no accepted plan baseline.",
         )
-    if "Status: Proposed" in content and "K6" in content:
+    if "K6" not in content:
+        return StepResult(
+            "plan-precondition", "failed",
+            "Removal plan present but precondition unreadable (missing K6).",
+        )
+    if "Status: Proposed" in content:
         return StepResult(
             "plan-precondition", "completed",
             "Removal plan present with Status: Proposed; correctly unarchived pre-cutover.",
         )
+    if "superseded" in content.lower():
+        return StepResult(
+            "plan-precondition", "completed",
+            "Removal plan present as superseded scoped retirement reference; "
+            "account-replacement execution is not required.",
+        )
     return StepResult(
         "plan-precondition", "failed",
-        "Removal plan present but precondition unreadable (missing Proposed status or K6).",
+        "Removal plan present but precondition unreadable (missing Proposed status, "
+        "superseded reference, or K6).",
     )
 
 
@@ -582,8 +594,8 @@ def detect_capability_presence(repo_root: Path = REPO_ROOT) -> dict[str, str]:
         "(see inventory-survey); integrated removal not landed"
     )
     presence["4130-operator-contracts"] = (
-        "docs/tmp/KeycloakRemovalPlan.md Status: Proposed (pre-cutover); "
-        "operator contracts owned by #4130"
+        "docs/tmp/KeycloakRemovalPlan.md superseded scoped retirement reference; "
+        "account-replacement execution not required, operator contracts owned by #4130"
     )
     presence["named-owner-approval"] = "no owner approval record in checkout"
     presence["live-idp-mfa-qualification"] = (
@@ -734,9 +746,12 @@ def collect_build_pins(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     except (json.JSONDecodeError, AttributeError):
         pins["realm_clients"] = "unparseable"
     plan = _read_text(repo_root / PLAN_REL) or ""
-    pins["plan_status"] = (
-        "Proposed" if "Status: Proposed" in plan else "unknown-or-archived"
-    )
+    if "Status: Proposed" in plan:
+        pins["plan_status"] = "Proposed"
+    elif "superseded" in plan.lower():
+        pins["plan_status"] = "Superseded-reference"
+    else:
+        pins["plan_status"] = "unknown-or-archived"
     return pins
 
 
@@ -767,6 +782,8 @@ def check_build_pins(repo_root: Path = REPO_ROOT) -> StepResult:
     if pins.get("auth_provider_default") in (None, "unknown"):
         unusable.append("auth_provider_default")
     if pins.get("plan_status") in (None, "unknown-or-archived"):
+        unusable.append("plan_status")
+    elif pins.get("plan_status") not in ("Proposed", "Superseded-reference"):
         unusable.append("plan_status")
     if pins.get("realm_clients") == "unparseable":
         unusable.append("realm_clients")
