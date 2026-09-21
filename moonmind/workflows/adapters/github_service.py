@@ -216,19 +216,41 @@ class GitHubService:
             raise ValueError("Repository reader returned mismatched pull request identity")
         return data
 
-    async def read_repository_target(self, repository: str, ref: str = "") -> dict[str, str]:
+    async def read_repository_target(
+        self,
+        repository: str,
+        ref: str = "",
+        *,
+        connection: Any | None = None,
+    ) -> dict[str, str]:
         """Read a completion branch through the repository's authorized reader.
 
         Omission resolves the remote default, never the current feature upstream.
         This supplies identity only; the portable verifier owns acceptance.
+
+        When a ``github_app`` ``RepositoryConnection`` is supplied, the read
+        consumes the App installation credential through the existing bound
+        acquirer (exact restrictions, scope/expiry validation, opaque token)
+        instead of the PAT token flow; every other connection (or none) keeps
+        the existing resolution behavior unchanged.
         """
         from urllib.parse import quote
 
-        token, error = await self.resolve_github_token(repo=repository)
-        if not token:
-            raise ValueError(error or "Repository target read requires authorized GitHub access")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        headers: dict[str, str]
+        if (
+            connection is not None
+            and str(getattr(getattr(connection, "credential", None), "source", "") or "")
+            == "github_app"
+        ):
+            headers = await self.bound_app_headers_for_connection(
+                connection, repository=repository
+            )
+        else:
+            token, error = await self.resolve_github_token(repo=repository)
+            if not token:
+                raise ValueError(error or "Repository target read requires authorized GitHub access")
             headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
             if not ref:
                 response = await client.get(f"https://api.github.com/repos/{repository}", headers=headers)
                 response.raise_for_status()
@@ -379,6 +401,58 @@ class GitHubService:
 
         acquired.credential.use_now(_build)
         return dict(holder)
+
+    async def bound_app_headers_for_connection(
+        self,
+        connection: Any,
+        *,
+        repository: str,
+        operations: tuple[str, ...] = ("read",),
+    ) -> dict[str, str]:
+        """Acquire bound App headers for one admitted server-side read (#4022).
+
+        Production consumer of the bound-acquirer construction site: the
+        installation token is issued via
+        ``moonmind.auth.github_app_wiring.acquire_bound_headers_for_connection``
+        with exact repository/permission restrictions and returned
+        scope/expiry validation, then shaped through the shared bound-header
+        wire (see :meth:`headers_from_bound_credential`). The read acts under
+        the connection's recorded ownership; connections without ownership
+        fail closed. Suspension, key changes, and disablement surface through
+        the acquirer's existing invalidation/revocation checks.
+        """
+
+        from moonmind.auth.github_app_wiring import (
+            acquire_bound_headers_for_connection,
+        )
+
+        ownership = getattr(connection, "ownership", None)
+        principal_ref = (
+            str(getattr(ownership, "owner_ref", "") or "").strip()
+            if ownership is not None
+            else ""
+        )
+        if not principal_ref:
+            raise ValueError(
+                "GitHub App read requires a connection with recorded ownership"
+            )
+        scope_type = (
+            str(getattr(ownership, "scope_type", "system") or "system").strip()
+            if ownership is not None
+            else "system"
+        )
+        scope_ref = (
+            getattr(ownership, "scope_ref", None) if ownership is not None else None
+        )
+        headers, _redact = await acquire_bound_headers_for_connection(
+            connection,
+            operations=tuple(operations),
+            principal_ref=principal_ref,
+            principal_scope=(scope_type, scope_ref),
+            execution_owner=f"github-service:read:{repository}",
+            repository_display=repository,
+        )
+        return headers
 
     async def get_authenticated_user(
         self,
