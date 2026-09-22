@@ -728,11 +728,9 @@ def test_concurrent_changed_body_loser_conflicts_without_new_work(harness):
     """An insert-race loser with a divergent body gets 409, never dispatch."""
     import asyncio
     import hashlib as _hashlib
-    import json as _json
 
     client, dispatcher, maker, _ = harness
     payload = _payload()
-    raw = _json.dumps(payload).encode("utf-8")
     winner_digest = _hashlib.sha256(b"winner-body").hexdigest()
     key = f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-race"
 

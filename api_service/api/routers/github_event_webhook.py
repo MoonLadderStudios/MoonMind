@@ -481,9 +481,16 @@ async def receive_github_event(
                     execution_ref=winner.execution_ref,
                 )
             # else: same body and still pending: fall through and attempt
-            # dispatch under the stable key.
+            # dispatch under the stable key, refreshing the pending
+            # classification the same way the elif branch does for a
+            # directly observed pending receipt.
             stored_row = winner_row
             stored = winner
+            if stored is not None and stored.decision == "admitted_pending":
+                stored_row.decision = "admitted_pending"
+                stored_row.reason_code = decision.reason_code
+                stored_row.preset_slug = decision.preset_slug
+                await session.commit()
     elif stored is not None and stored.decision == "admitted_pending":
         stored_row.decision = "admitted_pending"
         stored_row.reason_code = decision.reason_code
