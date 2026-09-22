@@ -779,6 +779,107 @@ def test_supported_topology_builds_all_fleets_with_bounded_concurrency():
     assert elapsed < 30
 
 
+# --- 5. Credential/mount retain-vs-remove justification (3949-R2) ---------------
+#
+# The verifier asks for evidence that the workflow/artifacts fleets carry only
+# the credentials and mounts their actual colocated work needs. While the three
+# compat persistence handlers stay registered on the workflow fleet (the R3
+# live drain verdict is pending and fail-closed retain holds), the workflow
+# fleet must keep the I/O rights those handlers really use: database access
+# (async_session_maker, wired via the shared .env DATABASE_URL plus the
+# moonmind_secrets mount) and artifact retention (TEMPORAL_ARTIFACT_S3_* env
+# plus moonmind_secrets, via _retain_artifact/_write_result_artifact into the
+# S3-backed artifact service). Neither fleet carries LLM provider keys or
+# Docker authority, and the artifacts fleet correctly mounts no agent
+# workspaces. The agent_workspaces mount on the workflow fleet is not required
+# by the compat handlers (the four helpers carry no I/O authority per the
+# inventory tests above), but removing it — like removing the workflow fleet's
+# S3 config — is coupled to the R4 removal checklist: registration, dead DI,
+# and permissions go together once the live drain gate reports all-zero. No
+# compose change is taken in this pass; removal without the R3 verdict would
+# be a deployment change merely to close the issue.
+
+
+def test_retained_compat_handlers_require_database_and_artifact_authority():
+    """Measured I/O needs: every compat handler needs DB; terminals need artifacts."""
+
+    for handler in PERSISTENCE_HANDLERS:
+        names = _function_body_names(WORKFLOW_SRC, handler)
+        assert "async_session_maker" in names, (
+            f"{handler} must require database access while retained"
+        )
+    for handler in PERSISTENCE_HANDLERS[1:]:
+        names = _function_body_names(WORKFLOW_SRC, handler)
+        assert ("_retain_artifact" in names or "_write_result_artifact" in names), (
+            f"{handler} must require artifact retention while retained"
+        )
+    # Transitive requirement: the shared retention helpers reach the S3-backed
+    # artifact service through a database session, so both DB and S3 rights
+    # must stay wherever the compat handlers stay registered.
+    for helper in ("_write_result_artifact", "_pin_temporal_artifact"):
+        names = _function_body_names(WORKFLOW_SRC, helper)
+        assert "get_checkpoint_branch_artifact_service" in names, (
+            f"{helper} must reach the artifact service"
+        )
+        assert "async_session_maker" in names, (
+            f"{helper} must reach the database"
+        )
+
+
+def test_fleet_credentials_and_mounts_match_retained_handler_needs():
+    """Pinned compose boundary: required rights retained, no unused secrets held."""
+
+    import yaml
+
+    compose = yaml.safe_load(COMPOSE_SPEC.read_text())
+    workflow_worker = compose["services"]["temporal-worker-workflow"]
+    artifacts_worker = compose["services"]["temporal-worker-artifacts"]
+
+    workflow_env = " ".join(str(entry) for entry in workflow_worker["environment"])
+    artifacts_env = " ".join(str(entry) for entry in artifacts_worker["environment"])
+    workflow_volumes = [str(volume) for volume in workflow_worker.get("volumes", [])]
+    artifacts_volumes = [str(volume) for volume in artifacts_worker.get("volumes", [])]
+
+    # The retained workflow-queue handlers still need artifact retention, so
+    # the workflow fleet intentionally keeps the S3 backend config alongside
+    # the artifacts fleet; queue separation is not privilege separation.
+    required_s3_keys = (
+        "TEMPORAL_ARTIFACT_S3_ENDPOINT",
+        "TEMPORAL_ARTIFACT_S3_BUCKET",
+        "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
+        "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
+    )
+    for key in required_s3_keys:
+        assert key in workflow_env, f"workflow fleet must retain {key} while compat is retained"
+        assert key in artifacts_env, f"artifacts fleet must carry {key}"
+    assert any("moonmind_secrets" in volume for volume in workflow_volumes)
+    assert any("moonmind_secrets" in volume for volume in artifacts_volumes)
+
+    # The artifacts fleet serves persistence without agent workspaces.
+    assert not any(
+        volume.startswith("agent_workspaces:") for volume in artifacts_volumes
+    ), "artifacts fleet must not mount agent workspaces"
+
+    # Neither persistence fleet carries provider or container authority:
+    # no LLM keys, no Docker socket/host.
+    for key in (
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DOCKER_HOST",
+        "DOCKER_SOCKET",
+    ):
+        assert key not in workflow_env, f"workflow fleet must not carry {key}"
+        assert key not in artifacts_env, f"artifacts fleet must not carry {key}"
+
+    # agent_workspaces on the workflow fleet is not a compat-handler need
+    # (helpers carry no I/O authority), but its removal — like the workflow
+    # fleet's S3 config — belongs to the R4 removal checklist together with
+    # the handler registration and dead DI, once the live drain gate reports
+    # all-zero. Recorded here so a future removal diff is reviewable.
+
+
 @pytest.mark.asyncio
 async def test_rejection_terminalizes_blocked_without_advancing_head(
     matrix_session: AsyncSession,
