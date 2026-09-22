@@ -416,3 +416,88 @@ def test_controller_handoff_payload_is_data_only():
         submission_id="abc", image="repo@digest"
     )["desired"]["targetImage"] == "repo@digest"
     assert _handoff.controller_available() in (True, False)
+
+
+def test_serving_post_persists_prepared_record_and_runs_apply(tmp_path):
+    """Serving POST executes the apply instead of only reserving (REQ-3/REQ-4)."""
+    from moonmind_controller import apply, server, state
+
+    calls: list = []
+
+    def fake_run(command, *, timeout):
+        calls.append(tuple(command))
+        return apply.CommandResult(returncode=0, output="ok")
+
+    raw = {
+        "operationId": "op-serve",
+        "desired": {"targetImage": "img", "services": ["api"]},
+    }
+    final, error, code = server.handle_operation_submission(
+        tmp_path, raw, stack="moonmind", run=fake_run
+    )
+    assert code == 200 and error is None
+    # The injected Compose boundary ran pull then up.
+    assert calls[0][:3] == ("docker", "compose", "pull")
+    assert calls[1][:4] == ("docker", "compose", "up", "-d")
+    # Prepared target + installed config persisted across interruption.
+    persisted = state.read_record(tmp_path / "operation.json")
+    assert persisted["status"] == "installed"
+    assert persisted["prepared"]["targetImage"] == "img"
+    assert persisted["installed"]["image"] == "img"
+    assert final["status"] == "installed"
+
+
+def test_serving_post_failure_records_redacted_error_and_stays_usable(tmp_path):
+    """Apply failures persist redacted diagnostics; the record stays usable."""
+    from moonmind_controller import apply, server, state
+
+    def failing_run(command, *, timeout):
+        return apply.CommandResult(
+            returncode=1, output="token=super-secret-bearer-value denied"
+        )
+
+    raw = {
+        "operationId": "op-serve-fail",
+        "desired": {"targetImage": "img", "services": ["api"]},
+    }
+    final, error, code = server.handle_operation_submission(
+        tmp_path, raw, stack="moonmind", run=failing_run
+    )
+    assert code == 500
+    assert error is not None and "super-secret-bearer-value" not in error
+    assert "exit 1" in error
+    persisted = state.read_record(tmp_path / "operation.json")
+    assert persisted["status"] in ("desired", "failed")
+    assert persisted["attempts"]
+    assert "super-secret-bearer-value" not in json.dumps(persisted)
+    # An explicit Retry remains possible after the recorded failure.
+    retried = state.explicit_retry(tmp_path / "operation.json")
+    assert retried["status"] == "desired"
+
+
+def test_startup_convergence_resumes_unfinished_work_without_repeat(tmp_path):
+    """Restart inspects the record and converges unfinished work (REQ-4)."""
+    from moonmind_controller import apply, server, state
+
+    assert server.converge_on_startup(tmp_path, run=None) == "no-record"
+
+    done = state.new_operation(operation_id="op-done", target_image="img")
+    done = state.mark_installed(done, installed_image="img", service_images={})
+    state.write_record(tmp_path / "operation.json", done)
+
+    def must_not_run(command, *, timeout):
+        raise AssertionError("completed apply must not run again")
+
+    assert (
+        server.converge_on_startup(tmp_path, run=must_not_run) == "complete"
+    )
+
+    pending = state.new_operation(operation_id="op-resume", target_image="img")
+    pending["desired"]["services"] = ["api"]
+    state.write_record(tmp_path / "operation.json", pending)
+
+    def ok_run(command, *, timeout):
+        return apply.CommandResult(returncode=0, output="ok")
+
+    assert server.converge_on_startup(tmp_path, run=ok_run) == "resumed"
+    assert state.read_record(tmp_path / "operation.json")["status"] == "installed"
