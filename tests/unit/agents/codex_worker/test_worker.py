@@ -887,7 +887,7 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
     task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
     task_context = json.loads(task_context_path.read_text(encoding="utf-8"))
     runtime_config = task_context["runtimeConfig"]
-    assert runtime_config["mode"] == "codex"
+    assert runtime_config["mode"] == "codex_cli"
     assert runtime_config["model"] == "gpt-5-codex"
     assert runtime_config["effort"] == "high"
     assert runtime_config["providerProfile"] == "codex-provider-profile"
@@ -987,7 +987,7 @@ async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_ski
     assert handler.calls == ["codex_skill:batch-pr-resolver:True"]
     payload = handler.skill_payloads[0]
     inputs = payload["inputs"]
-    assert inputs["runtimeMode"] == "codex"
+    assert inputs["runtimeMode"] == "codex_cli"
     assert inputs["runtimeModel"] == "gpt-5-codex"
     assert inputs["runtimeEffort"] == "high"
     assert inputs["runtimeProviderProfile"] == "codex-provider-profile"
