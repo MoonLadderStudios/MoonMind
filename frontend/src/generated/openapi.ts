@@ -10239,11 +10239,10 @@ export interface components {
             /**
              * Harness
              * @default codex-native
-             * @constant
              */
-            harness: "codex-native";
+            harness: string;
             /** Harnesses */
-            harnesses?: ("codex-native" | "claude-native")[];
+            harnesses?: string[];
             /** Available */
             available: boolean;
             /** Defaultexecutionprofileref */

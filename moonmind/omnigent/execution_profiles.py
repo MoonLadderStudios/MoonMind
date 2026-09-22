@@ -12,7 +12,7 @@ import os
 import re
 from typing import Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.stock_agents import (
@@ -35,7 +35,11 @@ class OmnigentExecutionProfile(BaseModel):
     enabled: bool = True
     endpoint_ref: str = Field(alias="endpointRef")
     agent_name: str = Field(alias="agentName")
-    harness: Literal["codex-native", "claude-native", "opencode-native"]
+    # MoonLadderStudios/MoonMind#3933: the harness value is registry-derived,
+    # not a second hardcoded product list. Any approved registration (including
+    # pi-native and test registrations) validates; unknown ids are rejected at
+    # this admission boundary before effects. No live catalog is fetched.
+    harness: str
     default_policy_ref: str = Field(alias="defaultPolicyRef")
     provider_runtime: Literal["codex_cli", "claude_code", "opencode"] = Field(alias="providerRuntime")
     provider_auth: Literal["oauth_volume", "secret_ref"] = Field("oauth_volume", alias="providerAuth")
@@ -47,6 +51,20 @@ class OmnigentExecutionProfile(BaseModel):
     @property
     def ref(self) -> str:
         return f"{self.profile_id}@{self.version}"
+
+    @field_validator("harness")
+    @classmethod
+    def _require_approved_harness(cls, value: object) -> str:
+        from moonmind.omnigent.harness_platform.harness_registry import (
+            require_approved_harness_id,
+        )
+
+        try:
+            return require_approved_harness_id(value)
+        except Exception as exc:
+            raise ValueError(
+                f"harness {value} has no approved product registration"
+            ) from exc
 
 
 class OmnigentLaunchPolicy(BaseModel):
