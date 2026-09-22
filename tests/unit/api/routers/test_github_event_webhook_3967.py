@@ -352,3 +352,223 @@ def test_receipt_survives_engine_restart(harness, tmp_path):
     rows = asyncio.run(_reopen())
     assert len(rows) == 1
     assert rows[0].execution_ref == ref
+
+
+def _post_with_delivery_id(
+    client: TestClient,
+    payload: dict[str, Any],
+    delivery_id: str,
+    secret: bytes = _SECRET,
+):
+    raw = json.dumps(payload).encode("utf-8")
+    return client.post(
+        "/api/v1/github/events",
+        content=raw,
+        headers={
+            "X-Hub-Signature-256": "sha256="
+            + hmac.new(secret, raw, hashlib.sha256).hexdigest(),
+            "X-GitHub-Delivery": delivery_id,
+            "X-GitHub-Event": "issues",
+            "Content-Type": "application/json",
+        },
+    )
+
+
+def _client_with_loader(harness_maker, request_settings, loader_settings, dispatcher):
+    """Build an ingress client whose pre-dispatch recheck reads fresh wiring."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    maker = harness_maker
+    app = FastAPI()
+    app.include_router(webhook_module.router)
+
+    async def _session_override():
+        async with maker() as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = _session_override
+    app.dependency_overrides[webhook_module.get_webhook_settings] = (
+        lambda: request_settings
+    )
+    app.dependency_overrides[webhook_module.get_settings_loader] = (
+        lambda: (lambda: loader_settings)
+    )
+    app.dependency_overrides[webhook_module.resolve_webhook_secret] = (
+        lambda: _SECRET
+    )
+    app.dependency_overrides[webhook_module.get_event_dispatcher] = (
+        lambda: dispatcher
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_revoked_trigger_between_receipt_and_dispatch_yields_no_launch(harness):
+    """A trigger revoked after receipt refuses dispatch (403, no launch)."""
+    _, _, maker, _ = harness
+    request_settings = webhook_module.WebhookSettings(
+        secret_slug="github-webhook-secret",
+        trigger_configs=(_trigger_config(),),
+    )
+    revoked_settings = webhook_module.WebhookSettings(
+        secret_slug="github-webhook-secret",
+        trigger_configs=(_trigger_config(enabled=False),),
+    )
+    dispatcher = _Dispatcher()
+    client = _client_with_loader(maker, request_settings, revoked_settings, dispatcher)
+
+    import asyncio
+
+    response = _post_with_delivery_id(client, _payload(), "del-revoked")
+    assert response.status_code == 403, response.text
+    body = response.json()
+    assert body["decision"] == "rejected"
+    assert body["reasonCode"] == "revoked_before_dispatch"
+    assert body["executionRef"] in {"", None}
+    assert dispatcher.calls == []
+
+    async def _row():
+        async with maker() as session:
+            key = f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-revoked"
+            return await session.get(GitHubEventDeliveryReceipt, key)
+
+    row = asyncio.run(_row())
+    assert row is not None
+    assert row.decision == "rejected"
+    assert row.reason_code == "revoked_before_dispatch"
+    assert (row.execution_ref or "") == ""
+
+
+class _FlakyDispatcher:
+    """Controllable dispatch: fail/empty once, then succeed under same identity."""
+
+    def __init__(self, mode: str = "fail") -> None:
+        self.mode = mode
+        self.calls: list[dict[str, Any]] = []
+
+    async def dispatch(self, **kwargs: Any) -> str:
+        self.calls.append(dict(kwargs))
+        if self.mode == "fail":
+            raise RuntimeError("temporal-unavailable")
+        if self.mode == "empty":
+            return ""
+        return f"temporal:exec-{len(self.calls)}"
+
+
+def test_dispatch_failure_stays_pending_and_redelivery_reattempts_same_identity(
+    harness,
+):
+    """A dispatcher exception stays admitted_pending; redelivery re-attempts."""
+    _, _, maker, _ = harness
+    settings = webhook_module.WebhookSettings(
+        secret_slug="github-webhook-secret",
+        trigger_configs=(_trigger_config(),),
+    )
+    dispatcher = _FlakyDispatcher(mode="fail")
+    client = _client_with_loader(maker, settings, settings, dispatcher)
+
+    import asyncio
+
+    first = _post_with_delivery_id(client, _payload(), "del-flaky")
+    assert first.status_code == 202, first.text
+    first_body = first.json()
+    assert first_body["decision"] == "admitted_pending"
+    assert first_body["reasonCode"] == "dispatch_failed"
+    assert first_body["executionRef"] in {"", None}
+    identity = first_body["identityKey"]
+    assert identity.startswith("github-event:v1:")
+
+    async def _row():
+        async with maker() as session:
+            key = f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-flaky"
+            return await session.get(GitHubEventDeliveryReceipt, key)
+
+    row = asyncio.run(_row())
+    assert row is not None
+    assert row.decision == "admitted_pending"
+    assert (row.execution_ref or "") == ""
+
+    dispatcher.mode = "succeed"
+    second = _post_with_delivery_id(client, _payload(), "del-flaky")
+    assert second.status_code == 202, second.text
+    second_body = second.json()
+    assert second_body["decision"] == "admitted_dispatched"
+    assert second_body["executionRef"].startswith("temporal:exec-")
+    assert second_body["identityKey"] == identity
+    assert len(dispatcher.calls) == 2
+    assert dispatcher.calls[0]["identity_key"] == identity
+    assert dispatcher.calls[1]["identity_key"] == identity
+
+    row = asyncio.run(_row())
+    assert row.decision == "admitted_dispatched"
+    assert row.execution_ref == second_body["executionRef"]
+
+
+def test_empty_dispatch_reference_stays_pending_and_redelivery_dispatches(harness):
+    """An empty dispatch reference stays pending; redelivery dispatches once."""
+    _, _, maker, _ = harness
+    settings = webhook_module.WebhookSettings(
+        secret_slug="github-webhook-secret",
+        trigger_configs=(_trigger_config(),),
+    )
+    dispatcher = _FlakyDispatcher(mode="empty")
+    client = _client_with_loader(maker, settings, settings, dispatcher)
+
+    import asyncio
+
+    first = _post_with_delivery_id(client, _payload(), "del-empty")
+    assert first.status_code == 202, first.text
+    assert first.json()["decision"] == "admitted_pending"
+    assert first.json()["reasonCode"] == "dispatch_empty_reference"
+
+    dispatcher.mode = "succeed"
+    second = _post_with_delivery_id(client, _payload(), "del-empty")
+    assert second.status_code == 202, second.text
+    assert second.json()["decision"] == "admitted_dispatched"
+    assert second.json()["executionRef"].startswith("temporal:exec-")
+    assert len(dispatcher.calls) == 2
+
+
+def test_crash_before_start_redelivery_via_http_reuses_logical_request(harness):
+    """A receipt with no execution ref redelivered via HTTP dispatches once."""
+    client, dispatcher, maker, _ = harness
+
+    import asyncio
+
+    payload = _payload()
+    raw = json.dumps(payload).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    key = f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-crash"
+
+    async def _seed():
+        async with maker() as session:
+            session.add(
+                GitHubEventDeliveryReceipt(
+                    delivery_key=key,
+                    repository=_REPO,
+                    event_name="issues",
+                    action="labeled",
+                    payload_digest=digest,
+                    decision="admitted_pending",
+                    reason_code="admitted",
+                    preset_slug="triage-preset",
+                )
+            )
+            await session.commit()
+
+    asyncio.run(_seed())
+    response = _post_with_delivery_id(client, payload, "del-crash")
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["decision"] == "admitted_dispatched"
+    assert body["executionRef"].startswith("temporal:exec-")
+    assert len(dispatcher.calls) == 1
+    assert dispatcher.calls[0]["identity_key"].endswith(f":{digest[:16]}")
+
+    async def _row():
+        async with maker() as session:
+            return await session.get(GitHubEventDeliveryReceipt, key)
+
+    row = asyncio.run(_row())
+    assert row.decision == "admitted_dispatched"
+    assert row.execution_ref == body["executionRef"]
