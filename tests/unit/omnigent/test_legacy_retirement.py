@@ -79,11 +79,18 @@ def _record(**overrides: object) -> LegacyPathRecord:
 # ---------------------------------------------------------------- inventory shape
 
 
-def test_inventory_is_nonempty_and_nothing_removed_yet() -> None:
+def test_inventory_is_nonempty_and_records_the_runbook_deletion() -> None:
     assert RETIREMENT_INVENTORY
+    # MoonLadderStudios/MoonMind#3932 deleted the doc-only static-host startup
+    # runbook row (``omnigent.legacy.static_host_startup_runbook``): the markdown
+    # file remains as a historical read owned by the static-host consolidation
+    # tests, but no retirement row certifies it anymore.
+    assert "omnigent.legacy.static_host_startup_runbook" not in {
+        path.path_id for path in RETIREMENT_INVENTORY
+    }
     # #3833 has not promoted the qualified generic rows and the replay/rollback
-    # evidence in this cohort has not proven replacement coverage, so no legacy
-    # implementation may be classified removed.
+    # evidence in this cohort has not proven replacement coverage, so no
+    # remaining legacy implementation may be classified removed.
     assert all(not path.removed for path in RETIREMENT_INVENTORY)
 
 
@@ -771,19 +778,17 @@ def test_rollback_rows_keep_the_rollback_exercise_criterion() -> None:
         ), path.path_id
 
 
-def test_doc_only_row_is_removable_without_live_qualification() -> None:
-    """A doc-only runbook needs no canary or rollback exercise to be removed."""
+def test_removed_runbook_row_fails_closed_on_lookup() -> None:
+    """The deleted doc-only runbook row is unknown and fails closed (#3932).
 
-    path = get_retirement_record("omnigent.legacy.static_host_startup_runbook")
-    assert not path.rollback_dependency
-    eligibility = evaluate_removal_eligibility(
-        path,
-        stage=RemovalStage.STARTUP_AND_COMPOSE,
-        drained_kinds=frozenset(),
-        passed_criteria=_all_criteria(path),
-        retention=_closed_windows(),
-    )
-    assert eligibility.eligible is True, eligibility.blockers
+    The ``STATIC_HOST_STARTUP_INVENTORY.md`` file itself remains as a
+    historical read owned by the static-host consolidation tests; only the
+    retirement bookkeeping for it was removed, so a lookup by the old path id
+    must be rejected instead of admitting work.
+    """
+
+    with pytest.raises(RetirementGuardError, match="unknown retirement path"):
+        get_retirement_record("omnigent.legacy.static_host_startup_runbook")
 
 
 def test_direct_and_profile_bound_generations_are_independently_decided() -> None:

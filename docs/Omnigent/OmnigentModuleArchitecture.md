@@ -251,7 +251,13 @@ lease authority, or a rollback dependency — never from every row
 | `cutover.py` Codex-through-Omnigent selection | `omnigent.legacy.codex_cutover_selection` | `active_product_path` | 1 product selectors |
 | Managed-session replay patch branches | `omnigent.legacy.managed_session_replay_patches` | `temporal_replay_only` | 8 replay wrappers |
 | Session migration inventory | `omnigent.legacy.session_migration_inventory` | `migration_tool` | 9 historical readers |
-| `#3834` static-host startup runbook | `omnigent.legacy.static_host_startup_runbook` | `historical_read_only` | 4 startup and Compose |
+
+MoonLadderStudios/MoonMind#3932 deleted the `#3834` static-host startup runbook
+row (`omnigent.legacy.static_host_startup_runbook`) with its now-empty
+`fixtures_matrices_and_runbooks` family: the runbook was doc-only with no
+executable or persisted consumers, so it needed no live-provider canary or
+rollback exercise. `services/omnigent/scripts/STATIC_HOST_STARTUP_INVENTORY.md`
+remains as a historical read owned by the static-host consolidation tests.
 
 Two enforced-boundary exemptions are additionally owned by rows above:
 `omnigent_catalog.py`'s in-handler readiness projection reading the materializer

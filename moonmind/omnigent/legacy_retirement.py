@@ -120,7 +120,6 @@ class ComponentFamily(str, Enum):
     TEMPORAL_REGISTRATIONS = "temporal_registrations"
     PATCH_AND_WORKER_VERSION_BRANCHES = "patch_and_worker_version_branches"
     SERIALIZED_SCHEMA_AND_ROWS = "serialized_schema_and_rows"
-    FIXTURES_MATRICES_AND_RUNBOOKS = "fixtures_matrices_and_runbooks"
 
 
 class RuntimeGeneration(str, Enum):
@@ -420,12 +419,18 @@ class RetentionWindows(BaseModel):
     rollback_exercise_recorded: bool = Field(False, alias="rollbackExerciseRecorded")
 
 
-# The code-owned inventory. Nothing is removed yet; the migration/canary/replay
-# evidence in this cohort has not proven replacement coverage, and #3833 has not
-# promoted the qualified generic rows. Machine-checkable refs name a concrete
-# surface (a ``python:module:symbol``, Compose service, startup script, image
-# variable, or realizer identity) so deleting the still-required implementation
-# fails the guard even when an empty stub is left behind.
+# The code-owned inventory. MoonLadderStudios/MoonMind#3932 deleted the doc-only
+# static-host startup runbook row (``omnigent.legacy.static_host_startup_runbook``)
+# together with its now-empty ``FIXTURES_MATRICES_AND_RUNBOOKS`` family: the
+# markdown file remains as a historical read owned by the static-host
+# consolidation tests, but no retirement row certifies it anymore, and legacy
+# surface discovery tracks no ``file:`` ref that could orphan it. No other row
+# is removed yet; the migration/canary/replay evidence in this cohort has not
+# proven replacement coverage, and #3833 has not promoted the qualified generic
+# rows. Machine-checkable refs name a concrete surface (a
+# ``python:module:symbol``, Compose service, startup script, image variable, or
+# realizer identity) so deleting the still-required implementation fails the
+# guard even when an empty stub is left behind.
 RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
     # ---------------------------------------------------------------- direct Codex
     LegacyPathRecord(
@@ -1343,30 +1348,6 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         removalGuardTest=(
             "tests/unit/workflows/temporal/test_legacy_generation_replay.py::"
             "test_direct_and_profile_bound_generation_histories_replay"
-        ),
-    ),
-    LegacyPathRecord(
-        pathId="omnigent.legacy.static_host_startup_runbook",
-        owner="omnigent-deployment",
-        description=(
-            "Static-host startup consolidation runbook and rollback procedure "
-            "handed off by #3834; superseded by this code-owned inventory."
-        ),
-        family=ComponentFamily.FIXTURES_MATRICES_AND_RUNBOOKS,
-        generation=RuntimeGeneration.SHARED_LEGACY_SUBSTRATE,
-        retirementClass=RetirementClass.HISTORICAL_READ_ONLY,
-        machineCheckableRef=(
-            "file:services/omnigent/scripts/STATIC_HOST_STARTUP_INVENTORY.md"
-        ),
-        surfaces=(
-            "file:services/omnigent/scripts/STATIC_HOST_STARTUP_INVENTORY.md",
-        ),
-        historicalReadDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
-        earliestRemovalStage=RemovalStage.STARTUP_AND_COMPOSE,
-        removalGuardTest=(
-            "tests/unit/omnigent/test_legacy_retirement.py::"
-            "test_every_inventory_surface_still_resolves"
         ),
     ),
 )
