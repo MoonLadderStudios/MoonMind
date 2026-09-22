@@ -904,7 +904,7 @@ async def advance_agent_profiles_for_policy_cutover(
 ) -> list[dict[str, Any]]:
     """Advance active profiles across a same-policy cutover without manual edits.
 
-    When bootstrap reconcile (or the release migration) moves a policy default
+    When bootstrap reconcile moves a policy default
     from ``policy@14`` to ``policy@16`` for a compatible rebuild, long-lived
     schedules still pin ``@14`` and the Agent Profile still allows only
     ``@14``. ``refresh_schedule_deployment_snapshot`` then keeps requiring an

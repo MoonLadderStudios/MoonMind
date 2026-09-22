@@ -992,9 +992,11 @@ class RecurringWorkflowsService:
         Individual schedule failures are contained by default so one broken
         definition cannot block startup reconciliation. Pass
         ``raise_on_failure=True`` when the caller must block completion on any
-        failure (for example the singular Omnigent release migration, which
-        cannot publish success while recurring workflows retain stale
-        execution-plan authority).
+        failure (for example a strict administrative reconciliation pass,
+        which cannot publish success while recurring workflows retain stale
+        execution-plan authority). Routine Omnigent releases never call this:
+        fresh managed attempts bind the installed target through normal
+        admission while preserving schedule identity.
         """
 
         batch_size = max(1, int(limit))
@@ -1053,8 +1055,9 @@ class RecurringWorkflowsService:
                     exc,
                 )
         if failed and raise_on_failure:
-            # The release migration cannot publish success while affected
-            # recurring workflows retain stale execution-plan authority.
+            # A strict reconciliation caller cannot publish success while
+            # affected recurring workflows retain stale execution-plan
+            # authority.
             raise RuntimeError(
                 f"Failed to refresh {len(failed)} managed bootstrap "
                 f"schedule(s): {', '.join(failed[:5])}"
