@@ -1,4 +1,12 @@
-"""Policy-gated deployment operation service."""
+"""Policy-gated deployment operation service.
+
+Submission goes directly to the shared deployment-controller operation
+(MoonMind#4502), never through ``MoonMind.UserWorkflow``. The controller owns
+the durable operation identity; duplicate submission and lost acknowledgment
+reattach to the same operation, and an explicit retry starts a fresh bounded
+attempt. Historical workflow-backed actions remain readable as history through
+the legacy readers in the router, not as an executable fallback.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +16,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from moonmind.workflows.skills.deployment_tools import (
-    DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
+from api_service.services.deployment_controller import (
+    ControllerOperation,
+    DeploymentControllerClient,
 )
 
 CurrentImageEvidence = Literal[
@@ -106,6 +114,14 @@ class DeploymentRecentAction:
     before_build_id: str | None = None
     after_build_id: str | None = None
     rollback_eligibility: RollbackEligibilityDecision | None = None
+    # Controller-operation identity (MoonMind#4502). ``operation_id`` is the
+    # durable controller operation; ``original_error`` preserves the first
+    # failure across bounded retries; ``log_excerpt`` carries redacted,
+    # bounded controller logs for the existing Operations UI.
+    operation_id: str | None = None
+    original_error: str | None = None
+    verification_pending: bool = False
+    log_excerpt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,24 +138,25 @@ class DeploymentCurrentImage:
     evidence: CurrentImageEvidence
 
 
-class DeploymentExecutionCreator(Protocol):
-    async def create_execution(
+class DeploymentControllerSubmitter(Protocol):
+    """Narrow controller-submission surface used by the Operations service."""
+
+    def submit(
         self,
+        request: dict[str, Any],
         *,
-        workflow_type: str,
-        owner_id: UUID | str | None,
-        owner_type: str | None = None,
-        title: str | None,
-        input_artifact_ref: str | None,
-        plan_artifact_ref: str | None,
-        manifest_artifact_ref: str | None,
-        failure_policy: str | None,
-        initial_parameters: dict[str, Any] | None,
-        idempotency_key: str | None,
-        repository: str | None = None,
-        integration: str | None = None,
-        summary: str | None = None,
-    ) -> Any:
+        operator: str | None,
+        credential: str | None = ...,
+    ) -> ControllerOperation:
+        raise NotImplementedError
+
+    def retry(
+        self,
+        operation_id: str,
+        *,
+        operator: str | None,
+        credential: str | None = ...,
+    ) -> ControllerOperation:
         raise NotImplementedError
 
 
@@ -230,151 +247,146 @@ class DeploymentOperationsService:
         policy = self.get_policy(stack)
         return self._recent_actions.get(policy.stack, ())
 
-    async def queue_update(
+    def submit_update(
         self,
         *,
-        execution_service: DeploymentExecutionCreator,
+        controller: DeploymentControllerSubmitter | DeploymentControllerClient,
         policy: DeploymentStackPolicy,
         submission: DeploymentUpdateSubmission,
+        operator_credential: str | None = None,
     ) -> dict[str, str]:
-        initial_parameters = self._build_initial_parameters(
-            policy=policy,
-            submission=submission,
-        )
-        execution = await execution_service.create_execution(
-            workflow_type="MoonMind.UserWorkflow",
-            owner_id=submission.requested_by_user_id,
-            owner_type="user",
-            title=f"Update deployment stack {policy.stack}",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy="fail_fast",
-            initial_parameters=initial_parameters,
-            idempotency_key=self._idempotency_key(
-                policy=policy,
-                submission=submission,
-            ),
-            repository=None,
-            integration=DEPLOYMENT_UPDATE_TOOL_NAME,
-            summary=(
-                f"Policy-gated deployment update for {policy.stack} to "
-                f"{submission.repository}:{submission.reference}."
-            ),
-        )
-        workflow_id = str(getattr(execution, "workflow_id", "") or "").strip()
-        run_id = str(getattr(execution, "run_id", "") or "").strip()
-        if not workflow_id or not run_id:
-            raise DeploymentOperationError(
-                "deployment_update_queue_failed",
-                "Deployment update workflow was not created.",
-            )
-        deployment_update_run_id = f"depupd_{run_id.replace('-', '')}"
-        return {
-            "deploymentUpdateRunId": deployment_update_run_id,
-            "taskId": workflow_id,
-            "workflowId": workflow_id,
-            "status": "QUEUED",
-        }
+        """Submit directly to the shared controller operation.
 
-    def _build_initial_parameters(
-        self,
-        *,
-        policy: DeploymentStackPolicy,
-        submission: DeploymentUpdateSubmission,
-    ) -> dict[str, Any]:
-        plan_inputs = {
-            "stack": policy.stack,
-            "image": {
+        No ``MoonMind.UserWorkflow`` or application artifact is created. The
+        returned identifiers are the controller's durable operation identity:
+        ``workflowId`` carries that identity for clients migrating off the
+        retired workflow route and must not be treated as a Temporal workflow.
+        """
+
+        operation = controller.submit(
+            {
+                "stack": policy.stack,
                 "repository": submission.repository,
                 "reference": submission.reference,
+                "mode": submission.mode,
+                "operation_kind": submission.operation_kind,
+                "reason": submission.reason or "",
             },
-            "mode": submission.mode,
-            "removeOrphans": submission.remove_orphans,
-            "wait": submission.wait,
-            "runSmokeCheck": submission.run_smoke_check,
-            "pauseWork": submission.pause_work,
-            "pruneOldImages": submission.prune_old_images,
-            "operationKind": submission.operation_kind,
-        }
-        if submission.reason and submission.reason.strip():
-            plan_inputs["reason"] = submission.reason.strip()
-        if submission.rollback_source_action_id:
-            plan_inputs["rollbackSourceActionId"] = submission.rollback_source_action_id
-        if submission.confirmation:
-            plan_inputs["confirmation"] = submission.confirmation
-        deployment_step = {
-            "id": "update-moonmind-deployment",
-            "type": "tool",
-            "title": "Update MoonMind deployment",
-            "instructions": (
-                "Run the policy-gated deployment update operation for "
-                f"stack '{policy.stack}' using the typed "
-                f"{DEPLOYMENT_UPDATE_TOOL_NAME} tool contract."
+            operator=(
+                str(submission.requested_by_user_id)
+                if submission.requested_by_user_id is not None
+                else None
             ),
-            "tool": {
-                "type": "skill",
-                "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-                "id": DEPLOYMENT_UPDATE_TOOL_NAME,
-                "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
-                "inputs": plan_inputs,
-            },
-        }
+            credential=operator_credential,
+        )
         return {
-            "task": {
-                "instructions": (
-                    "Run the policy-gated deployment update operation for "
-                    f"stack '{policy.stack}' using the typed "
-                    f"{DEPLOYMENT_UPDATE_TOOL_NAME} tool contract."
-                ),
-                "operation": {
-                    "type": "deployment.update",
-                    "source": "api.v1.operations.deployment.update",
-                    "jiraIssue": "MM-523",
-                    "kind": submission.operation_kind,
-                    "rollbackSourceActionId": submission.rollback_source_action_id,
-                    "beforeBuildId": submission.before_build_id,
-                },
-                "steps": [deployment_step],
-                # Keep the legacy projection shape until deployment action
-                # readers are fully migrated to task.steps.
-                "plan": [
-                    {
-                        "id": deployment_step["id"],
-                        "title": deployment_step["title"],
-                        "tool": {
-                            "type": "skill",
-                            "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-                            "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
-                        },
-                        "inputs": plan_inputs,
-                    }
-                ],
-            }
+            "deploymentUpdateRunId": operation.operation_id,
+            "taskId": operation.operation_id,
+            "workflowId": operation.operation_id,
+            "operationId": operation.operation_id,
+            "status": operation.status,
         }
 
-    def _idempotency_key(
+    def retry_update(
         self,
         *,
-        policy: DeploymentStackPolicy,
-        submission: DeploymentUpdateSubmission,
-    ) -> str:
-        normalized_reason = str(submission.reason or "").strip()
-        explicit_action_key = normalized_reason
-        if submission.operation_kind == "rollback" or _is_mutable_reference(
-            policy=policy, reference=submission.reference
-        ):
-            explicit_action_key = uuid4().hex
-        return "|".join(
-            [
-                "deployment-update",
-                policy.stack,
-                submission.repository,
-                submission.reference,
-                submission.mode,
-                explicit_action_key,
-            ]
-        )[:128]
+        controller: DeploymentControllerSubmitter | DeploymentControllerClient,
+        operation_id: str,
+        operator: UUID | str | None,
+        operator_credential: str | None = None,
+    ) -> dict[str, str]:
+        """Request the controller's fresh bounded attempt for a terminal update.
+
+        The first failure is preserved on both the original and the retried
+        operation; a still-running operation reattaches instead of duplicating
+        mutation.
+        """
+
+        operation = controller.retry(
+            operation_id,
+            operator=str(operator) if operator is not None else None,
+            credential=operator_credential,
+        )
+        return {
+            "deploymentUpdateRunId": operation.operation_id,
+            "taskId": operation.operation_id,
+            "workflowId": operation.operation_id,
+            "operationId": operation.operation_id,
+            "status": operation.status,
+        }
+
+    def controller_recent_actions(
+        self,
+        stack: str,
+        *,
+        controller: DeploymentControllerClient,
+    ) -> tuple[DeploymentRecentAction, ...]:
+        """Read controller operations for a stack, newest first."""
+
+        policy = self.get_policy(stack)
+        return tuple(
+            recent_action_from_controller_operation(operation, policy=policy)
+            for operation in controller.list_stack_operations(policy.stack)
+        )
+
+
+TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
+
+
+def recent_action_from_controller_operation(
+    operation: ControllerOperation,
+    *,
+    policy: DeploymentStackPolicy,
+) -> DeploymentRecentAction:
+    """Project a controller operation onto the Operations read surface.
+
+    The controller's durable operation ID, selected target, status, original
+    failure, pending verification, and redacted logs are shown directly.
+    Installed versus requested state comes from the desired-state evidence
+    readers; accepted versus completed is the operation status. No workflow ID
+    or artifact reference is manufactured for a local operation.
+    """
+
+    status = (operation.status or "QUEUED").upper()
+    if operation.operation_kind == "rollback":
+        kind = "rollback"
+    elif status in {"FAILED", "TERMINATED", "CANCELED", "CANCELLED", "FAILURE"}:
+        kind = "failure"
+    else:
+        kind = "update"
+    completed_at = operation.updated_at if status in TERMINAL_STATES else None
+    logs = (operation.logs_text or "").strip()
+    return DeploymentRecentAction(
+        id=operation.operation_id,
+        kind=kind,
+        status=status,
+        requested_image=operation.requested_image,
+        resolved_digest=operation.resolved_digest,
+        operator=operation.operator,
+        reason=operation.reason,
+        started_at=operation.created_at,
+        completed_at=completed_at,
+        run_detail_url=None,
+        logs_artifact_url=None,
+        raw_command_log_url=None,
+        raw_command_log_permitted=False,
+        run_id=None,
+        before_summary=None,
+        after_summary=operation.error,
+        before_build_id=None,
+        after_build_id=None,
+        rollback_eligibility=RollbackEligibilityDecision(
+            eligible=False,
+            target_image=None,
+            source_action_id=operation.operation_id,
+            reason="Controller operations carry no workflow before-state.",
+            evidence_ref=None,
+        ),
+        operation_id=operation.operation_id,
+        original_error=operation.first_error or operation.error,
+        verification_pending=operation.verification_pending,
+        log_excerpt=logs[-1000:] if logs else None,
+    )
 
 
 def _is_mutable_reference(*, policy: DeploymentStackPolicy, reference: str) -> bool:

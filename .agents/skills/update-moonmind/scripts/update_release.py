@@ -1,12 +1,23 @@
-"""Portable host entrypoint for the image-owned MoonMind release controller.
+"""Portable host entrypoint for the MoonMind deployment controller operation.
 
 Only standard-library Python, Git and Compose are required on the host. The
 selected image owns deployment semantics, including canary, promotion and drain.
+
+This entrypoint is a client of the same controller operation observed by
+Settings Operations (MoonMind#4502): every submission or resume attaches to
+the durable ``depupd_`` operation in ``deploy/state/update-operations/``.
+Duplicate submission and lost acknowledgment reattach to the live operation
+instead of recording a second owner; ``--resume`` reattaches to the recorded
+operation, and ``--retry-operation`` requests the controller's fresh bounded
+attempt while preserving the first failure. The file format mirrors
+``api_service/services/deployment_controller.py`` (standard library only, so
+this script stays portable) and never carries secret material.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -14,6 +25,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -33,6 +45,14 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(password|passwd|token|secret|authorization|cookie)(\s*[:=]\s*)(\S+)"
 )
 
+# Shared controller-operation identity (MoonMind#4502). Mirrors
+# api_service/services/deployment_controller.py using only the standard
+# library so this host entrypoint stays portable.
+_CONTROLLER_OPERATIONS_SUBDIR = "update-operations"
+_CONTROLLER_TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED")
+_CONTROLLER_MAX_ATTEMPTS = 3
+_CONTROLLER_MAX_LOG_CHARS = 4000
+
 
 class DockerPullError(RuntimeError):
     """A `docker pull` failure with a classified cause for retry decisions."""
@@ -50,6 +70,278 @@ def _redact_diagnostics(text):
 
 def _sleep(seconds):
     time.sleep(seconds)
+
+
+def _controller_state_dir(repo):
+    return Path(repo) / "deploy" / "state" / _CONTROLLER_OPERATIONS_SUBDIR
+
+
+def _controller_dedupe_key(*, stack, repository, reference, mode, operation_kind, reason):
+    material = "|".join(
+        [
+            "deployment-operation",
+            stack,
+            repository,
+            reference,
+            mode,
+            operation_kind or "update",
+            reason or "",
+        ]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _controller_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _controller_atomic_write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _controller_observe(state_dir, operation_id):
+    try:
+        record = json.loads((state_dir / f"{operation_id}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _controller_find_live(state_dir, dedupe_key):
+    try:
+        names = sorted(
+            name
+            for name in os.listdir(state_dir)
+            if name.startswith("depupd_") and name.endswith(".json")
+        )
+    except OSError:
+        return None
+    for name in names:
+        try:
+            record = json.loads((state_dir / name).read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("dedupeKey") != dedupe_key:
+            continue
+        if str(record.get("status") or "") not in _CONTROLLER_TERMINAL_STATUSES:
+            return record
+    return None
+
+
+def _controller_submit(state_dir, *, intent):
+    """Attach to the live operation for identical intent or record a new one.
+
+    Returns ``(record, created)``. A duplicate submission or lost
+    acknowledgment reattaches (``created`` is False) so exactly one mutation
+    owner exists per live intent. A changed target is explicit new intent and
+    records a new operation.
+    """
+
+    dedupe = _controller_dedupe_key(
+        stack=intent["stack"],
+        repository=intent["repository"],
+        reference=intent["reference"],
+        mode=intent.get("mode", "changed_services"),
+        operation_kind=intent.get("operation_kind", "update"),
+        reason=intent.get("reason", ""),
+    )
+    live = _controller_find_live(state_dir, dedupe)
+    if live is not None:
+        return live, False
+    now = _controller_now_iso()
+    operation_id = f"depupd_{uuid.uuid4().hex[:24]}"
+    record = {
+        "operationId": operation_id,
+        "stack": intent["stack"],
+        "repository": intent["repository"],
+        "reference": intent["reference"],
+        "mode": intent.get("mode", "changed_services"),
+        "operationKind": intent.get("operation_kind", "update"),
+        "status": "QUEUED",
+        "requestedImage": intent.get("requested_image"),
+        "resolvedDigest": intent.get("resolved_digest"),
+        "reason": intent.get("reason"),
+        "operator": intent.get("operator", "local-operator"),
+        "retryOf": None,
+        "attempt": 1,
+        "firstError": None,
+        "error": None,
+        "verificationPending": False,
+        "logsText": "",
+        "createdAt": now,
+        "updatedAt": now,
+        "historyImport": None,
+        "dedupeKey": dedupe,
+    }
+    _controller_atomic_write_json(state_dir / f"{operation_id}.json", record)
+    return record, True
+
+
+def _controller_record_result(state_dir, operation_id, *, status, error=None):
+    record = _controller_observe(state_dir, operation_id)
+    if record is None:
+        raise ValueError(f"Deployment operation {operation_id} is not known")
+    redacted = _redact_diagnostics(str(error or "").strip()) or None
+    record.update(
+        {
+            "status": status,
+            "error": redacted,
+            "firstError": record.get("firstError") or redacted,
+            "updatedAt": _controller_now_iso(),
+        }
+    )
+    _controller_atomic_write_json(state_dir / f"{operation_id}.json", record)
+    return record
+
+
+def _controller_retry(state_dir, operation_id, *, operator="local-operator"):
+    """Request a fresh bounded attempt, preserving the first failure.
+
+    A still-running operation reattaches instead of duplicating mutation.
+    """
+
+    record = _controller_observe(state_dir, operation_id)
+    if record is None:
+        raise ValueError(f"Deployment operation {operation_id} is not known")
+    if str(record.get("status") or "") not in _CONTROLLER_TERMINAL_STATUSES:
+        return record, False
+    attempt = int(record.get("attempt") or 1)
+    if attempt >= _CONTROLLER_MAX_ATTEMPTS:
+        raise ValueError(
+            f"Deployment operation {operation_id} exhausted its bounded retry "
+            f"budget ({_CONTROLLER_MAX_ATTEMPTS} attempts); a changed target "
+            "is explicit new intent"
+        )
+    now = _controller_now_iso()
+    new_id = f"depupd_{uuid.uuid4().hex[:24]}"
+    new_record = {
+        "operationId": new_id,
+        "stack": record.get("stack"),
+        "repository": record.get("repository"),
+        "reference": record.get("reference"),
+        "mode": record.get("mode"),
+        "operationKind": record.get("operationKind", "update"),
+        "status": "QUEUED",
+        "requestedImage": record.get("requestedImage"),
+        "resolvedDigest": record.get("resolvedDigest"),
+        "reason": record.get("reason"),
+        "operator": operator,
+        "retryOf": operation_id,
+        "attempt": attempt + 1,
+        "firstError": record.get("firstError") or record.get("error"),
+        "error": None,
+        "verificationPending": False,
+        "logsText": "",
+        "createdAt": now,
+        "updatedAt": now,
+        "historyImport": None,
+        "dedupeKey": f"{record.get('dedupeKey')}|retry:{new_id}",
+    }
+    _controller_atomic_write_json(state_dir / f"{new_id}.json", new_record)
+    return new_record, True
+
+
+def _submission_intent(*, image_repository, reference, reason):
+    return {
+        "stack": "moonmind",
+        "repository": image_repository,
+        "reference": reference,
+        "mode": "changed_services",
+        "operation_kind": "update",
+        "reason": reason or "",
+    }
+
+
+def _find_submission_for_operation(submissions, operation_id):
+    try:
+        names = sorted(
+            name
+            for name in os.listdir(submissions)
+            if name.endswith(".json")
+        )
+    except OSError:
+        return None, None
+    for name in names:
+        path = submissions / name
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and record.get("controllerOperationId") == operation_id:
+            return path, record
+    return None, None
+
+
+def _attach_controller_operation(*, state_dir, submissions, record, submission_path=None):
+    """Attach a host submission to the shared controller operation.
+
+    A live identical intent reattaches (no second owner). A terminal linked
+    operation starts a fresh bounded attempt preserving the first failure.
+    Returns the operation record the adapter run belongs to.
+    """
+
+    inputs = record.get("inputs", {})
+    image = inputs.get("image", {})
+    intent = _submission_intent(
+        image_repository=image.get("repository", ""),
+        reference=image.get("reference", ""),
+        reason=inputs.get("reason", ""),
+    )
+    intent["requested_image"] = record.get("image")
+    digest = ""
+    if "@" in str(record.get("image") or ""):
+        digest = str(record["image"]).split("@", 1)[1]
+    intent["resolved_digest"] = digest or None
+    linked_id = record.get("controllerOperationId")
+    if linked_id:
+        linked = _controller_observe(state_dir, linked_id)
+        if linked is not None:
+            if str(linked.get("status") or "") not in _CONTROLLER_TERMINAL_STATUSES:
+                print(
+                    f"Reattaching to live controller operation {linked_id}; "
+                    "no second updater is started",
+                    flush=True,
+                )
+                return linked
+            retried, _ = _controller_retry(state_dir, linked_id)
+            print(
+                f"Controller operation {linked_id} is terminal; continuing "
+                f"as bounded attempt {retried['attempt']} "
+                f"({retried['operationId']}) preserving the first failure",
+                flush=True,
+            )
+            record["controllerOperationId"] = retried["operationId"]
+            if submission_path is not None:
+                _controller_atomic_write_json(submission_path, record)
+            return retried
+    operation, created = _controller_submit(state_dir, intent=intent)
+    record["controllerOperationId"] = operation["operationId"]
+    if submission_path is not None:
+        _controller_atomic_write_json(submission_path, record)
+    if not created:
+        print(
+            f"Reattaching to live controller operation {operation['operationId']}; "
+            "no second updater is started",
+            flush=True,
+        )
+    return operation
 
 
 def _classify_pull_failure(combined_lower):
@@ -214,6 +506,12 @@ def main(argv=None):
     parser.add_argument(
         "--resume", help="Resume the printed submission ID using its original inputs"
     )
+    parser.add_argument(
+        "--retry-operation",
+        help="Request a fresh bounded controller attempt for a terminal "
+        "operation ID that has a recorded host submission, preserving the "
+        "first failure",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--local-build", action="store_true",
@@ -226,7 +524,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.resume and args.operator_url:
         raise ValueError("Resume preserves the original operator URLs; omit --operator-url")
-    if args.local_build and args.resume:
+    if args.retry_operation and args.resume:
+        raise ValueError("Retry resolves its own recorded submission; omit --resume")
+    if args.retry_operation and args.operator_url:
+        raise ValueError("Retry preserves the original operator URLs; omit --operator-url")
+    if args.retry_operation and args.dry_run:
+        raise ValueError("Retry mutates controller state; omit --dry-run")
+    if args.local_build and (args.resume or args.retry_operation):
         raise ValueError("Resume replays a recorded release submission; omit --local-build")
     if args.local_build and args.image_repository != parser.get_default("image_repository"):
         raise ValueError("A local working-tree update uses no registry image; omit --image-repository")
@@ -234,9 +538,30 @@ def main(argv=None):
     if args.local_build:
         return _local_build_update(args, repo)
     submissions = repo / "deploy" / "state" / "release-submissions"
-    if args.resume:
+    state_dir = _controller_state_dir(repo)
+    if args.retry_operation:
+        submission_path, record = _find_submission_for_operation(
+            submissions, str(args.retry_operation).strip()
+        )
+        if record is None:
+            raise ValueError(
+                f"Controller operation {args.retry_operation} has no recorded "
+                "host submission; retry it from Settings Operations or start "
+                "a new host update"
+            )
+        if record["repo"] != str(repo):
+            raise ValueError("Release submission belongs to another deployment")
+        submission_id = submission_path.stem
+        operation = _attach_controller_operation(
+            state_dir=state_dir,
+            submissions=submissions,
+            record=record,
+            submission_path=submission_path,
+        )
+    elif args.resume:
         submission_id = str(uuid.UUID(args.resume))
-        record = json.loads((submissions / f"{submission_id}.json").read_text())
+        submission_path = submissions / f"{submission_id}.json"
+        record = json.loads(submission_path.read_text())
         if record["repo"] != str(repo):
             raise ValueError("Release submission belongs to another deployment")
         if args.dry_run:
@@ -250,6 +575,12 @@ def main(argv=None):
                 )
             )
             return 0
+        operation = _attach_controller_operation(
+            state_dir=state_dir,
+            submissions=submissions,
+            record=record,
+            submission_path=submission_path,
+        )
     else:
         run(["git", "check-ref-format", "--branch", args.branch], cwd=repo)
         if args.dry_run:
@@ -331,6 +662,14 @@ def main(argv=None):
                 **({"deployment_operator_urls": operator_urls} if operator_urls else {}),
             },
         }
+        # The host update is a client of the same controller operation the
+        # Operations UI observes: identical live intent reattaches instead of
+        # recording a second owner.
+        operation = _attach_controller_operation(
+            state_dir=state_dir,
+            submissions=submissions,
+            record=record,
+        )
         submissions.mkdir(parents=True, exist_ok=True)
         with (submissions / f"{submission_id}.json").open("x") as stream:
             json.dump(record, stream, sort_keys=True)
@@ -338,6 +677,11 @@ def main(argv=None):
             os.fsync(stream.fileno())
     print(
         f"Release submission: {submission_id} (resume with --resume {submission_id})",
+        flush=True,
+    )
+    print(
+        f"Controller operation: {operation['operationId']} "
+        f"(status {operation['status']})",
         flush=True,
     )
     compose = run(
@@ -400,7 +744,11 @@ def main(argv=None):
                 json.dumps({"inputs": record["inputs"], "context": record["context"]}),
             ]
         )
-        return subprocess.run(
+        # The image-owned deployment-control invocation underneath remains the
+        # execution adapter for this operation until #4500's execution engine
+        # lands; the shared operation record above is the identity both the
+        # host and Settings Operations observe.
+        returncode = subprocess.run(
             command,
             cwd=repo,
                 env={
@@ -422,6 +770,15 @@ def main(argv=None):
                 },
             check=False,
         ).returncode
+        _controller_record_result(
+            state_dir,
+            operation["operationId"],
+            status="SUCCEEDED" if returncode == 0 else "FAILED",
+            error=None if returncode == 0 else (
+                f"host adapter exited with status {returncode}"
+            ),
+        )
+        return returncode
 
 
 def _compose_ps_state(*, repo, project):

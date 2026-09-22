@@ -563,6 +563,86 @@ describe('OperationsSettingsSection deployment update card', () => {
     });
     expect(await within(card).findByText(/deployment rollback queued/i)).toBeTruthy();
   });
+
+  it('renders controller operation error, logs, and explicit retry', async () => {
+    const controllerFailure = {
+      ...stackState,
+      recentActions: [
+        {
+          id: 'depupd_controller1',
+          kind: 'failure',
+          status: 'FAILED',
+          requestedImage: 'ghcr.io/moonladderstudios/moonmind:stable',
+          operator: 'admin@example.com',
+          reason: 'Routine release',
+          startedAt: '2026-04-25T18:00:00Z',
+          completedAt: '2026-04-25T18:04:00Z',
+          runDetailUrl: null,
+          logsArtifactUrl: null,
+          operationId: 'depupd_controller1',
+          originalError: 'postcheck: operator route unreachable',
+          verificationPending: false,
+          logExcerpt: 'compose up failed for service api',
+          rollbackEligibility: {
+            eligible: false,
+            sourceActionId: 'depupd_controller1',
+            targetImage: null,
+            reason: 'Controller operations carry no workflow before-state.',
+          },
+        },
+      ],
+    };
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/v1/operations/codex/shards') {
+        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({ ok: true, json: async () => controllerFailure } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/update') {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            deploymentUpdateRunId: 'depupd_controller2',
+            taskId: 'depupd_controller2',
+            workflowId: 'depupd_controller2',
+            operationId: 'depupd_controller2',
+            status: 'QUEUED',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(await within(card).findByText(/postcheck: operator route unreachable/i)).toBeTruthy();
+    expect(within(card).getByText(/controller logs/i)).toBeTruthy();
+    fireEvent.click(await within(card).findByRole('button', { name: /retry update/i }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Retry deployment update?'));
+      const retryCall = fetchSpy.mock.calls.find(([url]) => String(url) === '/api/v1/operations/deployment/update');
+      expect(retryCall).toBeDefined();
+      expect(JSON.parse(String(retryCall?.[1]?.body))).toMatchObject({
+        retryOfOperationId: 'depupd_controller1',
+        image: {
+          repository: 'ghcr.io/moonladderstudios/moonmind',
+          reference: 'stable',
+        },
+      });
+    });
+    expect(await within(card).findByText(/deployment update retried/i)).toBeTruthy();
+  });
   it.each([
     ['accepted', 'pending', 'Pause requested; confirmation pending'],
     ['unknown', 'unknown', 'Pause partially confirmed'],
