@@ -22949,9 +22949,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if self._external_status == "failed":
             raise ValueError("Integration failed during plan execution.")
 
-        if self._external_status == "failed":
-            raise ValueError("Integration failed during plan execution.")
-
         # --- Jules branch-publish auto-merge ---
         # When publishMode is "branch" and the integration is Jules, the
         # workflow uses AUTO_CREATE_PR so Jules produces a PR targeting the
