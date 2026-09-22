@@ -101,6 +101,9 @@ from api_service.api.routers.secrets import router as secrets_router
 from api_service.api.routers.repository_connections import (
     router as repository_connections_router,
 )
+from api_service.api.routers.github_event_webhook import (
+    router as github_event_webhook_router,
+)
 from api_service.api.routers.settings import router as settings_router
 from api_service.api.routers.system_operations import (
     router as system_operations_router,
@@ -1437,6 +1440,7 @@ app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(
     repository_connections_router, prefix="/api/v1/repository-connections"
 )
+app.include_router(github_event_webhook_router)
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(proxy_router, prefix="/api/v1")
 app.include_router(system_operations_router)
