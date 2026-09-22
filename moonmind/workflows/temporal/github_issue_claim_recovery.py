@@ -281,6 +281,37 @@ def runtime_provisioning_failure(detail: Any) -> bool:
     return any(code in text for code in RUNTIME_PROVISIONING_FAILURES)
 
 
+async def _capacity_backoff_failed(client, receipt) -> bool:
+    """Return True when the controlling run backed off without ever holding capacity.
+
+    Best-effort and read-only like :func:`_runtime_provisioning_failed`, but
+    matches only the capacity-blocked code. An ``ISSUE_CLAIM_CAPACITY_BLOCKED``
+    failure is raised inside ``MoonMind.AgentRun`` before any provider slot
+    was granted, so the AgentRun workflow itself started yet no provider
+    execution began. Callers use this to exempt the attempt from the retry
+    allowance even though ``_closed_execution_tree`` already lists the
+    AgentRun in ``agents``.
+    """
+    from moonmind.workflows.temporal.github_issue_lease_workflow import (
+        CAPACITY_BLOCKED_CODE,
+    )
+
+    _namespace, workflow_id = receipt.owner.split("/", 1)
+    try:
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.result()
+    except Exception as exc:  # noqa: BLE001 - the failure itself is the evidence
+        parts = [str(exc)]
+        cause = getattr(exc, "cause", None)
+        for _ in range(MAX_FAILURE_CAUSE_DEPTH):
+            if cause is None:
+                break
+            parts.append(str(cause))
+            cause = getattr(cause, "cause", None)
+        return CAPACITY_BLOCKED_CODE in " ".join(parts)
+    return False
+
+
 async def _runtime_provisioning_failed(client, receipt) -> bool:
     """Return True when the controlling run failed for want of a runtime.
 
@@ -517,12 +548,28 @@ async def reconcile_local_claims(
                     # under lock. A tool failure before announcement must not
                     # retain the reservation forever.
                     agents = []
-                checkpoints = await _runtime_no_work(store, agents, receipt, service)
-                # Only asked when no agent child started: the narrow case where
-                # the run may have died before any runtime existed.
-                runtime_unavailable = not agents and await _runtime_provisioning_failed(
+                # A capacity-blocked AgentRun never admitted provider execution:
+                # its failure proves no agent work began even though the
+                # AgentRun workflow itself started. Detect it before requiring
+                # binding evidence (there is none to inspect) and treat the
+                # run as having started no agent, so the retry allowance is
+                # not spent. The exemption keys on admitted provider work,
+                # not on whether the AgentRun workflow exists.
+                capacity_backoff = bool(agents) and await _capacity_backoff_failed(
                     client, receipt
                 )
+                if capacity_backoff:
+                    agents = []
+                checkpoints = await _runtime_no_work(store, agents, receipt, service)
+                # Only asked when no agent child started (including the
+                # capacity-blocked case above): the narrow case where the run
+                # may have died before any runtime existed.
+                if capacity_backoff:
+                    runtime_unavailable = True
+                else:
+                    runtime_unavailable = (not agents) and await _runtime_provisioning_failed(
+                        client, receipt
+                    )
                 if unannounced:
                     released = await store.abandon_unannounced(
                         receipt.owner, receipt.attempt_id
