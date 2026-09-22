@@ -5,6 +5,14 @@
 # manager, Omnigent, or an LLM. Release configuration arrives as data.
 FROM python:3.12-slim
 
+# The production apply path shells out to `docker compose` subprocesses.
+# Mounting /var/run/docker.sock provides no Docker CLI or Compose plugin,
+# so the image ships both; without them every operation fails with
+# FileNotFoundError before it can repair the target stack.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker.io docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists
+
 WORKDIR /controller
 COPY moonmind_controller/ /controller/moonmind_controller/
 

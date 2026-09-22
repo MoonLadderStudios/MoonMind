@@ -21,13 +21,19 @@ services:
       context: ../..
       dockerfile: deploy/moonmind-controller/Dockerfile
     image: moonmind-controller:local
-    container_name: moonmind-controller
     restart: unless-stopped
     volumes:
       # Direct Docker socket mount, controller-owned in this separate
       # project. No agent receives this socket.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - moonmind-controller-state:/var/lib/moonmind-controller
+      # Read-only checkout of the target MoonMind project. The controller
+      # scopes every `docker compose` invocation with --project-name,
+      # --project-directory, and -f against this mount; without it the
+      # working directory holds no Compose file and pull/up cannot locate
+      # the MoonMind stack. The installer exports MOONMIND_TARGET_REPO
+      # (default: the repo the installer runs from).
+      - ${MOONMIND_TARGET_REPO:-../..}:/target/moonmind:ro
     environment:
       MOONMIND_CONTROLLER_STATE_DIR: /var/lib/moonmind-controller
       # Deployment-owned secret; never looked up from an application service.

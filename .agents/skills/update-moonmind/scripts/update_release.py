@@ -455,7 +455,7 @@ def _try_controller_handoff(*, record):
             record["context"].get("idempotency_key") or f"host-update:{record['image']}"
         ),
         target_image=record["image"],
-        services=("api", "worker"),
+        stack=record.get("project"),
         authorization=_optional_mapping(trusted_inputs.get("authorization")),
         storage=_optional_mapping(trusted_inputs.get("storage")),
         access_settings=_optional_mapping(
@@ -463,14 +463,23 @@ def _try_controller_handoff(*, record):
         ),
     )
     try:
-        receipt = client.submit_operation(payload)
-    except Exception as exc:
+        receipt = client.submit_operation(payload, wait_for_terminal=True)
+    except client.ControllerUnavailableError as exc:
+        # No controller writer owns this operation (down or absent record):
+        # falling back to the legacy application-owned updater is safe.
         print(
             f"Standalone controller unavailable ({exc}); falling back to the "
             "legacy application-owned updater until cutover completes.",
             flush=True,
         )
         return None
+    except Exception as exc:
+        # The controller owns (or may own) this operation: never fork the
+        # legacy updater while it may still be applying the same stack.
+        # The durable record stays observable via controller status, and a
+        # retry reuses the same submission ID idempotently.
+        print(f"Standalone controller did not complete the operation ({exc})", flush=True)
+        return 1
     print(f"Controller operation: {receipt} (standalone replacement owner)", flush=True)
     return 0
 
