@@ -3,6 +3,12 @@
 # service, provider manager, Omnigent, or LLM is required at runtime.
 FROM python:3.12-slim
 
+# The controller invokes `docker ps` and `docker compose` against the mounted
+# Docker socket; the socket alone does not provide the executables.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker.io docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     MOONMIND_CONTROLLER_MANAGED=1 \

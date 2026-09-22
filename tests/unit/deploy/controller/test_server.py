@@ -126,6 +126,41 @@ def test_submit_defers_while_legacy_writer_may_be_active(controller_path, tmp_pa
         thread.join(timeout=10)
 
 
+def test_internal_errors_do_not_expose_exception_detail(controller_path, tmp_path):
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+
+    def boom(operation):
+        raise RuntimeError("secret stack trace boom")
+
+    app = server_mod.build_app(store=store, secret="test-secret", applier=boom)
+    harness_httpd = make_server("127.0.0.1", 0, app)
+    port = harness_httpd.server_address[1]
+    thread = threading.Thread(target=harness_httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/operations",
+            data=json.dumps(
+                {"stack": "moonmind", "desiredImage": "img", "sourceRevision": "r"}
+            ).encode(),
+            method="POST",
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10):
+                raise AssertionError("expected a 500 from the failing applier")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 500
+            payload = json.loads(exc.read().decode() or "{}")
+            assert "boom" not in json.dumps(payload)
+            assert payload.get("error") == "internal error"
+    finally:
+        harness_httpd.shutdown()
+        thread.join(timeout=10)
+
+
 def test_restart_converges_unfinished_work_without_duplicate_apply(
     controller_path, tmp_path
 ):

@@ -253,8 +253,8 @@ def build_app(
                 operation = store.load(operation["operationId"])
         except lock_mod.LockBusyError as exc:
             return _json_response(start_response, "409 Conflict", {"error": str(exc)})
-        except Exception as exc:  # noqa: BLE001 - surfaced as a 500 with context
-            return _json_response(start_response, "500 Internal Server Error", {"error": f"{type(exc).__name__}: {exc}"})
+        except Exception:  # noqa: BLE001 - never expose exception detail
+            return _json_response(start_response, "500 Internal Server Error", {"error": "internal error"})
         return _json_response(start_response, "202 Accepted", _public_operation(operation))
 
     def _status(start_response, operation_id):
@@ -277,8 +277,8 @@ def build_app(
             operation = store.load(operation_id)
         except lock_mod.LockBusyError as exc:
             return _json_response(start_response, "409 Conflict", {"error": str(exc)})
-        except Exception as exc:  # noqa: BLE001
-            return _json_response(start_response, "500 Internal Server Error", {"error": f"{type(exc).__name__}: {exc}"})
+        except Exception:  # noqa: BLE001 - never expose exception detail
+            return _json_response(start_response, "500 Internal Server Error", {"error": "internal error"})
         return _json_response(start_response, "202 Accepted", _public_operation(operation))
 
     def _logs(start_response, operation_id):
@@ -323,11 +323,9 @@ def write_image_overlay(state_dir: str, operation_id: str, image: str) -> str:
 
 def production_apply(store: record_mod.OperationStore, operation: dict) -> dict:
     """Default applier: stage images, apply, verify, and record the result."""
-    from engine import pre_apply_checks  # local import keeps module import light
-
     target = operation.get("target") or {}
     project = target.get("project", operation.get("stack"))
-    checks = pre_apply_checks(
+    checks = engine.pre_apply_checks(
         config_valid=bool(target.get("projectDir") and target.get("composeFiles")),
         storage_ok=True,
         access_preserved=True,
@@ -380,8 +378,8 @@ def main(argv=None) -> int:
     probe = None if args.no_legacy_probe else default_legacy_writer_probe
     converge_on_restart(store, lambda operation: production_apply(store, operation), legacy_writer_probe=probe)
     app = build_app(store=store, secret_file=secret_file, legacy_writer_probe=probe)
-    httpd = make_server("127.0.0.1", args.port, app)
-    print(f"moonmind-controller listening on 127.0.0.1:{args.port}", flush=True)
+    httpd = make_server("0.0.0.0", args.port, app)
+    print(f"moonmind-controller listening on 0.0.0.0:{args.port}", flush=True)
     httpd.serve_forever()
     return 0
 

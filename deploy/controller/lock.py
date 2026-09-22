@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import os
 import re
 from pathlib import Path
 
@@ -74,10 +73,13 @@ class StackLock:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            handle.close()
             return True
-        with contextlib.suppress(OSError):
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
+        try:
+            with contextlib.suppress(OSError):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
         return False
 
 

@@ -33,7 +33,6 @@ from redact import redact_text, tail_text
 PULL_TIMEOUT_SECONDS = 600
 UP_TIMEOUT_SECONDS = 900
 MAX_COMMAND_TIMEOUT_SECONDS = 900
-VERIFY_TIMEOUT_SECONDS = 120
 
 PULL_FLAGS = ("pull", "--policy", "always")
 UP_FLAGS = (
@@ -45,18 +44,6 @@ UP_FLAGS = (
     "--remove-orphans",
     "--wait",
 )
-
-_FORBIDDEN_COMMAND_TOKENS = frozenset(
-    {
-        "down",
-        "prune",
-        "--force-recreate",
-        "--force-recreate".lstrip("-"),
-        "volume rm",
-        "image rm",
-    }
-)
-
 
 class CommandError(RuntimeError):
     """A Compose/CLI command failed; carries exit status and output."""
