@@ -251,10 +251,13 @@ from moonmind.workflows.executions.runtime_target_selection import (
     AuthoringSurface,
     resolve_runtime_target_selection,
 )
+from moonmind.workflows.executions.new_work_runtime import (
+    NewWorkAdmissionRejected,
+    new_work_evidence,
+    resolve_new_work_selection,
+)
 from moonmind.omnigent.cutover import (
     assert_runtime_new_admission,
-    effective_phase,
-    select_runtime,
 )
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
@@ -8756,7 +8759,7 @@ async def _resolve_step_runtime_selections(
                 )
             canonical_step_runtime = normalized_rt
             # A step override is new admission in its own right. The top-level
-            # ``select_runtime`` gate only covers the workflow's runtime, so
+            # new-work selection only covers the workflow's runtime, so
             # without this check an allowed top-level runtime plus a legacy
             # ``steps[i].runtime.mode`` would keep creating new legacy work
             # after the direct strategy's retirement class stopped admitting it.
@@ -11487,18 +11490,11 @@ async def _create_execution_from_workflow_request(
         if task_payload.get("presetSchedule") or scheduled_for_dt is not None
         else "create"
     )
-    # MoonLadderStudios/MoonMind#3833: the unauthored default comes from the one
-    # shared runtime-target selection boundary, which asks the versioned
-    # runtime-provider rollout policy. This surface does not reconstruct a
-    # default of its own from settings or environment variables.
-    resolved_default_runtime = resolve_runtime_target_selection(
-        surface=(
-            AuthoringSurface.schedule
-            if submission_kind == "schedule"
-            else AuthoringSurface.workflow_create
-        ),
-        workflow_settings=settings.workflow,
-    ).runtime_id
+    # MoonLadderStudios/MoonMind#3931: ordinary new work uses the one shared
+    # runtime-target selection boundary. The retired Codex phase/deployed-phase
+    # switches never influence this path; the bounded direct-retirement cutoff
+    # and the code-owned retirement class remain the only admission authorities
+    # besides the shared policy.
     if not authored_runtime and _provider_profile is not None:
         # Profile selection is execution authority even when the advanced
         # runtime control was untouched. Use the same route as inventory; an
@@ -11517,18 +11513,21 @@ async def _create_execution_from_workflow_request(
             else "omnigent"
         )
     try:
-        cutover_status = effective_phase()
-        cutover_selection = select_runtime(
+        new_work_selection = resolve_new_work_selection(
+            surface=(
+                AuthoringSurface.schedule
+                if submission_kind == "schedule"
+                else AuthoringSurface.workflow_create
+            ),
             authored_runtime=authored_runtime,
-            configured_default=resolved_default_runtime,
-            phase=cutover_status.phase,
-            submission_kind=submission_kind,
-            release_status=cutover_status,
-            versioned_default=True,
+            workflow_settings=settings.workflow,
         )
+        raw_target_runtime = new_work_selection.runtime_id
+        new_work_runtime_evidence = new_work_evidence(new_work_selection)
+    except NewWorkAdmissionRejected as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
-    raw_target_runtime = cutover_selection.runtime_id
     # Preserve the original requested model byte-for-byte (Compatibility Policy:
     # codex.model and codex.effort inputs must not be modified).
     raw_requested_model: str | None = runtime_payload.get("model") or None
@@ -11671,7 +11670,11 @@ async def _create_execution_from_workflow_request(
         "effort": resolved_effort,
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
-        "runtimeCutover": cutover_selection.as_dict(),
+        # MoonLadderStudios/MoonMind#3931: passive new-work provenance from the
+        # one shared selection boundary. Historical ``runtimeCutover`` blocks
+        # remain readable by replay; new work records target/policy provenance
+        # without a phase gate or SHA/digest fingerprint.
+        "runtimeCutover": dict(new_work_runtime_evidence),
     }
     if principal.is_workflow_principal:
         initial_parameters["parentWorkflowId"] = principal.workflow_id
@@ -12304,25 +12307,21 @@ async def _resolve_recurring_runtime_metadata(
         or parameter_payload.get("targetRuntime")
         or runtime_payload.get("mode")
     )
-    # The recurring-schedule surface resolves its unauthored default through the
-    # same shared boundary as Workflow Create (#3833).
-    resolved_default_runtime = resolve_runtime_target_selection(
-        surface=AuthoringSurface.schedule,
-        workflow_settings=settings.workflow,
-    ).runtime_id
+    # MoonLadderStudios/MoonMind#3931: the recurring-schedule surface resolves
+    # its unauthored default through the one shared boundary as Workflow
+    # Create. The retired phase switches never influence this path.
     try:
-        cutover_status = effective_phase()
-        cutover_selection = select_runtime(
+        new_work_selection = resolve_new_work_selection(
+            surface=AuthoringSurface.schedule,
             authored_runtime=authored_runtime,
-            configured_default=resolved_default_runtime,
-            phase=cutover_status.phase,
-            submission_kind="schedule",
-            release_status=cutover_status,
-            versioned_default=True,
+            workflow_settings=settings.workflow,
         )
+        raw_target_runtime = new_work_selection.runtime_id
+        new_work_runtime_evidence = new_work_evidence(new_work_selection)
+    except NewWorkAdmissionRejected as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
-    raw_target_runtime = cutover_selection.runtime_id
     canonical_target_runtime: str | None = None
     if raw_target_runtime:
         normalized_rt = normalize_runtime_id(raw_target_runtime)
@@ -12397,7 +12396,9 @@ async def _resolve_recurring_runtime_metadata(
         "model": resolved_model,
         "requestedModel": raw_requested_model,
         "modelSource": model_source,
-        "runtimeCutover": cutover_selection.as_dict(),
+        # MoonLadderStudios/MoonMind#3931: passive new-work provenance; see
+        # workflow-create site above.
+        "runtimeCutover": dict(new_work_runtime_evidence),
     }
     if model_tier_resolution is not None:
         metadata["modelTierResolution"] = model_tier_resolution
