@@ -198,7 +198,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     # discoverable through the generic execution-readiness surface instead.
     harness: str = "codex-native"
     harnesses: list[str] = Field(
-        default_factory=lambda: _default_oauth_harnesses(),
+        default_factory=_default_oauth_harnesses,
     )
     available: bool
     default_execution_profile_ref: str = Field(alias="defaultExecutionProfileRef")

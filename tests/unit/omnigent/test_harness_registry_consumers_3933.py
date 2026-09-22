@@ -312,6 +312,7 @@ def test_pinned_profile_choice_wins_over_catalog_order() -> None:
     reordered = [incompatible, pairs[0]]
     first = select_execution_configuration(provider, ordered)
     second = select_execution_configuration(provider, reordered)
+    assert first == reference
     assert second == reference
     assert second["harnessId"] == "opencode-native"
     assert second["providerProfileRef"] == fixture["provider"]["profile_id"]
