@@ -52,6 +52,10 @@ from api_service.services.github_event_dispatch import (
     TemporalEventExecutionDispatcher,
     build_dispatch_parameters,
 )
+from moonmind.workflows.adapters.github_event_delivery import (
+    _identity_key,
+    payload_digest,
+)
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
 
@@ -95,9 +99,15 @@ async def test_production_dispatcher_starts_real_workflow_under_identity_key(
             )
 
             delivery_id = f"del-boundary-{uuid4().hex[:12]}"
-            identity_key = f"github-event:v1:{_INSTALLATION}:{_REPO}:{delivery_id}"
+            digest = payload_digest(delivery_id.encode("utf-8"))
+            identity_key = _identity_key(
+                installation_id=_INSTALLATION,
+                repository=_REPO,
+                delivery_id=delivery_id,
+                digest_hex=digest,
+            )
             parameters = build_dispatch_parameters(
-                preset_slug="triage-preset",
+                preset_slug="github-issue-search-and-implement",
                 repository=_REPO,
                 issue_number=7,
                 delivery_key=f"github-delivery:v1:{_INSTALLATION}:{_REPO}:{delivery_id}",
@@ -108,11 +118,11 @@ async def test_production_dispatcher_starts_real_workflow_under_identity_key(
             async with maker() as session:
                 dispatcher = TemporalEventExecutionDispatcher(session)
                 ref = await dispatcher.dispatch(
-                    preset_slug="triage-preset",
+                    preset_slug="github-issue-search-and-implement",
                     identity_key=identity_key,
                     repository=_REPO,
                     issue_number=7,
-                    title=f"GitHub event issues.labeled {_REPO}#7 [triage-preset]",
+                    title=f"GitHub event issues.labeled {_REPO}#7 [github-issue-search-and-implement]",
                     parameters=parameters,
                 )
             assert ref.startswith("mm:"), ref
@@ -148,11 +158,11 @@ async def test_production_dispatcher_starts_real_workflow_under_identity_key(
             async with maker() as session:
                 dispatcher = TemporalEventExecutionDispatcher(session)
                 repeat_ref = await dispatcher.dispatch(
-                    preset_slug="triage-preset",
+                    preset_slug="github-issue-search-and-implement",
                     identity_key=identity_key,
                     repository=_REPO,
                     issue_number=7,
-                    title=f"GitHub event issues.labeled {_REPO}#7 [triage-preset]",
+                    title=f"GitHub event issues.labeled {_REPO}#7 [github-issue-search-and-implement]",
                     parameters=parameters,
                 )
             assert repeat_ref == ref

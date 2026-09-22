@@ -31,7 +31,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
-from api_service.db.models import GitHubEventDeliveryReceipt
+from api_service.db.models import (
+    GitHubEventDeliveryReceipt,
+    TemporalExecutionCanonicalRecord,
+)
 from api_service.services.github_event_dispatch import (
     EventExecutionDispatcher,
     TemporalEventExecutionDispatcher,
@@ -115,15 +118,32 @@ def get_settings_loader() -> Callable[[], WebhookSettings]:
     return WebhookSettings.from_env
 
 
-async def resolve_webhook_secret(
+async def resolve_webhook_secrets(
     session: AsyncSession = Depends(get_async_session),
     settings: WebhookSettings = Depends(get_webhook_settings),
-) -> bytes | None:
-    """Resolve the webhook secret from the existing Managed Secrets owner."""
-    value = await SecretsService.get_secret(session, settings.secret_slug)
-    if not value:
-        return None
-    return value.encode("utf-8") if isinstance(value, str) else bytes(value)
+) -> dict[str, bytes]:
+    """Resolve every candidate webhook secret (global + per-trigger slugs).
+
+    A trigger's documented ``webhook_secret_slug`` is honored: a delivery
+    verifies against any configured secret, so trigger-scoped rotation never
+    breaks while the global secret still verifies, and a trigger-specific
+    secret is never silently ignored. Only slugs are configured here; secret
+    material never leaves the Secrets owner except into verification.
+    """
+    slugs: list[str] = [settings.secret_slug]
+    for trigger in settings.trigger_configs or ():
+        slug = (trigger.webhook_secret_slug or "").strip()
+        if slug and slug not in slugs:
+            slugs.append(slug)
+    secrets: dict[str, bytes] = {}
+    for slug in slugs:
+        value = await SecretsService.get_secret(session, slug)
+        if not value:
+            continue
+        secrets[slug] = (
+            value.encode("utf-8") if isinstance(value, str) else bytes(value)
+        )
+    return secrets
 
 
 def get_event_dispatcher(
@@ -131,6 +151,47 @@ def get_event_dispatcher(
 ) -> EventExecutionDispatcher:
     """Return the Temporal-backed dispatcher (single dispatch identity)."""
     return TemporalEventExecutionDispatcher(session)
+
+
+def _sanitize_dispatch_diagnostic(message: str, *, limit: int = 40) -> str:
+    """Return a bounded log-safe diagnostic fragment for a dispatch failure.
+
+    Single line, restricted alphabet, truncated: enough to tell the operator
+    what must be corrected (invalid runtime, unknown preset, unenforceable
+    limit) without persisting secret-bearing payloads in the receipt row.
+    """
+    text = " ".join(str(message or "").split())
+    kept = "".join(
+        ch for ch in text if ch.isalnum() or ch in " ._-/:"
+    ).strip()
+    return kept[:limit]
+
+
+def _dispatch_failure_reason(exc: Exception) -> str:
+    """Build a stable, bounded reason code for a dispatch failure."""
+    kind = exc.__class__.__name__
+    detail = _sanitize_dispatch_diagnostic(str(exc))
+    base = f"dispatch_failed_{kind}"
+    if detail:
+        base = f"{base}_{detail}"
+    return base[:64]
+
+
+async def _read_bounded_body(request: Request) -> bytes | None:
+    """Read the request body with an early cutoff before buffering.
+
+    Returns ``None`` when the body exceeds ``MAX_WEBHOOK_BODY_BYTES`` so a
+    very large or chunked body on this unauthenticated ingress cannot
+    exhaust process memory before the length check runs.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_WEBHOOK_BODY_BYTES:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _safe_response(
@@ -173,13 +234,13 @@ async def receive_github_event(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
     settings: WebhookSettings = Depends(get_webhook_settings),
-    secret: bytes | None = Depends(resolve_webhook_secret),
+    secrets: dict[str, bytes] = Depends(resolve_webhook_secrets),
     dispatcher: EventExecutionDispatcher = Depends(get_event_dispatcher),
     settings_loader: Callable[[], WebhookSettings] = Depends(get_settings_loader),
 ) -> JSONResponse:
     """Receive one GitHub webhook delivery for the opt-in event path."""
-    raw = await request.body()
-    if len(raw) > MAX_WEBHOOK_BODY_BYTES:
+    raw = await _read_bounded_body(request)
+    if raw is None:
         return _safe_response(
             413,
             delivery_key_value="",
@@ -196,7 +257,7 @@ async def receive_github_event(
             decision="rejected",
             reason_code="missing_delivery_headers",
         )
-    if not secret:
+    if not secrets:
         logger.warning("github_event_webhook_secret_unconfigured")
         return _safe_response(
             503,
@@ -204,9 +265,23 @@ async def receive_github_event(
             decision="rejected",
             reason_code="webhook_secret_unconfigured",
         )
-    ok, sig_reason = verify_webhook_signature(
-        raw_body=raw, signature_header=signature, secret=secret
-    )
+    ok = False
+    sig_reason = "signature_mismatch"
+    for slug, candidate in secrets.items():
+        candidate_ok, candidate_reason = verify_webhook_signature(
+            raw_body=raw, signature_header=signature, secret=candidate
+        )
+        if candidate_ok:
+            ok = True
+            sig_reason = candidate_reason
+            break
+        sig_reason = candidate_reason
+        logger.debug(
+            "github_event_signature_candidate_rejected",
+            delivery_key=delivery_id,
+            secret_slug=slug,
+            reason=candidate_reason,
+        )
     if not ok:
         logger.warning("github_event_signature_rejected", reason=sig_reason)
         return _safe_response(
@@ -254,6 +329,28 @@ async def receive_github_event(
 
     stored_row = await session.get(GitHubEventDeliveryReceipt, key)
     stored = _stored_from_row(stored_row) if stored_row is not None else None
+    if stored is not None and stored.execution_ref:
+        # Reconcile before reusing: a receipt that references a canonical
+        # execution which no longer exists is a lost start, not a reuse.
+        # Re-attempting under the same stable identity key is idempotent
+        # (the execution service reconciles to the existing row), while
+        # blindly reusing a dead reference would lose the event forever.
+        canonical = await session.get(
+            TemporalExecutionCanonicalRecord, stored.execution_ref
+        )
+        if canonical is None:
+            logger.warning(
+                "github_event_reuse_without_execution",
+                delivery_key=key,
+                execution_ref=stored.execution_ref,
+            )
+            stored = StoredReceipt(
+                delivery_key=stored.delivery_key,
+                payload_digest=stored.payload_digest,
+                decision="admitted_pending",
+                execution_ref="",
+                received_at_epoch=stored.received_at_epoch,
+            )
     decision = decide_delivery(
         delivery=delivery,
         configs=settings.trigger_configs,
@@ -355,19 +452,38 @@ async def receive_github_event(
             await session.commit()
         except IntegrityError:
             # A concurrent duplicate won the insert: reconcile against the
-            # stored row instead of dispatching twice.
+            # stored row instead of dispatching twice. A winner with a
+            # different body digest is a changed-body conflict, never fresh
+            # work: the loser must not dispatch under its divergent digest.
             await session.rollback()
-            stored_row = await session.get(GitHubEventDeliveryReceipt, key)
-            stored = _stored_from_row(stored_row) if stored_row is not None else None
-            if stored is not None and stored.execution_ref:
+            winner_row = await session.get(GitHubEventDeliveryReceipt, key)
+            winner = (
+                _stored_from_row(winner_row)
+                if winner_row is not None
+                else None
+            )
+            if winner is not None and winner.payload_digest != digest:
+                logger.warning(
+                    "github_event_changed_body_conflict", delivery_key=key
+                )
+                return _safe_response(
+                    409,
+                    delivery_key_value=key,
+                    decision="conflict",
+                    reason_code="changed_body_conflict",
+                )
+            if winner is not None and winner.execution_ref:
                 return _safe_response(
                     202,
                     delivery_key_value=key,
                     decision="redelivery_reuse",
                     reason_code="redelivery_reuse",
-                    execution_ref=stored.execution_ref,
+                    execution_ref=winner.execution_ref,
                 )
-            # else: fall through and attempt dispatch under the stable key.
+            # else: same body and still pending: fall through and attempt
+            # dispatch under the stable key.
+            stored_row = winner_row
+            stored = winner
     elif stored is not None and stored.decision == "admitted_pending":
         stored_row.decision = "admitted_pending"
         stored_row.reason_code = decision.reason_code
@@ -426,17 +542,21 @@ async def receive_github_event(
             issue_number=delivery.issue_number,
             title=title,
             parameters=parameters,
+            execution_limits=dict(config.execution_limits),
+            publication_intent=config.publication_intent,
         )
     except Exception as exc:  # noqa: BLE001 - dispatch failure stays pending
         row = await session.get(GitHubEventDeliveryReceipt, key)
+        failure_reason = _dispatch_failure_reason(exc)
         if row is not None:
             row.decision = "admitted_pending"
-            row.reason_code = f"dispatch_failed_{exc.__class__.__name__}"[:64]
+            row.reason_code = failure_reason
             await session.commit()
         logger.warning(
             "github_event_dispatch_failed",
             delivery_key=key,
             error_kind=exc.__class__.__name__,
+            reason_code=failure_reason,
         )
         return _safe_response(
             202,

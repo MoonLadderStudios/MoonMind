@@ -41,7 +41,9 @@ from api_service.db.models import (
 from api_service.services import github_event_dispatch as dispatch_module
 from api_service.services.github_event_dispatch import (
     TemporalEventExecutionDispatcher,
+    apply_event_execution_limits,
     build_dispatch_parameters,
+    enforce_event_publication_intent,
 )
 
 _SECRET = b"dispatch-binding-test-secret-3967"
@@ -58,7 +60,7 @@ def _trigger_config(**overrides: Any) -> dict[str, Any]:
         "action": "labeled",
         "permitted_actors": ["alice"],
         "label": "mm-ready",
-        "preset_slug": "triage-preset",
+        "preset_slug": "github-issue-search-and-implement",
         "enabled": True,
     }
     base.update(overrides)
@@ -142,7 +144,7 @@ def test_dispatcher_parameters_pass_real_admission_gates(
             f"github-event:v1:{_INSTALLATION}:{_REPO}:del-1:{uuid4().hex[:16]}"
         )
         parameters = build_dispatch_parameters(
-            preset_slug="triage-preset",
+            preset_slug="github-issue-search-and-implement",
             repository=_REPO,
             issue_number=7,
             delivery_key=f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-1",
@@ -152,11 +154,11 @@ def test_dispatcher_parameters_pass_real_admission_gates(
         async with maker() as session:
             dispatcher = TemporalEventExecutionDispatcher(session)
             ref = await dispatcher.dispatch(
-                preset_slug="triage-preset",
+                preset_slug="github-issue-search-and-implement",
                 identity_key=identity_key,
                 repository=_REPO,
                 issue_number=7,
-                title=f"GitHub event issues.labeled {_REPO}#7 [triage-preset]",
+                title=f"GitHub event issues.labeled {_REPO}#7 [github-issue-search-and-implement]",
                 parameters=parameters,
             )
             return ref, identity_key
@@ -169,6 +171,95 @@ def test_dispatcher_parameters_pass_real_admission_gates(
     assert len(rows) == 1
     assert rows[0].workflow_id == ref
     assert rows[0].create_idempotency_key == identity_key
+
+
+def test_dispatcher_expands_preset_steps_not_prose(
+    service_session_factory, mock_client_adapter
+):
+    """The launch carries the preset's expanded steps, not generic prose."""
+    import asyncio
+
+    async def _run():
+        maker = service_session_factory
+        identity_key = (
+            f"github-event:v1:{_INSTALLATION}:{_REPO}:del-expand:{uuid4().hex[:16]}"
+        )
+        parameters = build_dispatch_parameters(
+            preset_slug="github-issue-search-and-implement",
+            repository=_REPO,
+            issue_number=7,
+            delivery_key=f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-expand",
+            identity_key=identity_key,
+            execution_limits={},
+        )
+        async with maker() as session:
+            dispatcher = TemporalEventExecutionDispatcher(session)
+            ref = await dispatcher.dispatch(
+                preset_slug="github-issue-search-and-implement",
+                identity_key=identity_key,
+                repository=_REPO,
+                issue_number=7,
+                title="GitHub event issues.labeled",
+                parameters=parameters,
+            )
+            return ref, identity_key
+
+    ref, identity_key = asyncio.run(_run())
+    assert ref.startswith("mm:"), ref
+    rows = asyncio.run(_canonical_by_idempotency(service_session_factory, identity_key))
+    assert len(rows) == 1
+    params = rows[0].parameters
+    # The service normalizes the expanded task payload under the canonical
+    # "workflow" key; the preset's authored steps must survive admission.
+    workflow = params.get("workflow") or {}
+    assert isinstance(workflow.get("steps"), list) and workflow["steps"]
+    assert (workflow.get("taskTemplate") or {}).get("slug") == (
+        "github-issue-search-and-implement"
+    )
+    # The preset slug provenance survives expansion for diagnostics.
+    assert params.get("presetSlug") == "github-issue-search-and-implement"
+    assert params["githubEventTrigger"]["repository"] == _REPO
+    # Search attributes carry the repository for operator filtering.
+    assert rows[0].search_attributes.get("mm_repo") == _REPO
+    assert rows[0].search_attributes.get("mm_integration") == "github"
+
+
+def test_execution_limits_translate_to_canonical_budget():
+    params = apply_event_execution_limits(
+        {"instructions": "x"}, {"maxModelBudgetUsd": 5}
+    )
+    assert params["maxBudgetUsd"] == 5.0
+    assert params["instructions"] == "x"
+
+
+def test_execution_limits_reject_unknown_or_invalid():
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="Unsupported execution_limits"):
+        apply_event_execution_limits({}, {"maxSpend": 5})
+    with _pytest.raises(ValueError, match="positive number"):
+        apply_event_execution_limits({}, {"maxModelBudgetUsd": 0})
+    with _pytest.raises(ValueError, match="positive number"):
+        apply_event_execution_limits({}, {"maxModelBudgetUsd": "lots"})
+
+
+def test_publication_intent_none_strips_preset_publish():
+    params = enforce_event_publication_intent(
+        {
+            "task": {"steps": [], "publish": {"mode": "auto"}},
+            "publish": {"mode": "auto"},
+        },
+        "none",
+    )
+    assert "publish" not in params
+    assert "publish" not in params["task"]
+
+
+def test_publication_intent_other_than_none_rejected():
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="publication_intent"):
+        enforce_event_publication_intent({}, "draft")
 
 
 def test_dispatcher_reuses_execution_for_same_identity_key(
@@ -184,7 +275,7 @@ def test_dispatcher_reuses_execution_for_same_identity_key(
     async def _dispatch_once() -> str:
         maker = service_session_factory
         parameters = build_dispatch_parameters(
-            preset_slug="triage-preset",
+            preset_slug="github-issue-search-and-implement",
             repository=_REPO,
             issue_number=7,
             delivery_key=f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-2",
@@ -194,11 +285,11 @@ def test_dispatcher_reuses_execution_for_same_identity_key(
         async with maker() as session:
             dispatcher = TemporalEventExecutionDispatcher(session)
             return await dispatcher.dispatch(
-                preset_slug="triage-preset",
+                preset_slug="github-issue-search-and-implement",
                 identity_key=identity_key,
                 repository=_REPO,
                 issue_number=7,
-                title=f"GitHub event issues.labeled {_REPO}#7 [triage-preset]",
+                title=f"GitHub event issues.labeled {_REPO}#7 [github-issue-search-and-implement]",
                 parameters=parameters,
             )
 
@@ -234,8 +325,8 @@ def test_signed_fixture_traverses_ingress_to_real_service(
     app.dependency_overrides[webhook_module.get_settings_loader] = (
         lambda: (lambda: settings)
     )
-    app.dependency_overrides[webhook_module.resolve_webhook_secret] = (
-        lambda: _SECRET
+    app.dependency_overrides[webhook_module.resolve_webhook_secrets] = (
+        lambda: {"github-webhook-secret": _SECRET}
     )
     # NOTE: no dispatcher override — the production
     # TemporalEventExecutionDispatcher runs with the patched service factory.
@@ -257,7 +348,7 @@ def test_signed_fixture_traverses_ingress_to_real_service(
     body = response.json()
     assert body["decision"] == "admitted_dispatched"
     assert body["executionRef"].startswith("mm:"), body
-    assert body["presetSlug"] == "triage-preset"
+    assert body["presetSlug"] == "github-issue-search-and-implement"
     assert mock_client_adapter.start_workflow.await_count == 1
 
     async def _receipts():
