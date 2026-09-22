@@ -1177,6 +1177,11 @@ class MoonMindAgentRun:
         # during that wait: the run has started no work, so holding the issue
         # behind a queue this deployment cannot drain helps nobody.
         self._capacity_requested = False
+        # True once any provider/host slot has been granted. Managed runs can
+        # release their slot and re-queue for a cooldown or fresh-process
+        # retry after agent work already began; that later wait must not use
+        # the no-work backoff. Plain workflow state for deterministic replay.
+        self._capacity_ever_granted = False
         self.run_status = RunStatus.queued
         self.final_result: AgentRunResult | None = None
         # MoonLadderStudios/MoonMind#1088: deterministic emitter state for
@@ -5066,6 +5071,7 @@ class MoonMindAgentRun:
                             manager_state.get("requester_fencing_generation")
                         )
                     )
+                    self._capacity_ever_granted = True
                     self.slot_assigned_event.set()
                     break
                 await self._ensure_manager_and_signal(
@@ -5849,6 +5855,7 @@ class MoonMindAgentRun:
         self._assigned_slot_fencing_generation = _coerce_fencing_generation(
             payload.get("fencing_generation")
         )
+        self._capacity_ever_granted = True
         self.slot_assigned_event.set()
 
     @workflow.update(name="Pause")
@@ -6781,8 +6788,12 @@ class MoonMindAgentRun:
         return AgentRunStatusModel(**payload)
 
     def _capacity_blocked(self) -> bool:
-        """Queued for capacity this run asked for and has not been granted."""
-        return self._capacity_requested and not self.slot_assigned_event.is_set()
+        """Queued for capacity this run asked for and has never been granted."""
+        return (
+            self._capacity_requested
+            and not self.slot_assigned_event.is_set()
+            and not self._capacity_ever_granted
+        )
 
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:

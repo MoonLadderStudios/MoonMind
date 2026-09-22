@@ -1031,6 +1031,19 @@ def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_GET(self):  # noqa: N802
+            # Verified admission: the gated fan-out describes each child after
+            # POST before counting it as queued.
+            workflow_id = self.path.rsplit("/", 1)[-1]
+            body = json.dumps(
+                {"workflowId": workflow_id, "status": "queued"}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def log_message(self, *_args):
             return None
 
@@ -1052,6 +1065,7 @@ def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
                 str(snapshot / "batch-workflows" / "bin" / "batch_workflows.py"),
                 "--targets", "targets.json", "--run-ref", "skill:jira-verify",
                 "--publish-mode", "none", "--artifacts-dir", str(external_repo / "artifacts"),
+                "--max-concurrency", "5",
             ],
             cwd=external_repo,
             env=env,
@@ -1164,7 +1178,7 @@ def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp
         else:
             env["MOONMIND_STEP_EXECUTION_ID"] = execution_ref
         return subprocess.run(
-            [sys.executable, str(helper), "--targets", str(targets_path), "--run-ref", "skill:jira-verify", "--publish-mode", "none", "--artifacts-dir", str(artifacts)],
+            [sys.executable, str(helper), "--targets", str(targets_path), "--run-ref", "skill:jira-verify", "--publish-mode", "none", "--artifacts-dir", str(artifacts), "--max-concurrency", "5", "--capacity-poll-interval", "0"],
             cwd=workspace, env=env, text=True, capture_output=True, timeout=20, check=False,
         )
 
@@ -1202,6 +1216,19 @@ def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp
                 self.send_error(503, "injected partial failure")
                 return
             body = json.dumps({"workflowId": f"child-{posts}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):  # noqa: N802
+            # Verified admission: the gated fan-out describes each child after
+            # POST before counting it as queued.
+            workflow_id = self.path.rsplit("/", 1)[-1]
+            body = json.dumps(
+                {"workflowId": workflow_id, "status": "queued"}
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1285,6 +1312,85 @@ def test_publish_mode_explicit_none_survives_helper_normalization():
     assert module["_normalize_publish_mode"](None) == "pr"
     assert module["_normalize_publish_mode"]("") == "pr"
     assert module["_publish_payload_for_mode"]("none") == {"mode": "none"}
+
+
+def test_issue_fanout_respects_max_concurrency_and_marks_capacity_blocked(
+    tmp_path, monkeypatch
+) -> None:
+    """Issue fan-out reuses the repository-batch capacity gate (no thundering herd).
+
+    With more targets than admitted concurrency, only the cap is queued and the
+    remainder is reported as blocked ``capacity_exhausted`` instead of being
+    submitted all at once to compete for one provider slot.
+    """
+    module = _load_module()
+
+    args = module["_parse_args"](
+        ["--run-ref", "skill:jira-verify", "--max-concurrency", "2"]
+    )
+    assert args.max_concurrency == 2
+
+    targets = [
+        {
+            "provider": "jira",
+            "ref": f"THOR-{number}",
+            "jiraIssue": {"key": f"THOR-{number}"},
+            "repository": "acme/widgets",
+        }
+        for number in range(5)
+    ]
+    targets_path = tmp_path / "targets.json"
+    targets_path.write_text(json.dumps(targets), encoding="utf-8")
+    artifacts = tmp_path / "artifacts"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-capacity-gate")
+    monkeypatch.setenv("MOONMIND_URL", "http://127.0.0.1:1")
+
+    submitted: list[str] = []
+
+    def fake_submit(*, moonmind_url, envelope):
+        key = str(envelope["payload"].get("idempotencyKey") or "")
+        workflow_id = f"child-{len(submitted)}"
+        submitted.append(key)
+        return workflow_id, None
+
+    def fake_refresh(*, moonmind_url, workflow_id):
+        return "queued", {"workflowId": workflow_id}
+
+    # The provider entrypoint re-exports the shared engine namespace, so patch
+    # the engine globals the gated submit loop actually reads (the same reason
+    # existing tests patch ``submit.__globals__["urllib"]``).
+    engine_globals = module["_submit_issue_jobs_gated"].__globals__
+    monkeypatch.setitem(engine_globals, "_submit_repository_child", fake_submit)
+    monkeypatch.setitem(engine_globals, "_refresh_owned_status", fake_refresh)
+
+    return_code = module["main"](
+        [
+            "--targets",
+            str(targets_path),
+            "--run-ref",
+            "skill:jira-verify",
+            "--publish-mode",
+            "none",
+            "--max-workflows",
+            "5",
+            "--max-concurrency",
+            "2",
+            "--capacity-poll-interval",
+            "0",
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+
+    evidence = json.loads(
+        (artifacts / "batch-workflows-result.json").read_text(encoding="utf-8")
+    )
+    assert evidence["created"] == 2
+    assert len(submitted) == 2
+    blocked = [item for item in evidence["skipped"] if item["reason"] == "capacity_exhausted"]
+    assert len(blocked) == 3
+    assert return_code == 1
 
 
 def test_batch_skill_recipes_resolve_from_active_snapshot():

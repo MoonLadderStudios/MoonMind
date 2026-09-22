@@ -458,6 +458,21 @@ def test_other_failures_are_not_treated_as_runtime_faults(detail: str) -> None:
     assert runtime_provisioning_failure(detail) is False
 
 
+def test_issue_claim_capacity_blocked_is_a_runtime_fault() -> None:
+    """Capacity-blocked backoff with no agent started says nothing about the issue."""
+    from moonmind.workflows.temporal.github_issue_claim_recovery import (
+        runtime_provisioning_failure,
+    )
+
+    assert (
+        runtime_provisioning_failure(
+            "ISSUE_CLAIM_CAPACITY_BLOCKED: queued behind unavailable provider "
+            "capacity; backing off"
+        )
+        is True
+    )
+
+
 def test_recovery_codes_stay_in_sync_with_the_failure_taxonomy() -> None:
     from moonmind.omnigent.harness_platform.failures import HarnessPlatformFailure
     from moonmind.workflows.temporal.github_issue_claim_recovery import (
