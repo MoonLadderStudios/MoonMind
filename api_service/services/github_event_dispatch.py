@@ -29,7 +29,9 @@ class EventExecutionDispatcher(Protocol):
         issue_number: int,
         title: str,
         parameters: dict[str, Any],
-    ) -> str: ...
+    ) -> str:
+        """Protocol stub; implementations dispatch the admitted delivery."""
+        raise NotImplementedError
 
 
 class TemporalEventExecutionDispatcher:

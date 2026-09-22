@@ -368,7 +368,6 @@ async def receive_github_event(
                     execution_ref=stored.execution_ref,
                 )
             # else: fall through and attempt dispatch under the stable key.
-        stored_row = await session.get(GitHubEventDeliveryReceipt, key)
     elif stored is not None and stored.decision == "admitted_pending":
         stored_row.decision = "admitted_pending"
         stored_row.reason_code = decision.reason_code
