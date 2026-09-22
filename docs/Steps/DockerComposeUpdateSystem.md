@@ -5,7 +5,7 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-22
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
 
@@ -31,7 +31,10 @@ One portable controller implements updates for the host entrypoint and the Setti
 
 The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery. Temporal and the UI may request or observe an update, but neither is required for the controller to keep making progress. An observer must not become a second update algorithm.
 
-Use existing Docker/Compose, local job files, and process ownership. Do not add a release service, parallel supervisor, promotion state machine, or mandatory approval workflow.
+Use existing Docker/Compose, local job files, and process ownership. The one
+separate minimal controller lifecycle below is the replacement owner, not a
+second deployment mode: do not add a parallel supervisor, promotion state
+machine, or mandatory approval workflow.
 
 ## 3. Terminology
 
@@ -39,7 +42,15 @@ Use existing Docker/Compose, local job files, and process ownership. Do not add 
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector. Resolve and record the concrete image that will run.
 
-**Controller:** The existing portable update implementation, capable of outliving the worker or API that submitted it. Its privileged execution boundary is deployment-owned, not selectable by an agent.
+**Controller:** The standalone minimal controller in its own Compose project
+(`moonmind-controller`), separate from the MoonMind stack. It owns its
+durable state, restart policy, direct Docker socket mount, and one small
+authenticated local endpoint guarded by a deployment-owned secret. Its Docker
+transport and command endpoint survive target-project shutdown. The host CLI
+(`deploy/controller/bootstrap.py`) installs, starts, updates, and restores
+the controller; the controller never replaces itself, and controller updates
+are serialized against active deployment mutation. No agents receive sockets
+or unrestricted controller access.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -145,11 +156,17 @@ After resolving the target, persist the selected deployment intent before recrea
 Normal service replacement uses the equivalent of:
 
 ```bash
-docker compose pull
-docker compose up -d --remove-orphans --wait
+docker compose pull --policy always
+docker compose up -d --pull never --no-build --remove-orphans --wait
 ```
 
-These are semantic commands after resolving the correct deployment files, env overlays, project, and service set, not permission to operate on an arbitrary project. Do not use routine `docker compose down` or volume deletion. Recreate only changed services by default.
+under bounded timeouts, after staging all images needed for the requested
+update and before any recreation. These are semantic commands after resolving
+the correct deployment files, env overlays, project, and service set, not
+permission to operate on an arbitrary project. Do not use routine
+`docker compose down`, force-recreate, or volume/image pruning; those are
+explicit repair operations only, never automatic escalation. Recreate only
+changed services by default.
 
 Preserve dependency order and required `init-db`/schema migration gating before new dependent services start. Bring necessary infrastructure up in the existing Compose lifecycle. A failed migration preserves the original error and data rather than starting an incompatible application or attempting a destructive downgrade.
 
@@ -185,9 +202,18 @@ Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon
 
 The existing deployment-control worker is a submission/observation adapter where available. It is not the sole path to recovery. Privileged Docker operations remain in trusted deployment infrastructure and cannot be supplied by arbitrary agent-authored code.
 
-### 11.2 Ephemeral updater container
+### 11.2 Standalone controller project
 
-Reuse the detached controller execution boundary so an update can replace its submitting worker. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts. A caller timing out reattaches to that operation rather than duplicating mutation.
+The controller runs as one service in its own Compose project with a
+configured restart policy, a durable host state directory, and a direct
+Docker socket mount (a proxy is acceptable only if controller-owned in that
+separate project). Local durable ownership, selected target, progress,
+deadline, and attempt budget survive restarts of MoonMind and of the
+controller itself: on restart the controller inspects Docker and converges
+only unfinished work toward the same target. A caller timing out reattaches
+to that operation rather than duplicating mutation. The legacy ephemeral
+application-owned updater container is retired through the cutover in §11.4;
+it is not a second supported owner.
 
 ### 11.3 Runner image policy
 

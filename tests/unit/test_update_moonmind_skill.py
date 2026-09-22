@@ -32,6 +32,47 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
     original_run = subprocess.run
     commands = []
     digest = "sha256:" + "a" * 64
+    image = f"ghcr.io/moonladderstudios/moonmind@{digest}"
+    posted = []
+
+    class FakeResponse:
+        def __init__(self, status, payload):
+            self.status = status
+            self._payload = payload
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        url = request.full_url
+        if request.method == "POST" and url.endswith("/v1/operations"):
+            payload = json.loads(request.data.decode("utf-8"))
+            assert payload["stack"] == "moonmind"
+            assert payload["desiredImage"] == image
+            assert payload["sourceRevision"] == revision
+            assert payload["target"]["project"] == "existing-project"
+            assert payload["target"]["projectDir"] == str(repo)
+            assert "docker-compose.yaml" in payload["target"]["composeFiles"]
+            # The standalone controller owns execution over its own transport;
+            # proxy substrate is never recreated through the update.
+            assert "docker-proxy" not in payload["target"]["services"]
+            assert "sandbox-egress-proxy" not in payload["target"]["services"]
+            assert request.get_header("Authorization") == "Bearer test-secret"
+            posted.append(payload)
+            return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
+        assert request.method == "GET" and url.endswith("/v1/operations/op-1")
+        assert request.get_header("Authorization") == "Bearer test-secret"
+        return FakeResponse(
+            200,
+            {"operationId": "op-1", "status": "succeeded", "installed": {"image": image}},
+        )
+
     def command(args, **kwargs):
         if args[0] != "docker":
             return original_run(args, **kwargs)
@@ -39,34 +80,28 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
         if args[1:3] == ["image", "inspect"]:
             output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": "different" if mismatch else revision}}}])
         elif args[1:3] == ["compose", "config"]:
-            output = '{"name":"existing-project"}'
-        elif args[1] == "run":
-            output = "services: {}"
-        elif args[1] == "compose":
-            payload = json.loads(args[-1])
-            assert payload["inputs"]["sourceRevision"] == revision
-            assert payload["inputs"]["image"]["reference"] == digest
-            assert payload["context"].get("deployment_operator_urls") == ([operator_url] if operator_url else None)
-            assert "--submit" in args
-            assert kwargs["env"]["MOONMIND_IMAGE"].endswith("@" + digest)
-            # The updater reaches Docker through docker-proxy; host updates
-            # must not recreate that substrate through itself.
-            assert kwargs["env"]["MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES"] == "docker-proxy,sandbox-egress-proxy,postgres"
-            assert "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=docker-proxy,sandbox-egress-proxy,postgres" in args
-            output = ""
+            output = json.dumps({"name": "existing-project", "services": {"api": {}, "worker": {}, "docker-proxy": {}}})
         else:
             assert args[1] == "pull"
             assert args[2].endswith(":sha-" + revision)
             output = ""
         return SimpleNamespace(returncode=0, stdout=output)
     monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update.urllib.request, "urlopen", fake_urlopen)
+    secret_file = repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"
+    secret_file.parent.mkdir(parents=True, exist_ok=True)
+    secret_file.write_text("test-secret\n")
     args = ["--repo", str(repo)] + (["--operator-url", operator_url] if operator_url else [])
     if mismatch:
         with pytest.raises(ValueError, match="source revision"):
             update.main(args)
-        assert not any("--submit" in item for item in commands)
+        assert posted == []
     else:
         assert update.main(args) == 0
+        assert len(posted) == 1
+        # The standalone controller owns execution: no application-owned
+        # updater container is launched from the target image.
+        assert not any(item[1] == "run" for item in commands)
         submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
         assert update.main(["--repo", str(repo), "--resume", submission.stem]) == 0
         with pytest.raises(ValueError, match="original operator URLs"):
@@ -77,6 +112,52 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
     assert (repo / "source.txt").read_text() == "operator edits"
     assert (repo / ".env").read_text() == "AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=192.0.2.4\n"
     assert git("rev-parse", "HEAD") == revision
+
+
+def test_submit_via_controller_requires_an_installed_controller(tmp_path):
+    record = {"project": "existing-project", "image": "img", "inputs": {}}
+    with pytest.raises(RuntimeError, match="Controller secret is missing"):
+        update._submit_via_controller(
+            record, tmp_path, controller_url="http://127.0.0.1:9", secret_file=None
+        )
+
+
+def _install_controller_secret(repo, secret="test-secret"):
+    path = repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(secret + "\n")
+    return secret
+
+
+def _stub_controller_success(monkeypatch, image):
+    """Route controller HTTP calls to an immediately succeeding operation."""
+    posted = []
+
+    class FakeResponse:
+        def __init__(self, status, payload):
+            self.status = status
+            self._payload = payload
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        if request.method == "POST":
+            posted.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
+        return FakeResponse(
+            200,
+            {"operationId": "op-1", "status": "succeeded", "installed": {"image": image}},
+        )
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", fake_urlopen)
+    return posted
 
 
 def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
@@ -133,6 +214,8 @@ def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rend
             output = ""
         return SimpleNamespace(returncode=0, stdout=output)
     monkeypatch.setattr(update.subprocess, "run", command)
+    _install_controller_secret(repo)
+    _stub_controller_success(monkeypatch, f"ghcr.io/moonladderstudios/moonmind@{digest}")
     assert update.main(["--repo", str(repo)]) == 0
     submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
     payload = json.loads(submission.read_text())
@@ -436,21 +519,19 @@ def test_main_records_the_published_ancestor_and_requested_tip(tmp_path, monkeyp
             )
             return SimpleNamespace(returncode=0, stdout=output)
         if args[1:3] == ["compose", "config"]:
-            return SimpleNamespace(returncode=0, stdout='{"name":"existing-project"}')
+            return SimpleNamespace(returncode=0, stdout='{"name":"existing-project","services":{"api":{}}}')
         if args[1] == "run":
             return SimpleNamespace(returncode=0, stdout="services: {}")
-        if args[1] == "compose":
-            payload = json.loads(args[-1])
-            assert payload["inputs"]["sourceRevision"] == parent
-            assert payload["inputs"]["requestedTipRevision"] == tip
-            assert payload["inputs"]["skippedUnpublishedRevisions"] == [tip]
-            return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError(f"unexpected docker command: {args}")
 
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_sleep", lambda seconds: None)
     monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
+    _install_controller_secret(repo)
+    posted = _stub_controller_success(monkeypatch, f"ghcr.io/moonladderstudios/moonmind@{digest}")
     assert update.main(["--repo", str(repo)]) == 0
+    assert posted[0]["sourceRevision"] == parent
+    assert posted[0]["reason"] == "Update to selected branch snapshot"
     assert pulls[0].endswith(tip)
     assert pulls[-1].endswith(parent)
     submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
