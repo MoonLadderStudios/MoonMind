@@ -43,7 +43,7 @@ The current repo baseline is:
 - The default artifact backend is MinIO / S3-compatible storage.
 - The worker topology is a small capability-based fleet set: `workflow`, `artifacts`, `llm`, `sandbox`, `integrations`, and `agent_runtime`.
 - The live registered workflow catalog includes `MoonMind.MergeAutomation` in addition to the previously documented core workflow types.
-- The workflow helper-activity exception is narrow; the current registration is the eight handlers listed in §9.1 (one release-identity probe, four adapter/metadata helpers and three replay-compatibility checkpoint handlers, owned by `workflow_registry.py`).
+- The workflow helper-activity exception is narrow; the current workflow-queue handler routing (current lane vs historical-only) is owned by the generated reference [WorkflowTypeCatalogGenerated.md](WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing) (produced from `workflow_registry.py`) with the current-vs-intended boundary tabulated in [ActivityCatalogAndWorkerTopology.md](ActivityCatalogAndWorkerTopology.md#51-workflow-fleet-exception-rule) §5.1.
 - The shared Temporal data converter currently resolves to the Pydantic data converter. A payload-encryption codec is not currently visible as the shared converter contract and must not be assumed to exist.
 - Projection repair, run-history/rerun semantics, visibility semantics, type-safety rules, and error taxonomy are covered by adjacent docs and should be treated as part of this architecture.
 
@@ -469,18 +469,7 @@ A narrow helper-activity exception is allowed only when all of the following are
 - it does not block Workflow Task throughput under normal operation
 - it is explicitly listed in the activity topology
 
-Current repo-aligned registration (`workflow_registry.py::workflow_fleet_activity_handlers` — eight handlers):
-
-- immutable-release identity probe from `workflows/release_canary.py`: `release.inspect` reads the installed release manifest without credentials or external mutation.
-- adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
-- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there. New writes schedule these types on the artifacts fleet behind the `checkpoint-branch-artifact-fleet-v1` patch marker; queue separation is not privilege separation until the workflow-queue registration is removed after its consumers drain.
-
-The list above is the current state, not the intended end state. The
-intended least-privilege boundary keeps the workflow fleet Temporal-only;
-whether checkpoint persistence belongs beside deterministic workflows is the
-implementation concern tracked in #3949. Do not read the registration as
-approval for broad workflow-fleet I/O. The current registration vs intended
-boundary is tabulated in `ActivityCatalogAndWorkerTopology.md` §5.1.
+The normative handler routing lives with the providing modules, not here: the current lane vs historical-only workflow-queue routing is tabulated in [WorkflowTypeCatalogGenerated.md](WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing) (mechanically produced from `workflow_registry.py`), and the current registration vs intended Temporal-only boundary is tabulated in [ActivityCatalogAndWorkerTopology.md](ActivityCatalogAndWorkerTopology.md#51-workflow-fleet-exception-rule) §5.1 (including the #3949 drain gate for retained checkpoint-persistence compatibility). Do not read that registration as approval for broad workflow-fleet I/O.
 
 If a helper grows into I/O-heavy work, provider mutation, artifact work, or runtime supervision, it must move to a capability-appropriate activity queue.
 
@@ -935,8 +924,10 @@ Immutable production releases use Temporal Worker Deployment routing. The
 installed release manifest supplies the worker Build ID; Temporal owns the
 effective current/ramping route. Starting a different worker image does not
 promote that route. The image-owned controller qualifies a candidate, promotes
-it with compare-and-set, verifies ordinary installed traffic, and retains
-previous pollers while Temporal still requires them. The
+it with compare-and-set, verifies ordinary installed traffic, and keeps
+previous pollers only as bounded transitional drainage while Temporal still
+requires them for open executions. Retained pollers are not a permanent
+fleet: the steady state is one installed fleet recreated in place. The
 [deployment update contract](../Steps/DockerComposeUpdateSystem.md)
 owns promotion, drainage, rollback, and durable recovery authority.
 
@@ -1057,7 +1048,7 @@ MoonMind must enforce limits at the API, workflow, activity, and worker levels.
 
 Required limit families:
 
-- workflow starts per owner / tenant / service principal
+- workflow starts per owner (single-operator instance; admission still enforces resource limits)
 - concurrent open workflows per owner / runtime / provider profile
 - child workflows per parent
 - activities per phase or workflow run
@@ -1081,19 +1072,19 @@ Limit behavior must be explicit:
 
 ---
 
-## 22. Namespaces, tenancy, and retention
+## 22. Namespaces, ownership, and retention
 
-MoonMind’s current platform foundation uses:
+MoonMind is a single-user application: one operator per instance. MoonMind’s current platform foundation uses:
 
 - `default` for local default operation
-- a dedicated namespace such as `moonmind` for shared/enterprise deployments
+- a dedicated namespace such as `moonmind` per independent deployment (namespace names isolate deployments; they do not provide multi-user tenancy)
 - 90-day closed execution retention by default, with operator override and storage-cap guardrails
 
 Rules:
 
 - environment isolation should use separate deployment/namespace boundaries where possible
-- tenant/user ownership is mirrored into `mm_owner_type` and `mm_owner_id`
-- standard user views must enforce ownership at the API layer, not rely on UI filters
+- owner identity is mirrored into `mm_owner_type` and `mm_owner_id`
+- standard views must enforce ownership at the API layer, not rely on UI filters
 - shared namespaces must treat Search Attributes, Memo, IDs, and logs as operator-visible metadata
 - namespace retention is for Temporal histories/visibility, not for long-term artifact record guarantees
 - artifacts and projections needed beyond Temporal retention must have their own retention and archival posture
