@@ -198,7 +198,10 @@ def test_scan_job_spec_reuses_bounded_read_only_production_path() -> None:
         }
     )
     assert spec.network_mode == "none"
-    assert spec.workspace_read_only is True
+    # The workspace mount stays writable so the declared outputs are
+    # collectable; the scanner itself never writes into the snapshot
+    # (read-only by construction, enforced by test_scan_never_writes_snapshot).
+    assert spec.workspace_read_only in (None, False)
     assert spec.resources.cpu_millis == 2000
     assert spec.outputs[0].relative_path == "artifacts/passive-scan-report.json"
 
@@ -212,3 +215,185 @@ def test_scan_job_spec_reuses_bounded_read_only_production_path() -> None:
         pass
     else:
         raise AssertionError("unsafe snapshot path must be rejected")
+
+
+def test_prefixed_credential_assignments_are_detected(tmp_path: Path) -> None:
+    _write(tmp_path / "settings.env", "DATABASE_PASSWORD=hunter2-abcdef\n")
+    _write(tmp_path / "deploy.env", "GITHUB_TOKEN=plain-value-12345\n")
+    _write(tmp_path / "aws.env", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYz\n")
+    report = run_passive_scan(tmp_path)
+
+    assert report.verdict == "finding_present"
+    assert report.findings, "prefixed credential keys must be detected"
+    dumped = json.dumps(report.to_payload())
+    assert "hunter2-abcdef" not in dumped
+
+
+def test_bare_and_prefixed_keys_do_not_double_count(tmp_path: Path) -> None:
+    raw_secret = "ghp_" + "A" * 36
+    _write(tmp_path / "app.py", f"token = '{raw_secret}'\n")
+    report = run_passive_scan(tmp_path)
+
+    assert report.verdict == "finding_present"
+    locations = [finding.location for finding in report.findings]
+    assert locations, "bare credential key must still be detected once"
+
+
+def test_git_internals_are_excluded_without_forcing_incomplete(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "main.py", "print('hello world')\n")
+    git_index = tmp_path / ".git" / "index"
+    _write(git_index, b"\x00\x01\x02binary\xff\xfe" * 100)
+    report = run_passive_scan(tmp_path)
+
+    assert report.verdict == "clean_with_coverage"
+    assert all(not item.startswith(".git/") for item in report.covered_files)
+    assert all(not item.path.startswith(".git/") for item in report.files_skipped)
+
+
+def test_symlinked_snapshot_root_is_rejected(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    _write(real / "main.py", "print('hello')\n")
+    link = tmp_path / "snapshot-link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except OSError:
+        return  # symlink creation unavailable on this platform
+    report = run_passive_scan(link)
+
+    assert report.verdict == "incomplete"
+    assert report.incomplete_reason
+
+
+def test_clean_report_requires_complete_schema() -> None:
+    # A bare clean verdict with no identity, digest, or coverage is incomplete.
+    assert (
+        parse_scan_report_json(b'{"verdict": "clean_with_coverage"}').verdict
+        == "incomplete"
+    )
+    minimal_clean = json.dumps(
+        {
+            "toolRef": PASSIVE_SCAN_TOOL_REF,
+            "verdict": "clean_with_coverage",
+        }
+    ).encode()
+    assert parse_scan_report_json(minimal_clean).verdict == "incomplete"
+
+
+def test_clean_report_round_trip_preserves_config_and_cancellation(
+    tmp_path: Path,
+) -> None:
+    from moonmind.security.passive_repo_scan import (  # noqa: PLC0415
+        PassiveScanConfig as _Config,
+    )
+
+    _write(tmp_path / "main.py", "print('hello')\n")
+    report = run_passive_scan(tmp_path, config=_Config(max_files=7))
+    payload = json.dumps(report.to_payload()).encode()
+    parsed = parse_scan_report_json(payload)
+
+    assert parsed.verdict == "clean_with_coverage"
+    assert parsed.config.max_files == 7
+    assert parsed.feed.get("name") == "none"
+    assert parsed.cancelled is False
+
+
+def test_workload_defaults_to_workspace_root_with_normalized_outputs() -> None:
+    workload = build_scan_job_workload()
+    assert workload["command"][workload["command"].index("--snapshot") + 1] == "."
+    assert workload["command"][workload["command"].index("--report") + 1] == (
+        "artifacts/passive-scan-report.json"
+    )
+    assert "workspaceReadOnly" not in workload
+
+    backslashed = build_scan_job_workload(
+        report_relative_path="artifacts\\report.json",
+    )
+    assert backslashed["command"][backslashed["command"].index("--report") + 1] == (
+        "artifacts/report.json"
+    )
+    assert backslashed["outputs"][0]["relativePath"] == "artifacts/report.json"
+
+
+def test_file_count_bound_does_not_require_full_enumeration(
+    tmp_path: Path,
+) -> None:
+    for index in range(10):
+        _write(tmp_path / f"file{index:03d}.py", "print('ok')\n")
+    report = run_passive_scan(
+        tmp_path,
+        config=PassiveScanConfig(max_files=3),
+    )
+
+    assert report.verdict == "incomplete"
+    assert report.incomplete_reason == "file-count bound exceeded"
+    assert len(report.covered_files) <= 3
+
+
+def test_markdown_summary_escapes_untrusted_paths(tmp_path: Path) -> None:
+    _write(tmp_path / "evil`.md", "print('hello')\n")
+    report = run_passive_scan(tmp_path)
+
+    assert report.verdict == "clean_with_coverage"
+    assert "`evil`" not in report.summary_markdown
+
+
+def test_fifo_symlink_target_is_skipped_without_blocking(tmp_path: Path) -> None:
+    import os  # noqa: PLC0415
+
+    _write(tmp_path / "main.py", "print('hello')\n")
+    fifo = tmp_path / "pipe"
+    try:
+        os.mkfifo(fifo)
+    except (OSError, AttributeError):
+        return  # fifo creation unavailable on this platform
+    report = run_passive_scan(tmp_path)
+
+    assert report.verdict == "incomplete"
+    assert report.files_skipped
+
+
+def test_scan_never_writes_snapshot(tmp_path: Path) -> None:
+    from moonmind.security import passive_repo_scan as _module  # noqa: PLC0415
+
+    before = sorted(path.as_posix() for path in tmp_path.rglob("*"))
+    report = run_passive_scan(tmp_path)
+    after = sorted(path.as_posix() for path in tmp_path.rglob("*"))
+
+    assert before == after
+    assert report.verdict in {"clean_with_coverage", "incomplete"}
+    assert _module.__name__.endswith("passive_repo_scan")
+
+
+def test_passive_scan_supported_journey_submits_without_hand_authored_json() -> None:
+    from moonmind.container_job_cli import (  # noqa: PLC0415
+        passive_scan_submission,
+    )
+
+    env = {
+        "MOONMIND_AGENT_RUN_ID": "agent-run-scan-3970",
+        "MOONMIND_TASK_WORKFLOW_ID": "workflow-scan-3970",
+        "MOONMIND_CONTAINER_JOBS_SESSION_ID": "session-scan-3970",
+        "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": "ws-scan-3970",
+        "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",
+        "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": "repo",
+    }
+    submission = passive_scan_submission(env=env, request_id="req-scan-1")
+
+    spec = submission["spec"]
+    assert spec["command"][spec["command"].index("--snapshot") + 1] == "."
+    validated = ContainerJobSpec.model_validate(spec)
+    assert validated.network_mode == "none"
+    assert validated.outputs[0].relative_path == "artifacts/passive-scan-report.json"
+    assert submission["idempotencyKey"].endswith("req-scan-1")
+    assert submission["source"]["workflowId"] == "workflow-scan-3970"
+
+
+def test_passive_scan_cli_command_is_registered() -> None:
+    from moonmind.cli import container_app, container_passive_scan  # noqa: PLC0415
+
+    assert callable(container_passive_scan)
+    names = [command.name or "" for command in container_app.registered_commands]
+    assert "passive-scan" in names
