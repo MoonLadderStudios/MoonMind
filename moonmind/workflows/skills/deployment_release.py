@@ -1150,6 +1150,46 @@ async def run_job(request_file):
 
 
 async def submit(payload):
+    # Replacement-owner handoff first: trusted release data goes to the
+    # standalone controller endpoint (MoonLadderStudios/MoonMind#4500) without
+    # importing the target application's Python bootstrap. The legacy
+    # application-worker path below is retained only until the old writer is
+    # positively stopped/reconciled.
+    try:
+        from moonmind.workflows.skills.deployment_controller_handoff import (
+            build_controller_payload,
+            controller_available,
+            submit_to_controller,
+        )
+
+        if controller_available():
+            inputs = dict(payload.get("inputs") or {})
+            image = dict(inputs.get("image") or {})
+            repository = str(image.get("repository") or "")
+            reference = str(
+                image.get("resolvedDigest") or image.get("reference") or ""
+            )
+            target = f"{repository}@{reference}" if repository and reference else ""
+            context = dict(payload.get("context") or {})
+            operation_id = str(context.get("idempotency_key") or "").strip()
+            if target and operation_id:
+                receipt = submit_to_controller(
+                    build_controller_payload(
+                        submission_id=operation_id.removeprefix("host-update:"),
+                        image=target,
+                    )
+                )
+                print(json.dumps({"controllerReceipt": receipt}, sort_keys=True), flush=True)
+                return 0
+    except Exception as exc:
+        # Fall through to the legacy path with the handoff diagnostic
+        # preserved; the installation is unchanged by a failed submission.
+        print(
+            json.dumps(
+                {"controllerHandoff": f"unavailable: {type(exc).__name__}"}
+            ),
+            flush=True,
+        )
     from moonmind.workflows.temporal.worker_runtime import (
         _build_deployment_update_executor,
     )

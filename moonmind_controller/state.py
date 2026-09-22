@@ -124,3 +124,48 @@ def explicit_retry(path: str | Path) -> dict:
     record["status"] = "desired"
     write_record(path, record)
     return record
+
+
+# Prepared target + last installed configuration + compatibility-gated
+# previous release. These are additive helpers for the apply orchestrator:
+# the prepared target is written before any mutation, the installed config
+# only after a verified apply, and the previous release is retained solely
+# for restoration within actual compatibility (never an automatic DB
+# downgrade).
+
+def record_prepared_target(record: dict, *, target: dict) -> dict:
+    """Persist the prepared target (concrete images + services) before apply."""
+    updated = dict(record)
+    prepared = dict(target or {})
+    # Selected concrete images are recorded once; a prepared target never
+    # rewrites an already-recorded selection for the same operation.
+    desired = dict(record.get("desired") or {})
+    existing_images = desired.get("concreteImages")
+    if existing_images is not None and "concreteImages" not in prepared:
+        prepared["concreteImages"] = dict(existing_images)
+    updated["prepared"] = prepared
+    return updated
+
+
+def record_installed_config(record: dict, *, config: dict) -> dict:
+    """Persist the last supported installed configuration after apply."""
+    updated = dict(record)
+    updated["installedConfig"] = dict(config or {})
+    return updated
+
+
+def record_previous_release(record: dict, *, previous: dict, compatible: bool) -> dict:
+    """Retain the previous release only within actual compatibility.
+
+    When ``compatible`` is False (schema/history mismatch) the previous
+    release is not retained for restoration: restoring across an
+    incompatible boundary would imply an automatic database downgrade,
+    which the controller never performs.
+    """
+    updated = dict(record)
+    if compatible:
+        updated["previousRelease"] = dict(previous or {})
+    else:
+        updated.pop("previousRelease", None)
+    updated["previousReleaseCompatible"] = bool(compatible)
+    return updated

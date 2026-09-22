@@ -201,3 +201,218 @@ def test_restart_converges_without_duplicate_apply(tmp_path):
     exhausted = state.read_record(path)
     assert service.converge_on_restart(exhausted, child_running=False, child_owner_matches=False) == "await_retry"
     assert "boom-1" in service.failure_summary(exhausted["attempts"])
+
+
+def test_controller_image_entrypoint_serves_package():
+    """Controller image serves the package entrypoint, not server module (REQ-2)."""
+    from pathlib import Path as _Path
+
+    dockerfile = _Path(__file__).resolve().parents[2] / "deploy" / "moonmind-controller" / "Dockerfile"
+    text = dockerfile.read_text()
+    assert '["python", "-m", "moonmind_controller"]' in text
+    assert "moonmind_controller.server" not in text
+
+
+def test_apply_stages_all_images_then_up_without_build():
+    """Apply orchestrator pulls always then up never/build-never (REQ-3)."""
+    from moonmind_controller import apply, state
+
+    calls: list = []
+
+    def fake_run(command, *, timeout):
+        calls.append((tuple(command), timeout))
+        return apply.CommandResult(returncode=0, output="ok")
+
+    record = state.new_operation(operation_id="op-apply", target_image="repo@sha256:new")
+    target = {
+        "targetImage": "repo@sha256:new",
+        "services": ["api", "worker"],
+        "concreteImages": {"api": "repo@sha256:new"},
+    }
+    updated = apply.orchestrate_apply(
+        record=record,
+        target=target,
+        installed_images={"postgres": "pg:15"},
+        installed_config={"services": ["api", "worker"]},
+        service_statuses={"api": "running", "worker": "running"},
+        operator_access_ok=True,
+        run=fake_run,
+    )
+    assert calls[0][0][:3] == ("docker", "compose", "pull")
+    assert "always" in calls[0][0]
+    assert calls[1][0][:4] == ("docker", "compose", "up", "-d")
+    assert "--pull" in calls[1][0] and "never" in calls[1][0]
+    assert "--no-build" in calls[1][0]
+    assert "--remove-orphans" in calls[1][0] and "--wait" in calls[1][0]
+    # Infra selection preserved; prepared target + installed config recorded.
+    assert updated["prepared"]["concreteImages"]["postgres"] == "pg:15"
+    assert updated["status"] == "installed"
+    assert updated["installedConfig"]["services"] == ["api", "worker"]
+
+
+def test_apply_failure_surfaces_exit_status_and_redacted_tail():
+    """Apply failures surface exit status with redacted diagnostics (REQ-3)."""
+    from moonmind_controller import apply, state
+
+    def failing_run(command, *, timeout):
+        return apply.CommandResult(
+            returncode=1, output="token=super-secret-bearer-value pull denied"
+        )
+
+    record = state.new_operation(operation_id="op-fail", target_image="img")
+    try:
+        apply.orchestrate_apply(
+            record=record,
+            target={"targetImage": "img", "services": ["api"]},
+            service_statuses={"api": "running"},
+            operator_access_ok=True,
+            run=failing_run,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "exit 1" in message
+        assert "super-secret-bearer-value" not in message
+    else:
+        raise AssertionError("failing pull must raise with redacted diagnostics")
+
+
+def test_apply_validation_and_post_verification_are_explicit():
+    """Pre/post checks fail loudly without erasing installs (REQ-5)."""
+    from moonmind_controller import apply, state
+
+    record = state.new_operation(operation_id="op-validate", target_image="img")
+    try:
+        apply.orchestrate_apply(
+            record=record,
+            target={"targetImage": "", "services": []},
+            run=lambda command, *, timeout: apply.CommandResult(0, "ok"),
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("empty target must not apply")
+
+    def ok_run(command, *, timeout):
+        return apply.CommandResult(returncode=0, output="ok")
+
+    record = state.new_operation(operation_id="op-post", target_image="img")
+    try:
+        apply.orchestrate_apply(
+            record=record,
+            target={"targetImage": "img", "services": ["api"]},
+            service_statuses={"api": "exited"},
+            operator_access_ok=False,
+            run=ok_run,
+        )
+    except RuntimeError as exc:
+        assert "api" in str(exc) and "Operator access" in str(exc)
+    else:
+        raise AssertionError("failed postcheck must raise explicitly")
+
+
+def test_apply_retains_previous_release_only_when_compatible():
+    """Previous release retained only within compatibility (REQ-4)."""
+    from moonmind_controller import apply, state
+
+    def ok_run(command, *, timeout):
+        return apply.CommandResult(returncode=0, output="ok")
+
+    record = state.new_operation(operation_id="op-prev", target_image="img")
+    updated = apply.orchestrate_apply(
+        record=record,
+        target={"targetImage": "img", "services": ["api"]},
+        service_statuses={"api": "running"},
+        operator_access_ok=True,
+        run=ok_run,
+        previous_release={"image": "old", "schema": 1},
+        previous_compatible=True,
+    )
+    assert updated["previousRelease"]["image"] == "old"
+
+    record = state.new_operation(operation_id="op-prev2", target_image="img")
+    updated = apply.orchestrate_apply(
+        record=record,
+        target={"targetImage": "img", "services": ["api"]},
+        service_statuses={"api": "running"},
+        operator_access_ok=True,
+        run=ok_run,
+        previous_release={"image": "old", "schema": 1},
+        previous_compatible=False,
+    )
+    assert "previousRelease" not in updated
+
+
+def test_locked_apply_uses_installation_local_kernel_lock(tmp_path):
+    """Apply holds the kernel lock; legacy owners block cutover (REQ-7)."""
+    import json
+
+    from moonmind_controller import apply, state
+
+    def ok_run(command, *, timeout):
+        return apply.CommandResult(returncode=0, output="ok")
+
+    legacy = tmp_path / "stack.lock"
+    legacy.write_text(json.dumps({"owner": "legacy"}) + "\n")
+    try:
+        apply.locked_orchestrate_apply(
+            lock_dir=str(tmp_path),
+            stack="stack",
+            record=state.new_operation(operation_id="op-lock", target_image="img"),
+            target={"targetImage": "img", "services": ["api"]},
+            service_statuses={"api": "running"},
+            operator_access_ok=True,
+            run=ok_run,
+        )
+    except RuntimeError as exc:
+        assert "legacy" in str(exc).lower()
+    else:
+        raise AssertionError("legacy lock must block cutover")
+
+    legacy.unlink()
+    updated = apply.locked_orchestrate_apply(
+        lock_dir=str(tmp_path),
+        stack="stack",
+        record=state.new_operation(operation_id="op-lock", target_image="img"),
+        target={"targetImage": "img", "services": ["api"]},
+        service_statuses={"api": "running"},
+        operator_access_ok=True,
+        run=ok_run,
+    )
+    assert updated["status"] == "installed"
+
+
+def test_controller_handoff_payload_is_data_only():
+    """Release config crosses to the controller as data (REQ-1)."""
+    from moonmind_controller import client
+    from moonmind_controller import server
+
+    payload = client.build_operation_payload(
+        operation_id="host-update:abc", target_image="repo@digest", services=("api",)
+    )
+    record = server.parse_operation_payload(payload)
+    assert record["operationId"] == "host-update:abc"
+    assert record["desired"]["targetImage"] == "repo@digest"
+
+    # Load the application handoff by path: importing the ``moonmind``
+    # package pulls heavy API/DB dependencies, while the handoff itself is
+    # a thin data module the controller test must not require.
+    import importlib.util as _ilu
+
+    from pathlib import Path as _Path2
+
+    _handoff_path = (
+        _Path2(__file__).resolve().parents[2]
+        / "moonmind"
+        / "workflows"
+        / "skills"
+        / "deployment_controller_handoff.py"
+    )
+    _spec = _ilu.spec_from_file_location("deployment_controller_handoff", _handoff_path)
+    assert _spec is not None and _spec.loader is not None
+    _handoff = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_handoff)
+
+    assert _handoff.build_controller_payload(
+        submission_id="abc", image="repo@digest"
+    )["desired"]["targetImage"] == "repo@digest"
+    assert _handoff.controller_available() in (True, False)

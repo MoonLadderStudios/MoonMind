@@ -340,6 +340,14 @@ def main(argv=None):
         f"Release submission: {submission_id} (resume with --resume {submission_id})",
         flush=True,
     )
+    # Replacement owner first: the standalone controller in its own Compose
+    # project (MoonLadderStudios/MoonMind#4500). Its Docker transport and
+    # command endpoint survive target-project shutdown, unlike the legacy
+    # application-owned control service below. The legacy path is retained
+    # only until the old writer is positively stopped/reconciled.
+    controller_rc = _try_controller_handoff(record=record)
+    if controller_rc is not None:
+        return controller_rc
     compose = run(
         [
             "docker",
@@ -422,6 +430,39 @@ def main(argv=None):
                 },
             check=False,
         ).returncode
+
+
+def _try_controller_handoff(*, record):
+    """Submit trusted release data to the standalone controller if configured.
+
+    Returns the controller exit code on a handled submission, else None to
+    fall through to the legacy application-owned path. A controller failure
+    falls back with an explicit diagnostic; the installation is unchanged.
+    """
+    try:
+        from moonmind_controller import client
+    except ImportError:
+        return None
+    if not client.is_controller_configured():
+        return None
+    payload = client.build_operation_payload(
+        operation_id=str(
+            record["context"].get("idempotency_key") or f"host-update:{record['image']}"
+        ),
+        target_image=record["image"],
+        services=("api", "worker"),
+    )
+    try:
+        receipt = client.submit_operation(payload)
+    except Exception as exc:
+        print(
+            f"Standalone controller unavailable ({exc}); falling back to the "
+            "legacy application-owned updater until cutover completes.",
+            flush=True,
+        )
+        return None
+    print(f"Controller operation: {receipt} (standalone replacement owner)", flush=True)
+    return 0
 
 
 def _compose_ps_state(*, repo, project):

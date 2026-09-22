@@ -9,4 +9,4 @@ WORKDIR /controller
 COPY moonmind_controller/ /controller/moonmind_controller/
 
 # The controller never replaces itself; it has no self-update path.
-ENTRYPOINT ["python", "-m", "moonmind_controller.server"]
+ENTRYPOINT ["python", "-m", "moonmind_controller"]
