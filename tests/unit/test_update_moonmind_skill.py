@@ -479,3 +479,160 @@ def test_unpublished_tip_does_not_mask_auth_failure(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="docker login"):
         update.main(["--repo", str(repo)])
     assert len(pulls) == 1
+
+
+def test_host_submit_records_shared_controller_operation(tmp_path, monkeypatch):
+    """The host update is a client of the same controller operation the
+    Operations UI observes (MoonMind#4502): the submission links the durable
+    operation, and the server-side client reads the identical record."""
+    from api_service.services.deployment_controller import DeploymentControllerClient
+
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    digest = "sha256:" + "c" * 64
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = '{"name":"existing-project"}'
+        elif args[1] in ("run", "compose", "pull"):
+            output = "services: {}" if args[1] == "run" else ""
+        else:
+            raise AssertionError(f"unexpected docker command: {args}")
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    assert update.main(["--repo", str(repo)]) == 0
+
+    submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+    record = json.loads(submission.read_text())
+    operation_id = record["controllerOperationId"]
+    assert operation_id.startswith("depupd_")
+
+    # The same file is the server-side controller operation: one identity.
+    client = DeploymentControllerClient(
+        state_dir=repo / "deploy" / "state" / "update-operations"
+    )
+    observed = client.observe(operation_id)
+    assert observed.status == "SUCCEEDED"
+    assert observed.requested_image == f"ghcr.io/moonladderstudios/moonmind@{digest}"
+    assert observed.reference == digest
+    assert client.mutation_owner_count(operation_id) == 1
+
+
+def test_host_resume_after_failure_starts_bounded_attempt(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    digest = "sha256:" + "d" * 64
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = '{"name":"existing-project"}'
+        elif args[1] in ("run", "pull"):
+            output = ""
+        elif args[1] == "compose":
+            return SimpleNamespace(returncode=1, stdout="adapter failed")
+        else:
+            raise AssertionError(f"unexpected docker command: {args}")
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    assert update.main(["--repo", str(repo)]) == 1
+    submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+    first_id = json.loads(submission.read_text())["controllerOperationId"]
+    state_dir = repo / "deploy" / "state" / "update-operations"
+    first = json.loads((state_dir / f"{first_id}.json").read_text())
+    assert first["status"] == "FAILED"
+    assert first["error"] == "host adapter exited with status 1"
+
+    # Resume after a terminal operation requests a fresh bounded attempt that
+    # preserves the first failure instead of reusing the failed record.
+    assert update.main(["--repo", str(repo), "--resume", submission.stem]) == 1
+    second_id = json.loads(submission.read_text())["controllerOperationId"]
+    assert second_id != first_id
+    second = json.loads((state_dir / f"{second_id}.json").read_text())
+    assert second["retryOf"] == first_id
+    assert second["attempt"] == 2
+    assert second["firstError"] == "host adapter exited with status 1"
+    assert len(list((repo / "deploy/state/release-submissions").glob("*.json"))) == 1
+
+
+def test_host_duplicate_submit_reattaches_to_live_operation(tmp_path):
+    state_dir = tmp_path / "operations"
+    intent = {
+        "stack": "moonmind",
+        "repository": "ghcr.io/moonladderstudios/moonmind",
+        "reference": "stable",
+        "mode": "changed_services",
+        "operation_kind": "update",
+        "reason": "routine update",
+    }
+    first, created_first = update._controller_submit(state_dir, intent=intent)
+    second, created_second = update._controller_submit(state_dir, intent=intent)
+
+    assert created_first is True
+    assert created_second is False
+    assert second["operationId"] == first["operationId"]
+    assert len(list(state_dir.glob("depupd_*.json"))) == 1
+
+
+def test_host_dry_run_writes_no_controller_operation(tmp_path, monkeypatch):
+    calls = []
+
+    def inspect(args, **kwargs):
+        calls.append(args)
+        return ""
+
+    monkeypatch.setattr(update, "run", inspect)
+    assert update.main(["--repo", str(tmp_path), "--dry-run"]) == 0
+    assert not (tmp_path / "deploy" / "state" / "update-operations").exists()
+
+
+def test_host_retry_operation_without_submission_fails_truthfully(tmp_path):
+    with pytest.raises(ValueError, match="no recorded host submission"):
+        update.main(
+            ["--repo", str(tmp_path), "--retry-operation", "depupd_missing0001"]
+        )
+
+
+def test_host_retry_exhaustion_is_explicit(tmp_path):
+    state_dir = tmp_path / "operations"
+    record, _ = update._controller_submit(
+        state_dir,
+        intent={
+            "stack": "moonmind",
+            "repository": "ghcr.io/moonladderstudios/moonmind",
+            "reference": "stable",
+            "mode": "changed_services",
+            "operation_kind": "update",
+            "reason": "exhaustion probe",
+        },
+    )
+    update._controller_record_result(
+        state_dir, record["operationId"], status="FAILED", error="boom"
+    )
+    second, _ = update._controller_retry(state_dir, record["operationId"])
+    update._controller_record_result(
+        state_dir, second["operationId"], status="FAILED", error="boom"
+    )
+    third, _ = update._controller_retry(state_dir, second["operationId"])
+    update._controller_record_result(
+        state_dir, third["operationId"], status="FAILED", error="boom"
+    )
+    with pytest.raises(ValueError, match="bounded retry budget"):
+        update._controller_retry(state_dir, third["operationId"])

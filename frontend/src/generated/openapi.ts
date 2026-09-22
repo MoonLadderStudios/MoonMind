@@ -7671,6 +7671,17 @@ export interface components {
             /** Afterbuildid */
             afterBuildId?: string | null;
             rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
+            /** Operationid */
+            operationId?: string | null;
+            /** Originalerror */
+            originalError?: string | null;
+            /**
+             * Verificationpending
+             * @default false
+             */
+            verificationPending: boolean;
+            /** Logexcerpt */
+            logExcerpt?: string | null;
         };
         /** DeploymentStackStateResponse */
         DeploymentStackStateResponse: {
@@ -7730,6 +7741,8 @@ export interface components {
             rollbackSourceActionId?: string | null;
             /** Confirmation */
             confirmation?: string | null;
+            /** Retryofoperationid */
+            retryOfOperationId?: string | null;
         };
         /** DeploymentUpdateResponse */
         DeploymentUpdateResponse: {
@@ -7739,11 +7752,10 @@ export interface components {
             taskId: string;
             /** Workflowid */
             workflowId: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "QUEUED";
+            /** Operationid */
+            operationId: string;
+            /** Status */
+            status: "QUEUED" | "ACCEPTED" | "RUNNING";
         };
         /** EligibleProviderProfile */
         EligibleProviderProfile: {

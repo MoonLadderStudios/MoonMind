@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,6 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from api_service.services.deployment_controller import (
+    DeploymentControllerClient,
+    DeploymentControllerError,
+)
 from api_service.services.deployment_operations import (
     DeploymentCurrentImage,
     DeploymentOperationError,
@@ -25,11 +30,7 @@ from api_service.services.deployment_operations import (
 )
 from moonmind.config.settings import settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
-from moonmind.workflows.temporal import (
-    TemporalExecutionService,
-    TemporalExecutionValidationError,
-)
+from moonmind.workflows.temporal import TemporalExecutionService
 from moonmind.workflows.skills.deployment_tools import DEPLOYMENT_UPDATE_TOOL_NAME
 
 
@@ -60,6 +61,7 @@ class DeploymentUpdateRequest(BaseModel):
         None, alias="rollbackSourceActionId"
     )
     confirmation: str | None = None
+    retry_of_operation_id: str | None = Field(None, alias="retryOfOperationId")
 
 
 class DeploymentUpdateResponse(BaseModel):
@@ -68,7 +70,8 @@ class DeploymentUpdateResponse(BaseModel):
     deployment_update_run_id: str = Field(..., alias="deploymentUpdateRunId")
     task_id: str = Field(..., alias="taskId")
     workflow_id: str = Field(..., alias="workflowId")
-    status: Literal["QUEUED"]
+    operation_id: str = Field(..., alias="operationId")
+    status: Literal["QUEUED", "ACCEPTED", "RUNNING"]
 
 
 class DeploymentCurrentImageModel(BaseModel):
@@ -150,6 +153,10 @@ class DeploymentRecentActionModel(BaseModel):
     rollback_eligibility: RollbackEligibilityModel | None = Field(
         None, alias="rollbackEligibility"
     )
+    operation_id: str | None = Field(None, alias="operationId")
+    original_error: str | None = Field(None, alias="originalError")
+    verification_pending: bool = Field(False, alias="verificationPending")
+    log_excerpt: str | None = Field(None, alias="logExcerpt")
 
 
 class ImageTargetModel(BaseModel):
@@ -169,6 +176,17 @@ class ImageTargetsResponse(BaseModel):
 
 def _get_deployment_service() -> DeploymentOperationsService:
     return DeploymentOperationsService()
+
+
+def _get_controller_client() -> DeploymentControllerClient:
+    # The shared secret is deployment-owned and server-to-controller only: it
+    # is compared by the controller client and never returned to the browser.
+    return DeploymentControllerClient(
+        controller_secret=str(
+            os.environ.get("MOONMIND_DEPLOYMENT_CONTROLLER_SECRET") or ""
+        ).strip()
+        or None,
+    )
 
 
 def _get_temporal_execution_service(
@@ -211,6 +229,39 @@ def _require_admin(user: User) -> None:
 def _policy_error(exc: DeploymentOperationError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={"code": exc.code, "message": exc.message},
+    )
+
+
+def _controller_error(exc: DeploymentControllerError) -> HTTPException:
+    """Map controller failures to truthful, distinct API results."""
+
+    if exc.code == "controller_unavailable":
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        )
+    if exc.code == "controller_access_denied":
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "failureClass": "controller_access_failure",
+            },
+        )
+    if exc.code == "controller_operation_not_found":
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": exc.code, "message": exc.message},
+        )
+    if exc.code == "controller_retry_exhausted":
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message},
+        )
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
         detail={"code": exc.code, "message": exc.message},
     )
 
@@ -412,6 +463,11 @@ async def _recent_actions_from_executions(
     execution_service: TemporalExecutionService,
     policy: DeploymentStackPolicy,
 ) -> tuple[DeploymentRecentAction, ...]:
+    """Project legacy workflow-backed actions as readable history only.
+
+    This never submits work and never revives the retired workflow submission
+    route; controller operations above are the live source.
+    """
     try:
         result = await execution_service.list_executions(
             workflow_type="MoonMind.UserWorkflow",
@@ -453,6 +509,10 @@ def _recent_action_model(action: DeploymentRecentAction) -> DeploymentRecentActi
         after_summary=action.after_summary,
         before_build_id=action.before_build_id,
         after_build_id=action.after_build_id,
+        operation_id=action.operation_id,
+        original_error=action.original_error,
+        verification_pending=action.verification_pending,
+        log_excerpt=action.log_excerpt,
         rollback_eligibility=(
             RollbackEligibilityModel(
                 eligible=eligibility.eligible,
@@ -530,9 +590,17 @@ def _stack_state(
 async def submit_deployment_update(
     payload: DeploymentUpdateRequest,
     service: DeploymentOperationsService = Depends(_get_deployment_service),
-    execution_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
+    controller: DeploymentControllerClient = Depends(_get_controller_client),
     user: User = Depends(get_current_user()),
 ) -> DeploymentUpdateResponse:
+    """Submit directly to the shared deployment-controller operation.
+
+    No ``MoonMind.UserWorkflow`` is created and Temporal is not required: the
+    same operation is observed by the host update command. Duplicate
+    submission and lost acknowledgment reattach to the live operation.
+    ``retryOfOperationId`` requests the controller's fresh bounded attempt.
+    """
+
     _require_admin(user)
     try:
         policy = service.validate_update_request(
@@ -548,46 +616,44 @@ async def submit_deployment_update(
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
     try:
-        queued = await service.queue_update(
-            execution_service=execution_service,
-            policy=policy,
-            submission=DeploymentUpdateSubmission(
-                stack=policy.stack,
-                repository=payload.image.repository,
-                reference=payload.image.reference,
-                mode=payload.mode,
-                remove_orphans=payload.remove_orphans,
-                wait=payload.wait,
-                run_smoke_check=payload.run_smoke_check,
-                pause_work=payload.pause_work,
-                prune_old_images=payload.prune_old_images,
-                reason=payload.reason,
-                requested_by_user_id=getattr(user, "id", None),
-                operation_kind=payload.operation_kind,
-                rollback_source_action_id=payload.rollback_source_action_id,
-                confirmation=payload.confirmation,
-                before_build_id=resolve_moonmind_build_id(),
-            ),
-        )
-    except TemporalSubmitDisabledError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "temporal_submit_disabled", "message": str(exc)},
-        ) from exc
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"code": "deployment_update_queue_invalid", "message": str(exc)},
-        ) from exc
-    except DeploymentOperationError as exc:
-        raise _policy_error(exc) from exc
-    return DeploymentUpdateResponse(**queued)
+        if payload.retry_of_operation_id:
+            submitted = service.retry_update(
+                controller=controller,
+                operation_id=payload.retry_of_operation_id.strip(),
+                operator=getattr(user, "id", None),
+            )
+        else:
+            submitted = service.submit_update(
+                controller=controller,
+                policy=policy,
+                submission=DeploymentUpdateSubmission(
+                    stack=policy.stack,
+                    repository=payload.image.repository,
+                    reference=payload.image.reference,
+                    mode=payload.mode,
+                    remove_orphans=payload.remove_orphans,
+                    wait=payload.wait,
+                    run_smoke_check=payload.run_smoke_check,
+                    pause_work=payload.pause_work,
+                    prune_old_images=payload.prune_old_images,
+                    reason=payload.reason,
+                    requested_by_user_id=getattr(user, "id", None),
+                    operation_kind=payload.operation_kind,
+                    rollback_source_action_id=payload.rollback_source_action_id,
+                    confirmation=payload.confirmation,
+                    before_build_id=resolve_moonmind_build_id(),
+                ),
+            )
+    except DeploymentControllerError as exc:
+        raise _controller_error(exc) from exc
+    return DeploymentUpdateResponse(**submitted)
 
 
 @router.get("/stacks/{stack}", response_model=DeploymentStackStateResponse)
 async def get_deployment_stack_state(
     stack: str,
     service: DeploymentOperationsService = Depends(_get_deployment_service),
+    controller: DeploymentControllerClient = Depends(_get_controller_client),
     execution_service: TemporalExecutionService = Depends(
         _get_temporal_execution_service
     ),
@@ -597,7 +663,18 @@ async def get_deployment_stack_state(
         policy = service.get_policy(stack)
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
-    recent_actions = service.recent_actions(policy.stack)
+    # Controller operations are the live source. In-memory and legacy
+    # workflow-backed actions remain readable as history only.
+    try:
+        controller_actions = service.controller_recent_actions(
+            policy.stack, controller=controller
+        )
+    except DeploymentControllerError:
+        controller_actions = ()
+    recent_actions = (
+        *controller_actions,
+        *service.recent_actions(policy.stack),
+    )
     if not recent_actions:
         recent_actions = await _recent_actions_from_executions(
             execution_service=execution_service,

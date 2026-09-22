@@ -108,6 +108,10 @@ const DeploymentActionSchema = z
     logsArtifactUrl: z.string().optional().nullable(),
     rawCommandLogUrl: z.string().optional().nullable(),
     rawCommandLogPermitted: z.boolean().optional(),
+    operationId: z.string().optional().nullable(),
+    originalError: z.string().optional().nullable(),
+    verificationPending: z.boolean().optional(),
+    logExcerpt: z.string().optional().nullable(),
     id: z.union([z.string(), z.number()]).optional().nullable(),
     runId: z.string().optional().nullable(),
     beforeSummary: z.string().optional().nullable(),
@@ -693,6 +697,80 @@ export function OperationsSettingsSection({
     },
   });
 
+  const retryMutation = useMutation({
+    mutationFn: async (action: DeploymentAction) => {
+      const operationId = action.operationId || String(action.id || '');
+      if (!operationId) {
+        throw new Error('Retry requires a controller operation.');
+      }
+      const requestedImage = String(action.requestedImage || '');
+      const separator = requestedImage.lastIndexOf(':');
+      if (separator < 0) {
+        throw new Error('Retry requires the failed update target image.');
+      }
+      const confirmation = [
+        'Retry deployment update?',
+        `Operation: ${operationId}`,
+        `Target image: ${requestedImage}`,
+        'The first failure is preserved; this starts a fresh bounded attempt.',
+        'Services may restart during this operation.',
+      ].join('\n');
+      if (!window.confirm(confirmation)) {
+        return null;
+      }
+      const response = await fetch('/api/v1/operations/deployment/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          stack: deploymentState?.stack || DEPLOYMENT_STACK,
+          image: {
+            repository: requestedImage.slice(0, separator),
+            reference: requestedImage.slice(separator + 1),
+          },
+          mode: 'changed_services',
+          removeOrphans: true,
+          wait: true,
+          runSmokeCheck: false,
+          pauseWork: false,
+          pruneOldImages: false,
+          reason: `Explicit retry of ${operationId}`,
+          operationKind: 'update',
+          retryOfOperationId: operationId,
+        }),
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorPayload.detail?.message === 'string'
+            ? errorPayload.detail.message
+            : typeof errorPayload.detail === 'string'
+              ? errorPayload.detail
+              : `Server error: ${response.status}`;
+        throw new Error(detail);
+      }
+      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+    },
+    onSuccess: (result) => {
+      if (!result) {
+        return;
+      }
+      setUpdateNotice({
+        level: 'ok',
+        text: `Deployment update retried: ${result.deploymentUpdateRunId}`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
+    },
+    onError: (mutationError: Error) => {
+      setUpdateNotice({
+        level: 'error',
+        text: mutationError.message,
+      });
+    },
+  });
+
   const renderDeploymentNotice = (
     notice: { level: 'ok' | 'error'; text: string } | null,
   ) =>
@@ -982,7 +1060,21 @@ export function OperationsSettingsSection({
                         <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                           {action.completedAt || action.startedAt || '-'}
                           {action.operator ? ` · ${action.operator}` : ''}
+                          {action.verificationPending ? ' · verification pending' : ''}
                         </div>
+                        {action.originalError ? (
+                          <div className="mt-1 text-xs text-rose-700 dark:text-rose-400">
+                            {action.originalError}
+                          </div>
+                        ) : null}
+                        {action.logExcerpt ? (
+                          <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            <summary className="cursor-pointer">Controller logs</summary>
+                            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono">
+                              {action.logExcerpt}
+                            </pre>
+                          </details>
+                        ) : null}
                         <div className="mt-3 flex flex-wrap gap-3">
                           {action.runDetailUrl ? (
                             <a
@@ -1024,6 +1116,19 @@ export function OperationsSettingsSection({
                             <span className="text-sm text-slate-500 dark:text-slate-400">
                               {action.rollbackEligibility.reason}
                             </span>
+                          ) : null}
+                          {(action.operationId || action.originalError) &&
+                          ['FAILED', 'FAILURE', 'PARTIALLY_VERIFIED'].includes(
+                            String(action.status || '').toUpperCase(),
+                          ) ? (
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+                              disabled={!canInvokeOperations || retryMutation.isPending}
+                              onClick={() => retryMutation.mutate(action)}
+                            >
+                              Retry update
+                            </button>
                           ) : null}
                         </div>
                       </div>

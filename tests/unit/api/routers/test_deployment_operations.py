@@ -9,11 +9,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.deployment_operations import (
+    _get_controller_client,
     _get_deployment_service,
     _get_temporal_execution_service,
     router,
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.services.deployment_controller import DeploymentControllerClient
 from api_service.services.deployment_operations import (
     DeploymentOperationsService,
     DeploymentRecentAction,
@@ -73,6 +75,12 @@ def _override_execution_service(app: FastAPI) -> _FakeExecutionService:
     return service
 
 
+def _override_controller_client(app: FastAPI, tmp_path, **kwargs) -> DeploymentControllerClient:
+    client = DeploymentControllerClient(state_dir=tmp_path / "controller-state", **kwargs)
+    app.dependency_overrides[_get_controller_client] = lambda: client
+    return client
+
+
 def _override_deployment_service(
     app: FastAPI, service: DeploymentOperationsService
 ) -> None:
@@ -80,21 +88,23 @@ def _override_deployment_service(
 
 
 @pytest.fixture
-def admin_client() -> Iterator[tuple[TestClient, _FakeExecutionService]]:
+def admin_client(tmp_path) -> Iterator[tuple[TestClient, _FakeExecutionService, DeploymentControllerClient]]:
     app = FastAPI()
     app.include_router(router)
     _override_user(app, is_superuser=True)
     execution_service = _override_execution_service(app)
+    controller = _override_controller_client(app, tmp_path)
     with TestClient(app) as client:
-        yield client, execution_service
+        yield client, execution_service, controller
 
 
 @pytest.fixture
-def user_client() -> Iterator[TestClient]:
+def user_client(tmp_path) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(router)
     _override_user(app, is_superuser=False)
     _override_execution_service(app)
+    _override_controller_client(app, tmp_path)
     with TestClient(app) as client:
         yield client
 
@@ -180,9 +190,9 @@ def _recent_action_service(*, eligible: bool = True) -> DeploymentOperationsServ
 
 
 def test_admin_can_submit_policy_valid_deployment_update(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service, controller = admin_client
     response = client.post(
         "/api/v1/operations/deployment/update",
         json=_valid_update_payload(),
@@ -191,31 +201,49 @@ def test_admin_can_submit_policy_valid_deployment_update(
     assert response.status_code == 202
     payload = response.json()
     assert payload["deploymentUpdateRunId"].startswith("depupd_")
-    assert payload["taskId"] == "mm:deployment-update"
-    assert payload["workflowId"] == "mm:deployment-update"
+    assert payload["operationId"] == payload["deploymentUpdateRunId"]
+    assert payload["taskId"] == payload["operationId"]
     assert payload["status"] == "QUEUED"
-    assert len(execution_service.requests) == 1
-    request = execution_service.requests[0]
-    assert request["workflow_type"] == "MoonMind.UserWorkflow"
-    assert request["owner_type"] == "user"
-    assert request["integration"] == DEPLOYMENT_UPDATE_TOOL_NAME
-    parameters = request["initial_parameters"]
-    assert isinstance(parameters, dict)
-    plan = parameters["task"]["plan"]
-    steps = parameters["task"]["steps"]
-    assert plan[0]["tool"]["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
-    assert plan[0]["tool"]["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
-    assert plan[0]["inputs"]["stack"] == "moonmind"
-    assert steps[0]["type"] == "tool"
-    assert steps[0]["tool"]["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
-    assert steps[0]["tool"]["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
-    assert steps[0]["tool"]["inputs"]["stack"] == "moonmind"
+    # No UserWorkflow is created: Temporal is not in the submission path.
+    assert execution_service.requests == []
+    observed = controller.observe(payload["operationId"])
+    assert observed.stack == "moonmind"
+    assert observed.requested_image == (
+        "ghcr.io/moonladderstudios/moonmind:20260425.1234"
+    )
+
+
+def test_deployment_update_submits_with_temporal_stopped(
+    tmp_path,
+) -> None:
+    """The Operations router submits to the real controller without any
+    Temporal execution service override: no workflow or artifact prerequisite.
+    """
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(router)
+    _override_user(app, is_superuser=True)
+    _override_controller_client(app, tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/operations/deployment/update",
+            json=_valid_update_payload(),
+        )
+        assert response.status_code == 202
+        operation_id = response.json()["operationId"]
+        state = client.get("/api/v1/operations/deployment/stacks/moonmind")
+        assert state.status_code == 200
+        actions = state.json()["recentActions"]
+        assert [action["operationId"] for action in actions] == [operation_id]
 
 
 def test_deployment_update_uses_canonical_policy_stack_for_queued_run(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, _execution_service, controller = admin_client
     payload = _valid_update_payload()
     payload["stack"] = " moonmind "
 
@@ -225,15 +253,17 @@ def test_deployment_update_uses_canonical_policy_stack_for_queued_run(
     )
 
     assert response.status_code == 202
-    parameters = execution_service.requests[0]["initial_parameters"]
-    assert isinstance(parameters, dict)
-    assert parameters["task"]["plan"][0]["inputs"]["stack"] == "moonmind"
+    observed = controller.observe(response.json()["operationId"])
+    assert observed.stack == "moonmind"
 
 
-def test_explicit_retry_submission_creates_distinct_audited_update_request(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+def test_duplicate_submission_reattaches_to_one_mutation_owner(
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    """Browser refresh / client timeout / lost acknowledgment cannot launch a
+    second updater: identical intent returns the same operation."""
+
+    client, execution_service, controller = admin_client
 
     first = client.post(
         "/api/v1/operations/deployment/update",
@@ -245,19 +275,25 @@ def test_explicit_retry_submission_creates_distinct_audited_update_request(
         "/api/v1/operations/deployment/update",
         json=second_payload,
     )
+    lost_ack = client.post(
+        "/api/v1/operations/deployment/update",
+        json=second_payload,
+    )
 
     assert first.status_code == 202
     assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] != (
-        execution_service.requests[1]["idempotency_key"]
-    )
+    assert lost_ack.status_code == 202
+    # A changed reason is new intent; an identical repeat reattaches.
+    assert second.json()["operationId"] != first.json()["operationId"]
+    assert lost_ack.json()["operationId"] == second.json()["operationId"]
+    assert execution_service.requests == []
+    assert controller.mutation_owner_count(second.json()["operationId"]) == 1
 
 
-def test_repeated_update_submission_without_reason_reuses_idempotency_key(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+def test_repeated_update_submission_without_reason_reattaches(
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, _execution_service, _controller = admin_client
     payload = _valid_update_payload()
     payload.pop("reason")
 
@@ -272,16 +308,17 @@ def test_repeated_update_submission_without_reason_reuses_idempotency_key(
 
     assert first.status_code == 202
     assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] == (
-        execution_service.requests[1]["idempotency_key"]
-    )
+    assert second.json()["operationId"] == first.json()["operationId"]
 
 
-def test_mutable_tag_update_submission_without_reason_is_not_stale_idempotent(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+def test_mutable_tag_update_submission_without_reason_reattaches(
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    """Mutable tags no longer mint a distinct Temporal idempotency key per
+    attempt: a live identical intent reattaches, and a fresh attempt is an
+    explicit retry preserving the first failure."""
+
+    client, _execution_service, _controller = admin_client
     payload = _valid_update_payload()
     payload["image"] = {
         "repository": "ghcr.io/moonladderstudios/moonmind",
@@ -300,10 +337,93 @@ def test_mutable_tag_update_submission_without_reason_is_not_stale_idempotent(
 
     assert first.status_code == 202
     assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] != (
-        execution_service.requests[1]["idempotency_key"]
+    assert second.json()["operationId"] == first.json()["operationId"]
+
+
+def test_explicit_retry_creates_fresh_attempt_preserving_first_failure(
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
+) -> None:
+    client, _execution_service, controller = admin_client
+    first_id = client.post(
+        "/api/v1/operations/deployment/update",
+        json=_valid_update_payload(),
+    ).json()["operationId"]
+    controller.record_result(first_id, status="FAILED", error="postcheck failed")
+
+    retry_payload = _valid_update_payload()
+    retry_payload["retryOfOperationId"] = first_id
+    retried = client.post(
+        "/api/v1/operations/deployment/update",
+        json=retry_payload,
     )
+
+    assert retried.status_code == 202
+    retried_id = retried.json()["operationId"]
+    assert retried_id != first_id
+    observed = controller.observe(retried_id)
+    assert observed.retry_of == first_id
+    assert observed.first_error == "postcheck failed"
+    assert controller.observe(first_id).error == "postcheck failed"
+
+
+def test_changed_target_is_explicit_new_intent(
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
+) -> None:
+    client, _execution_service, _controller = admin_client
+
+    first = client.post(
+        "/api/v1/operations/deployment/update",
+        json=_valid_update_payload(),
+    )
+    changed = _valid_update_payload()
+    changed["image"] = {
+        "repository": "ghcr.io/moonladderstudios/moonmind",
+        "reference": "stable",
+    }
+    second = client.post(
+        "/api/v1/operations/deployment/update",
+        json=changed,
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert second.json()["operationId"] != first.json()["operationId"]
+
+
+def test_controller_unavailable_and_access_denied_are_distinct(
+    tmp_path,
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(router)
+    _override_user(app, is_superuser=True)
+    _override_execution_service(app)
+    _override_controller_client(app, tmp_path, available=False)
+    with TestClient(app) as client:
+        unavailable = client.post(
+            "/api/v1/operations/deployment/update",
+            json=_valid_update_payload(),
+        )
+        assert unavailable.status_code == 503
+        assert unavailable.json()["detail"]["code"] == "controller_unavailable"
+
+    guarded = FastAPI()
+    guarded.include_router(router)
+    _override_user(guarded, is_superuser=True)
+    _override_execution_service(guarded)
+    _override_controller_client(
+        guarded, tmp_path, controller_secret="controller-owned-secret"
+    )
+    with TestClient(guarded) as client:
+        denied = client.post(
+            "/api/v1/operations/deployment/update",
+            json=_valid_update_payload(),
+        )
+        assert denied.status_code == 403
+        assert denied.json()["detail"]["code"] == "controller_access_denied"
+        assert "controller-owned-secret" not in denied.text
 
 
 def test_non_admin_cannot_submit_deployment_update(
@@ -357,12 +477,12 @@ def test_disabled_mode_still_enforces_admin_after_identity_resolution(
     ],
 )
 def test_invalid_deployment_update_policy_inputs_are_rejected_before_execution(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
     field: str,
     value: object,
     code: str,
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service, _controller = admin_client
     payload = _valid_update_payload()
     payload[field] = value
 
@@ -377,9 +497,9 @@ def test_invalid_deployment_update_policy_inputs_are_rejected_before_execution(
 
 
 def test_deployment_update_reason_is_optional(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service, controller = admin_client
     payload = _valid_update_payload()
     payload.pop("reason")
 
@@ -389,16 +509,15 @@ def test_deployment_update_reason_is_optional(
     )
 
     assert response.status_code == 202
-    parameters = execution_service.requests[0]["initial_parameters"]
-    assert isinstance(parameters, dict)
-    plan_inputs = parameters["task"]["plan"][0]["inputs"]
-    assert "reason" not in plan_inputs
+    observed = controller.observe(response.json()["operationId"])
+    assert observed.reason is None
+    assert execution_service.requests == []
 
 
 def test_arbitrary_shell_and_path_fields_are_not_accepted(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service, _controller = admin_client
     payload = _valid_update_payload()
     payload["command"] = "docker compose up"
     payload["composeFile"] = "/tmp/docker-compose.yaml"
@@ -416,9 +535,9 @@ def test_arbitrary_shell_and_path_fields_are_not_accepted(
 
 
 def test_current_deployment_state_returns_typed_shape(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, _execution_service = admin_client
+    client, _execution_service, _controller = admin_client
     response = client.get("/api/v1/operations/deployment/stacks/moonmind")
 
     assert response.status_code == 200
@@ -440,9 +559,9 @@ def test_current_deployment_state_returns_typed_shape(
 
 
 def test_deployment_state_returns_recent_failure_action_with_rollback_eligibility(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, _execution_service = admin_client
+    client, _execution_service, _controller = admin_client
     _override_deployment_service(client.app, _recent_action_service())
 
     response = client.get("/api/v1/operations/deployment/stacks/moonmind")
@@ -464,9 +583,9 @@ def test_deployment_state_returns_recent_failure_action_with_rollback_eligibilit
 
 
 def test_deployment_state_withholds_rollback_for_missing_before_state_evidence(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, _execution_service = admin_client
+    client, _execution_service, _controller = admin_client
     _override_deployment_service(client.app, _recent_action_service(eligible=False))
 
     response = client.get("/api/v1/operations/deployment/stacks/moonmind")
@@ -479,9 +598,9 @@ def test_deployment_state_withholds_rollback_for_missing_before_state_evidence(
 
 
 def test_deployment_state_projects_recent_actions_from_execution_history(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service, _controller = admin_client
     execution_service.execution_items = [
         SimpleNamespace(
             workflow_id="mm:workflow-history",
@@ -538,9 +657,9 @@ def test_deployment_state_projects_recent_actions_from_execution_history(
 
 
 def test_allowed_image_targets_return_digest_guidance(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, _execution_service = admin_client
+    client, _execution_service, _controller = admin_client
     response = client.get(
         "/api/v1/operations/deployment/image-targets",
         params={"stack": "moonmind"},
@@ -556,9 +675,9 @@ def test_allowed_image_targets_return_digest_guidance(
 
 
 def test_admin_can_submit_rollback_through_typed_deployment_update(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service, controller = admin_client
 
     response = client.post(
         "/api/v1/operations/deployment/update",
@@ -566,22 +685,17 @@ def test_admin_can_submit_rollback_through_typed_deployment_update(
     )
 
     assert response.status_code == 202
-    parameters = execution_service.requests[0]["initial_parameters"]
-    assert isinstance(parameters, dict)
-    operation = parameters["task"]["operation"]
-    plan_inputs = parameters["task"]["plan"][0]["inputs"]
-    assert operation["kind"] == "rollback"
-    assert operation["rollbackSourceActionId"] == "depupd_recent"
-    assert plan_inputs["operationKind"] == "rollback"
-    assert plan_inputs["rollbackSourceActionId"] == "depupd_recent"
-    assert plan_inputs["confirmation"].startswith("Rollback to")
-    assert plan_inputs["image"]["reference"] == "stable"
+    observed = controller.observe(response.json()["operationId"])
+    assert observed.operation_kind == "rollback"
+    assert observed.reference == "stable"
+    assert observed.reason is not None and "depupd_recent" in observed.reason
+    assert execution_service.requests == []
 
 
-def test_repeated_rollback_submissions_are_distinct_explicit_actions(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+def test_identical_rollback_reattaches_explicit_retry_is_distinct(
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, _execution_service, controller = admin_client
 
     first = client.post(
         "/api/v1/operations/deployment/update",
@@ -594,16 +708,30 @@ def test_repeated_rollback_submissions_are_distinct_explicit_actions(
 
     assert first.status_code == 202
     assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] != (
-        execution_service.requests[1]["idempotency_key"]
+    assert second.json()["operationId"] == first.json()["operationId"]
+
+    controller.record_result(
+        first.json()["operationId"], status="FAILED", error="recreate failed"
+    )
+    retry_payload = _rollback_payload()
+    retry_payload["retryOfOperationId"] = first.json()["operationId"]
+    retried = client.post(
+        "/api/v1/operations/deployment/update",
+        json=retry_payload,
+    )
+
+    assert retried.status_code == 202
+    assert retried.json()["operationId"] != first.json()["operationId"]
+    assert (
+        controller.observe(retried.json()["operationId"]).first_error
+        == "recreate failed"
     )
 
 
 def test_rollback_submission_requires_explicit_confirmation(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service, _controller = admin_client
     payload = _rollback_payload(confirmation=" ")
 
     response = client.post(
@@ -614,3 +742,27 @@ def test_rollback_submission_requires_explicit_confirmation(
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "deployment_confirmation_required"
     assert execution_service.requests == []
+
+
+def test_stack_state_surfaces_controller_operation_progress_and_error(
+    admin_client: tuple[TestClient, _FakeExecutionService, DeploymentControllerClient],
+) -> None:
+    client, _execution_service, controller = admin_client
+    operation_id = client.post(
+        "/api/v1/operations/deployment/update",
+        json=_valid_update_payload(),
+    ).json()["operationId"]
+    controller.record_result(operation_id, status="FAILED", error="recreate failed")
+    controller.append_log(operation_id, "compose up failed for service api")
+
+    response = client.get("/api/v1/operations/deployment/stacks/moonmind")
+
+    assert response.status_code == 200
+    action = response.json()["recentActions"][0]
+    assert action["operationId"] == operation_id
+    assert action["status"] == "FAILED"
+    assert action["originalError"] == "recreate failed"
+    assert "compose up failed" in (action["logExcerpt"] or "")
+    assert action["runDetailUrl"] is None
+    # Historical workflow actions stay readable without a workflow engine.
+    assert action["id"] == operation_id
