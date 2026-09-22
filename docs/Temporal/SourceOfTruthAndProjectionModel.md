@@ -273,7 +273,8 @@ Cross-owner and operator/excluded access on every path above fails closed
 with the generic `execution_not_found` / `403` shapes (no internal type or
 child data disclosed); product detail links for the owning user keep working
 after exclusions are introduced (covered by
-`test_execution_operator_links_3947.py`). Previously
+`tests/unit/api/routers/test_executions.py`: `test_owner_product_detail_surfaces_operator_child_parent_links`
+and `test_operator_type_detail_stays_out_of_product_cards_for_non_admin`). Previously
 misclassified rows are repaired only through the shared projection-mutation
 owner (`mutate_execution_projection`, §7.2 field ownership) against
 authoritative workflow/run and owner evidence: correct projection metadata

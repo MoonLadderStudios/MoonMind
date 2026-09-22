@@ -2007,3 +2007,103 @@ async def test_snapshot_owner_patch_applies_first_write_to_both_rows(tmp_path):
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_stale_projection_repair_converges_without_reexecution_3947(tmp_path):
+    """MoonLadderStudios/MoonMind#3947 (R5/AC-3): a demonstrated stale
+    projection (old run, executing state, stale search attributes) repaired
+    through the shared mutator converges to the authoritative Temporal
+    observation — read model only, no repeated execution/publication.
+
+    Ownership, admission parameters, and artifact history are preserved; a
+    repeated identical observation is idempotent (no further revision).
+    """
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import (
+        Base,
+        TemporalExecutionCanonicalRecord,
+    )
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(
+                session, "mm:repair-converge-3947", updated_at=stored_at,
+                refs=["art_original"], version=4,
+            )
+            await session.commit()
+
+            # Authoritative Temporal truth: same workflow chain advanced to a
+            # newer run with completed close evidence.
+            newer = datetime(2026, 9, 1, 12, 5, tzinfo=UTC)
+            desc = _temporal_desc(
+                workflow_id="mm:repair-converge-3947",
+                run_id="run-2",
+                updated_at=newer,
+                memo={"entry": "run", "owner_id": "owner-1", "owner_type": "user"},
+                status=WorkflowExecutionStatus.COMPLETED,
+                close_time=newer,
+            )
+            payload = await map_temporal_state_to_projection(desc)
+            loaded = bool(payload.pop("_temporal_memo_loaded", False)) and bool(
+                payload.get("memo")
+            )
+            refreshed = await mutate_execution_projection(
+                session, workflow_id="mm:repair-converge-3947", payload=payload,
+                owner="temporal", metadata_loaded=loaded,
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+
+            # Read model converges to the authoritative observation.
+            assert refreshed.run_id == "run-2"
+            assert refreshed.state is MoonMindWorkflowState.COMPLETED
+            assert refreshed.close_status is TemporalExecutionCloseStatus.COMPLETED
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
+            assert refreshed.projection_version == 5
+            # Repair preserves the authorized principal, admission parameters,
+            # and accumulated artifact history — nothing is deleted, relabeled,
+            # restarted, or transferred.
+            assert refreshed.owner_id == "owner-1"
+            assert refreshed.parameters.get("targetRuntime") == "codex_cli"
+            assert "art_original" in refreshed.artifact_refs
+            stored_canonical = await session.get(
+                TemporalExecutionCanonicalRecord, "mm:repair-converge-3947"
+            )
+            assert stored_canonical.run_id == "run-2"
+            assert stored_canonical.owner_id == "owner-1"
+
+            # Convergence without re-execution: repeating the identical
+            # authoritative observation produces no further revision.
+            repeat_payload = await map_temporal_state_to_projection(
+                _temporal_desc(
+                    workflow_id="mm:repair-converge-3947",
+                    run_id="run-2",
+                    updated_at=newer,
+                    memo={
+                        "entry": "run",
+                        "owner_id": "owner-1",
+                        "owner_type": "user",
+                    },
+                    status=WorkflowExecutionStatus.COMPLETED,
+                    close_time=newer,
+                )
+            )
+            repeat_loaded = bool(
+                repeat_payload.pop("_temporal_memo_loaded", False)
+            ) and bool(repeat_payload.get("memo"))
+            repeated = await mutate_execution_projection(
+                session, workflow_id="mm:repair-converge-3947",
+                payload=repeat_payload, owner="temporal",
+                metadata_loaded=repeat_loaded,
+            )
+            await session.commit()
+            await session.refresh(repeated)
+            assert repeated.projection_version == 5
+            assert repeated.sync_state is TemporalExecutionProjectionSyncState.FRESH
+    finally:
+        await engine.dispose()
+
+
