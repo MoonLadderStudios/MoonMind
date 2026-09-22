@@ -170,6 +170,17 @@ class RetirementCriterion(str, Enum):
 
 # Criteria every legacy path must satisfy before deletion, independent of which
 # feature surfaces it touches.
+#
+# MoonLadderStudios/MoonMind#3932: the protected-provider canary and the
+# rollback exercise are NOT base criteria. A paid/live provider canary is
+# evidence about provider behavior and a rollback exercise is evidence about a
+# rollback dependency — an unused image alias, a doc-only runbook, or a
+# migration tool has neither, so demanding both from every row made removal
+# impossible without waiving real protections. Rows with a live
+# credential/lease authority add ``_PROTECTED_PROVIDER_CRITERIA``; rows with a
+# rollback dependency add ``_ROLLBACK_EXERCISE_CRITERIA``. Active-work, replay,
+# historical-read, and retention protections stay in the base set for every row
+# and cannot be waived.
 _BASE_CRITERIA: frozenset[RetirementCriterion] = frozenset(
     {
         RetirementCriterion.NO_NEW_RECORDS_USE_IT,
@@ -177,11 +188,27 @@ _BASE_CRITERIA: frozenset[RetirementCriterion] = frozenset(
         RetirementCriterion.ALL_SUPPORTED_HISTORIES_REPLAY,
         RetirementCriterion.DETERMINISTIC_CONFORMANCE_PASSED,
         RetirementCriterion.EXACT_IMAGE_CONFORMANCE_PASSED,
-        RetirementCriterion.PROTECTED_PROVIDER_CANARY_PASSED,
-        RetirementCriterion.ROLLBACK_WITHOUT_PATH_EXERCISED,
         RetirementCriterion.HISTORICAL_READS_AVAILABLE,
         RetirementCriterion.RETENTION_POLICY_PERMITS_DELETION,
     }
+)
+
+
+# Evidence required only from rows that exercise a live credential or lease
+# authority (the direct launch strategies, the profile-bound realizer and
+# coordinator, the OAuth host runtime and session activities, the shared
+# capacity consumer, and the embedded transport admission boundary).
+_PROTECTED_PROVIDER_CRITERIA: frozenset[RetirementCriterion] = frozenset(
+    {RetirementCriterion.PROTECTED_PROVIDER_CANARY_PASSED}
+)
+
+
+# Evidence required only from rows that carry a rollback dependency. The
+# retention windows in :func:`evaluate_removal_eligibility` additionally block
+# a rollback-carrying row while its rollback window is open or no exercise is
+# recorded, so this criterion is never the only rollback protection.
+_ROLLBACK_EXERCISE_CRITERIA: frozenset[RetirementCriterion] = frozenset(
+    {RetirementCriterion.ROLLBACK_WITHOUT_PATH_EXERCISED}
 )
 
 
@@ -436,7 +463,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         replayDependency=True,
         historicalReadDependency=True,
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA
+        | _ROLLBACK_EXERCISE_CRITERIA
+        | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -575,7 +604,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         replayDependency=True,
         historicalReadDependency=True,
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA
+        | _ROLLBACK_EXERCISE_CRITERIA
+        | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -618,7 +649,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         replayDependency=True,
         historicalReadDependency=True,
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA
+        | _ROLLBACK_EXERCISE_CRITERIA
+        | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -656,6 +689,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         historicalReadDependency=True,
         rollbackDependency=True,
         applicableCriteria=_BASE_CRITERIA
+        | _ROLLBACK_EXERCISE_CRITERIA
+        | _PROTECTED_PROVIDER_CRITERIA
         | {RetirementCriterion.BROWSER_TO_HOST_ACCEPTANCE_PASSED},
         earliestRemovalStage=RemovalStage.LAUNCH_ONLY_CODE,
         removalGuardTest=(
@@ -693,7 +728,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         replayDependency=True,
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA
+        | _ROLLBACK_EXERCISE_CRITERIA
+        | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.OAUTH_HOST_ORCHESTRATION,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -758,7 +795,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             }
         ),
         replayDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.COMPOSITION_ROOT_REGISTRATIONS,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -790,7 +827,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
                 ActiveOwnerKind.INCOMPLETE_CLEANUP_OR_JANITOR,
             }
         ),
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.COMPOSITION_ROOT_REGISTRATIONS,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -825,7 +862,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             }
         ),
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _ROLLBACK_EXERCISE_CRITERIA,
         earliestRemovalStage=RemovalStage.STARTUP_AND_COMPOSE,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -858,7 +895,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             }
         ),
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _ROLLBACK_EXERCISE_CRITERIA,
         earliestRemovalStage=RemovalStage.STARTUP_AND_COMPOSE,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -888,7 +925,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             {ActiveOwnerKind.STATIC_OR_ON_DEMAND_HOST}
         ),
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _ROLLBACK_EXERCISE_CRITERIA,
         earliestRemovalStage=RemovalStage.STARTUP_AND_COMPOSE,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -922,7 +959,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "resolve_static_host_image_ref"
         ),
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _ROLLBACK_EXERCISE_CRITERIA,
         earliestRemovalStage=RemovalStage.IMAGE_AND_ENVIRONMENT_ALIASES,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -956,7 +993,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             {ActiveOwnerKind.STATIC_OR_ON_DEMAND_HOST}
         ),
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _ROLLBACK_EXERCISE_CRITERIA,
         earliestRemovalStage=RemovalStage.IMAGE_AND_ENVIRONMENT_ALIASES,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -1108,7 +1145,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             }
         ),
         historicalReadDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
         removalGuardTest=(
             "tests/unit/omnigent/test_embedded_transport_retirement_3955.py::"
@@ -1192,7 +1229,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         surfaces=("python:moonmind.omnigent.cutover:validate_matrix_artifact",),
         newAdmissionSource="moonmind.omnigent.cutover:select_runtime",
         rollbackDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _ROLLBACK_EXERCISE_CRITERIA,
         earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
         removalGuardTest=(
             "tests/unit/omnigent/test_legacy_retirement.py::"
@@ -1247,7 +1284,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             }
         ),
         historicalReadDependency=True,
-        applicableCriteria=_BASE_CRITERIA,
+        applicableCriteria=_BASE_CRITERIA | _PROTECTED_PROVIDER_CRITERIA,
         earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
         removalGuardTest=(
             "tests/unit/api/routers/test_omnigent_bridge_embedded_retirement.py::"
