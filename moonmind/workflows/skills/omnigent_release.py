@@ -1,19 +1,19 @@
-"""Singular Omnigent release alignment for the deployment update flow.
+"""Singular Omnigent release record for the deployment update flow.
 
 A deployment runs exactly one Omnigent release: one digest-pinned server
 image plus digest-pinned host images, recorded once in the deployment
-desired-state files. The release controller is the single writer; every
-other authority (Compose rendering, launch policy versions, schedule
-admissions, dispatch) derives from that record instead of independently
-resolving mutable tags on its own cadence.
+desired-state files. The release controller is the single writer of that
+record; ordinary application startup and managed-attempt admission resolve
+the installed server/host artifacts from the installation instead of
+independently re-pinning mutable tags on their own cadence.
 
-This ends the stale-pin saga where each authority pinned a different
-upstream moment: the schedule input says 0.13, the policy says 0.13, the
-running container says 0.14, and every dispatch fails until a human
-re-admits each layer by hand. With one record, ``update-moonmind.sh``
-advances the whole deployment in one audited operation; the major.minor
-dispatch gate stays in place as a backstop that can then only fire on
-genuine out-of-band drift.
+A routine image update records the new digests, recreates the affected
+services, and verifies the running server. It does not cut new
+launch-policy/profile versions or re-admit recurring schedules merely to
+synchronize digest strings: fresh admission binds the installed target to
+the new attempt while preserving authored harness, Profile, model,
+account, cost/privacy, source, and publication intent, and already-started
+attempts retain their actual image/session evidence.
 """
 
 from __future__ import annotations
@@ -284,9 +284,15 @@ def decide_release_transition(
 class OmnigentReleaseDrivers:
     """Injectable boundaries for :func:`migrate_omnigent_release`.
 
-    Production wiring uses the real Compose/DB/registry boundaries; tests
+    Production wiring uses the real Compose/registry boundaries; tests
     inject fakes. Every driver is bounded by its own timeout or attempt
     budget so a stuck boundary surfaces as a step failure, never a hang.
+
+    The controller is deployment-owned: it records the installed release,
+    recreates services onto it, and verifies the running server. It never
+    imports application policy/schedule services, cuts policy versions, or
+    refreshes schedules. Fresh admission binds the installed target to new
+    attempts through the owning persistence/admission boundaries instead.
     """
 
     deployment_inputs: Callable[[], Mapping[str, str]] = field(
@@ -304,18 +310,6 @@ class OmnigentReleaseDrivers:
     await_resolution: Callable[[dict[str, str]], Awaitable[dict[str, str]]] = (
         field(default=None, repr=False)
     )
-    sync_catalog: Callable[[], Awaitable[dict[str, Any]]] = field(
-        default=None, repr=False
-    )
-    cut_policy_versions: Callable[
-        [dict[str, str]], Awaitable[dict[str, list[str]]]
-    ] = field(default=None, repr=False)
-    refresh_schedules: Callable[[], Awaitable[int]] = field(
-        default=None, repr=False
-    )
-    qualify_host_drift: Callable[
-        [dict[str, str]], Awaitable[list[dict[str, Any]]]
-    ] = field(default=None, repr=False)
     verify_live_container: Callable[[str], Awaitable[str | None]] = field(
         default=None, repr=False
     )
@@ -325,14 +319,13 @@ def release_policy_drift_dispositions(
     policy_host_refs: Mapping[str, str],
     target_refs: Mapping[str, str],
 ) -> list[dict[str, Any]]:
-    """Describe policy<->Host Class drift for release qualification (#4379 R7).
+    """Describe policy<->Host Class drift (historical #4379 R7 helper).
 
-    ``policy_host_refs`` maps ``policy_id`` to its default host image ref;
-    ``target_refs`` maps release host kinds (``codex``/``opencode``/``shared``/
-    ``pi``) to the recorded release image. Returns one disposition per
-    drifted policy (see ``describe_policy_hostclass_drift``); empty means
-    policy defaults already match the recorded release and promotion is
-    unfenced on this boundary.
+    Retained for inspection of already-recorded policy/host pairs only. The
+    release migration no longer qualifies or fences promotion on image
+    alignment: fresh admission binds the installed target while preserving
+    authored execution choices, and image/patch inequality alone is not
+    incompatibility.
     """
     from moonmind.omnigent.host_image_drift import describe_policy_hostclass_drift
 
@@ -354,12 +347,12 @@ def release_policy_drift_dispositions(
 def raise_for_release_policy_drift(
     dispositions: list[dict[str, Any]] | tuple[dict[str, Any], ...],
 ) -> None:
-    """Fence promotion while policy<->Host Class drift remains (#4379 R7).
+    """Historical promotion fence (#4379 R7).
 
-    Raises :class:`OmnigentReleaseError` with the executable recovery
-    disposition instead of a warnings-only log. Compatible rebuilds point at
-    bootstrap reconcile; family changes require explicit revision. Empty
-    dispositions return without raising.
+    Retained so recorded dispositions stay interpretable. The release
+    migration no longer calls this: compatible rebuilds must not require a
+    new policy/version ladder just to align images, and the superseded
+    permanent promotion fence must not be restored.
     """
     pending = [dict(item) for item in dispositions or () if isinstance(item, dict)]
     if not pending:
@@ -371,56 +364,6 @@ def raise_for_release_policy_drift(
     recovery = str(first.get("recovery") or "resolve policy drift explicitly")
     policy_ref = str(first.get("policyRef") or "policy")
     raise OmnigentReleaseError("drift-fence", f"{policy_ref}: {recovery}")
-
-
-async def _default_qualify_host_drift(
-    target_refs: Mapping[str, str],
-) -> list[dict[str, Any]]:
-    """Read policy defaults and describe drift against the release record."""
-    from api_service.db.base import get_async_session_context
-    from api_service.services.omnigent_policies import OmnigentPolicy
-
-    target = {str(k): str(v or "") for k, v in dict(target_refs or {}).items()}
-    policy_hosts: dict[str, str] = {}
-    policy_refs: dict[str, str] = {}
-    async with get_async_session_context() as session:
-        from api_service.services.omnigent_policies import OmnigentPolicyService
-
-        service = OmnigentPolicyService(session)
-        for policy_id, _kind in OMNIGENT_RELEASE_POLICIES:
-            policy = await session.get(OmnigentPolicy, policy_id)
-            if policy is None or policy.default_version is None:
-                continue
-            try:
-                current = await service.get_version(
-                    policy_id, policy.default_version
-                )
-            except Exception as exc:
-                # Unavailable qualification must fence promotion rather than
-                # silently passing with no drift disposition.
-                raise OmnigentReleaseError(
-                    "qualify-host-drift",
-                    f"{policy_id}@{policy.default_version}: "
-                    f"could not load policy default for drift "
-                    f"qualification: {exc}",
-                ) from exc
-            document = current.document_json
-            host = document.get("host") if isinstance(document, dict) else None
-            host_ref = (
-                str(host.get("hostImageRef") or "")
-                if isinstance(host, dict)
-                else ""
-            )
-            if host_ref.strip():
-                policy_hosts[policy_id] = host_ref.strip()
-                policy_refs[policy_id] = f"{policy_id}@{policy.default_version}"
-    dispositions = release_policy_drift_dispositions(policy_hosts, target)
-    # Annotate with the exact default ref so the recovery names versions.
-    for item in dispositions:
-        policy_id = str(item.get("policyRef") or "")
-        if policy_id in policy_refs:
-            item["policyRef"] = policy_refs[policy_id]
-    return dispositions
 
 
 async def _default_deployment_inputs() -> Mapping[str, str]:
@@ -533,24 +476,16 @@ async def _default_await_resolution(
     raise OmnigentReleaseError("await-resolution", last_error)
 
 
-async def _default_sync_catalog() -> dict[str, Any]:
-    from api_service.db.base import get_async_session_context
-    from api_service.services.omnigent_agent_profile_service import (
-        synchronize_omnigent_harness_catalog,
-    )
-
-    async with get_async_session_context() as session:
-        return dict(await synchronize_omnigent_harness_catalog(session))
-
-
 def build_migrated_policy_document(
     document: Mapping[str, Any], *, server_ref: str, host_ref: str
 ) -> dict[str, Any]:
     """Return a copy of a policy document with only the image refs moved.
 
-    Every other field (resources, boundaries, providers, rollout) is carried
-    over verbatim so operator customizations survive the migration; only the
-    two digest pins advance to the recorded release.
+    Historical one-time transition helper, retained so already-recorded
+    migrations stay interpretable. Routine releases no longer cut policy
+    versions: every other field (resources, boundaries, providers, rollout)
+    is carried over verbatim so operator customizations survive the
+    migration; only the two digest pins advance to the recorded release.
     """
     if not isinstance(document, dict):
         raise OmnigentReleaseError("cut-policies", "policy default has no document")
@@ -568,176 +503,6 @@ def build_migrated_policy_document(
     return payload
 
 
-async def _default_cut_policy_versions(
-    record_refs: Mapping[str, str], *, actor: str
-) -> dict[str, list[str]]:
-    """Cut one policy version per bootstrap policy whose images moved.
-
-    The current default document is carried over verbatim except for the two
-    image refs, so operator customizations survive the migration. The release
-    is explicit operator-invoked authority, which is why it may advance even
-    operator-owned defaults; the parent ref chain and cutover events record
-    exactly what moved. Policies whose host family has no recorded ref (an
-    unresolvable optional image) are skipped with a note instead of failing
-    the migration.
-    """
-    from api_service.db.base import get_async_session_context
-    from api_service.services.omnigent_policies import (
-        OmnigentPolicy,
-        OmnigentPolicyService,
-        OmnigentPolicyVersion,
-        PolicyDocument,
-        PolicyState,
-        _cutover_inactive_bootstrap_bindings,
-    )
-    from sqlalchemy import func, select
-
-    cut: list[str] = []
-    skipped: list[str] = []
-    async with get_async_session_context() as session:
-        service = OmnigentPolicyService(session)
-        for policy_id, kind in OMNIGENT_RELEASE_POLICIES:
-            policy = await session.get(OmnigentPolicy, policy_id)
-            if policy is None or policy.default_version is None:
-                continue
-            current = await service.get_version(policy_id, policy.default_version)
-            document = current.document_json
-            if not isinstance(document, dict):
-                raise OmnigentReleaseError(
-                    "cut-policies", f"{policy_id} default has no document"
-                )
-            host = document.get("host")
-            if not isinstance(host, dict):
-                raise OmnigentReleaseError(
-                    "cut-policies", f"{policy_id} default has no host block"
-                )
-            want_server = str(record_refs.get("server") or "")
-            want_host = str(record_refs.get(kind) or "")
-            if (
-                host.get("serverImageRef") == want_server
-                and host.get("hostImageRef") == want_host
-            ):
-                continue
-            if not want_server or not want_host:
-                skipped.append(policy_id)
-                continue
-            previous_default_ref = f"{policy_id}@{policy.default_version}"
-            payload = build_migrated_policy_document(
-                document, server_ref=want_server, host_ref=want_host
-            )
-            try:
-                new_document = PolicyDocument.model_validate(payload)
-            except ValueError as exc:
-                raise OmnigentReleaseError(
-                    "cut-policies", f"{policy_id} migrated document invalid: {exc}"
-                ) from exc
-            latest = (
-                await session.execute(
-                    select(func.max(OmnigentPolicyVersion.version)).where(
-                        OmnigentPolicyVersion.policy_id == policy_id
-                    )
-                )
-            ).scalar_one()
-            row = await service.new_version(
-                policy_id=policy_id,
-                document=new_document,
-                actor=actor,
-                expected_parent_ref=f"{policy_id}@{latest}",
-            )
-            if not row.validation_json.get("valid"):
-                raise OmnigentReleaseError(
-                    "cut-policies", f"{policy_id}@{row.version} failed validation"
-                )
-            candidate = await service.transition(
-                policy_id=policy_id,
-                version=row.version,
-                state=PolicyState.ACTIVE,
-                actor=actor,
-                make_default=True,
-            )
-            candidate_ref = f"{policy_id}@{candidate.version}"
-            versions = await service.versions(policy_id)
-            predecessors = tuple(
-                f"{policy_id}@{item.version}"
-                for item in versions
-                if item.version != candidate.version
-                and str(item.state) == PolicyState.ACTIVE.value
-            )
-            updated, _deferred = await _cutover_inactive_bootstrap_bindings(
-                session,
-                previous_refs=predecessors,
-                policy_ref=candidate_ref,
-            )
-            # Release cutover advances active profiles across the same-policy
-            # move so schedules refresh without manual profile edits (#4379
-            # R3). Previous defaults are recorded authority for in-flight
-            # runs; only the active profile pointer moves.
-            try:
-                from api_service.services.omnigent_agent_profile_selection import (
-                    advance_agent_profiles_for_policy_cutover,
-                )
-
-                # Release cutover advances active profiles across the same-policy
-                # move so schedules refresh without manual profile edits (#4379
-                # R3). `previous_default_ref` was captured before the cut;
-                # usages keep recorded authority for in-flight runs.
-                if previous_default_ref != candidate_ref:
-                    # Isolate best-effort advancement in a savepoint: a database
-                    # error inside the helper (for example an IntegrityError
-                    # from concurrent version allocation) must not poison this
-                    # session, or the following audit insert and commit would
-                    # fail and abort the release after policy cutover.
-                    async with session.begin_nested():
-                        await advance_agent_profiles_for_policy_cutover(
-                            session,
-                            cutovers={previous_default_ref: candidate_ref},
-                            actor=actor,
-                        )
-            except Exception:
-                # Profile advancement is convergent; a later reconcile retry
-                # completes it. Never fail the policy cut itself here.
-                pass
-            service._event(
-                policy_id,
-                candidate.version,
-                "bootstrap_authority_cutover",
-                actor,
-                {
-                    "previousRefs": list(predecessors),
-                    "policyRef": candidate_ref,
-                    "serverImageRef": want_server,
-                    "hostImageRef": want_host,
-                    "updatedBindingCount": updated,
-                    "releaseMigration": True,
-                },
-            )
-            await session.commit()
-            cut.append(candidate_ref)
-    return {"cut": cut, "skipped": skipped}
-
-
-async def _default_refresh_schedules() -> int:
-    from api_service.db.base import get_async_session_context
-    from api_service.services.recurring_workflows_service import (
-        RecurringWorkflowsService,
-    )
-
-    try:
-        async with get_async_session_context() as session:
-            refreshed = await RecurringWorkflowsService(
-                session
-            ).refresh_managed_bootstrap_schedules(limit=500, raise_on_failure=True)
-            await session.commit()
-            return refreshed
-    except OmnigentReleaseError:
-        raise
-    except Exception as exc:
-        raise OmnigentReleaseError(
-            "refresh-schedules",
-            f"managed bootstrap schedule refresh failed: {exc}",
-        ) from exc
-
-
 async def _default_verify_live_container(server_ref: str) -> str | None:
     from moonmind.omnigent.bootstrap.image_resolution import (
         resolve_live_server_image_ref,
@@ -753,10 +518,6 @@ def _default_drivers() -> OmnigentReleaseDrivers:
         read_live_refs=_default_read_live_refs,
         restart_server=None,
         await_resolution=_default_await_resolution,
-        sync_catalog=_default_sync_catalog,
-        cut_policy_versions=None,
-        refresh_schedules=_default_refresh_schedules,
-        qualify_host_drift=_default_qualify_host_drift,
         verify_live_container=_default_verify_live_container,
     )
 
@@ -772,8 +533,11 @@ def production_drivers(
 
     The runner recreates the omnigent server container onto the recorded
     digests (Compose renders them from the release-owned desired-state env
-    file); policy cuts run under the release actor, which is explicit
-    operator-invoked authority from ``update-moonmind.sh``.
+    file). The controller stays deployment-owned: it records, recreates,
+    and verifies the installed images without importing application
+    policy/schedule services. Fresh managed attempts bind the installed
+    target through the owning admission boundaries instead of per-release
+    policy cuts or schedule re-admissions.
     """
 
     async def _up_services(services: tuple[str, ...], phase: str) -> None:
@@ -822,9 +586,6 @@ def production_drivers(
             "restart-consumers",
         )
 
-    async def cut_policy_versions(target: dict[str, str]) -> dict[str, list[str]]:
-        return await _default_cut_policy_versions(target, actor=actor)
-
     base = _default_drivers()
     return OmnigentReleaseDrivers(
         deployment_inputs=base.deployment_inputs,
@@ -832,10 +593,6 @@ def production_drivers(
         read_live_refs=base.read_live_refs,
         restart_server=restart_server,
         await_resolution=base.await_resolution,
-        sync_catalog=base.sync_catalog,
-        cut_policy_versions=cut_policy_versions,
-        refresh_schedules=base.refresh_schedules,
-        qualify_host_drift=base.qualify_host_drift,
         verify_live_container=base.verify_live_container,
     )
 
@@ -851,12 +608,22 @@ async def migrate_omnigent_release(
 ) -> dict[str, Any]:
     """Advance the deployment to the resolved Omnigent release, or no-op.
 
+    The migration records the installed server/host digests, recreates the
+    affected services onto them, and verifies the running server. It never
+    cuts policy versions, refreshes schedules, synchronizes the harness
+    catalog, or fences promotion on image alignment: fresh managed attempts
+    bind the installed target through the owning admission boundaries while
+    preserving authored execution choices, and already-started attempts
+    retain their actual image/session evidence.
+
     Every step is convergent: re-running after an interruption completes the
-    pending work instead of duplicating it (record compare-and-set, idempotent
-    container up, skip-when-current policy/schedule steps). Any failure raises
-    :class:`OmnigentReleaseError` with the step name; the retained fleet owns
-    recovery and the record's ``previous`` revision supports an explicit
-    rollback through this same function.
+    pending work instead of duplicating it (record compare-and-set,
+    idempotent container up). Any failure raises
+    :class:`OmnigentReleaseError` with the step name; a failed required
+    runtime stays a visible failure with a supported retry, while an
+    optional catalog/reporting outage never undoes confirmed Compose work.
+    The retained fleet owns recovery and the record's ``previous`` revision
+    supports an explicit rollback through this same function.
     """
     from moonmind.omnigent.settings import build_omnigent_gate, generic_host_enabled
 
@@ -865,9 +632,9 @@ async def migrate_omnigent_release(
 
     # Hold the release-wide deployment lock through the migration so a second
     # queued release cannot rewrite the desired-state files while this
-    # migration restarts Omnigent and cuts policies. The revision CAS below
-    # still rejects any interleaving that slips through the gap between the
-    # deployment update's lock release and this acquisition.
+    # migration restarts services. The revision CAS below still rejects any
+    # interleaving that slips through the gap between the deployment update's
+    # lock release and this acquisition.
     import os
 
     lock_lease = None
@@ -917,10 +684,10 @@ async def _migrate_omnigent_release_inner(
     actor: str = "release",
 ) -> dict[str, Any]:
     run = drivers or _default_drivers()
-    if run.restart_server is None or run.cut_policy_versions is None:
+    if run.restart_server is None:
         raise OmnigentReleaseError(
             "wiring",
-            "runner-bound drivers (restart_server, cut_policy_versions) are required",
+            "runner-bound driver (restart_server) is required",
         )
 
     env_entries, record_doc = store.read()
@@ -935,26 +702,14 @@ async def _migrate_omnigent_release_inner(
     action, target = decide_release_transition(live, record, candidates)
 
     if action == "noop":
-        # A previous advance may have written the record and aligned the
-        # server but failed before catalog, policy, schedule, or verification
-        # finished. Rerun those convergent post-record steps before treating
-        # matching refs as terminal; otherwise the receipt completes with
-        # stale policies or schedules.
+        # Live, record, and candidates already agree: the installed release
+        # is aligned. Confirm the running server carries the recorded digest
+        # without recreating services or touching policies/schedules. A
+        # pre-existing recurring schedule creates its next attempt from the
+        # installed target through normal admission, preserving its identity,
+        # timing, paused state, and authored execution choices.
         assert record is not None
         try:
-            resolved = await run.await_resolution(target)
-            catalog = await run.sync_catalog()
-            policy_outcome = await run.cut_policy_versions(target)
-            refreshed = await run.refresh_schedules()
-            if run.qualify_host_drift is not None:
-                # Fence promotion while policy defaults drift from the
-                # recorded release (#4379 R7): a compatible rebuild names
-                # bootstrap reconcile, a family change names explicit
-                # revision. Warnings-only would re-create the wedged
-                # schedules the issue reports.
-                raise_for_release_policy_drift(
-                    await run.qualify_host_drift(dict(target))
-                )
             live_digest = await run.verify_live_container(
                 str(target.get("server") or "")
             )
@@ -962,8 +717,8 @@ async def _migrate_omnigent_release_inner(
             raise
         except Exception as exc:
             raise OmnigentReleaseError(
-                "converge-post-steps",
-                f"aligned refs still need post-record work: {exc}",
+                "verify",
+                f"could not observe the running server image: {exc}",
             ) from exc
         if live_digest and live_digest != str(target.get("server") or ""):
             raise OmnigentReleaseError(
@@ -978,11 +733,9 @@ async def _migrate_omnigent_release_inner(
             "status": "aligned",
             "revision": record.revision,
             "serverImageRef": target.get("server"),
-            "policiesCut": policy_outcome["cut"],
-            "policiesSkipped": policy_outcome["skipped"],
-            "schedulesRefreshed": refreshed,
-            "catalogRef": catalog.get("catalogRef"),
-            "resolvedRefs": resolved,
+            "hostImageRefs": {
+                k: v for k, v in target.items() if k != "server" and v
+            },
         }
 
     if action == "advance":
@@ -1021,14 +774,11 @@ async def _migrate_omnigent_release_inner(
         target = dict(new_release.refs())
 
     # From here the target is the record: converge an interrupted migration
-    # and finish a fresh advance through the same steps.
+    # and finish a fresh advance through the same install-and-verify steps.
+    # No policy versions are cut and no schedules are refreshed here; the
+    # owning admission boundaries bind the installed target to new attempts.
     await run.restart_server(target)
     resolved = await run.await_resolution(target)
-    catalog = await run.sync_catalog()
-    policy_outcome = await run.cut_policy_versions(target)
-    refreshed = await run.refresh_schedules()
-    if run.qualify_host_drift is not None:
-        raise_for_release_policy_drift(await run.qualify_host_drift(dict(target)))
     live_digest = await run.verify_live_container(str(target.get("server") or ""))
     if live_digest and live_digest != str(target.get("server") or ""):
         # Compare by digest: the live check returns a repository digest for
@@ -1048,10 +798,6 @@ async def _migrate_omnigent_release_inner(
         "hostImageRefs": {
             k: v for k, v in target.items() if k != "server" and v
         },
-        "policiesCut": policy_outcome["cut"],
-        "policiesSkipped": policy_outcome["skipped"],
-        "schedulesRefreshed": refreshed,
-        "catalogRef": catalog.get("catalogRef"),
         "resolvedRefs": resolved,
     }
 
