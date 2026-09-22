@@ -12,8 +12,16 @@ def main(argv=None) -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8099)
     parser.add_argument("--state-dir", required=True)
+    parser.add_argument("--lock-dir", default=None)
+    parser.add_argument("--stack", default="moonmind")
     args = parser.parse_args(argv)
-    serve(host=args.host, port=args.port, state_dir=args.state_dir)
+    serve(
+        host=args.host,
+        port=args.port,
+        state_dir=args.state_dir,
+        lock_dir=args.lock_dir,
+        stack=args.stack,
+    )
 
 
 if __name__ == "__main__":
