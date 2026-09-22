@@ -1730,7 +1730,11 @@ class OmnigentOAuthHostBinding(BaseModel):
     binding_ref: str = Field(..., alias="bindingRef", min_length=1)
     provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
     endpoint_ref: str = Field(..., alias="endpointRef", min_length=1)
-    harness: Literal["codex-native", "claude-native"]
+    # MoonLadderStudios/MoonMind#3933: OAuth host bindings are an intentional
+    # registry-derived subset (authModel == "oauth_volume"). Approved
+    # opencode/pi registrations stay discoverable without becoming
+    # OAuth-bindable; unknown ids are rejected before effects.
+    harness: str
     credential_mount_ref: CredentialMountRef = Field(..., alias="credentialMountRef")
     max_hosts: Literal[1] = Field(1, alias="maxHosts")
     max_sessions_per_host: Literal[1] = Field(1, alias="maxSessionsPerHost")
@@ -1751,6 +1755,22 @@ class OmnigentOAuthHostBinding(BaseModel):
             raise ValueError(
                 "credentialMountRef must belong to providerProfileId"
             )
+        from moonmind.omnigent.harness_platform.harness_registry import (
+            harness_registration,
+        )
+
+        try:
+            registration = harness_registration(self.harness)
+        except Exception as exc:
+            raise ValueError(
+                f"harness {self.harness} has no approved product registration"
+            ) from exc
+        if registration.authModel != "oauth_volume":
+            raise ValueError(
+                f"harness {self.harness} is not an OAuth host harness"
+            )
+        # Normalize aliases to the canonical harness id.
+        object.__setattr__(self, "harness", registration.harnessId)
         return self
 
 
