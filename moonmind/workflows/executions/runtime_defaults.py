@@ -17,15 +17,10 @@ from typing import Any, Mapping
 # workflow package. They are re-exported here for existing importers.
 from moonmind.runtime_identity import (
     DEFAULT_WORKFLOW_RUNTIME,
-    RUNTIME_ALIASES,
     normalize_runtime_id,
 )
 
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
-
-# Legacy name kept for backwards compatibility; it is the shared map object,
-# not an independently maintained copy.
-_RUNTIME_ALIASES: dict[str, str] = RUNTIME_ALIASES
 
 
 def _clean_optional_string(value: object) -> str | None:
