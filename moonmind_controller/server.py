@@ -24,6 +24,37 @@ def is_authorized(headers: dict, secret: str | None) -> bool:
     return auth.verify_bearer(token.strip(), secret)
 
 
+def parse_operation_payload(raw: dict) -> dict:
+    """Validate a submitted handoff payload (release config as data).
+
+    The payload carries the desired target as data only; it never executes
+    application code. Returns a normalized ``new_operation`` record.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("Controller operation payload must be an object.")
+    operation_id = str(raw.get("operationId") or "").strip()
+    desired = raw.get("desired") or {}
+    target_image = str(desired.get("targetImage") or "").strip()
+    if not operation_id:
+        raise ValueError("Controller operation payload names no operationId.")
+    if not target_image:
+        raise ValueError("Controller operation payload names no targetImage.")
+    from moonmind_controller import state as _state
+
+    record = _state.new_operation(
+        operation_id=operation_id, target_image=target_image
+    )
+    services = desired.get("services")
+    if services is not None:
+        record["desired"]["services"] = [str(item) for item in list(services)]
+    concrete = desired.get("concreteImages")
+    if concrete is not None:
+        if not isinstance(concrete, dict):
+            raise ValueError("concreteImages must be an object.")
+        record = _state.record_concrete_images(record, dict(concrete))
+    return record
+
+
 def status_payload(record: dict) -> dict:
     """Render the human-readable operation summary served to operators."""
     desired = record.get("desired") or {}
@@ -77,6 +108,39 @@ def serve(*, host: str = "127.0.0.1", port: int = 8099, state_dir: str) -> None:
                 self.send_response(404)
                 self.end_headers()
                 return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server convention
+            if not is_authorized(dict(self.headers), secret):
+                self._deny()
+                return
+            if self.path != "/operation":
+                self.send_response(404)
+                self.end_headers()
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            try:
+                raw = json.loads(self.rfile.read(length or 0).decode() or "{}")
+                record = parse_operation_payload(raw)
+            except (ValueError, OSError) as exc:
+                body = (json.dumps({"error": str(exc)}) + "\n").encode()
+                self.send_response(400)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            from moonmind_controller import state as _state
+
+            stored = _state.reserve_record(root / "operation.json", record)
+            body = (
+                json.dumps(status_payload(stored), sort_keys=True) + "\n"
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
