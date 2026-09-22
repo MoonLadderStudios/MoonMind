@@ -66,6 +66,13 @@ _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
 # target version or follows the qualified default through an explicit,
 # separately versioned update policy. Changing a schedule's target advances the
 # schedule revision (``definition.version``); it never happens silently.
+# MoonLadderStudios/MoonMind#3931: future launches follow installed managed
+# runtime selection through the one shared boundary (Workflow Create/schedule
+# submission), without independent image/rollout pins. The stored target below
+# is recorded authority for occurrences (identity, cadence, paused state,
+# Profile, and intent preserved); new schedules persist ``pinned`` at creation
+# and reconcile incompatible persisted inputs through an explicit schedule
+# revision, never by recreating the schedule.
 SCHEDULE_TARGET_PINNED = "pinned"
 SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT = "follow_qualified_default"
 _SCHEDULE_TARGET_UPDATE_POLICIES = frozenset(
