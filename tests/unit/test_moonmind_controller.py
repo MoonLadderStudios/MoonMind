@@ -497,7 +497,9 @@ def test_cutover_handoff_taken_when_controller_configured():
 
     calls: dict = {}
 
-    def _fake_build_operation_payload(*, operation_id, target_image, services=()):
+    def _fake_build_operation_payload(
+        *, operation_id, target_image, services=(), **_extra
+    ):
         calls["payload"] = {
             "operation_id": operation_id,
             "target_image": target_image,
@@ -665,3 +667,96 @@ def test_startup_convergence_resumes_unfinished_work_without_repeat(tmp_path):
 
     assert server.converge_on_startup(tmp_path, run=ok_run) == "resumed"
     assert state.read_record(tmp_path / "operation.json")["status"] == "installed"
+
+
+def test_serving_path_threads_previous_release_compatibly(tmp_path):
+    """Serving path retains previous release only when compatible (REQ-4)."""
+    from moonmind_controller import apply, server, state
+
+    def ok_run(command, *, timeout):
+        return apply.CommandResult(returncode=0, output="ok")
+
+    # Compatible retention through the serving path.
+    raw = {
+        "operationId": "op-serve-prev",
+        "desired": {"targetImage": "img", "services": ["api"]},
+        "previousRelease": {"image": "old", "schema": 1},
+        "previousCompatible": True,
+    }
+    final, error, code = server.handle_operation_submission(
+        tmp_path, raw, stack="moonmind", run=ok_run
+    )
+    assert code == 200 and error is None
+    assert final["previousRelease"]["image"] == "old"
+
+    # Incompatible retention is cleared, never auto-downgraded.
+    other = tmp_path / "other"
+    raw2 = {
+        "operationId": "op-serve-prev2",
+        "desired": {"targetImage": "img2", "services": ["api"]},
+        "previousRelease": {"image": "old", "schema": 1},
+        "previousCompatible": False,
+    }
+    final2, error2, code2 = server.handle_operation_submission(
+        other, raw2, stack="moonmind", run=ok_run
+    )
+    assert code2 == 200 and error2 is None
+    assert "previousRelease" not in final2
+    assert final2.get("previousReleaseCompatible") is False
+
+
+def test_enriched_handoff_payload_round_trips_validation_data():
+    """Authorization/storage/accessSettings survive the handoff (REQ-5)."""
+    from moonmind_controller import apply, client, server
+
+    payload = client.build_operation_payload(
+        operation_id="host-update:enriched",
+        target_image="repo@digest",
+        services=("api",),
+        authorization={"mode": "oidc"},
+        storage={"volume": "data"},
+        access_settings={"ports": [8080]},
+    )
+    record = server.parse_operation_payload(payload)
+    assert record["desired"]["authorization"] == {"mode": "oidc"}
+    assert record["desired"]["storage"] == {"volume": "data"}
+    assert record["desired"]["accessSettings"] == {"ports": [8080]}
+
+    target = server.build_target_from_record(record)
+    assert target["authorization"] == {"mode": "oidc"}
+    assert target["storage"] == {"volume": "data"}
+    assert target["accessSettings"] == {"ports": [8080]}
+    assert apply.validate_target(target=target) == []
+
+    # Explicitly empty mappings are still refused, so validators are live.
+    bad = dict(target)
+    bad["authorization"] = {}
+    assert apply.validate_target(target=bad)
+
+
+def test_artifact_store_failure_blocks_install_without_erasing_confirmed():
+    """Artifact-store failure blocks install; confirmed installs persist (ACC-4)."""
+    from moonmind_controller import apply, state
+
+    def ok_run(command, *, timeout):
+        return apply.CommandResult(returncode=0, output="ok")
+
+    record = state.new_operation(operation_id="op-artifact", target_image="img")
+    try:
+        apply.orchestrate_apply(
+            record=record,
+            target={"targetImage": "img", "services": ["api"]},
+            service_statuses={"api": "running"},
+            operator_access_ok=True,
+            artifact_store_ok=False,
+            run=ok_run,
+        )
+    except RuntimeError as exc:
+        assert "Artifact-store" in str(exc)
+    else:
+        raise AssertionError("artifact-store failure must block install")
+
+    # A separately confirmed installation is not invalidated afterward.
+    confirmed = state.mark_installed(record, installed_image="img", service_images={})
+    assert state.apply_already_complete(confirmed) is True
+    assert confirmed["status"] == "installed"

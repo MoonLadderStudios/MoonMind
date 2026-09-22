@@ -445,12 +445,22 @@ def _try_controller_handoff(*, record):
         return None
     if not client.is_controller_configured():
         return None
+    trusted_inputs = dict((record.get("inputs") or {}) if isinstance(record.get("inputs"), dict) else {})
+
+    def _optional_mapping(value) -> dict | None:
+        return dict(value) if isinstance(value, dict) else None
+
     payload = client.build_operation_payload(
         operation_id=str(
             record["context"].get("idempotency_key") or f"host-update:{record['image']}"
         ),
         target_image=record["image"],
         services=("api", "worker"),
+        authorization=_optional_mapping(trusted_inputs.get("authorization")),
+        storage=_optional_mapping(trusted_inputs.get("storage")),
+        access_settings=_optional_mapping(
+            trusted_inputs.get("accessSettings") or trusted_inputs.get("access_settings")
+        ),
     )
     try:
         receipt = client.submit_operation(payload)
