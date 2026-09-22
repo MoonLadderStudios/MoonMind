@@ -47,6 +47,31 @@ def parse_operation_payload(raw: dict) -> dict:
     services = desired.get("services")
     if services is not None:
         record["desired"]["services"] = [str(item) for item in list(services)]
+    # Target-project wiring travels as data: the Compose project name plus
+    # the controller-side project directory/compose files that scope every
+    # ``docker compose`` invocation. Types are validated; absent stays
+    # absent and the serving path falls back to its configured project.
+    stack = desired.get("stack")
+    if stack is not None:
+        if not str(stack).strip():
+            raise ValueError("Controller target stack must not be empty.")
+        record["desired"]["stack"] = str(stack).strip()
+    project_directory = desired.get("projectDirectory")
+    if project_directory is not None:
+        if not str(project_directory).strip():
+            raise ValueError("Controller target projectDirectory must not be empty.")
+        record["desired"]["projectDirectory"] = str(project_directory).strip()
+    compose_files = desired.get("composeFiles")
+    if compose_files is not None:
+        if (
+            not isinstance(compose_files, list)
+            or not compose_files
+            or not all(str(item).strip() for item in compose_files)
+        ):
+            raise ValueError("Controller target composeFiles must be a non-empty list.")
+        record["desired"]["composeFiles"] = [
+            str(item).strip() for item in compose_files
+        ]
     concrete = desired.get("concreteImages")
     if concrete is not None:
         if not isinstance(concrete, dict):
@@ -114,6 +139,13 @@ def build_target_from_record(record: dict) -> dict:
         "targetImage": desired.get("targetImage"),
         "services": list(desired.get("services") or []),
     }
+    for key in ("stack", "projectDirectory"):
+        value = desired.get(key)
+        if value is not None:
+            target[key] = value
+    compose_files = desired.get("composeFiles")
+    if compose_files is not None:
+        target["composeFiles"] = list(compose_files)
     concrete = desired.get("concreteImages")
     if concrete is not None:
         target["concreteImages"] = dict(concrete)
@@ -156,6 +188,88 @@ def _previous_release_for(
     return None, True if previous_compatible is None else bool(previous_compatible)
 
 
+def resolve_target_project(
+    target: dict | None, server_project: dict | None, stack: str = "moonmind"
+) -> dict:
+    """Resolve Compose scoping for one apply (payload > server > default).
+
+    The handoff names the Compose project; the serving process configures
+    the controller-side project directory/compose files (bind-mounted
+    target checkout). Missing directory/files omit the flags so unit
+    boundaries keep historical bare commands; production relies on the
+    installer's bind mount, and a missing checkout fails loudly inside
+    Compose instead of mutating the wrong directory.
+    """
+    target = target or {}
+    server_project = server_project or {}
+    files = target.get("composeFiles")
+    if files is None:
+        files = server_project.get("files")
+    return {
+        "name": target.get("stack")
+        or server_project.get("name")
+        or str(stack or "moonmind"),
+        "directory": target.get("projectDirectory") or server_project.get("directory"),
+        "files": tuple(files or ()),
+    }
+
+
+def collect_service_statuses(
+    *,
+    project: dict,
+    services: tuple[str, ...],
+    run=None,
+    env: dict | None = None,
+) -> dict | None:
+    """Observe service liveness via ``docker compose ps`` (read-only).
+
+    Returns ``{service: state}`` or ``None`` when the deployment cannot be
+    observed; ``None`` is unverified, never clean. Any runner failure or
+    unparsable output yields ``None`` rather than replacing the caller's
+    failure with a probe error.
+    """
+    import json as _json
+
+    from moonmind_controller import apply as _apply
+    from moonmind_controller import compose as _compose
+
+    runner = run or _apply._default_run
+    command = _compose.build_ps_command(
+        services=tuple(services or ()),
+        project=project.get("name"),
+        project_directory=project.get("directory"),
+        compose_files=tuple(project.get("files") or ()),
+    )
+    try:
+        result = runner(
+            command, timeout=_compose.PS_TIMEOUT_SECONDS, env=env or None
+        )
+    except Exception:
+        return None
+    if result.returncode:
+        return None
+    try:
+        payload = _json.loads(result.output or "")
+    except ValueError:
+        return None
+    items = (
+        payload
+        if isinstance(payload, list)
+        else ([payload] if isinstance(payload, dict) else None)
+    )
+    if items is None:
+        return None
+    statuses: dict = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("Service") or item.get("service") or item.get("Name")
+        state = item.get("State") or item.get("state")
+        if name:
+            statuses[str(name)] = str(state or "unknown")
+    return statuses
+
+
 def execute_operation(
     state_path,
     record: dict,
@@ -164,19 +278,22 @@ def execute_operation(
     stack: str = "moonmind",
     run=None,
     service_statuses: dict | None = None,
-    operator_access_ok: bool | None = True,
+    operator_access_ok: bool | None = None,
     artifact_store_ok: bool | None = None,
     previous_release: dict | None = None,
     previous_compatible: bool | None = None,
+    target_project: dict | None = None,
 ) -> dict:
     """Execute one reserved operation toward its persisted target.
 
     The ``run`` boundary executes Compose commands and stays injectable so
-    unit tests exercise the serving path without Docker. Post-apply
-    observations (``service_statuses``/``operator_access_ok``/
-    ``artifact_store_ok``) default to the orchestrator's own defaults; live
-    Docker/operator probes can supply them without changing this boundary.
-    Returns the updated record persisted to ``state_path``.
+    unit tests exercise the serving path without Docker. Unsupplied
+    ``service_statuses`` are collected from the wired target project via
+    ``docker compose ps``; observations left unavailable fail every
+    mandatory check instead of recording an uninspected success. The
+    prepared target (with selected concrete images) is persisted before
+    the first Compose side effect so interruption reconciles against the
+    selected inputs. Returns the updated record persisted to ``state_path``.
     Already-complete records are not repeated; exhausted records wait for an
     explicit Retry. Failures are recorded with redacted diagnostics before
     re-raising so the controller stays usable and mandatory checks remain
@@ -200,11 +317,33 @@ def execute_operation(
         previous_release=previous_release,
         previous_compatible=previous_compatible,
     )
+    project = resolve_target_project(target, target_project, stack)
+    if "stack" not in target and project.get("name"):
+        target = {**target, "stack": project["name"]}
+    if project.get("directory") and "projectDirectory" not in target:
+        target = {**target, "projectDirectory": project["directory"]}
+    if project.get("files") and "composeFiles" not in target:
+        target = {**target, "composeFiles": list(project["files"])}
+    # Persist the prepared target before the first Compose side effect: a
+    # kill during pull/up restarts from the selected concrete images and
+    # prepared target instead of the original unprepared record.
+    prepared_record, _staged = _apply.prepare_apply_record(
+        record=record,
+        target=target,
+        installed_images=installed_images,
+    )
+    _state.write_record(state_path, prepared_record)
+    if service_statuses is None:
+        service_statuses = collect_service_statuses(
+            project=project,
+            services=tuple(target.get("services") or ()),
+            run=run,
+        )
     try:
         updated = _apply.locked_orchestrate_apply(
             lock_dir=lock_dir,
             stack=stack,
-            record=record,
+            record=prepared_record,
             target=target,
             installed_images=installed_images,
             installed_config=installed_config,
@@ -226,6 +365,10 @@ def execute_operation(
                 state_path, attempt=next_attempt, error=message
             )
         except (OSError, ValueError):
+            # The attempt error is already recorded below via record_attempt_error
+            # when the state file is usable; an unreadable state file here only
+            # means the failure was already raised to the caller, so skip the
+            # bookkeeping rather than replacing the original error.
             pass
         raise
     _state.write_record(state_path, updated)
@@ -240,23 +383,34 @@ def handle_operation_submission(
     stack: str = "moonmind",
     run=None,
     service_statuses: dict | None = None,
-    operator_access_ok: bool | None = True,
+    operator_access_ok: bool | None = None,
     artifact_store_ok: bool | None = None,
     previous_release: dict | None = None,
     previous_compatible: bool | None = None,
+    target_project: dict | None = None,
 ) -> tuple[dict, str | None, int]:
     """Parse, reserve, then execute one controller submission.
 
     Returns ``(record, error, status_code)`` where ``record`` is the persisted
     status to render, ``error`` is a redacted failure (or ``None``), and
-    ``status_code`` is the HTTP status the endpoint should return. The run
-    boundary stays injectable so tests prove execution without Docker.
+    ``status_code`` is the HTTP status the endpoint should return. Invalid
+    payloads are answered with a structured 400 instead of escaping the
+    handler and closing the connection. The run boundary stays injectable
+    so tests prove execution without Docker.
     """
     from moonmind_controller import state as _state
 
-    record = parse_operation_payload(raw)
+    try:
+        record = parse_operation_payload(raw)
+    except ValueError as exc:
+        return {}, str(exc)[:2000], 400
     state_path = _state_path_for(root)
-    stored = _state.reserve_record(state_path, record)
+    try:
+        stored = _state.reserve_record(state_path, record)
+    except ValueError as exc:
+        return {}, str(exc)[:2000], 400
+    except OSError as exc:
+        return {}, f"Controller state is unavailable: {exc}"[:2000], 500
     try:
         final = execute_operation(
             state_path,
@@ -269,6 +423,7 @@ def handle_operation_submission(
             artifact_store_ok=artifact_store_ok,
             previous_release=previous_release,
             previous_compatible=previous_compatible,
+            target_project=target_project,
         )
     except ValueError as exc:
         try:
@@ -297,10 +452,11 @@ def converge_on_startup(
     child_running: bool = False,
     child_owner_matches: bool = True,
     service_statuses: dict | None = None,
-    operator_access_ok: bool | None = True,
+    operator_access_ok: bool | None = None,
     artifact_store_ok: bool | None = None,
     previous_release: dict | None = None,
     previous_compatible: bool | None = None,
+    target_project: dict | None = None,
 ) -> str:
     """Inspect Docker state on restart and converge unfinished work.
 
@@ -333,35 +489,95 @@ def converge_on_startup(
             artifact_store_ok=artifact_store_ok,
             previous_release=previous_release,
             previous_compatible=previous_compatible,
+            target_project=target_project,
         )
     except Exception:
         return "resume-failed"
     return "resumed"
 
 
+def default_compose_files(project_directory: str | None) -> tuple[str, ...]:
+    """Default Compose files for the wired target checkout (data only)."""
+    from pathlib import Path as _Path
+
+    if not project_directory:
+        return ()
+    root = _Path(project_directory)
+    files = []
+    base = root / "docker-compose.yaml"
+    if base.exists():
+        files.append(str(base))
+    else:
+        base_yml = root / "docker-compose.yml"
+        if base_yml.exists():
+            files.append(str(base_yml))
+    for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+        override = root / name
+        if override.exists():
+            files.append(str(override))
+            break
+    return tuple(files)
+
+
 def serve(
     *,
-    host: str = "127.0.0.1",
+    host: str = "0.0.0.0",
     port: int = 8099,
     state_dir: str,
     lock_dir: str | None = None,
     stack: str = "moonmind",
     run=None,
+    project_directory: str | None = None,
+    compose_files: tuple[str, ...] | None = None,
 ) -> None:
-    """Serve the authenticated endpoint on loopback (deployment-local)."""
+    """Serve the authenticated endpoint (container interface, host-loopback published).
+
+    Inside the controller container the server binds ``0.0.0.0``: the
+    Compose service publishes the port as loopback-only on the host
+    (``127.0.0.1:8099:8099``), so binding the container loopback would
+    refuse connections arriving through the container network interface.
+    The host publication, not this bind address, is the access control.
+    """
     import json
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from pathlib import Path
 
     secret = auth.secret_from_environ()
     root = Path(state_dir)
     resolved_lock_dir = _lock_dir_for(root, lock_dir)
+    if project_directory is None:
+        import os as _os
+
+        project_directory = _os.environ.get(
+            "MOONMIND_TARGET_PROJECT_DIR", "/target/moonmind"
+        )
+    resolved_files = (
+        tuple(compose_files)
+        if compose_files is not None
+        else default_compose_files(project_directory)
+    )
+    server_project = {
+        "name": stack,
+        "directory": project_directory,
+        "files": resolved_files,
+    }
+    # Concurrent submissions serialize here so two POSTs cannot enter the
+    # same apply; reads (GET) stay concurrent. Long applies run in their
+    # handler thread while status probes keep serving.
+    submission_lock = threading.Lock()
 
     try:
         converge_on_startup(
-            root, lock_dir=resolved_lock_dir, stack=stack, run=run
+            root,
+            lock_dir=resolved_lock_dir,
+            stack=stack,
+            run=run,
+            target_project=server_project,
         )
     except Exception:
+        # Startup convergence is best-effort (see converge_on_startup): a
+        # failed resume is recorded, and the endpoint still starts serving.
         pass
 
     class Handler(BaseHTTPRequestHandler):
@@ -416,13 +632,20 @@ def serve(
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            final, error, status_code = handle_operation_submission(
-                root,
-                raw,
-                lock_dir=resolved_lock_dir,
-                stack=stack,
-                run=run,
-            )
+            try:
+                with submission_lock:
+                    final, error, status_code = handle_operation_submission(
+                        root,
+                        raw,
+                        lock_dir=resolved_lock_dir,
+                        stack=stack,
+                        run=run,
+                        target_project=server_project,
+                    )
+            except (BrokenPipeError, ConnectionResetError):
+                # A timed-out client may be gone while its apply continues on
+                # the durable record; it reattaches through GET /operation.
+                return
             if error is not None:
                 body = (
                     json.dumps(
@@ -434,7 +657,10 @@ def serve(
                 self.send_response(status_code)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
                 return
             body = (
                 json.dumps(status_payload(final), sort_keys=True) + "\n"
@@ -442,9 +668,14 @@ def serve(
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
         def log_message(self, *args: object) -> None:  # keep logs readable
             pass
 
-    HTTPServer((host, port), Handler).serve_forever()
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd.daemon_threads = True
+    httpd.serve_forever()

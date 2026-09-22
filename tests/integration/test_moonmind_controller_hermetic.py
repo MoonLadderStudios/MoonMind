@@ -185,15 +185,17 @@ def _project_run(compose_file: Path, project: str):
     adds ``-p``/``-f`` so the disposable project is addressed.
     """
 
-    def run(command: tuple[str, ...], *, timeout: int):
+    def run(command: tuple[str, ...], *, timeout: int, env=None):
         assert list(command)[:2] == ["docker", "compose"], command
         full = ["docker", "compose", "-p", project, "-f", str(compose_file), *list(command)[2:]]
+        merged_env = _limited_env()
+        merged_env.update(dict(env or {}))
         completed = subprocess.run(
             full,
             capture_output=True,
             text=True,
             timeout=min(timeout, 300),
-            env=_limited_env(),
+            env=merged_env,
         )
         merged = (completed.stdout or "").strip()
         if completed.stderr:
@@ -308,9 +310,9 @@ def test_acc2_pull_failure_leaves_containers_untouched(hermetic_project):
     try:
         calls: list[tuple[str, ...]] = []
 
-        def counting_run(command: tuple[str, ...], *, timeout: int):
+        def counting_run(command: tuple[str, ...], *, timeout: int, env=None):
             calls.append(tuple(command))
-            return run(command, timeout=timeout)
+            return run(command, timeout=timeout, env=env)
 
         record = ctrl_state.new_operation(operation_id=f"acc2a-{project}", target_image=APP_IMAGE)
         with pytest.raises(RuntimeError, match="exit"):
@@ -424,7 +426,7 @@ def test_acc3_restart_converges_with_real_state(hermetic_project):
     assert ctrl_state.read_record(record_path)["status"] == "installed"
 
     # A completed apply is never repeated after a second restart.
-    def must_not_run(command: tuple[str, ...], *, timeout: int):
+    def must_not_run(command: tuple[str, ...], *, timeout: int, env=None):
         raise AssertionError("a completed apply must not run again")
 
     assert ctrl_server.converge_on_startup(state_dir, stack="moonmind-test", run=must_not_run) == "complete"
@@ -443,7 +445,9 @@ def test_acc3_restart_converges_with_real_state(hermetic_project):
     assert "boom-1" in ctrl_service.failure_summary(exhausted["attempts"])
     retried = ctrl_state.explicit_retry(retry_path)
     assert retried["status"] == "desired"
-    assert [item["error"] for item in ctrl_state.read_record(retry_path)["attempts"]] == ["boom-1", "boom-2", "boom-3"]
+    assert retried["attempts"] == []
+    archived = [item["error"] for item in ctrl_state.read_record(retry_path)["attemptHistory"]]
+    assert archived == ["boom-1", "boom-2", "boom-3"]
 
     # A corrupt diagnostic is explicit and never a permanent blocker.
     corrupt_path = state_dir / "corrupt-operation.json"
@@ -564,7 +568,7 @@ def test_req6_preservation_scope_and_orphan_scoping(tmp_path, hermetic_images):
     run = _project_run(base, project)
     original_run = run
 
-    def override_run(command: tuple[str, ...], *, timeout: int):
+    def override_run(command: tuple[str, ...], *, timeout: int, env=None):
         assert list(command)[:2] == ["docker", "compose"], command
         full = [
             "docker",
@@ -580,7 +584,7 @@ def test_req6_preservation_scope_and_orphan_scoping(tmp_path, hermetic_images):
             *list(command)[2:],
         ]
         completed = subprocess.run(
-            full, capture_output=True, text=True, timeout=min(timeout, 300), env=_limited_env()
+            full, capture_output=True, text=True, timeout=min(timeout, 300), env={**_limited_env(), **dict(env or {})}
         )
         merged = (completed.stdout or "").strip()
         if completed.stderr:

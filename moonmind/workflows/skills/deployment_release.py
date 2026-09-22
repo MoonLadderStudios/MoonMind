@@ -884,25 +884,9 @@ async def prepare_operator_access(runner, image, directory, owner, *, declared_u
         recorded = reserve_record(path, {"owner": owner, "urls": urls})
         if recorded != {"owner": owner, "urls": urls}:
             raise ValueError("Operator access targets differ from the saved release")
-    # The old deployment's health is diagnostic input, not admission to repair:
-    # an operator URL that is already unreachable must not prevent replacing
-    # the unhealthy deployment it names. A retry keeps the original targets
-    # instead of changing scope. Post-apply operator verification stays
-    # mandatory and still fails the release when it cannot be established.
-    try:
-        await verify_operator_access(image, urls, owner)
-    except Exception as exc:
-        from moonmind.utils.logging import redact_sensitive_text
-
-        write_record(
-            directory / "operator-access-preflight.json",
-            {
-                "owner": owner,
-                "urls": urls,
-                "status": "unverified",
-                "warning": redact_sensitive_text(str(exc) or type(exc).__name__)[:500],
-            },
-        )
+    # Missing host-network capability or an unreachable origin stops before API
+    # replacement. A retry keeps the original targets instead of changing scope.
+    await verify_operator_access(image, urls, owner)
     return urls
 
 
@@ -1161,6 +1145,10 @@ async def submit(payload):
             controller_available,
             submit_to_controller,
         )
+        from moonmind_controller.client import (
+            ControllerError,
+            ControllerUnavailableError,
+        )
 
         if controller_available():
             inputs = dict(payload.get("inputs") or {})
@@ -1176,19 +1164,46 @@ async def submit(payload):
                 authorization = inputs.get("authorization")
                 storage = inputs.get("storage")
                 access_settings = inputs.get("accessSettings", inputs.get("access_settings"))
-                receipt = submit_to_controller(
-                    build_controller_payload(
-                        submission_id=operation_id.removeprefix("host-update:"),
-                        image=target,
-                        authorization=dict(authorization) if isinstance(authorization, dict) else None,
-                        storage=dict(storage) if isinstance(storage, dict) else None,
-                        access_settings=dict(access_settings)
-                        if isinstance(access_settings, dict)
-                        else None,
+                try:
+                    receipt = submit_to_controller(
+                        build_controller_payload(
+                            submission_id=operation_id.removeprefix("host-update:"),
+                            image=target,
+                            authorization=dict(authorization)
+                            if isinstance(authorization, dict)
+                            else None,
+                            storage=dict(storage)
+                            if isinstance(storage, dict)
+                            else None,
+                            access_settings=dict(access_settings)
+                            if isinstance(access_settings, dict)
+                            else None,
+                        )
                     )
-                )
-                print(json.dumps({"controllerReceipt": receipt}, sort_keys=True), flush=True)
-                return 0
+                except ControllerUnavailableError as exc:
+                    # No controller writer owns this operation: fall through
+                    # to the legacy path with the handoff diagnostic
+                    # preserved; the installation is unchanged.
+                    print(
+                        json.dumps(
+                            {"controllerHandoff": f"unavailable: {type(exc).__name__}"}
+                        ),
+                        flush=True,
+                    )
+                except ControllerError as exc:
+                    # The controller owns (or may own) this operation: never
+                    # fork the legacy updater while it may still be applying.
+                    print(
+                        json.dumps({"controllerHandoff": f"owned: {exc}"}, sort_keys=True),
+                        flush=True,
+                    )
+                    return 1
+                else:
+                    print(
+                        json.dumps({"controllerReceipt": receipt}, sort_keys=True),
+                        flush=True,
+                    )
+                    return 0
     except Exception as exc:
         # Fall through to the legacy path with the handoff diagnostic
         # preserved; the installation is unchanged by a failed submission.

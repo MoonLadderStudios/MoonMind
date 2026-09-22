@@ -62,11 +62,39 @@ def write_record(path: str | Path, record: dict) -> None:
 
 
 def reserve_record(path: str | Path, record: dict) -> dict:
-    """Publish without replacing another writer's decision (first wins)."""
+    """Publish without replacing another writer's decision (first wins).
+
+    Retries of the same ``operationId`` stay idempotent. A new operation
+    rotates the durable record once the stored one reached terminal
+    completion (``installed``): without rotation every later submission
+    would execute or return the first operation forever. The installed
+    image of the completed record is retained as the compatibility-gated
+    previous release so the new operation cannot silently drop the
+    retention baseline. An unfinished record still wins for a different
+    operation.
+    """
     target = _path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
-        return read_record(target)
+        stored = read_record(target)
+        if stored.get("operationId") == record.get("operationId"):
+            return stored
+        if stored.get("status") == "installed" or apply_already_complete(stored):
+            rotated = dict(record)
+            if "previousRelease" not in rotated:
+                installed = stored.get("installed")
+                if isinstance(installed, dict) and installed.get("image"):
+                    rotated = record_previous_release(
+                        rotated,
+                        previous={
+                            "image": installed.get("image"),
+                            "services": dict(installed.get("services") or {}),
+                        },
+                        compatible=True,
+                    )
+            write_record(target, rotated)
+            return read_record(target)
+        return stored
     write_record(target, record)
     return read_record(target)
 
@@ -116,11 +144,24 @@ def record_attempt_error(path: str | Path, *, attempt: int, error: str) -> list:
 
 
 def explicit_retry(path: str | Path) -> dict:
-    """Start a fresh bounded attempt; prior diagnostics are retained."""
+    """Start a fresh bounded attempt; prior diagnostics are retained.
+
+    The active retry budget (``attempts``/``attempt``) resets so the
+    explicit retry actually runs: retaining history in the active budget
+    would keep ``len(history) >= MAX_ATTEMPTS`` true and perform zero
+    commands. Prior diagnostics move to ``attemptHistory`` for forensics
+    instead of being erased.
+    """
     record = read_record(path)
     if record.get("status") == "installed":
         raise ValueError("A confirmed installation is not retried")
-    record["attempt"] = int(record.get("attempt") or 0) + 1
+    history = list(record.get("attempts") or [])
+    if history:
+        retained = list(record.get("attemptHistory") or [])
+        retained.extend(history)
+        record["attemptHistory"] = retained
+    record["attempts"] = []
+    record["attempt"] = 0
     record["status"] = "desired"
     write_record(path, record)
     return record

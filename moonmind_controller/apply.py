@@ -47,14 +47,27 @@ class CommandResult:
     output: str
 
 
-def _default_run(command: tuple[str, ...], *, timeout: int) -> CommandResult:
-    """Run one Compose command, capturing merged output for diagnostics."""
+def _default_run(
+    command: tuple[str, ...], *, timeout: int, env: dict | None = None
+) -> CommandResult:
+    """Run one Compose command, capturing merged output for diagnostics.
+
+    ``env`` carries the requested release images (see
+    :func:`compose.image_env`); it is layered over the process environment
+    so Compose interpolation recreates the requested release instead of
+    whatever the ambient configuration already names.
+    """
+    import os
+
+    merged_env = dict(os.environ)
+    merged_env.update(dict(env or {}))
     try:
         completed = subprocess.run(
             list(command),
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=merged_env,
         )
     except subprocess.TimeoutExpired as exc:
         partial = ""
@@ -146,25 +159,42 @@ def validate_target(
 
 def verify_post_apply(
     *,
-    service_statuses: dict,
+    service_statuses: dict | None,
     operator_access_ok: bool | None,
     artifact_store_ok: bool | None = None,
+    expected_services: tuple[str, ...] = (),
+    require_operator_access: bool = False,
+    require_artifact_store: bool = False,
 ) -> list[str]:
     """Post-apply verification: service, dispatch, operator access.
 
-    Failed or unavailable mandatory checks are returned explicitly; the
-    caller records them without erasing a confirmed installation.
+    Every expected service needs a ``running`` observation: missing or
+    non-running entries fail instead of passing silently. Operator and
+    artifact-store checks are mandatory when the target declares them
+    (``accessSettings``/``storage``); an unavailable observation for a
+    declared check is unverified and fails. Undeclared checks stay absent,
+    mirroring pre-apply validation. Failed or unavailable mandatory checks
+    are returned explicitly; the caller records them without erasing a
+    confirmed installation.
     """
     failures: list[str] = []
-    for name, status in (service_statuses or {}).items():
-        if status != "running":
+    statuses = dict(service_statuses or {})
+    for name in expected_services or ():
+        if statuses.get(name) != "running":
+            failures.append(
+                f"Service {name} is {statuses.get(name) or 'unverified'} after apply."
+            )
+    for name, status in statuses.items():
+        if status != "running" and name not in (expected_services or ()):
             failures.append(f"Service {name} is {status or 'unknown'} after apply.")
     if operator_access_ok is False:
         failures.append("Operator access verification failed after apply.")
-    elif operator_access_ok is None:
+    elif operator_access_ok is None and require_operator_access:
         failures.append("Operator access verification is unavailable after apply.")
     if artifact_store_ok is False:
         failures.append("Artifact-store verification failed after apply.")
+    elif artifact_store_ok is None and require_artifact_store:
+        failures.append("Artifact-store verification is unavailable after apply.")
     return failures
 
 
@@ -172,12 +202,36 @@ def stage_all_images(
     *,
     images: dict,
     services: tuple[str, ...] = (),
+    target_image: str | None = None,
+    env: dict | None = None,
+    project: str | None = None,
+    project_directory: str | None = None,
+    compose_files: tuple[str, ...] = (),
     run=None,
 ) -> CommandResult:
-    """Stage every image needed for the requested update before apply."""
+    """Stage every image needed for the requested update before apply.
+
+    The requested ``images`` mapping is honored through the Compose
+    environment (see :func:`compose.image_env`): an explicit ``env`` wins,
+    otherwise the environment is derived from ``target_image`` plus the
+    requested mapping, so staging pulls the requested release instead of
+    whatever the ambient configuration already names.
+    """
     runner = run or _default_run
-    command = compose.build_pull_command(services=services)
-    result = runner(command, timeout=compose.PULL_TIMEOUT_SECONDS)
+    effective_env = (
+        dict(env)
+        if env is not None
+        else compose.image_env(target_image=target_image, concrete_images=images)
+    )
+    command = compose.build_pull_command(
+        services=services,
+        project=project,
+        project_directory=project_directory,
+        compose_files=compose_files,
+    )
+    result = runner(
+        command, timeout=compose.PULL_TIMEOUT_SECONDS, env=effective_env or None
+    )
     if result.returncode:
         raise RuntimeError(_failure_report(command, result))
     return result
@@ -188,6 +242,10 @@ def apply_changed_services(
     services: tuple[str, ...],
     run=None,
     force_recreate: bool = False,
+    env: dict | None = None,
+    project: str | None = None,
+    project_directory: str | None = None,
+    compose_files: tuple[str, ...] = (),
 ) -> CommandResult:
     """Recreate changed services; force-recreate is explicit repair only."""
     if force_recreate:
@@ -196,11 +254,42 @@ def apply_changed_services(
             "use the explicit repair path instead of the default apply."
         )
     runner = run or _default_run
-    command = compose.build_up_command(services=tuple(services))
-    result = runner(command, timeout=compose.UP_TIMEOUT_SECONDS)
+    command = compose.build_up_command(
+        services=tuple(services),
+        project=project,
+        project_directory=project_directory,
+        compose_files=compose_files,
+    )
+    result = runner(command, timeout=compose.UP_TIMEOUT_SECONDS, env=env or None)
     if result.returncode:
         raise RuntimeError(_failure_report(command, result))
     return result
+
+
+def prepare_apply_record(
+    *,
+    record: dict,
+    target: dict,
+    installed_images: dict | None = None,
+    infra_changed_intentionally: bool = False,
+) -> tuple[dict, dict]:
+    """Derive staged images and record the prepared target (no side effects).
+
+    Returns ``(updated_record, staged_images)``. The caller persists the
+    updated record before the first Compose side effect so interruption
+    reconciles against the selected inputs instead of the original record.
+    """
+    requested_images = dict((target or {}).get("concreteImages") or {})
+    staged_images = preserve_infra_images(
+        installed_images=dict(installed_images or {}),
+        requested_images=requested_images,
+        infra_changed_intentionally=infra_changed_intentionally,
+    )
+    prepared = dict(target or {})
+    prepared["concreteImages"] = staged_images
+    updated = state.record_prepared_target(record, target=prepared)
+    updated = state.record_concrete_images(updated, staged_images)
+    return updated, staged_images
 
 
 def orchestrate_apply(
@@ -214,7 +303,7 @@ def orchestrate_apply(
     is_desktop_daemon: bool | None = None,
     infra_changed_intentionally: bool = False,
     service_statuses: dict | None = None,
-    operator_access_ok: bool | None = True,
+    operator_access_ok: bool | None = None,
     artifact_store_ok: bool | None = None,
     run=None,
     previous_release: dict | None = None,
@@ -224,7 +313,9 @@ def orchestrate_apply(
 
     Pure orchestration over injectable boundaries: ``run`` executes Compose
     commands, ``host_source_exists`` answers bind-source presence, and
-    ``service_statuses``/``operator_access_ok`` carry post-apply observations.
+    ``service_statuses``/``operator_access_ok``/``artifact_store_ok`` carry
+    post-apply observations (``None`` means unobserved, which fails every
+    mandatory check instead of passing silently).
     Returns the updated record (installed on success; attempt error recorded
     by the caller on exception).
     """
@@ -246,18 +337,21 @@ def orchestrate_apply(
     if errors:
         raise ValueError("; ".join(errors))
 
-    requested_images = dict((target or {}).get("concreteImages") or {})
-    staged_images = preserve_infra_images(
-        installed_images=dict(installed_images or {}),
-        requested_images=requested_images,
+    updated, staged_images = prepare_apply_record(
+        record=record,
+        target=target,
+        installed_images=installed_images,
         infra_changed_intentionally=infra_changed_intentionally,
     )
-    prepared = dict(target or {})
-    prepared["concreteImages"] = staged_images
-    updated = state.record_prepared_target(record, target=prepared)
-    updated = state.record_concrete_images(updated, staged_images)
 
     services = tuple((target or {}).get("services") or ())
+    project = (target or {}).get("stack")
+    project_directory = (target or {}).get("projectDirectory")
+    compose_files = tuple((target or {}).get("composeFiles") or ())
+    image_env = compose.image_env(
+        target_image=(target or {}).get("targetImage"),
+        concrete_images=staged_images,
+    )
     # Reconcile or stop an existing Compose child before launching anew.
     # The caller supplies liveness via service.reconcile_child; here the
     # decision point is explicit so a competing child is never ignored.
@@ -272,13 +366,32 @@ def orchestrate_apply(
             "before launching a new apply."
         )
 
-    stage_all_images(images=staged_images, services=services, run=run)
-    apply_changed_services(services=services, run=run)
+    stage_all_images(
+        images=staged_images,
+        services=services,
+        target_image=(target or {}).get("targetImage"),
+        env=image_env or None,
+        project=project,
+        project_directory=project_directory,
+        compose_files=compose_files,
+        run=run,
+    )
+    apply_changed_services(
+        services=services,
+        run=run,
+        env=image_env or None,
+        project=project,
+        project_directory=project_directory,
+        compose_files=compose_files,
+    )
 
     failures = verify_post_apply(
-        service_statuses=dict(service_statuses or {}),
+        service_statuses=service_statuses,
         operator_access_ok=operator_access_ok,
         artifact_store_ok=artifact_store_ok,
+        expected_services=services,
+        require_operator_access="accessSettings" in (target or {}),
+        require_artifact_store="storage" in (target or {}),
     )
     if failures:
         raise RuntimeError("; ".join(failures))
