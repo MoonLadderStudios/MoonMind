@@ -37,7 +37,6 @@ from api_service.core.sync import (
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
-    TemporalExecutionCanonicalRecord,
     TemporalExecutionOwnerType,
     TemporalExecutionProjectionSyncState,
     TemporalExecutionRecord,
