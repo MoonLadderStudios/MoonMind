@@ -31,7 +31,7 @@ One portable controller implements updates for the host entrypoint and the Setti
 
 The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery. Temporal and the UI may request or observe an update, but neither is required for the controller to keep making progress. An observer must not become a second update algorithm.
 
-Use existing Docker/Compose, local job files, and process ownership. Do not add a release service, parallel supervisor, promotion state machine, or mandatory approval workflow.
+Use existing Docker/Compose, local job files, and process ownership. The controller is one small separate release service in its own Compose project (see section 11.2), not a parallel supervisor, promotion state machine, or mandatory approval workflow.
 
 ## 3. Terminology
 
@@ -39,7 +39,7 @@ Use existing Docker/Compose, local job files, and process ownership. Do not add 
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector. Resolve and record the concrete image that will run.
 
-**Controller:** The existing portable update implementation, capable of outliving the worker or API that submitted it. Its privileged execution boundary is deployment-owned, not selectable by an agent.
+**Controller:** The standalone deployment controller in its own Compose project (`deploy/moonmind-controller`), capable of outliving the worker or API that submitted work to it. Its privileged execution boundary is deployment-owned, not selectable by an agent. The controller never replaces itself; its lifecycle is host-owned.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -185,9 +185,9 @@ Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon
 
 The existing deployment-control worker is a submission/observation adapter where available. It is not the sole path to recovery. Privileged Docker operations remain in trusted deployment infrastructure and cannot be supplied by arbitrary agent-authored code.
 
-### 11.2 Ephemeral updater container
+### 11.2 Separate controller project
 
-Reuse the detached controller execution boundary so an update can replace its submitting worker. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts. A caller timing out reattaches to that operation rather than duplicating mutation.
+The controller runs as one small service in its own Compose project with durable state, a configured restart policy, and a direct Docker socket mount, so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access.
 
 ### 11.3 Runner image policy
 
@@ -279,7 +279,7 @@ Use existing operation status plus a small progress message and log reference. K
 
 ## 20. Locked decisions
 
-One controller serves host and UI requests. Normal updates pull and recreate changed services without routine teardown. Recovery works independently of the application being repaired. Local state and original errors survive interruption. Deployment integrity, operator access, and saved work remain protected.
+One controller serves host and UI requests from its own Compose project. Normal updates pull and recreate changed services without routine teardown. Recovery works independently of the application being repaired. Local state and original errors survive interruption. Deployment integrity, operator access, and saved work remain protected.
 
 Permanent candidate/retained fleets, promotion qualification, and independent schedule/profile image pins are not part of the desired default. Transitional support has real consumers and an explicit removal condition. Do not preserve it solely because an older issue or test checklist described it.
 
