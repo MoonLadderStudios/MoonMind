@@ -356,6 +356,18 @@ def delivery_from_webhook_payload(
             repo = head.get("repo", {})
             if isinstance(repo, Mapping) and repo.get("fork") is True:
                 fork_content = True
+    if not fork_content:
+        # An issues webhook carries no head-repository object. A
+        # PR-backed issue only carries the ``issue.pull_request`` API
+        # marker, from which fork status cannot be established. Treat
+        # such deliveries as untrusted fork content so the default-deny
+        # ``allow_fork_content=false`` posture holds for PR-backed
+        # issues; operators who trust them opt in explicitly.
+        issue_payload = payload.get("issue", {})
+        if isinstance(issue_payload, Mapping) and isinstance(
+            issue_payload.get("pull_request"), Mapping
+        ):
+            fork_content = True
     return IncomingDelivery(
         delivery_id=str(delivery_id).strip(),
         event_name=str(event_name or "").strip(),
@@ -447,11 +459,20 @@ class DeliveryDecision:
 def _identity_key(
     *, installation_id: str, repository: str, delivery_id: str, digest_hex: str
 ) -> str:
-    short = str(digest_hex or "")[:16]
-    return (
-        f"github-event:v1:{str(installation_id).strip()}:"
-        f"{normalize_repository(repository)}:{str(delivery_id).strip()}:{short}"
+    # Fixed-length hash of the scoped tuple: the full tuple (long repository
+    # names, UUID delivery ids) exceeds the 128-character
+    # ``create_idempotency_key`` column, and truncation would risk cross-repo
+    # collisions. The hash is deterministic, so redeliveries reconcile to the
+    # same logical execution.
+    scoped = "\0".join(
+        (
+            str(installation_id).strip(),
+            normalize_repository(repository),
+            str(delivery_id).strip(),
+            str(digest_hex or ""),
+        )
     )
+    return f"github-event:v1:{hashlib.sha256(scoped.encode('utf-8')).hexdigest()[:48]}"
 
 
 def decide_delivery(
@@ -480,6 +501,15 @@ def decide_delivery(
             same_delivery=True,
         )
         if classification == "redelivery_reuse":
+            if is_receipt_expired(
+                received_at_epoch=stored.received_at_epoch, now_epoch=now_epoch
+            ):
+                # A stored receipt outside the deduplication lifetime is
+                # never fresh spending intent, including a weeks-old
+                # pending receipt an operator redelivers by hand.
+                return DeliveryDecision(
+                    outcome="rejected", reason_code="stale_event"
+                )
             if stored.decision == "admitted_pending" and not stored.execution_ref:
                 # A lost start acknowledgment: the receipt exists but no
                 # dispatch evidence was recorded. Re-resolve current authority

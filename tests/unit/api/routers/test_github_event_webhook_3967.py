@@ -22,7 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from api_service.api.routers import github_event_webhook as webhook_module
 from api_service.db.base import get_async_session
-from api_service.db.models import GitHubEventDeliveryReceipt
+from api_service.db.models import (
+    GitHubEventDeliveryReceipt,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalWorkflowType,
+)
+from moonmind.statuses.workflow import MoonMindWorkflowState
+from moonmind.workflows.adapters.github_event_delivery import _identity_key
 
 _SECRET = b"router-test-webhook-secret-8357"
 _INSTALLATION = "12345"
@@ -83,7 +90,11 @@ def harness(monkeypatch, tmp_path):
             await conn.run_sync(
                 GitHubEventDeliveryReceipt.__table__.create, checkfirst=True
             )
-
+            await conn.run_sync(
+                TemporalExecutionCanonicalRecord.__table__.create,
+                checkfirst=True,
+            )
+    
     import asyncio
 
     asyncio.run(_init())
@@ -106,8 +117,8 @@ def harness(monkeypatch, tmp_path):
     app.dependency_overrides[webhook_module.get_settings_loader] = (
         lambda: (lambda: settings)
     )
-    app.dependency_overrides[webhook_module.resolve_webhook_secret] = (
-        lambda: _SECRET
+    app.dependency_overrides[webhook_module.resolve_webhook_secrets] = (
+        lambda: {"github-webhook-secret": _SECRET}
     )
     app.dependency_overrides[webhook_module.get_event_dispatcher] = (
         lambda: dispatcher
@@ -117,6 +128,25 @@ def harness(monkeypatch, tmp_path):
         yield client, dispatcher, maker, settings
     finally:
         asyncio.run(engine.dispose())
+
+
+async def _seed_canonical_execution(maker, workflow_id: str) -> None:
+    """Mirror production: every dispatched ref has a canonical execution row."""
+    import asyncio
+
+    async with maker() as session:
+        session.add(
+            TemporalExecutionCanonicalRecord(
+                workflow_id=workflow_id,
+                run_id="run-seed",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.INITIALIZING,
+                entry="api",
+                create_idempotency_key=f"seed:{workflow_id}",
+            )
+        )
+        await session.commit()
 
 
 def _post(client: TestClient, payload: dict[str, Any], secret: bytes = _SECRET):
@@ -279,15 +309,50 @@ def test_unsupported_events_are_ignored_safely(harness):
 
 
 def test_duplicate_redelivery_reuses_same_execution(harness):
-    client, dispatcher, _, _ = harness
+    client, dispatcher, maker, _ = harness
     first = _post(client, _payload())
     assert first.status_code == 202, first.text
     ref = first.json()["executionRef"]
+
+    import asyncio
+
+    asyncio.run(_seed_canonical_execution(maker, ref))
     second = _post(client, _payload())
     assert second.status_code == 202, second.text
     assert second.json()["decision"] == "redelivery_reuse"
     assert second.json()["executionRef"] == ref
     assert len(dispatcher.calls) == 1
+
+
+def test_redelivery_without_execution_record_reattempts_same_identity(harness):
+    """A receipt referencing a missing execution is a lost start: the
+    redelivery re-attempts under the same stable identity instead of
+    reusing a dead reference forever."""
+    client, dispatcher, maker, _ = harness
+    first = _post(client, _payload())
+    assert first.status_code == 202, first.text
+    ref = first.json()["executionRef"]
+    identity = first.json()["identityKey"]
+
+    import asyncio
+
+    # No canonical row seeded: the referenced execution does not exist.
+    second = _post(client, _payload())
+    assert second.status_code == 202, second.text
+    assert second.json()["decision"] == "admitted_dispatched"
+    assert second.json()["identityKey"] == identity
+    assert len(dispatcher.calls) == 2
+    assert dispatcher.calls[1]["identity_key"] == identity
+
+    async def _row():
+        async with maker() as session:
+            key = f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-1"
+            return await session.get(GitHubEventDeliveryReceipt, key)
+
+    row = asyncio.run(_row())
+    assert row.decision == "admitted_dispatched"
+    assert row.execution_ref == second.json()["executionRef"]
+    assert ref != ""
 
 
 def test_changed_body_duplicate_conflicts_without_new_work(harness):
@@ -394,8 +459,8 @@ def _client_with_loader(harness_maker, request_settings, loader_settings, dispat
     app.dependency_overrides[webhook_module.get_settings_loader] = (
         lambda: (lambda: loader_settings)
     )
-    app.dependency_overrides[webhook_module.resolve_webhook_secret] = (
-        lambda: _SECRET
+    app.dependency_overrides[webhook_module.resolve_webhook_secrets] = (
+        lambda: {"github-webhook-secret": _SECRET}
     )
     app.dependency_overrides[webhook_module.get_event_dispatcher] = (
         lambda: dispatcher
@@ -487,6 +552,9 @@ def test_dispatch_failure_stays_pending_and_redelivery_reattempts_same_identity(
     assert row is not None
     assert row.decision == "admitted_pending"
     assert (row.execution_ref or "") == ""
+    # The receipt carries an actionable diagnostic, not just the class name.
+    assert row.reason_code.startswith("dispatch_failed_RuntimeError")
+    assert "temporal-unavailable" in row.reason_code
 
     dispatcher.mode = "succeed"
     second = _post_with_delivery_id(client, _payload(), "del-flaky")
@@ -563,7 +631,12 @@ def test_crash_before_start_redelivery_via_http_reuses_logical_request(harness):
     assert body["decision"] == "admitted_dispatched"
     assert body["executionRef"].startswith("temporal:exec-")
     assert len(dispatcher.calls) == 1
-    assert dispatcher.calls[0]["identity_key"].endswith(f":{digest[:16]}")
+    assert dispatcher.calls[0]["identity_key"] == _identity_key(
+        installation_id=_INSTALLATION,
+        repository=_REPO,
+        delivery_id="del-crash",
+        digest_hex=digest,
+    )
 
     async def _row():
         async with maker() as session:
@@ -572,3 +645,179 @@ def test_crash_before_start_redelivery_via_http_reuses_logical_request(harness):
     row = asyncio.run(_row())
     assert row.decision == "admitted_dispatched"
     assert row.execution_ref == body["executionRef"]
+
+
+def test_oversized_streamed_body_rejected_before_buffering(harness):
+    """A body past the limit is cut off mid-stream (413, no launch)."""
+    from moonmind.workflows.adapters.github_event_delivery import (
+        MAX_WEBHOOK_BODY_BYTES,
+    )
+
+    client, dispatcher, _, _ = harness
+    raw = b'{"pad": "' + b"x" * (MAX_WEBHOOK_BODY_BYTES + 1) + b'"}'
+    response = client.post(
+        "/api/v1/github/events",
+        content=raw,
+        headers={
+            "X-Hub-Signature-256": _sign(raw),
+            "X-GitHub-Delivery": "del-huge",
+            "X-GitHub-Event": "issues",
+            "Content-Type": "application/json",
+        },
+    )
+    assert response.status_code == 413, response.text
+    assert response.json()["reasonCode"] == "body_too_large"
+    assert dispatcher.calls == []
+
+
+def test_per_trigger_webhook_secret_slug_is_honored(harness):
+    """A delivery signed with the trigger's own secret slug verifies."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    _, _, maker, _ = harness
+    trigger_secret = b"trigger-scoped-secret-3967"
+    request_settings = webhook_module.WebhookSettings(
+        secret_slug="github-webhook-secret",
+        trigger_configs=(
+            _trigger_config(webhook_secret_slug="trigger-secret"),
+        ),
+    )
+    dispatcher = _Dispatcher()
+    app = FastAPI()
+    app.include_router(webhook_module.router)
+
+    async def _session_override():
+        async with maker() as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = _session_override
+    app.dependency_overrides[webhook_module.get_webhook_settings] = (
+        lambda: request_settings
+    )
+    app.dependency_overrides[webhook_module.get_settings_loader] = (
+        lambda: (lambda: request_settings)
+    )
+    # Global slug resolves nothing; only the trigger slug verifies.
+    app.dependency_overrides[webhook_module.resolve_webhook_secrets] = (
+        lambda: {"trigger-secret": trigger_secret}
+    )
+    app.dependency_overrides[webhook_module.get_event_dispatcher] = (
+        lambda: dispatcher
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    raw = json.dumps(_payload()).encode("utf-8")
+    response = client.post(
+        "/api/v1/github/events",
+        content=raw,
+        headers={
+            "X-Hub-Signature-256": "sha256="
+            + hmac.new(trigger_secret, raw, hashlib.sha256).hexdigest(),
+            "X-GitHub-Delivery": "del-trigger-secret",
+            "X-GitHub-Event": "issues",
+            "Content-Type": "application/json",
+        },
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["decision"] == "admitted_dispatched"
+    assert len(dispatcher.calls) == 1
+
+
+def test_concurrent_changed_body_loser_conflicts_without_new_work(harness):
+    """An insert-race loser with a divergent body gets 409, never dispatch."""
+    import asyncio
+    import hashlib as _hashlib
+    import json as _json
+
+    client, dispatcher, maker, _ = harness
+    payload = _payload()
+    raw = _json.dumps(payload).encode("utf-8")
+    winner_digest = _hashlib.sha256(b"winner-body").hexdigest()
+    key = f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-race"
+
+    async def _seed_winner():
+        async with maker() as session:
+            session.add(
+                GitHubEventDeliveryReceipt(
+                    delivery_key=key,
+                    repository=_REPO,
+                    event_name="issues",
+                    action="labeled",
+                    payload_digest=winner_digest,
+                    decision="admitted_pending",
+                    reason_code="admitted",
+                    preset_slug="triage-preset",
+                )
+            )
+            await session.commit()
+
+    asyncio.run(_seed_winner())
+    response = _post_with_delivery_id(client, payload, "del-race")
+    assert response.status_code == 409, response.text
+    assert response.json()["decision"] == "conflict"
+    assert response.json()["reasonCode"] == "changed_body_conflict"
+    assert dispatcher.calls == []
+
+
+def test_stale_stored_receipt_redelivery_rejected(harness):
+    """A weeks-old pending receipt redelivered by hand never launches."""
+    import asyncio
+    import datetime
+    import hashlib as _hashlib
+    import json as _json
+
+    client, dispatcher, maker, _ = harness
+    payload = _payload()
+    raw = _json.dumps(payload).encode("utf-8")
+    digest = _hashlib.sha256(raw).hexdigest()
+    key = f"github-delivery:v1:{_INSTALLATION}:{_REPO}:del-stale"
+    ancient = datetime.datetime.now(
+        datetime.timezone.utc
+    ) - datetime.timedelta(days=8)
+
+    async def _seed_stale():
+        async with maker() as session:
+            session.add(
+                GitHubEventDeliveryReceipt(
+                    delivery_key=key,
+                    repository=_REPO,
+                    event_name="issues",
+                    action="labeled",
+                    payload_digest=digest,
+                    decision="admitted_pending",
+                    reason_code="admitted",
+                    preset_slug="triage-preset",
+                    created_at=ancient,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(_seed_stale())
+    response = _post_with_delivery_id(client, payload, "del-stale")
+    assert response.status_code == 202, response.text
+    assert response.json()["decision"] == "rejected"
+    assert response.json()["reasonCode"] == "stale_event"
+    assert dispatcher.calls == []
+
+
+def test_pr_backed_issue_rejected_by_default(harness):
+    """issues/labeled on a PR cannot prove non-fork: rejected by default."""
+    client, dispatcher, _, _ = harness
+    payload = _payload(
+        issue={"number": 7, "pull_request": {"url": "https://api.github.com/x"}},
+    )
+    raw = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/api/v1/github/events",
+        content=raw,
+        headers={
+            "X-Hub-Signature-256": _sign(raw),
+            "X-GitHub-Delivery": "del-pr-issue",
+            "X-GitHub-Event": "issues",
+            "Content-Type": "application/json",
+        },
+    )
+    assert response.status_code in {202, 403}, response.text
+    assert response.json()["reasonCode"] == "fork_content_untrusted"
+    assert dispatcher.calls == []

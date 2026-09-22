@@ -288,8 +288,42 @@ def test_decide_admits_signed_opted_in_delivery():
     decision = _decide(_delivery(), (_config(),))
     assert decision.outcome == "admitted"
     assert decision.preset_slug == "triage-preset"
-    assert decision.identity_key.startswith("github-event:v1:12345:acme/repo:del-1:")
+    assert decision.identity_key.startswith("github-event:v1:")
     assert decision.reason_code == "admitted"
+
+
+def test_identity_key_is_fixed_length_deterministic_and_scoped():
+    from moonmind.workflows.adapters.github_event_delivery import _identity_key
+
+    first = _identity_key(
+        installation_id="12345",
+        repository="acme/repo",
+        delivery_id="del-1",
+        digest_hex="digest-1",
+    )
+    assert first.startswith("github-event:v1:")
+    assert len(first) <= 128
+    assert first == _identity_key(
+        installation_id="12345",
+        repository="acme/repo",
+        delivery_id="del-1",
+        digest_hex="digest-1",
+    )
+    assert first != _identity_key(
+        installation_id="12345",
+        repository="acme/repo",
+        delivery_id="del-1",
+        digest_hex="digest-2",
+    )
+    # A very long repository name still fits the 128-char idempotency column.
+    long_repo = "a" * 60 + "/" + "b" * 60
+    long_key = _identity_key(
+        installation_id="123456789",
+        repository=long_repo,
+        delivery_id="12345678-1234-1234-1234-123456789012",
+        digest_hex="d" * 64,
+    )
+    assert len(long_key) <= 128
 
 
 def test_decide_ignores_unsupported_events_safely():
@@ -464,3 +498,86 @@ def test_expired_delivery_gets_safe_disposition_not_launch():
     decision = _decide(old, (_config(),), now=1000.0 + RECEIPT_RETENTION_SECONDS + 10.0)
     assert decision.outcome == "rejected"
     assert decision.reason_code == "stale_event"
+
+
+def test_expired_stored_receipt_is_never_fresh_spending_intent():
+    """A weeks-old pending receipt redelivered by hand is rejected, not run."""
+    now = 2000000000.0
+    received = now - RECEIPT_RETENTION_SECONDS - 10.0
+    for stored_decision, execution_ref in (
+        ("admitted_pending", ""),
+        ("admitted_dispatched", "mm:deadbeef"),
+    ):
+        stored = StoredReceipt(
+            delivery_key="github-delivery:v1:12345:acme/repo:del-old",
+            payload_digest="digest-1",
+            decision=stored_decision,
+            execution_ref=execution_ref,
+            received_at_epoch=received,
+        )
+        decision = _decide(
+            _delivery(delivery_id="del-old", received_at_epoch=now),
+            (_config(),),
+            stored=stored,
+            now=now,
+        )
+        assert decision.outcome == "rejected", stored_decision
+        assert decision.reason_code == "stale_event"
+
+
+def test_fresh_stored_receipt_still_reuses_or_reattempts():
+    now = 2000000000.0
+    stored = StoredReceipt(
+        delivery_key="github-delivery:v1:12345:acme/repo:del-1",
+        payload_digest="digest-1",
+        decision="admitted_dispatched",
+        execution_ref="mm:live",
+        received_at_epoch=now - 60.0,
+    )
+    decision = _decide(
+        _delivery(received_at_epoch=now), (_config(),), stored=stored, now=now
+    )
+    assert decision.outcome == "redelivery_reuse"
+    assert decision.execution_ref == "mm:live"
+
+
+def test_pr_backed_issue_is_untrusted_fork_content_by_default():
+    """An issues payload with an issue.pull_request marker cannot prove a
+    non-fork head from payload fields, so default-deny treats it as fork."""
+    payload = {
+        "action": "labeled",
+        "installation": {"id": 12345},
+        "repository": {"full_name": "acme/repo"},
+        "sender": {"login": "alice", "type": "User"},
+        "label": {"name": "mm-ready"},
+        "issue": {"number": 7, "pull_request": {"url": "https://api.github.com/x"}},
+    }
+    delivery = delivery_from_webhook_payload(
+        delivery_id="del-pr",
+        event_name="issues",
+        payload=payload,
+        received_at_epoch=1700000000.0,
+    )
+    assert delivery.is_fork_content is True
+    decision = _decide(delivery, (_config(),))
+    assert decision.outcome == "rejected"
+    assert decision.reason_code == "fork_content_untrusted"
+
+
+def test_pr_backed_issue_runs_when_fork_content_opted_in():
+    payload = {
+        "action": "labeled",
+        "installation": {"id": 12345},
+        "repository": {"full_name": "acme/repo"},
+        "sender": {"login": "alice", "type": "User"},
+        "label": {"name": "mm-ready"},
+        "issue": {"number": 7, "pull_request": {"url": "https://api.github.com/x"}},
+    }
+    delivery = delivery_from_webhook_payload(
+        delivery_id="del-pr",
+        event_name="issues",
+        payload=payload,
+        received_at_epoch=1700000000.0,
+    )
+    decision = _decide(delivery, (_config(allow_fork_content=True),))
+    assert decision.outcome == "admitted"
