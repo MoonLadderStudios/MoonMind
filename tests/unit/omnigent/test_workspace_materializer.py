@@ -918,6 +918,88 @@ async def test_materializer_gives_up_after_repeated_transient_clone_failures(
 
 
 @pytest.mark.asyncio
+async def test_materializer_reuses_overlapping_completed_checkout(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """An overlapping materialization's success is reused, never deleted.
+
+    If another invocation completes the checkout during this attempt's
+    backoff, cleanup must not recursively delete that valid checkout.
+    """
+    import asyncio
+    import pathlib
+
+    _real_sleep = asyncio.sleep
+
+    async def _no_sleep(_delay: float) -> None:
+        await _real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=None, workspace_root=tmp_path  # type: ignore[arg-type]
+    )
+
+    calls: list[list[str]] = []
+
+    async def racing_runner(argv, input_bytes=None):
+        calls.append(argv)
+        if input_bytes is not None:
+            target = tmp_path / pathlib.Path(argv[-3].removeprefix("/work/"))
+            if len([c for c in calls if c[0] == "docker"]) == 1:
+                # The overlapping invocation wins during our backoff: leave
+                # a completed checkout behind, then report our own DNS error.
+                (target / ".git").mkdir(parents=True, exist_ok=True)
+                (target / ".git" / "HEAD").write_text(
+                    "ref: refs/heads/main\n", encoding="utf-8"
+                )
+                (target / "README.md").write_text("theirs", encoding="utf-8")
+                return (
+                    128,
+                    "",
+                    "Cloning into '/work/temporal_sandbox/abc/repo'...\n"
+                    "fatal: unable to access "
+                    "'https://github.com/MoonLadderStudios/MoonMind.git/': "
+                    "Could not resolve host: github.com",
+                )
+            raise AssertionError("completed checkout must be reused, not recloned")
+        return 0, "", ""
+
+    object.__setattr__(materializer, "_runner", racing_runner)
+
+    async def fake_token(*args, **kwargs):
+        return "tok" * 5
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_github_token_for_launch",
+        fake_token,
+    )
+    workspace = await materializer.materialize(
+        _request(
+            {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": _workspace_id(),
+                    "relativePath": "repo",
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "main",
+            }
+        ),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+
+    assert workspace["kind"] == "bind"
+    # One clone attempt plus the ownership handoff; no second clone.
+    assert len(calls) == 2
+    kept = tmp_path / "temporal_sandbox" / _workspace_id() / "repo"
+    assert (kept / "README.md").read_text(encoding="utf-8") == "theirs"
+    assert (kept / ".git" / "HEAD").exists()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('separate_remaining_work', [False, True])
 async def test_historical_remediation_request_materializes_named_evidence_and_reuses_candidate(
     tmp_path, separate_remaining_work,
