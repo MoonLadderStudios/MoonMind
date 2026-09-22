@@ -12,6 +12,7 @@ from moonmind.container_job_cli import (
     ContainerJobResult,
     load_container_job_spec,
     run_container_job,
+    run_passive_scan_job,
     run_python_tests,
 )
 from moonmind.utils.logging import redact_sensitive_text
@@ -140,6 +141,47 @@ def container_python_tests(
 ) -> None:
     try:
         result = run_python_tests(targets or [], timeout_seconds=timeout_seconds)
+    except ContainerJobCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
+@container_app.command(
+    "passive-scan",
+    help=(
+        "Run the supported passive repository secret-exposure scan "
+        "(MoonLadderStudios/MoonMind#3970) in the active managed workspace "
+        "through a durable container job, without hand-authoring a JSON "
+        "workload. Prints the terminal job state plus the collected logs and "
+        "artifacts references for the retained native report and summary."
+    ),
+)
+def container_passive_scan(
+    snapshot: str = typer.Option(
+        ".",
+        "--snapshot",
+        help="Workspace-relative snapshot directory to scan; defaults to the mounted workspace root.",
+    ),
+    report: str = typer.Option(
+        "artifacts/passive-scan-report.json",
+        "--report",
+        help="Workspace-relative path for the retained native JSON report.",
+    ),
+    summary: str = typer.Option(
+        "artifacts/passive-scan-summary.md",
+        "--summary",
+        help="Workspace-relative path for the retained Markdown summary.",
+    ),
+    timeout_seconds: int = typer.Option(1800, "--timeout-seconds", min=1, max=86400),
+) -> None:
+    try:
+        result = run_passive_scan_job(
+            snapshot_relative_path=snapshot,
+            report_relative_path=report,
+            summary_relative_path=summary,
+            timeout_seconds=timeout_seconds,
+        )
     except ContainerJobCliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
