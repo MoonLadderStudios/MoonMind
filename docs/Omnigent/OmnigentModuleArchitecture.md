@@ -217,7 +217,11 @@ reader can never be deleted alongside a product selector.
 
 Removal eligibility is fail-closed on every axis: a still-admitting class, an
 undrained active owner, an open replay/historical-read/rollback window, a
-missing rollback exercise, or an unmet retirement criterion all block.
+missing rollback exercise on a row with a rollback dependency, or an unmet
+retirement criterion all block. The paid/live provider canary and the rollback
+exercise are required only from the rows with that behavior — a credential or
+lease authority, or a rollback dependency — never from every row
+(MoonLadderStudios/MoonMind#3932).
 
 ### 5.3 Retained components
 

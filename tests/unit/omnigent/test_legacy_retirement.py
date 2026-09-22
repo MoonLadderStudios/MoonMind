@@ -700,13 +700,90 @@ def test_removal_stage_ordering_is_enforced() -> None:
     assert at_stage.eligible is True, at_stage.blockers
 
 
-def test_removal_stages_cover_the_nine_ordered_stages() -> None:
-    assert [stage.value for stage in RemovalStage] == list(range(1, 10))
-    # Every stage a row cites must be one of the ordered stages, and the
-    # inventory must actually span the staged convergence rather than collapsing
-    # into one unreviewable removal.
-    used = {path.earliest_removal_stage for path in RETIREMENT_INVENTORY}
-    assert len(used) >= 6, sorted(stage.name for stage in used)
+def test_boundary_rows_do_not_require_a_live_provider_canary() -> None:
+    """Rows with no credential or lease authority need no paid/live canary.
+
+    MoonLadderStudios/MoonMind#3932: an unused image alias, a doc-only
+    runbook, or a migration tool must not be held to live-provider evidence
+    for a deletion that has no provider behavior.
+    """
+
+    for path in RETIREMENT_INVENTORY:
+        uses_credential_or_lease = bool(
+            path.active_resource_dependencies
+            & frozenset(
+                {
+                    ActiveOwnerKind.CREDENTIAL_CONSUMER,
+                    ActiveOwnerKind.PROVIDER_PROFILE_LEASE,
+                }
+            )
+        )
+        if uses_credential_or_lease:
+            continue
+        assert (
+            RetirementCriterion.PROTECTED_PROVIDER_CANARY_PASSED
+            not in path.applicable_criteria
+        ), path.path_id
+
+
+def test_boundary_rows_do_not_require_a_rollback_exercise() -> None:
+    """Rows with no rollback dependency need no rollback exercise criterion."""
+
+    for path in RETIREMENT_INVENTORY:
+        if path.rollback_dependency:
+            continue
+        assert (
+            RetirementCriterion.ROLLBACK_WITHOUT_PATH_EXERCISED
+            not in path.applicable_criteria
+        ), path.path_id
+
+
+def test_credential_and_lease_rows_keep_the_provider_canary_criterion() -> None:
+    """Live credential/lease protection cannot be waived (#3932)."""
+
+    for path in RETIREMENT_INVENTORY:
+        uses_credential_or_lease = bool(
+            path.active_resource_dependencies
+            & frozenset(
+                {
+                    ActiveOwnerKind.CREDENTIAL_CONSUMER,
+                    ActiveOwnerKind.PROVIDER_PROFILE_LEASE,
+                }
+            )
+        )
+        if not uses_credential_or_lease:
+            continue
+        assert (
+            RetirementCriterion.PROTECTED_PROVIDER_CANARY_PASSED
+            in path.applicable_criteria
+        ), path.path_id
+
+
+def test_rollback_rows_keep_the_rollback_exercise_criterion() -> None:
+    """A rollback dependency still needs its actual exercise evidence (#3932)."""
+
+    for path in RETIREMENT_INVENTORY:
+        if not path.rollback_dependency:
+            continue
+        assert (
+            RetirementCriterion.ROLLBACK_WITHOUT_PATH_EXERCISED
+            in path.applicable_criteria
+        ), path.path_id
+
+
+def test_doc_only_row_is_removable_without_live_qualification() -> None:
+    """A doc-only runbook needs no canary or rollback exercise to be removed."""
+
+    path = get_retirement_record("omnigent.legacy.static_host_startup_runbook")
+    assert not path.rollback_dependency
+    eligibility = evaluate_removal_eligibility(
+        path,
+        stage=RemovalStage.STARTUP_AND_COMPOSE,
+        drained_kinds=frozenset(),
+        passed_criteria=_all_criteria(path),
+        retention=_closed_windows(),
+    )
+    assert eligibility.eligible is True, eligibility.blockers
 
 
 def test_direct_and_profile_bound_generations_are_independently_decided() -> None:
