@@ -475,6 +475,170 @@ def test_serving_post_failure_records_redacted_error_and_stays_usable(tmp_path):
     assert retried["status"] == "desired"
 
 
+def test_cutover_handoff_taken_when_controller_configured():
+    """Controller-first cutover: handoff wins when configured (REQ-1/REQ-2/REQ-7)."""
+    import importlib.util as _ilu
+    import sys as _sys
+    import types as _types
+    from pathlib import Path as _Path3
+
+    _entry = (
+        _Path3(__file__).resolve().parents[2]
+        / ".agents"
+        / "skills"
+        / "update-moonmind"
+        / "scripts"
+        / "update_release.py"
+    )
+    _spec = _ilu.spec_from_file_location("cutover_update_release", _entry)
+    assert _spec is not None and _spec.loader is not None
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+
+    calls: dict = {}
+
+    def _fake_build_operation_payload(*, operation_id, target_image, services=()):
+        calls["payload"] = {
+            "operation_id": operation_id,
+            "target_image": target_image,
+            "services": tuple(services),
+        }
+        return {"operationId": operation_id, "desired": {"targetImage": target_image}}
+
+    def _fake_submit_operation(payload):
+        calls["submitted"] = payload
+        return {"status": "installed"}
+
+    _fake_client = _types.ModuleType("moonmind_controller.client")
+    _fake_client.is_controller_configured = lambda: True
+    _fake_client.build_operation_payload = _fake_build_operation_payload
+    _fake_client.submit_operation = _fake_submit_operation
+    _fake_pkg = _types.ModuleType("moonmind_controller")
+    _fake_pkg.client = _fake_client
+    _prior_pkg = _sys.modules.get("moonmind_controller")
+    _prior_client = _sys.modules.get("moonmind_controller.client")
+    _sys.modules["moonmind_controller"] = _fake_pkg
+    _sys.modules["moonmind_controller.client"] = _fake_client
+    try:
+        record = {
+            "image": "repo@sha256:cutover",
+            "context": {"idempotency_key": "host-update:cutover-1"},
+        }
+        assert _mod._try_controller_handoff(record=record) == 0
+    finally:
+        if _prior_pkg is not None:
+            _sys.modules["moonmind_controller"] = _prior_pkg
+        else:
+            _sys.modules.pop("moonmind_controller", None)
+        if _prior_client is not None:
+            _sys.modules["moonmind_controller.client"] = _prior_client
+        else:
+            _sys.modules.pop("moonmind_controller.client", None)
+    # The trusted release data reached the controller handoff exactly once;
+    # the legacy temporal-worker-deployment-control path was never entered
+    # (a handled submission returns an exit code instead of None).
+    assert calls["submitted"]["desired"]["targetImage"] == "repo@sha256:cutover"
+    assert calls["payload"]["operation_id"] == "host-update:cutover-1"
+
+    _fake_client2 = _types.ModuleType("moonmind_controller.client")
+    _fake_client2.is_controller_configured = lambda: False
+    _fake_client2.submit_operation = lambda payload: (_ for _ in ()).throw(
+        AssertionError("unconfigured controller must not submit")
+    )
+    _fake_pkg2 = _types.ModuleType("moonmind_controller")
+    _fake_pkg2.client = _fake_client2
+    _sys.modules["moonmind_controller"] = _fake_pkg2
+    _sys.modules["moonmind_controller.client"] = _fake_client2
+    try:
+        assert _mod._try_controller_handoff(record=record) is None
+    finally:
+        if _prior_pkg is not None:
+            _sys.modules["moonmind_controller"] = _prior_pkg
+        else:
+            _sys.modules.pop("moonmind_controller", None)
+        if _prior_client is not None:
+            _sys.modules["moonmind_controller.client"] = _prior_client
+        else:
+            _sys.modules.pop("moonmind_controller.client", None)
+
+
+def test_cutover_lock_is_installation_local_and_preserves_legacy(tmp_path):
+    """Two installs hold independent locks; legacy files are never deleted (REQ-7)."""
+    from moonmind_controller import lock
+
+    first = lock.lock_path_for(str(tmp_path / "install-a"), "moonmind")
+    second = lock.lock_path_for(str(tmp_path / "install-b"), "moonmind")
+    assert first != second
+    assert first.parent != second.parent
+    # Unsafe stack names cannot escape the installation-local directory.
+    for unsafe in ("", ".", "..", "a/b"):
+        try:
+            lock.lock_path_for(str(tmp_path), unsafe)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unsafe stack {unsafe!r} must be rejected")
+
+    legacy = tmp_path / "install-a" / "moonmind.lock"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"owner": "legacy-writer"}) + "\n")
+    try:
+        with lock.hold(str(tmp_path / "install-a"), stack="moonmind"):
+            raise AssertionError("legacy lock must block cutover")
+    except RuntimeError as exc:
+        assert "legacy" in str(exc).lower()
+    # Cutover refusal preserves the old writer's file for positive-stop
+    # reconciliation instead of deleting a live lock inode.
+    assert legacy.exists(), "blocked cutover must keep the legacy lock file"
+    assert "unlink" not in (tmp_path / "install-a" / "moonmind.lock").read_text()
+    lock_source = (
+        Path(__file__).resolve().parents[2] / "moonmind_controller" / "lock.py"
+    ).read_text()
+    assert "unlink" not in lock_source
+    assert "subprocess" not in lock_source
+    assert "docker" not in lock_source.lower()
+
+    legacy.unlink()
+    with lock.hold(str(tmp_path / "install-a"), stack="moonmind"):
+        pass
+
+
+def test_cutover_submit_prefers_controller_and_serializes_host_update():
+    """Legacy path stays fallback-only; host owns controller update (REQ-2/REQ-7)."""
+    from pathlib import Path as _Path4
+
+    repo = _Path4(__file__).resolve().parents[2]
+    submit_source = (
+        repo / "moonmind" / "workflows" / "skills" / "deployment_release.py"
+    ).read_text()
+    submit_body = submit_source.split("async def submit", 1)[1]
+    handoff_pos = submit_body.index("controller_available()")
+    legacy_pos = submit_body.index("_build_deployment_update_executor")
+    assert handoff_pos < legacy_pos, "controller handoff must precede legacy fallback"
+
+    entry_source = (
+        repo
+        / ".agents"
+        / "skills"
+        / "update-moonmind"
+        / "scripts"
+        / "update_release.py"
+    ).read_text()
+    assert "_try_controller_handoff(record=record)" in entry_source
+    assert (
+        entry_source.index("_try_controller_handoff(record=record)")
+        < entry_source.index("temporal-worker-deployment-control")
+    ), "host entrypoint must try the controller before the legacy control service"
+
+    server_source = (repo / "moonmind_controller" / "server.py").read_text()
+    assert "/update" not in server_source, "controller must never replace itself"
+    install_source = (repo / "tools" / "install-moonmind-controller.sh").read_text()
+    assert "assert_no_active_mutation" in install_source
+    assert "never by itself" in install_source.lower() or "never replaces itself" in (
+        repo / "moonmind_controller" / "server.py"
+    ).read_text()
+
+
 def test_startup_convergence_resumes_unfinished_work_without_repeat(tmp_path):
     """Restart inspects the record and converges unfinished work (REQ-4)."""
     from moonmind_controller import apply, server, state
