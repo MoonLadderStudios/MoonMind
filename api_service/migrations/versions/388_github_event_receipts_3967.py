@@ -1,6 +1,6 @@
 """Durable receipt for opt-in GitHub event deliveries (#3967).
 
-Revision ID: 388_github_event_delivery_receipts_3967
+Revision ID: 388_github_event_receipts_3967
 Revises: 387_merge_386_heads_4461
 Create Date: 2026-09-22 00:00:00.000000
 """
@@ -8,7 +8,7 @@ Create Date: 2026-09-22 00:00:00.000000
 import sqlalchemy as sa
 from alembic import op
 
-revision = "388_github_event_delivery_receipts_3967"
+revision = "388_github_event_receipts_3967"
 down_revision = "387_merge_386_heads_4461"
 branch_labels = None
 depends_on = None
