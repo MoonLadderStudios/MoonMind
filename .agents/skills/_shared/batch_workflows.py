@@ -1260,14 +1260,27 @@ def _submit_issue_jobs_gated(
                 SkippedTarget(ref=submission.ref, reason="capacity_exhausted")
             )
             continue
-        workflow_id, error = _submit_repository_child(
+        submit_result = _submit_repository_child(
             moonmind_url=moonmind_url, envelope=submission.queue_request
         )
+        # The portable engine now returns (workflow_id, error, verified_status);
+        # older test doubles may still return a 2-tuple.
+        if len(submit_result) == 3:
+            workflow_id, error, verified_status = submit_result
+        else:  # pragma: no cover - backwards compatibility for test doubles
+            workflow_id, error = submit_result
+            verified_status = None
         idempotency_key = str(
             submission.queue_request.get("payload", {}).get("idempotencyKey") or ""
         )
         if workflow_id is None:
-            if error and error.startswith("submission_unconfirmed:"):
+            # Every ambiguous post-admission result is capacity-consuming
+            # until reconciled: the server may already be running the child
+            # even when the immediate verification could not confirm it.
+            if error and (
+                error.startswith("submission_unconfirmed:")
+                or error.startswith("admission_unconfirmed:")
+            ):
                 owned[f"unconfirmed:{submission.ref}:{len(owned)}"] = "unknown"
             errors.append(
                 {
@@ -1277,7 +1290,25 @@ def _submit_issue_jobs_gated(
                 }
             )
             continue
-        owned[workflow_id] = "queued"
+        # Preserve the verified admission status: on retry with the same batch
+        # scope the execution API returns the existing workflow, which may
+        # already be terminal. Recording every return as "queued" would fill
+        # the gate with finished children and block remaining targets.
+        owned[workflow_id] = (
+            verified_status
+            if verified_status
+            in {
+                "queued",
+                "running",
+                "unknown",
+                "waiting",
+                "succeeded",
+                "failed",
+                "canceled",
+                "blocked",
+            }
+            else "queued"
+        )
         created.append(
             {
                 "provider": submission.provider,
@@ -1630,8 +1661,15 @@ def _submit_repository_child(
     *,
     moonmind_url: str,
     envelope: dict[str, Any],
-) -> tuple[str | None, str | None]:
-    """POST one child and verify admission; never count unverified queueing."""
+) -> tuple[str | None, str | None, str | None]:
+    """POST one child and verify admission; never count unverified queueing.
+
+    Returns ``(workflow_id, error, verified_status)``. On success
+    ``verified_status`` is the admission-check status (for example
+    ``queued``, ``running``, ``succeeded``, ``failed``, or ``canceled``) so
+    callers can preserve idempotent terminal state instead of assuming
+    ``queued``. On failure ``verified_status`` is None.
+    """
 
     body = {
         "type": str(envelope["type"]),
@@ -1648,34 +1686,35 @@ def _submit_repository_child(
         with urllib.request.urlopen(http_request, timeout=30.0) as response:
             data = json.loads(response.read().decode("utf-8"))
         if not isinstance(data, dict):
-            return None, "execution API response must be a JSON object"
+            return None, "execution API response must be a JSON object", None
         workflow_id = str(
             data.get("workflowId") or data.get("taskId") or data.get("id") or ""
         ).strip()
         if not workflow_id:
-            return None, "execution API response is missing workflowId"
+            return None, "execution API response is missing workflowId", None
     except urllib.error.HTTPError as exc:
         try:
             detail = exc.read(65536).decode("utf-8", errors="replace")
-            return None, f"{exc}: {detail}"
+            return None, f"{exc}: {detail}", None
         except Exception:
-            return None, str(exc)
+            return None, str(exc), None
     except Exception as exc:  # noqa: BLE001 - reported per target
         # A transport failure after server-side admission is ambiguous: the
         # caller retries under the same idempotency key and reconciles.
-        return None, f"submission_unconfirmed: {exc}"
+        return None, f"submission_unconfirmed: {exc}", None
     status, _ = _refresh_owned_status(
         moonmind_url=moonmind_url, workflow_id=workflow_id
     )
     if status == "admission_lost":
-        return None, "admission_unconfirmed: child missing immediately after queueing"
+        return None, "admission_unconfirmed: child missing immediately after queueing", None
     if status == "unknown":
         return (
             None,
             "admission_unconfirmed: child verification returned unknown; "
             "preserved for bounded reconciliation instead of counting as queued",
+            None,
         )
-    return workflow_id, None
+    return workflow_id, None, status
 
 
 def _run_cancel_owned(args: argparse.Namespace, artifacts_dir: Path) -> int:
@@ -2123,9 +2162,14 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                     )
                 )
                 continue
-            workflow_id, error = _submit_repository_child(
+            submit_result = _submit_repository_child(
                 moonmind_url=moonmind_url, envelope=envelope
             )
+            if len(submit_result) == 3:
+                workflow_id, error, verified_status = submit_result
+            else:  # pragma: no cover - backwards compatibility for test doubles
+                workflow_id, error = submit_result
+                verified_status = None
             idempotency_key = str(envelope["payload"].get("idempotencyKey") or "")
             if workflow_id is None:
                 submit_errors += 1
@@ -2139,10 +2183,33 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                 )
             else:
                 submitted += 1
-                owned[workflow_id] = "queued"
+                owned_status = (
+                    verified_status
+                    if verified_status
+                    in {
+                        "queued",
+                        "running",
+                        "unknown",
+                        "waiting",
+                        "succeeded",
+                        "failed",
+                        "canceled",
+                        "blocked",
+                    }
+                    else "queued"
+                )
+                owned[workflow_id] = owned_status
+                # Preserve idempotent terminal state so a retry that finds an
+                # existing succeeded/failed/canceled child does not record it
+                # as queued and fill the gate with finished children.
+                entry_status = (
+                    owned_status
+                    if owned_status in {"succeeded", "failed", "canceled"}
+                    else "queued"
+                )
                 per_target.append(
                     _BATCH_TARGETS.per_target_entry(
-                        target, status="queued", workflow_id=workflow_id,
+                        target, status=entry_status, workflow_id=workflow_id,
                         idempotency_key=idempotency_key, attempt=attempt,
                     )
                 )
