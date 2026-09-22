@@ -2107,3 +2107,296 @@ async def test_stale_projection_repair_converges_without_reexecution_3947(tmp_pa
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_locked_get_propagates_session_type_error_3946():
+    """REQ-01: an unexpected session TypeError is a persistence failure, not
+    missing data — it must propagate, never retry unlocked or read as absent."""
+    import pytest as _pytest
+
+    from api_service.core.sync import _locked_get
+    from api_service.db.models import TemporalExecutionRecord
+
+    class _StrictFakeSession:
+        async def get(self, model, pk):
+            raise TypeError("strict fake without locking kwargs")
+
+    with _pytest.raises(TypeError):
+        await _locked_get(_StrictFakeSession(), TemporalExecutionRecord, "mm:x")
+
+
+@pytest.mark.asyncio
+async def test_locked_get_rejects_wrong_type_row_3946():
+    """REQ-01: a miswired session returning the wrong row type must raise,
+    never be mistaken for genuine absence (which would create a missing row)."""
+    import pytest as _pytest
+
+    from api_service.core.sync import _locked_get
+    from api_service.db.models import (
+        TemporalExecutionCanonicalRecord,
+        TemporalExecutionRecord,
+    )
+
+    class _MiswiredSession:
+        async def get(self, model, pk, **kwargs):
+            return TemporalExecutionCanonicalRecord(
+                workflow_id="mm:miswired",
+                run_id="run-1",
+                namespace="moonmind",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id="owner-1",
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.EXECUTING,
+                entry="run",
+                search_attributes={},
+                memo={},
+                artifact_refs=[],
+                parameters={},
+            )
+
+    with _pytest.raises(TypeError):
+        await _locked_get(_MiswiredSession(), TemporalExecutionRecord, "mm:miswired")
+
+
+@pytest.mark.asyncio
+async def test_flush_failure_propagates_without_missing_row_creation_3946(tmp_path):
+    """REQ-01: a flush failure around the read boundary propagates as an
+    error and must not trigger missing-row creation or a fresh projection."""
+    import pytest as _pytest
+
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+    from sqlalchemy import select
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(session, "mm:flush-failure", updated_at=stored_at)
+            await session.commit()
+
+            async def _boom_flush():
+                raise TypeError("fake-session serialization failure")
+
+            session.flush = _boom_flush  # type: ignore[assignment]
+            with _pytest.raises(TypeError):
+                await mutate_execution_projection(
+                    session,
+                    workflow_id="mm:flush-failure",
+                    payload={
+                        "workflow_id": "mm:flush-failure",
+                        "run_id": "run-1",
+                        "namespace": "moonmind",
+                        "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                        "owner_id": "owner-1",
+                        "owner_type": TemporalExecutionOwnerType.USER,
+                        "state": MoonMindWorkflowState.EXECUTING,
+                        "close_status": None,
+                        "entry": "run",
+                        "search_attributes": {},
+                        "memo": {"title": "Task"},
+                        "artifact_refs": [],
+                        "parameters": {},
+                        "updated_at": stored_at,
+                    },
+                    owner="temporal",
+                )
+            await session.rollback()
+            rows = (
+                await session.execute(
+                    select(TemporalExecutionRecord).where(
+                        TemporalExecutionRecord.workflow_id == "mm:flush-failure"
+                    )
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].projection_version == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_genuine_not_found_repairs_with_real_session_3946(tmp_path):
+    """REQ-01: genuine absence on a realistic session still repairs by
+    creating the missing projection as FRESH (not-found stays distinct from
+    persistence failure)."""
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            refreshed = await mutate_execution_projection(
+                session,
+                workflow_id="mm:absent-repairs",
+                payload={
+                    "workflow_id": "mm:absent-repairs",
+                    "run_id": "run-1",
+                    "namespace": "moonmind",
+                    "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                    "owner_id": "owner-1",
+                    "owner_type": TemporalExecutionOwnerType.USER,
+                    "state": MoonMindWorkflowState.EXECUTING,
+                    "close_status": None,
+                    "entry": "run",
+                    "search_attributes": {},
+                    "memo": {"title": "Task"},
+                    "artifact_refs": [],
+                    "parameters": {"targetRuntime": "codex_cli"},
+                    "updated_at": stored_at,
+                },
+                owner="temporal",
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert refreshed is not None
+            assert refreshed.workflow_id == "mm:absent-repairs"
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
+            assert refreshed.projection_version == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_divergent_canonical_vs_projection_newer_projection_keeps_admission_authority_3946(
+    tmp_path,
+):
+    """REQ-02: when canonical and projection rows disagree and the projection
+    carries the newer timestamp, the authoritative admission record still wins
+    for protected identity/parameters — never the divergent projection row."""
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            older = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            newer = datetime(2026, 9, 1, 12, 10, tzinfo=UTC)
+            canonical, projection = _seed_execution(
+                session, "mm:divergent-authority", updated_at=older,
+            )
+            # Diverge the projection row: different principal/params with a
+            # newer timestamp, as if a stray write moved it off admission.
+            projection.owner_id = "owner-diverged"
+            projection.namespace = "diverged-namespace"
+            projection.parameters = {"targetRuntime": "diverged_runtime"}
+            projection.updated_at = newer
+            await session.commit()
+
+            incoming_at = datetime(2026, 9, 1, 12, 15, tzinfo=UTC)
+            refreshed = await mutate_execution_projection(
+                session,
+                workflow_id="mm:divergent-authority",
+                payload={
+                    "workflow_id": "mm:divergent-authority",
+                    "run_id": "run-1",
+                    "namespace": "other-namespace",
+                    "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                    "owner_id": "owner-incoming",
+                    "owner_type": TemporalExecutionOwnerType.USER,
+                    "state": MoonMindWorkflowState.EXECUTING,
+                    "close_status": None,
+                    "entry": "run",
+                    "search_attributes": {},
+                    "memo": {"title": "Task"},
+                    "artifact_refs": [],
+                    "parameters": {"targetRuntime": "incoming_runtime"},
+                    "updated_at": incoming_at,
+                },
+                owner="temporal",
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert refreshed.owner_id == "owner-1"
+            assert refreshed.namespace == "moonmind"
+            assert refreshed.parameters == {"targetRuntime": "codex_cli"}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rejected_mutation_preserves_confirmed_rows_and_session_usable_3946(tmp_path):
+    """REQ-05: a reporting/mutation failure (canonical protected-field move)
+    must not erase confirmed rows and must leave the session usable for the
+    independent recovery path."""
+    import pytest as _pytest
+
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(
+                session, "mm:confirmed-survives", updated_at=stored_at,
+                refs=["art_confirmed"], version=3,
+            )
+            await session.commit()
+
+            with _pytest.raises(ValueError, match="protected field"):
+                await mutate_execution_projection(
+                    session,
+                    workflow_id="mm:confirmed-survives",
+                    payload={
+                        "workflow_id": "mm:confirmed-survives",
+                        "run_id": "run-1",
+                        "namespace": "other-namespace",
+                        "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                        "owner_id": "owner-1",
+                        "owner_type": TemporalExecutionOwnerType.USER,
+                        "state": MoonMindWorkflowState.EXECUTING,
+                        "close_status": None,
+                        "entry": "run",
+                        "search_attributes": {},
+                        "memo": {"title": "Task"},
+                        "artifact_refs": [],
+                        "parameters": {"targetRuntime": "codex_cli"},
+                        "updated_at": stored_at,
+                    },
+                    owner="canonical",
+                )
+            await session.rollback()
+
+            # Confirmed work survives the failed reporting attempt.
+            refreshed = await mutate_execution_projection(
+                session,
+                workflow_id="mm:confirmed-survives",
+                payload={
+                    "workflow_id": "mm:confirmed-survives",
+                    "run_id": "run-1",
+                    "namespace": "moonmind",
+                    "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                    "owner_id": "owner-1",
+                    "owner_type": TemporalExecutionOwnerType.USER,
+                    "state": MoonMindWorkflowState.EXECUTING,
+                    "close_status": None,
+                    "entry": "run",
+                    "search_attributes": {},
+                    "memo": {"title": "Task"},
+                    "artifact_refs": [],
+                    "parameters": {"targetRuntime": "codex_cli"},
+                    "updated_at": stored_at,
+                },
+                owner="temporal",
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+            assert refreshed.owner_id == "owner-1"
+            assert refreshed.namespace == "moonmind"
+            assert refreshed.artifact_refs == ["art_confirmed"]
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
+    finally:
+        await engine.dispose()
+
+
