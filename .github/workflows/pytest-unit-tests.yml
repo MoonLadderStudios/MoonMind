@@ -845,6 +845,18 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
+      - name: Run disposable default first-run journey
+        # MoonLadderStudios/MoonMind#3938: one disposable default Compose
+        # installation (no .env, no inherited credentials) exercising the
+        # real API startup/admission/session/save path with its browser
+        # consumer. The runner records revision/image provenance and reuses
+        # the saved-work journey by reference.
+        env:
+          MOONMIND_TEST_COMPOSE_PROJECT_NAME: moonmind-test-first-run-3938
+        run: |
+          set -euo pipefail
+          ./tools/first_run_journey_3938.sh --contract
+          ./tools/first_run_journey_3938.sh
       - name: Capture docker compose diagnostics
         if: failure()
         run: |
