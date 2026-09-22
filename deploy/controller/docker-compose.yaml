@@ -1,0 +1,50 @@
+# MoonMind deployment controller: separate minimal Compose project.
+#
+# MoonLadderStudios/MoonMind#4500: MoonMind must not need to be healthy to
+# repair or replace MoonMind. This controller lives OUTSIDE the MoonMind
+# application stack in its own project (`moonmind-controller`), with its own
+# durable state, restart policy, and direct Docker socket mount. Its Docker
+# transport and command endpoint survive target-project (`moonmind`) shutdown.
+#
+# No agents receive the socket or unrestricted controller access: the only
+# command path is one small authenticated loopback endpoint guarded by the
+# deployment-owned secret in the state volume. The host CLI installs/starts
+# and updates or restores this project; the controller never replaces itself.
+
+name: moonmind-controller
+
+services:
+  controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moonmind-controller:local
+    container_name: moonmind-controller
+    init: true
+    # The controller must outlive the stack it repairs and resume unfinished
+    # work after host/docker restarts.
+    restart: unless-stopped
+    # Direct Docker socket mount, owned by THIS separate project (not proxied
+    # through the application stack, so target-project shutdown cannot take
+    # the controller's Docker transport down with it).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - controller-state:/state
+    environment:
+      - CONTROLLER_STATE_DIR=/state
+      - PYTHONUNBUFFERED=1
+    # One small authenticated local endpoint only; published on loopback so
+    # only host-local callers holding the deployment-owned secret can submit.
+    ports:
+      - "127.0.0.1:${MOONMIND_CONTROLLER_PORT:-8765}:8765"
+    command: ["python", "-m", "mm_controller.main", "serve", "--state-dir", "/state"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/status', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  controller-state:
+    name: moonmind-controller-state
