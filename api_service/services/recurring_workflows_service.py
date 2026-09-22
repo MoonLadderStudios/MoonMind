@@ -72,7 +72,10 @@ _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
 # is recorded authority for occurrences (identity, cadence, paused state,
 # Profile, and intent preserved); new schedules persist ``pinned`` at creation
 # and reconcile incompatible persisted inputs through an explicit schedule
-# revision, never by recreating the schedule.
+# revision, never by recreating the schedule. Schedules that should track the
+# qualified default opt into ``follow_qualified_default``; the refresh path
+# raises for ``pinned`` on target change so the follow happens only via that
+# explicit revision.
 SCHEDULE_TARGET_PINNED = "pinned"
 SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT = "follow_qualified_default"
 _SCHEDULE_TARGET_UPDATE_POLICIES = frozenset(

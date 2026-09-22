@@ -22,6 +22,21 @@ phases, and operator remediation matrix. The versioned rollout mechanism that
 promotes every combination (states, canary, rollback, migration status) is
 owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 
+> MoonLadderStudios/MoonMind#3931: ordinary new work (Workflow Create,
+> schedule create) resolves through the one shared runtime-target selection
+> boundary (`moonmind.workflows.executions.new_work_runtime`), not through
+> `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` /
+> `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` or `effective_phase()` /
+> `select_runtime()`. The surviving rollback controls for future admission are
+> the bounded direct-retirement cutoff `MOONMIND_CODEX_DIRECT_RETIRED_AT`
+> (`moonmind.omnigent.codex_cutover_drain`), the code-owned retirement class
+> (`moonmind.omnigent.cutover.assert_runtime_new_admission`), and the
+> deployment-owned rollback list
+> `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK`. Lowering a retired phase value
+> no longer rolls back new-work defaults; use the surviving controls. Phase
+> prose below remains as historical reader context for replay and retained
+> history.
+
 ## Compatibility inventory
 
 | Direct Codex surface | Classification | Owner and supported behavior | Evidence contract / control | Removal condition | Rollback implication |

@@ -136,6 +136,10 @@ def test_new_work_evidence_records_provenance_without_phase_or_fingerprint():
 
 
 def test_patch_version_evolution_does_not_break_compatibility_series():
+    # Series helper only: same major.minor stays in-series across patch
+    # evolution. It is not the launch authority — missing capability or
+    # retired admission still blocks via resolve_new_work_selection above
+    # (NewWorkAdmissionRejected) and the shared rollout/admission owners.
     from moonmind.omnigent.compatibility import versions_compatible
 
     assert versions_compatible("1.18.11", "1.18.9") is True

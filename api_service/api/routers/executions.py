@@ -12332,6 +12332,42 @@ async def _resolve_recurring_runtime_metadata(
             )
         canonical_target_runtime = normalized_rt
 
+    # MoonLadderStudios/MoonMind#3931: a step override is new admission in its
+    # own right. Apply the same bounded step-runtime admission as Workflow
+    # Create so an allowed top-level runtime plus a retired
+    # ``steps[i].runtime.mode`` cannot persist new direct work after the
+    # direct-retirement cutoff.
+    if isinstance(steps_payload, Sequence) and not isinstance(
+        steps_payload, (str, bytes)
+    ):
+        for index, step_payload in enumerate(steps_payload):
+            if not isinstance(step_payload, Mapping):
+                continue
+            step_runtime_payload = step_payload.get("runtime")
+            if not isinstance(step_runtime_payload, Mapping):
+                continue
+            raw_step_mode = step_runtime_payload.get("mode")
+            if raw_step_mode is None or str(raw_step_mode).strip() == "":
+                continue
+            normalized_step_rt = normalize_runtime_id(raw_step_mode)
+            if normalized_step_rt not in _SUPPORTED_TASK_RUNTIMES:
+                raise _invalid_workflow_request(
+                    f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
+                    f"{raw_step_mode!r}. Must be one of: codex_cli, "
+                    "claude_code, codex_cloud, jules, omnigent."
+                )
+            try:
+                from moonmind.omnigent.codex_cutover_drain import (
+                    assert_new_admission_allowed,
+                )
+
+                assert_new_admission_allowed(normalized_step_rt)
+                assert_runtime_new_admission(normalized_step_rt)
+            except ValueError as exc:
+                raise _invalid_workflow_request(
+                    f"payload.workflow.steps[{index}].runtime.mode: {exc}"
+                ) from exc
+
     raw_profile_id = None
     for candidate_profile_id in (
         runtime_payload.get("providerProfileRef"),
