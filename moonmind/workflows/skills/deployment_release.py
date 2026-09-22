@@ -884,9 +884,25 @@ async def prepare_operator_access(runner, image, directory, owner, *, declared_u
         recorded = reserve_record(path, {"owner": owner, "urls": urls})
         if recorded != {"owner": owner, "urls": urls}:
             raise ValueError("Operator access targets differ from the saved release")
-    # Missing host-network capability or an unreachable origin stops before API
-    # replacement. A retry keeps the original targets instead of changing scope.
-    await verify_operator_access(image, urls, owner)
+    # The old deployment's health is diagnostic input, not admission to repair:
+    # an operator URL that is already unreachable must not prevent replacing
+    # the unhealthy deployment it names. A retry keeps the original targets
+    # instead of changing scope. Post-apply operator verification stays
+    # mandatory and still fails the release when it cannot be established.
+    try:
+        await verify_operator_access(image, urls, owner)
+    except Exception as exc:
+        from moonmind.utils.logging import redact_sensitive_text
+
+        write_record(
+            directory / "operator-access-preflight.json",
+            {
+                "owner": owner,
+                "urls": urls,
+                "status": "unverified",
+                "warning": redact_sensitive_text(str(exc) or type(exc).__name__)[:500],
+            },
+        )
     return urls
 
 

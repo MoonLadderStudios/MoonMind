@@ -1,0 +1,50 @@
+# Separate Compose project for the standalone deployment controller
+# (MoonLadderStudios/MoonMind#4500). This project is deployment-owned and
+# independent of the MoonMind application stack it repairs:
+#
+# - its Docker transport (direct socket mount) and command endpoint survive
+#   target-project shutdown;
+# - durable state lives in its own named volume with a configured restart
+#   policy, so interruption converges instead of losing intent;
+# - no agent service mounts the socket or reaches this endpoint without the
+#   deployment-owned secret.
+#
+# The controller never replaces itself: controller update is host-owned
+# (tools/install-moonmind-controller.sh) and serialized against active
+# deployment mutation.
+
+name: moonmind-controller
+
+services:
+  controller:
+    build:
+      context: ../..
+      dockerfile: deploy/moonmind-controller/Dockerfile
+    image: moonmind-controller:local
+    container_name: moonmind-controller
+    restart: unless-stopped
+    volumes:
+      # Direct Docker socket mount, controller-owned in this separate
+      # project. No agent receives this socket.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - moonmind-controller-state:/var/lib/moonmind-controller
+    environment:
+      MOONMIND_CONTROLLER_STATE_DIR: /var/lib/moonmind-controller
+      # Deployment-owned secret; never looked up from an application service.
+      MOONMIND_CONTROLLER_SECRET_FILE: /run/secrets/moonmind_controller_secret
+    secrets:
+      - moonmind_controller_secret
+    ports:
+      # Loopback-published, authenticated local endpoint only.
+      - "127.0.0.1:8099:8099"
+    command: ["--state-dir", "/var/lib/moonmind-controller"]
+
+secrets:
+  moonmind_controller_secret:
+    # Deployment-owned secret file created by the host bootstrap on first
+    # install. It is not stored in the application stack or in Git.
+    file: ${MOONMIND_CONTROLLER_SECRET_FILE:-./.moonmind-controller-secret}
+
+volumes:
+  moonmind-controller-state:
+    name: moonmind-controller-state
