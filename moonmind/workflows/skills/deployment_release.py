@@ -759,10 +759,15 @@ async def verify_installed_fleet(runner, image, *, expected=None, attempts=60):
 
 
 async def migrate_omnigent(runner, owner, image, *, actor="release"):
-    """Advance the singular Omnigent release; no-op when already aligned.
+    """Record, install, and verify the singular Omnigent release.
 
     Runs inside the primary success path so an omnigent migration failure
     blocks the release receipt exactly like a fleet verification failure.
+    The migration only records the installed server/host digests, recreates
+    the affected services onto them, and verifies the running server: it
+    performs no policy/schedule bulk rewrites. Fresh managed attempts bind
+    the installed target through normal admission while preserving authored
+    execution choices and schedule identity.
     """
     from moonmind.workflows.skills.deployment_execution import (
         FileDesiredStateStore,
