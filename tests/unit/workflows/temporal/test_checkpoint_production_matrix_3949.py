@@ -694,6 +694,91 @@ async def test_restarted_worker_cannot_steal_running_turn_or_release_cleanup(
     assert "latestBranchTurnResult" not in (branch.artifact_refs or {})
 
 
+# --- 4. Executed denial at the workflow-fleet process boundary -----------------
+#
+# Inventory (AST/import/mount pinning above) is not execution proof. These
+# tests execute one real forbidden operation at the claimed worker-composition
+# boundary: the workflow fleet must refuse the artifacts capability through
+# the catalog binding path, while the artifacts fleet keeps serving it. The
+# three compat persistence handlers stay reachable only through the explicit
+# workflow-queue compat registration (pre-cutover replay), never through a
+# new catalog binding on the workflow fleet.
+
+
+def test_workflow_fleet_forbids_artifacts_capability_at_execution():
+    """Executed denial: workflow fleet refuses artifacts, artifacts allows it."""
+
+    from moonmind.workflows.temporal.workers import (
+        TemporalWorkerBootstrapError,
+        require_fleet_capability_allowed,
+    )
+
+    assert require_fleet_capability_allowed("artifacts", "artifacts") == "artifacts"
+    with pytest.raises(
+        TemporalWorkerBootstrapError, match="forbids capability 'artifacts'"
+    ):
+        require_fleet_capability_allowed("workflow", "artifacts")
+
+
+def test_activity_bindings_enforce_fleet_capability_denial():
+    """A misrouted capability fails closed at binding time, not via imports."""
+
+    from moonmind.workflows.temporal.activity_catalog import (
+        ARTIFACTS_TASK_QUEUE,
+        TemporalActivityCatalog,
+        TemporalActivityDefinition,
+        TemporalActivityRetries,
+        TemporalActivityTimeouts,
+    )
+    from moonmind.workflows.temporal.workers import (
+        TemporalWorkerBootstrapError,
+        build_worker_activity_bindings,
+    )
+
+    catalog = build_default_activity_catalog()
+    misrouted = TemporalActivityCatalog(
+        activities=(
+            TemporalActivityDefinition(
+                activity_type="llm.misrouted_probe",
+                family="llm",
+                capability_class="llm",
+                task_queue=ARTIFACTS_TASK_QUEUE,
+                fleet="artifacts",
+                timeouts=TemporalActivityTimeouts(10, 20),
+                retries=TemporalActivityRetries(
+                    max_attempts=1,
+                    max_interval_seconds=5,
+                ),
+            ),
+        ),
+        fleets=catalog.fleets,
+    )
+    with pytest.raises(
+        TemporalWorkerBootstrapError, match="forbids capability 'llm'"
+    ):
+        build_worker_activity_bindings(catalog=misrouted, fleet="artifacts")
+
+
+def test_supported_topology_builds_all_fleets_with_bounded_concurrency():
+    """Denial/load companion: every fleet builds with an explicit budget."""
+
+    import time
+
+    from moonmind.workflows.temporal.workers import build_all_worker_topologies
+
+    started = time.monotonic()
+    topologies = build_all_worker_topologies()
+    elapsed = time.monotonic() - started
+    assert {topology.fleet for topology in topologies} >= {
+        "workflow",
+        "artifacts",
+    }
+    for topology in topologies:
+        assert topology.forbidden_capabilities, topology.fleet
+        assert topology.concurrency_limit is None or topology.concurrency_limit > 0
+    assert elapsed < 30
+
+
 @pytest.mark.asyncio
 async def test_rejection_terminalizes_blocked_without_advancing_head(
     matrix_session: AsyncSession,
