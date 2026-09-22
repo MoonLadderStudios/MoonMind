@@ -1077,7 +1077,7 @@ Limit behavior must be explicit:
 MoonMind is a single-user application: one operator per instance. MoonMind’s current platform foundation uses:
 
 - `default` for local default operation
-- a dedicated namespace such as `moonmind` for shared/enterprise deployments
+- a dedicated namespace such as `moonmind` per independent deployment (namespace names isolate deployments; they do not provide multi-user tenancy)
 - 90-day closed execution retention by default, with operator override and storage-cap guardrails
 
 Rules:

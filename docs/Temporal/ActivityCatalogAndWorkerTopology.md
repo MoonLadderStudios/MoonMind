@@ -264,8 +264,10 @@ The activity catalog maps activity types onto the following fleets.
 
 The workflow fleet is primarily for workflow code. It may also host **small helper activities** when needed to preserve deterministic workflow behavior without creating unnecessary routing complexity.
 
-Current registration (`workflow_registry.py::workflow_fleet_activity_handlers`,
-verified against the function body — eight handlers):
+Current registration (`workflow_registry.py::workflow_fleet_activity_handlers`;
+see the generated routing table in
+[`WorkflowTypeCatalogGenerated.md`](./WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing)
+for the mechanical current-lane versus historical-only split):
 
 - immutable-release identity probe from `workflows/release_canary.py`: `release.inspect` reads the installed release manifest without credentials or external mutation.
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
