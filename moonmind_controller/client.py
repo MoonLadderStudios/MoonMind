@@ -26,15 +26,38 @@ def controller_base_url(explicit: str | None = None) -> str:
 
 
 def build_operation_payload(
-    *, operation_id: str, target_image: str, services: tuple[str, ...] = ()
+    *,
+    operation_id: str,
+    target_image: str,
+    services: tuple[str, ...] = (),
+    concrete_images: dict | None = None,
+    authorization: dict | None = None,
+    storage: dict | None = None,
+    access_settings: dict | None = None,
 ) -> dict:
-    """Build the data handoff submitted to the controller (no app imports)."""
+    """Build the data handoff submitted to the controller (no app imports).
+
+    Optional ``authorization``/``storage``/``access_settings`` (and
+    ``concrete_images``) are trusted release data carried as plain data so
+    the controller's pre-apply validators are non-vacuous whenever the
+    release artifact supplies them. Absent fields stay absent; the
+    controller refuses only explicitly empty mappings.
+    """
+    desired: dict = {
+        "targetImage": target_image,
+        "services": list(services),
+    }
+    if concrete_images is not None:
+        desired["concreteImages"] = dict(concrete_images)
+    if authorization is not None:
+        desired["authorization"] = dict(authorization)
+    if storage is not None:
+        desired["storage"] = dict(storage)
+    if access_settings is not None:
+        desired["accessSettings"] = dict(access_settings)
     return {
         "operationId": operation_id,
-        "desired": {
-            "targetImage": target_image,
-            "services": list(services),
-        },
+        "desired": desired,
     }
 
 

@@ -1173,10 +1173,18 @@ async def submit(payload):
             context = dict(payload.get("context") or {})
             operation_id = str(context.get("idempotency_key") or "").strip()
             if target and operation_id:
+                authorization = inputs.get("authorization")
+                storage = inputs.get("storage")
+                access_settings = inputs.get("accessSettings", inputs.get("access_settings"))
                 receipt = submit_to_controller(
                     build_controller_payload(
                         submission_id=operation_id.removeprefix("host-update:"),
                         image=target,
+                        authorization=dict(authorization) if isinstance(authorization, dict) else None,
+                        storage=dict(storage) if isinstance(storage, dict) else None,
+                        access_settings=dict(access_settings)
+                        if isinstance(access_settings, dict)
+                        else None,
                     )
                 )
                 print(json.dumps({"controllerReceipt": receipt}, sort_keys=True), flush=True)

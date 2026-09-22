@@ -52,6 +52,23 @@ def parse_operation_payload(raw: dict) -> dict:
         if not isinstance(concrete, dict):
             raise ValueError("concreteImages must be an object.")
         record = _state.record_concrete_images(record, dict(concrete))
+    # Trusted pre-apply validation data round-trips as plain data so
+    # validate_target checks are non-vacuous for real handoffs. Absent
+    # fields stay absent; explicitly empty mappings are refused at apply.
+    for key in ("authorization", "storage", "accessSettings"):
+        value = desired.get(key)
+        if value is not None:
+            if not isinstance(value, dict):
+                raise ValueError(f"{key} must be an object.")
+            record["desired"][key] = dict(value)
+    previous = raw.get("previousRelease")
+    if previous is not None:
+        if not isinstance(previous, dict):
+            raise ValueError("previousRelease must be an object.")
+        compatible = raw.get("previousCompatible", True)
+        record = _state.record_previous_release(
+            record, previous=dict(previous), compatible=bool(compatible)
+        )
     return record
 
 
@@ -100,10 +117,43 @@ def build_target_from_record(record: dict) -> dict:
     concrete = desired.get("concreteImages")
     if concrete is not None:
         target["concreteImages"] = dict(concrete)
+    for key in ("authorization", "storage", "accessSettings"):
+        value = desired.get(key)
+        if value is not None:
+            target[key] = dict(value) if isinstance(value, dict) else value
     prepared = record.get("prepared") or {}
     if isinstance(prepared, dict) and prepared.get("child") is not None:
         target["child"] = prepared.get("child")
     return target
+
+
+def _previous_release_for(
+    record: dict,
+    *,
+    previous_release: dict | None = None,
+    previous_compatible: bool | None = None,
+) -> tuple[dict | None, bool]:
+    """Resolve compatibility-gated retention context for the serving path.
+
+    Explicit caller values win. Otherwise the persisted record supplies
+    them: an already-recorded ``previousRelease`` is reused, else the
+    currently installed image/services become the previous release so a
+    second update cannot silently drop the retention baseline. No automatic
+    database downgrade is implied; incompatibility clears retention.
+    """
+    if previous_release is not None:
+        compatible = True if previous_compatible is None else bool(previous_compatible)
+        return dict(previous_release), compatible
+    stored = record.get("previousRelease")
+    if isinstance(stored, dict):
+        return dict(stored), bool(record.get("previousReleaseCompatible", True))
+    installed = record.get("installed")
+    if isinstance(installed, dict) and installed.get("image"):
+        return (
+            {"image": installed.get("image"), "services": dict(installed.get("services") or {})},
+            True if previous_compatible is None else bool(previous_compatible),
+        )
+    return None, True if previous_compatible is None else bool(previous_compatible)
 
 
 def execute_operation(
@@ -116,6 +166,8 @@ def execute_operation(
     service_statuses: dict | None = None,
     operator_access_ok: bool | None = True,
     artifact_store_ok: bool | None = None,
+    previous_release: dict | None = None,
+    previous_compatible: bool | None = None,
 ) -> dict:
     """Execute one reserved operation toward its persisted target.
 
@@ -143,6 +195,11 @@ def execute_operation(
     installed = record.get("installed") if isinstance(record.get("installed"), dict) else {}
     installed_images = dict((installed or {}).get("services") or {})
     installed_config = record.get("installedConfig")
+    resolved_previous, resolved_compatible = _previous_release_for(
+        record,
+        previous_release=previous_release,
+        previous_compatible=previous_compatible,
+    )
     try:
         updated = _apply.locked_orchestrate_apply(
             lock_dir=lock_dir,
@@ -154,6 +211,8 @@ def execute_operation(
             service_statuses=service_statuses,
             operator_access_ok=operator_access_ok,
             artifact_store_ok=artifact_store_ok,
+            previous_release=resolved_previous,
+            previous_compatible=resolved_compatible,
             run=run,
         )
     except Exception as exc:
@@ -183,6 +242,8 @@ def handle_operation_submission(
     service_statuses: dict | None = None,
     operator_access_ok: bool | None = True,
     artifact_store_ok: bool | None = None,
+    previous_release: dict | None = None,
+    previous_compatible: bool | None = None,
 ) -> tuple[dict, str | None, int]:
     """Parse, reserve, then execute one controller submission.
 
@@ -206,6 +267,8 @@ def handle_operation_submission(
             service_statuses=service_statuses,
             operator_access_ok=operator_access_ok,
             artifact_store_ok=artifact_store_ok,
+            previous_release=previous_release,
+            previous_compatible=previous_compatible,
         )
     except ValueError as exc:
         try:
@@ -236,6 +299,8 @@ def converge_on_startup(
     service_statuses: dict | None = None,
     operator_access_ok: bool | None = True,
     artifact_store_ok: bool | None = None,
+    previous_release: dict | None = None,
+    previous_compatible: bool | None = None,
 ) -> str:
     """Inspect Docker state on restart and converge unfinished work.
 
@@ -266,6 +331,8 @@ def converge_on_startup(
             service_statuses=service_statuses,
             operator_access_ok=operator_access_ok,
             artifact_store_ok=artifact_store_ok,
+            previous_release=previous_release,
+            previous_compatible=previous_compatible,
         )
     except Exception:
         return "resume-failed"
