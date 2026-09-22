@@ -754,6 +754,36 @@ class TestWorkflowSettings:
             WorkflowSettings(_env_file=None)
         monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
 
+    def test_default_runtime_migrates_legacy_aliases_through_shared_map(
+        self, monkeypatch
+    ):
+        """Legacy deployment values migrate via the shared runtime alias map.
+
+        MoonLadderStudios/MoonMind#3934: settings must not keep a private
+        alias map that diverges from runtime_defaults (which also covers
+        ``jules_api``). Unknown explicit input is rejected, never replaced.
+        """
+
+        from moonmind.runtime_identity import normalize_runtime_id
+
+        for legacy, canonical in (
+            ("codex", "codex_cli"),
+            ("claude", "claude_code"),
+            ("jules_api", "jules"),
+        ):
+            assert normalize_runtime_id(legacy) == canonical
+            monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", legacy)
+            settings = WorkflowSettings(_env_file=None)
+            assert settings.default_runtime == canonical
+            monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
+
+        monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "bogus_runtime")
+        with pytest.raises(
+            ValidationError, match="default_runtime must be one of"
+        ):
+            WorkflowSettings(_env_file=None)
+        monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
+
     def test_git_user_accepts_legacy_spec_env_vars(self, monkeypatch):
         """Legacy WORKFLOW git user env vars should remain supported."""
 
