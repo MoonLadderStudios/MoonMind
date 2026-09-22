@@ -103,7 +103,6 @@ async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
                     delay = min(30, remaining)
                     continue
                 delay = RENEW_SECONDS if await refresh() else min(30, remaining)
-            return
         if should_renew is not None and not should_renew():
             raise _capacity_blocked_error()
         delay = RENEW_SECONDS
