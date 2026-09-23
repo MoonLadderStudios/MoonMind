@@ -8800,3 +8800,138 @@ async def test_create_execution_rejects_read_only_plan_with_managed_publish(
                 },
                 idempotency_key=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_failed_step_recovery_reuses_accepted_prepare_without_rerun(
+    tmp_path, mock_client_adapter
+):
+    """MoonLadderStudios/MoonMind#3510: prepare -> implement -> verify failure.
+
+    Real endpoint owner (service.create_failed_step_recovery_execution) plus
+    real destination ledger (MoonMindRunWorkflow) must reuse the accepted
+    prepare marker exactly once without re-execution.
+    """
+
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="prepare-implement-verify source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"title": "recovery source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+        source_parameters_before = dict(created.parameters or {})
+
+        checkpoint_payload = _valid_recovery_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        # Accepted prepare marker: order 1, failed implement order 2.
+        checkpoint_payload["failedStep"] = {
+            "logicalStepId": "implement",
+            "order": 2,
+            "executionOrdinal": 1,
+            "title": "Implement",
+        }
+        checkpoint_payload["preservedSteps"] = [
+            {
+                "logicalStepId": "prepare",
+                "order": 1,
+                "status": "succeeded",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {
+                    "outputSummary": "artifact://prepare-summary",
+                    "outputPrimary": "artifact://prepare-output",
+                },
+                "stateCheckpointRef": "artifact://workspace/prepare",
+            }
+        ]
+
+        result = await service.create_failed_step_recovery_execution(
+            created,
+            recovery_checkpoint_ref=None,
+            idempotency_key="recover-prepare-once-3510",
+            checkpoint_payload=checkpoint_payload,
+            failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+            failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+            ),
+        )
+
+        resumed = await service.describe_execution(result["execution"]["workflowId"])
+        recovery_source = resumed.parameters["recoverySource"]
+        assert recovery_source["failedStepId"] == "implement"
+        assert recovery_source["failedStepExecution"] == 1
+        assert [
+            step["logicalStepId"] for step in recovery_source["preservedSteps"]
+        ] == ["prepare"]
+        preserved = recovery_source["preservedSteps"][0]
+        assert preserved["artifacts"]["outputSummary"] == "artifact://prepare-summary"
+        assert preserved["artifacts"]["outputPrimary"] == "artifact://prepare-output"
+        assert preserved["sourceExecutionOrdinal"] == 1
+
+        # Source failure and input unchanged.
+        assert created.state is MoonMindWorkflowState.FAILED
+        assert created.parameters == source_parameters_before
+
+        # Destination execution reuses accepted predecessor without re-execution.
+        workflow = MoonMindRunWorkflow()
+        workflow._recovery_source = recovery_source
+        workflow._initialize_step_ledger(
+            ordered_nodes=[
+                {"id": "prepare", "title": "Prepare"},
+                {"id": "implement", "title": "Implement"},
+                {"id": "verify", "title": "Verify"},
+            ],
+            dependency_map={
+                "prepare": [],
+                "implement": ["prepare"],
+                "verify": ["implement"],
+            },
+            updated_at=_datetime.now(_UTC),
+        )
+        rows = {row["logicalStepId"]: row for row in workflow._step_ledger_rows}
+        # Prepare ran once in source (ordinal 1) and zero times at destination.
+        assert rows["prepare"]["preservedFrom"] == {
+            "workflowId": created.workflow_id,
+            "runId": created.run_id,
+            "logicalStepId": "prepare",
+            "executionOrdinal": 1,
+        }
+        assert rows["prepare"]["attempt"] == 0
+        assert rows["prepare"]["executionOrdinal"] == 0
+        assert rows["implement"]["status"] == "ready"
+        assert rows["verify"]["status"] == "pending"
+
+        outputs = workflow._preserved_outputs_for_step("implement")
+        assert outputs["prepare"]["outputSummary"] == "artifact://prepare-summary"
+        assert outputs["prepare"]["outputPrimary"] == "artifact://prepare-output"
+        assert outputs["prepare"]["producingAttempt"]["executionOrdinal"] == 1
+
+        restored = workflow._restore_recovery_workspace_for_failed_step("implement")
+        assert restored == "artifact://checkpoint/source"
