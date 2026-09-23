@@ -465,3 +465,111 @@ def test_the_rollout_probe_and_admission_agree_on_every_recorded_status(
 
     assert freshness.usable is admitted, status
     assert freshness.status == status
+
+
+def test_either_admission_falls_through_protected_outage_to_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary admission survives a protected-tier outage (MoonLadderStudios/MoonMind#3832).
+
+    A protected runner outage, unrelated soak failure, or expired report must
+    not become a blanket default lock on compatible work: under the ``either``
+    policy admission continues to the deployment tier instead of failing with
+    the protected tier's error.
+    """
+
+    import moonmind.omnigent.deployment_evidence as deployment_evidence
+    import moonmind.omnigent.execution_support_evidence as protected_evidence
+    from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
+
+    sentinel = {"tier": "deployment", "ref": "deployment-qualification/test"}
+
+    def _protected_down(plan_payload, **kwargs):
+        raise ValueError("exact protected execution support evidence is unavailable")
+
+    def _deployment_ok(plan_payload, **kwargs):
+        return sentinel
+
+    monkeypatch.setattr(
+        protected_evidence,
+        "load_protected_execution_support_evidence",
+        _protected_down,
+    )
+    monkeypatch.setattr(
+        deployment_evidence, "load_deployment_evidence", _deployment_ok
+    )
+
+    evidence, tier = resolve_execution_evidence(SimpleNamespace(), policy="either")
+
+    assert evidence is sentinel
+    assert tier == "deployment_qualified"
+
+
+def test_explicit_protected_admission_fails_closed_on_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicitly selected strict policy is never downgraded (#3832).
+
+    When the caller selects ``protected``, a protected-tier outage must fail
+    closed even though a deployment document would admit the plan. Admission
+    must not substitute the deployment tier for the selected strict policy.
+    """
+
+    import moonmind.omnigent.deployment_evidence as deployment_evidence
+    import moonmind.omnigent.execution_support_evidence as protected_evidence
+    from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
+
+    calls: list[object] = []
+
+    def _protected_down(plan_payload, **kwargs):
+        raise ValueError("exact protected execution support evidence is unavailable")
+
+    def _deployment_must_not_run(plan_payload, **kwargs):
+        calls.append(plan_payload)
+        return {"tier": "deployment"}
+
+    monkeypatch.setattr(
+        protected_evidence,
+        "load_protected_execution_support_evidence",
+        _protected_down,
+    )
+    monkeypatch.setattr(
+        deployment_evidence, "load_deployment_evidence", _deployment_must_not_run
+    )
+
+    with pytest.raises(ValueError):
+        resolve_execution_evidence(SimpleNamespace(), policy="protected")
+
+    assert calls == []
+
+
+def test_admission_still_blocks_when_both_tiers_refuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decoupling is not a bypass: with no admissible tier, admission blocks (#3832).
+
+    Genuine revoked authority, an incompatible plan, or missing required
+    evidence still fails closed under ``either`` with an actionable reason.
+    """
+
+    import moonmind.omnigent.deployment_evidence as deployment_evidence
+    import moonmind.omnigent.execution_support_evidence as protected_evidence
+    from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
+
+    def _protected_down(plan_payload, **kwargs):
+        raise ValueError("exact protected execution support evidence is unavailable")
+
+    def _deployment_down(plan_payload, **kwargs):
+        raise ValueError("no current deployment qualification")
+
+    monkeypatch.setattr(
+        protected_evidence,
+        "load_protected_execution_support_evidence",
+        _protected_down,
+    )
+    monkeypatch.setattr(
+        deployment_evidence, "load_deployment_evidence", _deployment_down
+    )
+
+    with pytest.raises(ValueError, match="no admissible execution evidence"):
+        resolve_execution_evidence(SimpleNamespace(), policy="either")
