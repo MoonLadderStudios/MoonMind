@@ -87,8 +87,10 @@ async def test_guard_completes_lease_release_when_maintainer_is_cancelled() -> N
     assert not task.done()
 
     finish.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    done, pending = await asyncio.wait({task})
+    assert task in done
+    assert not pending
+    assert task.cancelled()
     assert released.is_set()
 
 
@@ -117,8 +119,10 @@ async def test_guard_keeps_shutdown_cancellation_when_release_fails(
     assert not task.done()
 
     finish.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    done, pending = await asyncio.wait({task})
+    assert task in done
+    assert not pending
+    assert task.cancelled()
     assert "Temporal release unavailable" in caplog.text
 
 
