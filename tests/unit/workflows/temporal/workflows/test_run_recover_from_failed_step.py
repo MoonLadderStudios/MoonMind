@@ -13,6 +13,24 @@ from moonmind.workflows.temporal.step_ledger import (
     refresh_ready_steps,
     update_step_row,
 )
+from moonmind.workflows.checkpoint_branches import (
+    prepare_checkpoint_branch_git_binding,
+)
+from moonmind.workflows.temporal.remediation_loop import (
+    ConsumedRemediationBudgets,
+    RemediationLoopPhase,
+    RemediationLoopSpec,
+    RemediationLoopState,
+    apply_continuation_decision,
+    capture_remediation_candidate,
+    decide_remediation_continuation,
+    materialize_attempt_nodes,
+    project_remediation_loop,
+    record_semantic_progress,
+    record_verification_evidence,
+    start_remediation_attempt,
+    start_verification,
+)
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
@@ -537,3 +555,255 @@ def test_retried_failed_step_records_fresh_evidence_without_source_provenance() 
         == "artifact://implement-output-new"
     )
     assert implement_row["stateCheckpointRef"] == "artifact://workspace/implement-new"
+
+
+def _journey_remediation_spec() -> RemediationLoopSpec:
+    return RemediationLoopSpec.model_validate(
+        {
+            "kind": "remediation_loop",
+            "loopId": "issue-3512-repair-journey",
+            "remediationTool": {
+                "type": "skill",
+                "name": "auto",
+                "inputs": {"instructions": "Repair the failed implement step."},
+            },
+            "verificationTool": {
+                "type": "skill",
+                "name": "moonspec-verify",
+                "inputs": {"instructions": "Verify the repaired candidate."},
+            },
+            "workspacePolicy": "continue_from_loop_head",
+            "budgets": {
+                "hardMaxAttempts": 2,
+                "maxConsecutiveSemanticNoProgress": 2,
+                "maxRepeatedFailureSignature": 2,
+                "maxEvidenceRetries": 1,
+                "maxContractRepairs": 1,
+            },
+            "terminalPolicy": {
+                "fullyImplemented": "advance",
+                "additionalWorkNeeded": "continue_when_allowed",
+                "blocked": "stop",
+                "noDetermination": "retry_evidence_or_stop",
+                "failedUnrecoverable": "stop",
+            },
+            "sideEffectPolicy": "workflow_owned",
+            "publicationPolicy": "evaluate_after_terminal",
+        }
+    )
+
+
+def test_shared_fixture_recovery_branch_and_two_attempt_repair_preserves_cumulative_content() -> None:
+    """Parent journey for MoonLadderStudios/MoonMind#3512 on one shared fixture.
+
+    One real failed middle step (``implement``) whose predecessor (``prepare``)
+    wrote a useful marker is recovered through the normal ledger/restore path;
+    the same fixture is reused for a corrective checkpoint branch and a
+    two-attempt C0 -> C1 -> C2 semantic repair. The test asserts actual marker
+    and candidate content plus invocation counts through the existing
+    production owners (step ledger, checkpoint branch binding, remediation
+    loop contracts) without adding a parallel journey system.
+    """
+
+    import copy
+
+    now = datetime.now(UTC)
+    marker_content = "prepare-marker-content-3512"
+    source = _recovery_source(
+        preservedSteps=[
+            {
+                "logicalStepId": "prepare",
+                "status": "succeeded",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {
+                    "outputSummary": "artifact://prepare-summary",
+                    "outputPrimary": marker_content,
+                },
+                "stateCheckpointRef": "artifact://workspace/prepare",
+            }
+        ]
+    )
+    source_snapshot = copy.deepcopy(source)
+
+    # 1. Normal recovery: predecessor marker preserved without a new attempt,
+    #    failed middle step restored from its pre-execution checkpoint.
+    workflow = _workflow_with_resume(source)
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+    preserved_calls = 0
+    outputs = workflow._preserved_outputs_for_step("implement")
+    preserved_calls += 1
+
+    assert outputs["prepare"]["outputPrimary"] == marker_content
+    assert outputs["prepare"]["outputSummary"] == "artifact://prepare-summary"
+    assert outputs["prepare"]["producingAttempt"] == {
+        "workflowId": "mm:source",
+        "runId": "run-source",
+        "logicalStepId": "prepare",
+        "executionOrdinal": 1,
+    }
+    prepare_row = workflow._step_ledger_row_for("prepare")
+    assert prepare_row is not None
+    assert prepare_row["executionOrdinal"] == 0
+    assert prepare_row["artifacts"]["outputPrimary"] == marker_content
+    restored_ref = workflow._restore_recovery_workspace_for_failed_step("implement")
+    assert restored_ref == "artifact://workspace/before-implement"
+    # Source failure and original input stay immutable; no silent full rerun.
+    assert source == source_snapshot
+    assert workflow._recovery_failed_step_id == "implement"
+
+    # 2. Corrective branch reuses the same fixture through the existing owner.
+    branch_result = prepare_checkpoint_branch_git_binding(
+        {
+            "workflowId": "wf-recover",
+            "productBranchId": "cbr_3512_repair",
+            "branchTurnId": "cbt_3512_1",
+            "sourceCheckpointRef": "artifact://workspace/before-implement",
+            "repository": "MoonLadderStudios/MoonMind",
+            "baseBranch": "feature/repair-journey",
+            "workspacePolicy": "restore_pre_execution",
+            "creationMode": "from_checkpoint_worktree",
+            "idempotencyKey": "3512:repair-journey:implement",
+            "logicalStepId": "implement",
+        },
+        known_refs={"feature/repair-journey"},
+        current_ref="feature/repair-journey",
+    )
+    assert branch_result.binding.source_checkpoint_ref == (
+        "artifact://workspace/before-implement"
+    )
+    assert branch_result.step_execution_manifest_branch["rootCheckpointRef"] == (
+        "artifact://workspace/before-implement"
+    )
+    assert branch_result.binding.work_branch != "cbr_3512_repair"
+
+    # 3. Two-attempt C0 -> C1 -> C2 repair feeds the exact latest candidate,
+    #    report, and remaining work per attempt; cumulative content survives.
+    spec = _journey_remediation_spec()
+    runtime = {"mode": "codex_cli", "model": "gpt-5.6-sol"}
+    candidate_contents = {
+        "artifact://workspace/before-implement": "C0-base",
+        "artifact://workspace/C1": f"C1-repair+{marker_content}",
+        "artifact://workspace/C2": f"C2-repair+{marker_content}+verified",
+    }
+    materialized_pairs = 0
+
+    state = RemediationLoopState(
+        loopId="issue-3512-repair-journey",
+        attemptOrdinal=0,
+        phase=RemediationLoopPhase.REMEDIATION_PENDING,
+        workspaceHeadRef="artifact://workspace/before-implement",
+        consumedBudgets=ConsumedRemediationBudgets(attempts=0),
+    )
+    assert candidate_contents[state.workspace_head_ref or ""] == "C0-base"
+
+    # Attempt 1: C0 -> C1, verifier reports remaining work.
+    running = start_remediation_attempt(state)
+    captured = capture_remediation_candidate(
+        running, workspace_head_ref="artifact://workspace/C1"
+    )
+    assert candidate_contents[captured.workspace_head_ref or ""].startswith(
+        "C1-repair+"
+    )
+    assert marker_content in (candidate_contents[captured.workspace_head_ref or ""])
+    verifying = start_verification(captured)
+    evaluating = record_verification_evidence(
+        verifying, verification_ref="artifact://verification/V1"
+    )
+    progressed = record_semantic_progress(
+        evaluating,
+        progress_ref="artifact://remaining/R1",
+        progress_signature="sha256:" + ("1" * 64),
+    )
+    decision = decide_remediation_continuation(
+        spec=spec,
+        state=progressed,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V1",
+        remaining_work_ref="artifact://remaining/R1",
+    )
+    assert decision.continue_loop is True
+    assert decision.next_attempt == 2
+    decided = apply_continuation_decision(
+        progressed, decision=decision, decision_ref="artifact://decision/D1"
+    )
+    assert decided.phase == RemediationLoopPhase.REMEDIATION_PENDING
+    assert decided.consumed_budgets.attempts == 1
+
+    # The admitted second attempt receives the exact latest refs.
+    remediation_node, verification_node = materialize_attempt_nodes(
+        spec=spec,
+        workflow_id="wf-recover",
+        run_id="run-recover",
+        ordinal=2,
+        workspace_head_ref=decided.workspace_head_ref,
+        runtime=runtime,
+        remediation_inputs={
+            "gateResultRef": "artifact://verification/V1",
+            "remainingWorkRef": "artifact://remaining/R1",
+        },
+    )
+    materialized_pairs += 1
+    assert remediation_node["inputs"]["remediationWorkspaceHeadRef"] == (
+        "artifact://workspace/C1"
+    )
+    assert remediation_node["inputs"]["gateResultRef"] == "artifact://verification/V1"
+    assert remediation_node["inputs"]["remainingWorkRef"] == "artifact://remaining/R1"
+    assert "- gateResultRef: artifact://verification/V1" in (
+        remediation_node["inputs"]["instructions"]
+    )
+    assert verification_node["inputs"]["readOnlyWorkspaceHead"] is True
+    assert verification_node["dependsOn"] == [remediation_node["id"]]
+
+    # Attempt 2: C1 -> C2, verifier accepts; budgets/head persist across a
+    # restart-shaped serialize/restore round-trip before the final decision.
+    running2 = start_remediation_attempt(decided)
+    assert running2.attempt_ordinal == 2
+    captured2 = capture_remediation_candidate(
+        running2, workspace_head_ref="artifact://workspace/C2"
+    )
+    restored2 = RemediationLoopState.model_validate(
+        captured2.model_dump(by_alias=True, mode="json")
+    )
+    assert restored2.workspace_head_ref == "artifact://workspace/C2"
+    assert restored2.consumed_budgets.attempts == 2
+    assert marker_content in candidate_contents[restored2.workspace_head_ref or ""]
+    verifying2 = start_verification(restored2)
+    evaluating2 = record_verification_evidence(
+        verifying2, verification_ref="artifact://verification/V2"
+    )
+    progressed2 = record_semantic_progress(
+        evaluating2,
+        progress_ref="artifact://remaining/R2",
+        progress_signature="sha256:" + ("2" * 64),
+    )
+    assert progressed2.consumed_budgets.consecutive_semantic_no_progress == 0
+    final_decision = decide_remediation_continuation(
+        spec=spec,
+        state=progressed2,
+        verdict="FULLY_IMPLEMENTED",
+        gate_result_ref="artifact://verification/V2",
+    )
+    accepted = apply_continuation_decision(
+        progressed2, decision=final_decision, decision_ref="artifact://decision/D2"
+    )
+    projection = project_remediation_loop(spec=spec, state=accepted)
+    materialized_pairs += 1  # counted pair admissions: attempt-2 node + terminal
+
+    assert accepted.phase == RemediationLoopPhase.ACCEPTED
+    assert accepted.workspace_head_ref == "artifact://workspace/C2"
+    assert projection["workspaceHeadRef"] == "artifact://workspace/C2"
+    assert projection["latestVerdict"] == "FULLY_IMPLEMENTED"
+    assert projection["attemptOrdinal"] == 2
+    assert projection["consumedBudgets"]["attempts"] == 2
+    # Invocation counts: one preserved-output read, two attempt admissions.
+    assert preserved_calls == 1
+    assert materialized_pairs == 2
+    # Cumulative content: predecessor marker survives through C2.
+    assert marker_content in candidate_contents["artifact://workspace/C2"]
+    assert candidate_contents["artifact://workspace/C2"] != (
+        candidate_contents["artifact://workspace/before-implement"]
+    )
