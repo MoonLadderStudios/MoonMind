@@ -50,12 +50,31 @@ assert_no_active_mutation() {
   if [[ "${1:-}" == "--force" ]]; then
     return 0
   fi
-  # The durable record lives inside the controller's named volume, not at
-  # this host path: query the controller's actual durable state instead of
-  # a host-side file that can never observe it.
+  # The controller endpoint reports the authoritative durable state. When it
+  # is unreachable (MoonMind-free host bootstrap), fall back to the
+  # host-side record so an unfinished operation still serializes the update.
   local token response
   token="$(cat "${SECRET_FILE}" 2>/dev/null || true)"
   if ! response="$(curl -sf --max-time 10 http://127.0.0.1:8099/operation -H "Authorization: Bearer ${token}" 2>/dev/null)"; then
+    if [[ -f "${STATE_DIR}/operation.json" ]] && ! python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as stream:
+        record = json.load(stream)
+except (OSError, ValueError):
+    sys.exit(0)
+if not isinstance(record, dict):
+    sys.exit(0)
+desired = record.get("desired") or {}
+installed = record.get("installed")
+if record.get("status") == "installed" and isinstance(installed, dict) and installed.get("image") == desired.get("targetImage"):
+    sys.exit(0)
+sys.exit(1)
+' "${STATE_DIR}/operation.json"; then
+      echo "Refusing: a deployment operation is unfinished; finish or explicitly" >&2
+      echo "retry it first, or re-run with --force for an explicit restore." >&2
+      exit 1
+    fi
     echo "Warning: controller endpoint unreachable; no active mutation observable." >&2
     return 0
   fi
