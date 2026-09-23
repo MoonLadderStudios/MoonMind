@@ -128,10 +128,18 @@ the desired state, recreates the installed fleet in place, and verifies every
 service against that release. There is one fleet at one version: no candidate
 or retained cohort is started, and recreation has a bounded downtime window.
 
+The same update checks the deployment-configured Omnigent server and host image channels (image/tag inputs present in the operator `.env` or worker environment).
+When a newer published image for a configured channel passes the required runtime checks, the updater
+records its immutable digest and refreshes the Omnigent server, API, agent
+runtime worker, and already-running static host profiles that consume it.
+Inactive host profiles stay inactive. Channels without configured image/tag inputs retain their previously recorded refs instead of resolving `latest`, so the default `latest` channels advance only when configured; an explicit `OMNIGENT_*_IMAGE_REF`
+digest pin persisted in the operator `.env` remains fixed until the operator changes it (shell-only `*_IMAGE_REF` values are not read as pins). New upstream releases
+do not require editing Profile or schedule image versions by hand. See the
+[deployment update contract](docs/Steps/DockerComposeUpdateSystem.md) and
+[shared host image rules](docs/Omnigent/SharedHostImage.md).
+
 Use this updater for upgrades, including after a direct Compose replacement.
-Workers register their own version at startup, so if the outgoing fleet is
-still draining the new one retries the promotion in the background until
-routing moves. Resume an interrupted submission with the updater's
+Resume an interrupted submission with the updater's
 `--resume <submission-id>` option; an interrupted release is not resumed
 automatically, so re-running the script is the ordinary recovery.
 
