@@ -202,13 +202,11 @@ def test_provenance_is_well_formed_never_an_equality_gate(tmp_path) -> None:
     provenance = (log_dir / "provenance.log").read_text()
     revision = re.search(r"revision=([0-9a-f]{40})", provenance)
     assert revision is not None
-    assert (
-        subprocess.check_output(
-            ["git", "-c", "safe.directory=*", "-C", str(root), "rev-parse", "HEAD"],
-            text=True,
-        ).strip()
-        == revision.group(1)
-    )
+    recorded = subprocess.check_output(
+        ["git", "-c", "safe.directory=*", "-C", str(root), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    assert recorded == revision.group(1)
     digest = re.search(r"compose-sha256=([0-9a-f]{16})", provenance)
     assert digest is not None
     import hashlib
