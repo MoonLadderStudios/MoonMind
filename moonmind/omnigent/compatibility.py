@@ -1,4 +1,4 @@
-"""Omnigent interoperability is scoped to major.minor, independently of builds."""
+"""Parse runtime versions and keep image provenance separate from compatibility."""
 
 from __future__ import annotations
 
@@ -21,8 +21,17 @@ def compatibility_series(version: object) -> tuple[int, int] | None:
 
 
 def versions_compatible(expected: object, observed: object) -> bool:
-    series = compatibility_series(expected)
-    return series is not None and series == compatibility_series(observed)
+    """Accept observed releases without treating version drift as breakage.
+
+    Callers still require immutable image authority, observed build provenance,
+    harness identity, and functional readiness. A different release number by
+    itself cannot show that those contracts are incompatible.
+    """
+
+    return (
+        compatibility_series(expected) is not None
+        and compatibility_series(observed) is not None
+    )
 
 
 def image_repository(ref: object) -> str:

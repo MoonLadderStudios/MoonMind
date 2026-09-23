@@ -591,7 +591,7 @@ Before runner or session creation, the exact OpenCode host proves:
 ```text
 selected image digest matches the selected Host Class
 moonmind.omnigent.build_digest matches the pinned Host Class provenance
-omnigent --version matches the server major.minor series
+omnigent --version reports a parseable release in both server and host
 command -v opencode succeeds
 opencode --version is within >=1.17.7,<1.19.0
 selected runtime pack matches opencode-native
@@ -628,40 +628,35 @@ OpenCode repository in direct API startup selects the same default as Compose.
 Mutable image and tag coordinates are resolution inputs only. Launch authority
 is always the resolved digest, and explicit pins are never silently replaced.
 
-The deployment resolver treats the current Omnigent server and OpenCode host as
-compatible when their executable Omnigent versions share the same major.minor
-series. Patch releases and independently rebuilt images are compatible within
-that series, including `0.x` releases. It executes `omnigent --version` in both
-immutable images and records each build identity separately. The host's
-`moonmind.omnigent.build_digest` label is provenance, not a server equality gate. It also runs
+The deployment resolver probes `omnigent --version` in both immutable images
+and records each build identity separately. A release-number difference alone
+does not quarantine an otherwise qualified host. The host's
+`moonmind.omnigent.build_digest` label records host provenance. The resolver runs
 `services/omnigent/opencode-host/verify-warm-plugin-cache.sh` against the exact
 selected OpenCode image, proving plugin-enabled server startup with networking
 disabled. Missing or incomplete caches, failed startup, and probe timeouts
 block compatibility even when labels and versions match. Host Class selection
 and advertised inventory consume that verdict until reconciliation succeeds.
 
-Host admission is keyed by the running server, not by the newest tag. On the
-default mutable-tag path the resolver judges the freshly resolved tag first and
+Host admission uses observed deployment authority. On the default mutable-tag
+path the resolver judges the freshly resolved tag first and
 the currently admitted host second, and the first candidate that passes the
 full compatibility ladder becomes launch authority. When the registry has
-already published a host for a newer Omnigent server than Compose is running,
-the admitted compatible host stays authoritative and the newer image is
-recorded as `opencodeHostCompatibility.pendingHost` (image ref, host build,
-host version, and the failure code it would raise). The API logs that pending
-pair on every reconciliation pass together with the remediation derived from
-its failure code: a server/host major.minor difference is adopted by updating
-the `omnigent` Compose service, while a host that failed its own qualification
-or contradicts `OMNIGENT_BUILD_DIGEST` must be repaired or republished and never
-prompts a server update. Once the failure is cured the fresh tag passes and
+already published a new host, the admitted host stays authoritative if the new
+image fails its own qualification. The new image is recorded as
+`opencodeHostCompatibility.pendingHost` (image ref, host build, host version,
+and failure code). A host that fails its bootstrap probe or contradicts
+`OMNIGENT_BUILD_DIGEST` must be repaired or republished. Once the failure is
+cured, the fresh tag passes and
 replaces the admitted host. When server evidence is temporarily unavailable
 (for example while the Omnigent container restarts) nothing is judged and the
 admitted host is retained as the persisted ref. Quarantine is reserved for the
-case where no candidate is compatible with the running server. An explicit
-`OMNIGENT_OPENCODE_HOST_IMAGE_REF`
-pin is a single candidate: it is quarantined, never replaced. When the shared
+case where no candidate passes qualification. An explicit
+`OMNIGENT_OPENCODE_HOST_IMAGE_REF` pin is a single candidate: a failed pin is
+quarantined and never silently replaced. When the shared
 host coordinates resolve to the same image the OpenCode path judged, the
-shared ref follows the admitted digest so Codex and Claude Host Classes never
-launch a host from an incompatible major.minor series.
+shared ref follows the admitted digest so Codex and Claude Host Classes use
+the same qualified image.
 
 `OMNIGENT_BUILD_DIGEST` optionally pins the host build label. Server catalog and plan provenance always use the resolved server image digest; the host pin never masks a server version change. Each selected host image retains its own observed build label and executable version.
 
@@ -681,12 +676,16 @@ The shared release contract requires:
 - generate provenance and SBOM data
 - publish a neutral manifest tag and digest
 
-The shared image release workflow runs on a recurring schedule against the
-current upstream server and base-host images. Runtime quarantine remains
-authoritative during the publication window; successful reconciliation restores
-availability only when the selected image passes compatibility and bootstrap
-checks.
-A new shared image does not automatically replace any Host Class. Each harness promotes the new digest only after its own conformance row passes.
+The shared and dedicated host image release workflows run on recurring
+schedules against the current upstream host base. They publish new image
+digests when that base changes, even if upstream published the server and host
+at different times. The host build label records the base digest. The deployed
+server and host tags are resolved independently; a new image becomes launch
+authority after its bootstrap checks pass. A failed new image leaves the
+previous admitted host available. An explicit deployment image pin remains in
+place until the operator changes it. An ordinary MoonMind update advances
+changed mutable server and host inputs through the deployment controller,
+including the API and worker consumers of those refs.
 
 ## 15. Qualification and support
 

@@ -7,6 +7,7 @@ on:
     branches: [ main ]
     paths:
       - "services/omnigent/opencode-host/**"
+      - "tools/omnigent_host_release_drift.sh"
       - "moonmind/omnigent/harness_platform/host_classes.py"
       - "moonmind/omnigent/harness_platform/materializers.py"
       - ".github/workflows/docker-publish-opencode-host.yml"
@@ -39,6 +40,8 @@ jobs:
       opencode_version: ${{ steps.out.outputs.opencode_version }}
       rebuild_required: ${{ steps.drift.outputs.rebuild_required }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
       - name: Generate image metadata
         id: meta
         run: |
@@ -57,7 +60,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
-          VERSION_TAG: ${{ steps.meta.outputs.version_tag }}
+          BASE_REF: ${{ vars.OMNIGENT_BASE_IMAGE_REF || 'ghcr.io/omnigent-ai/omnigent-host:latest' }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" != "schedule" ]; then
@@ -65,28 +68,8 @@ jobs:
             exit 0
           fi
 
-          SERVER_TAG="ghcr.io/omnigent-ai/omnigent-server:latest"
-          HOST_TAG="${IMAGE_NAME}:${VERSION_TAG}"
-          docker pull "$SERVER_TAG" >/dev/null
-          if ! docker pull "$HOST_TAG" >/dev/null; then
-            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          SERVER_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "$SERVER_TAG" 2>/dev/null || true)"
-          SERVER_DIGEST="$(printf '%s' "$SERVER_REF" | grep -oE 'sha256:[0-9a-f]{64}' || true)"
-          HOST_BUILD_DIGEST="$(docker inspect --format='{{index .Config.Labels "moonmind.omnigent.build_digest"}}' "$HOST_TAG" 2>/dev/null || true)"
-          SERVER_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$SERVER_REF" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
-          HOST_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$HOST_TAG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
-
-          if [ -n "$SERVER_DIGEST" ] \
-            && [ "$SERVER_DIGEST" = "$HOST_BUILD_DIGEST" ] \
-            && [ -n "$SERVER_VERSION" ] \
-            && [ "$SERVER_VERSION" = "$HOST_VERSION" ]; then
-            echo "rebuild_required=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
-          fi
+          HOST_TAG="${IMAGE_NAME}:latest"
+          bash tools/omnigent_host_release_drift.sh "$HOST_TAG" "$BASE_REF"
 
   build:
     needs: metadata
@@ -156,27 +139,6 @@ jobs:
         id: setup-buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Resolve paired Omnigent server build identity
-        id: omnigent_build
-        run: |
-          set -euo pipefail
-          SERVER_TAG="ghcr.io/omnigent-ai/omnigent-server:latest"
-          docker pull "$SERVER_TAG" >/dev/null
-          SERVER_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "$SERVER_TAG" 2>/dev/null || true)"
-          BUILD_DIGEST="$(printf '%s' "$SERVER_REF" | grep -oE 'sha256:[0-9a-f]{64}' || true)"
-          if [[ ! "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::Could not resolve the paired Omnigent server build identity"
-            exit 1
-          fi
-          SERVER_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$SERVER_REF" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
-          HOST_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent '${{ steps.base.outputs.base_image }}' --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
-          if [ -z "$SERVER_VERSION" ] || [ "$SERVER_VERSION" != "$HOST_VERSION" ]; then
-            echo "::error::Omnigent server/host version mismatch: server=${SERVER_VERSION:-unknown} host=${HOST_VERSION:-unknown}"
-            exit 1
-          fi
-          echo "server_ref=$SERVER_REF" >> "$GITHUB_OUTPUT"
-          echo "digest=$BUILD_DIGEST" >> "$GITHUB_OUTPUT"
-
       - name: Prepare build metadata
         id: meta
         run: |
@@ -193,7 +155,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             OMNIGENT_HOST_BASE_IMAGE=${{ steps.base.outputs.base_image }}
-            OMNIGENT_BUILD_DIGEST=${{ steps.omnigent_build.outputs.digest }}
+            OMNIGENT_BUILD_DIGEST=${{ steps.base.outputs.base_digest }}
             OPENCODE_VERSION=${{ needs.metadata.outputs.opencode_version }}
             OPENCODE_MIN_VERSION=1.17.7
             OPENCODE_MAX_VERSION=1.19.0
@@ -287,7 +249,7 @@ jobs:
             echo "- Digest: \`${DIGEST}\`"
             echo "- Digest-pinned reference: \`${IMAGE_NAME}@${DIGEST}\`"
             echo ""
-            echo "Set \`OMNIGENT_OPENCODE_HOST_IMAGE_REF=${IMAGE_NAME}@${DIGEST}\` in deployment."
+            echo "MoonMind resolves this tag to a digest during deployment image reconciliation."
             echo ""
             echo "#### Host Class"
             echo "\`omnigent-opencode@1\` now bootstraps from this digest via \`get_opencode_host_image_ref()\`."

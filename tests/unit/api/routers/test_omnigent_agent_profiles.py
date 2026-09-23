@@ -94,10 +94,10 @@ def test_catalog_refresh_preserves_binding_when_only_live_inventory_changes():
 
 
 @pytest.mark.parametrize(
-    "observed_version,compatible",
-    [("1.2.4", True), ("1.2.0", True), ("1.3.0", False), ("2.2.3", False)],
+    "observed_version",
+    ["1.2.4", "1.2.0", "1.3.0", "2.2.3"],
 )
-def test_catalog_refresh_uses_major_minor_compatibility(observed_version, compatible):
+def test_catalog_refresh_preserves_binding_across_version_changes(observed_version):
     harnesses = [
         {
             "id": "opencode-native",
@@ -132,7 +132,7 @@ def test_catalog_refresh_uses_major_minor_compatibility(observed_version, compat
         implementation_ref=authority.harnesses[0].implementation.implementation_ref(),
     )
 
-    assert actual is compatible
+    assert actual is True
 
 
 @pytest.mark.asyncio
