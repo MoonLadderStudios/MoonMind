@@ -17,6 +17,12 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnLaunchError,
     build_branch_turn_execution_identity,
 )
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_contract_for,
+)
+from moonmind.workflows.temporal.workflows import (
+    checkpoint_branch_turn as branch_turn_module,
+)
 from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.omnigent.checkpoints import CandidateWorkspaceAuthority
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
@@ -1182,3 +1188,80 @@ async def test_owner_rejects_complete_authority_mismatch_matrix_before_mutation(
     owner._write_artifact.assert_not_awaited()
     claim.assert_not_awaited()
     start.assert_not_awaited()
+
+
+def test_branch_turn_save_commit_consumes_shared_save_before_cleanup_result() -> None:
+    """The branch finalization path commits through the shared save helper."""
+
+    committed = branch_turn_module.commit_branch_turn_save(
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref="artifact://diagnostics/turn-1",
+        manifest_digest="sha256:" + "c" * 64,
+    )
+    assert committed["status"] == "committed"
+    assert committed["reason"] is None
+
+    incomplete = branch_turn_module.commit_branch_turn_save(
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref=None,
+        manifest_digest="sha256:" + "c" * 64,
+    )
+    assert incomplete["status"] == "incomplete"
+    assert (
+        incomplete["orphanAction"] == "reconcile-with-finalization-owner"
+    ), "an incomplete branch save must route orphans to the finalization owner"
+
+
+def test_branch_turn_verification_handoff_carries_exact_candidate_and_objective() -> (
+    None
+):
+    """The terminal handoff passes the exact candidate + objective to #3622."""
+
+    handoff = branch_turn_module.build_branch_turn_verification_handoff(
+        branch_id="branch-1",
+        branch_turn_id="turn-1",
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref="artifact://diagnostics/turn-1",
+        checkpoint_ref="artifact://checkpoint/turn-1",
+        checkpoint_digest="sha256:" + "d" * 64,
+        terminal_disposition="verification_pending",
+        delivery_outcome="succeeded",
+        source_namespace="default",
+        source_workflow_id="source-workflow",
+        source_run_id="source-run",
+        verification_pending=True,
+    )
+    assert handoff["candidate"]["agentResultRef"] == "artifact://agent-result/turn-1"
+    assert handoff["candidate"]["checkpointRef"] == "artifact://checkpoint/turn-1"
+    assert handoff["candidate"]["checkpointDigest"] == "sha256:" + "d" * 64
+    assert handoff["objective"]["sourceWorkflowId"] == "source-workflow"
+    assert handoff["objective"]["sourceRunId"] == "source-run"
+    assert handoff["verificationPending"] is True
+
+    contract = verification_contract_for(
+        "checkpoint_branch.create_from_remediation_context"
+    )
+    assert contract.automatically_verifiable is True
+    assert handoff["verifier"] == contract.verifier
+    assert handoff["actionKind"] == contract.action_kind
+
+
+def test_branch_turn_verification_pending_is_not_graph_success() -> None:
+    """Pending verification never reads as repair success for the graph."""
+
+    handoff = branch_turn_module.build_branch_turn_verification_handoff(
+        branch_id="branch-1",
+        branch_turn_id="turn-1",
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref="artifact://diagnostics/turn-1",
+        checkpoint_ref=None,
+        checkpoint_digest=None,
+        terminal_disposition="terminal_checkpoint_missing",
+        delivery_outcome="failed",
+        source_namespace="default",
+        source_workflow_id="source-workflow",
+        source_run_id="source-run",
+        verification_pending=False,
+    )
+    assert handoff["verificationPending"] is False
+    assert handoff["candidate"]["checkpointRef"] is None
