@@ -308,3 +308,127 @@ def test_wrong_owner_and_expired_token_mapped() -> None:
 
     with pytest.raises(WorkflowCliError, match="expired"):
         _client(expired).describe_execution("wf-1")
+
+
+def test_download_help_lists_ref_and_out() -> None:
+    result = CliRunner().invoke(app, ["workflow", "download", "--help"])
+    assert result.exit_code == 0
+    body = unstyle(result.output)
+    assert "--ref" in body and "--out" in body
+
+
+def test_download_returns_bytes_and_filename() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.url.path == "/api/executions/wf-1/captured-evidence/download"
+        assert dict(request.url.params)["ref"] == "artifact://omnigent/corr-1/final.json"
+        return httpx.Response(
+            200,
+            content=b'{"ok": true}',
+            headers={
+                "content-disposition": 'attachment; filename="final.json"',
+                "content-type": "application/json",
+            },
+        )
+
+    downloaded = _client(handler).download_captured_evidence(
+        "wf-1", "artifact://omnigent/corr-1/final.json"
+    )
+    assert downloaded.content == b'{"ok": true}'
+    assert downloaded.filename == "final.json"
+    assert seen and seen[0].headers.get("authorization") == "Bearer tok-1"
+
+
+def test_download_derives_filename_from_ref_without_header() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"bytes")
+
+    downloaded = _client(handler).download_captured_evidence("wf-1", "art_final")
+    assert downloaded.content == b"bytes"
+    assert downloaded.filename == "art_final"
+
+
+def test_download_unknown_ref_is_actionable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "detail": {
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                }
+            },
+        )
+
+    with pytest.raises(WorkflowCliError, match="no such captured evidence"):
+        _client(handler).download_captured_evidence("wf-1", "art_missing")
+
+
+def test_download_rejects_empty_ref_before_network() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"x")
+
+    with pytest.raises(WorkflowCliError, match="artifact ref is required"):
+        _client(handler).download_captured_evidence("wf-1", "   ")
+    assert seen == []
+
+
+def test_download_redirect_never_forwards_credentials() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(302, headers={"location": "https://evil.invalid/x"})
+
+    with pytest.raises(WorkflowCliError, match="redirected"):
+        _client(handler).download_captured_evidence("wf-1", "art_final")
+    assert len(seen) == 1
+
+
+def test_download_save_refuses_overwrite_without_flag(tmp_path) -> None:
+    from moonmind.workflow_cli import save_evidence_download
+
+    target = tmp_path / "final.json"
+    target.write_bytes(b"existing")
+    with pytest.raises(WorkflowCliError, match="overwrite"):
+        save_evidence_download(target, b"new", overwrite=False)
+    assert target.read_bytes() == b"existing"
+    saved = save_evidence_download(target, b"new", overwrite=True)
+    assert saved == target
+    assert target.read_bytes() == b"new"
+
+
+def test_download_command_saves_bytes_to_out(tmp_path, monkeypatch) -> None:
+    from moonmind import workflow_cli as workflow_cli_module
+
+    saved_path = tmp_path / "evidence.json"
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def download_captured_evidence(self, workflow_id, ref):
+            assert workflow_id == "wf-1"
+            assert ref == "art_final"
+            return workflow_cli_module.EvidenceDownload(
+                filename="evidence.json",
+                content=b'{"ok": true}',
+                content_type="application/json",
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(workflow_cli_module, "WorkflowApiClient", _FakeClient)
+    result = CliRunner().invoke(
+        app,
+        ["workflow", "download", "wf-1", "--ref", "art_final", "--out", str(saved_path)],
+    )
+    assert result.exit_code == 0, unstyle(result.output)
+    assert saved_path.read_bytes() == b'{"ok": true}'
+    assert "wf-1" in unstyle(result.output)
