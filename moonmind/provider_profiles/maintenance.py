@@ -46,7 +46,19 @@ class CredentialMaintenanceGuard:
                 await asyncio.shield(release_task)
             except asyncio.CancelledError:
                 cancelled = True
-        await release_task
+            except Exception:
+                # The finished task's error is handled below, where shutdown
+                # cancellation can take precedence without hiding the error.
+                break
+        try:
+            release_task.result()
+        except Exception:
+            if not cancelled:
+                raise
+            logger.warning(
+                "Credential maintenance lease release failed during cancellation",
+                exc_info=True,
+            )
         if cancelled:
             raise asyncio.CancelledError
 
