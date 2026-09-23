@@ -873,6 +873,10 @@ jobs:
           MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
           set -euo pipefail
+          # The hermetic suite above runs inside Docker (often as root),
+          # leaving var/ root-owned. Restore ownership so the journey can
+          # record provenance/submission evidence under var/artifacts.
+          sudo chown -R "$(id -u):$(id -g)" var 2>/dev/null || true
           ./tools/first_run_journey_3938.sh --contract
           ./tools/first_run_journey_3938.sh
       - name: Capture docker compose diagnostics
