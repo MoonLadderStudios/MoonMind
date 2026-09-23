@@ -205,6 +205,18 @@ Where this is headed (planned): self-healing remediation workflows where a dedic
 "It finished" is not an answer. MoonMind treats every run as an evidence-producing process. These views exist today:
 
 - **The dashboard.** Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI.
+
+The Workflow list (`/workflows`) and a Workflow Detail result page (`/workflows/{workflowId}`) look like this. Both captures show a deterministic synthetic fixture (`example/public-fixture`, workflows `readme-demo-*`) through the real built dashboard served by the normal FastAPI routes — they demonstrate presentation, not a live provider run:
+
+![Workflow list showing three synthetic workflows in executing, completed, and failed states with per-step progress](docs/assets/readme/workflow-list.jpg)
+
+*Workflow list with executing, completed, and failed runs. Synthetic fixture data, not live runs.*
+
+![Workflow Detail page for a completed synthetic workflow, with title, status, repository, and result tabs](docs/assets/readme/workflow-detail.jpg)
+
+*Workflow Detail for one completed run. The fixture provides no live provider session, so Chat honestly reports unavailable. Synthetic fixture data, not a live run.*
+
+The capture recipe (route, fixture, build, viewport, theme, readiness) is recorded beside the frontend guidance in [Frontend Development](docs/Development/FrontendDevelopment.md).
 - **Live logs as a session-aware timeline.** Merged stdout, stderr, system, and session events stream over SSE into one ordered, run-global sequence with durable artifact-backed replay after the run ends. Session boundaries, resets, and epochs are explicit, observable events.
 - **Artifact-first outputs.** Prompts, transcripts, diffs, and diagnostics are stored as immutable, content-addressed artifacts rather than buried in process logs, so every run's evidence outlives the container that produced it.
 - **Correlated structured logs.** Every log line carries correlation IDs tying it to its workflow, run, activity, and trace. Questions about what happened can be answered without reading raw worker internals.

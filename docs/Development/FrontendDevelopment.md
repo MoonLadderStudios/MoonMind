@@ -51,6 +51,22 @@ Do not open the Vite dev server root (`http://localhost:5173/`) for demos or
 reviews. MoonMind's Vite server serves frontend modules for development; it does
 not own the dashboard HTML routes and may return `404` at `/`.
 
+## README screenshot recipe (MoonMind#2835)
+
+The README Workflow list and Workflow Detail captures in
+`docs/assets/readme/` were produced from the real built dashboard through the
+normal FastAPI dashboard routes with deterministic synthetic fixture data. To
+refresh them when the pictured flow materially changes:
+
+- **Build:** `npm run ui:build` (serves `api_service/static/workflow_console/dist/` via the Vite manifest).
+- **Serve:** FastAPI dashboard shell (`api_service/templates/react_dashboard.html` with `ui_assets("dashboard")` and `generate_boot_payload("dashboard")`) on `/workflows` and `/workflows/{workflowId}`.
+- **Fixture:** deterministic synthetic workflows only — repository `example/public-fixture`, ids `readme-demo-*`. Keep private repositories, prompts, emails, credential references, tokens, and signed URLs out at source. The fixture exposes no live provider session, so Workflow Chat honestly renders its unavailable state; that demonstrates presentation, not a live journey.
+- **Capture:** Playwright Chromium (the `npm run ui:test:browser` family), viewport 1280×800, light theme. Wait for the fixture rows to render, then screenshot `/workflows` (list) and `/workflows/readme-demo-001?source=temporal` (detail).
+- **Readiness:** dashboard shell returns 200, `/api/ui/info` is reachable, and the fixture rows render with zero page errors before capture.
+- **Finish:** inspect the images and relevant output before publication (no sensitive or invented content, warning states visible — the fixture keeps one failed row — synthetic state labeled). Crop whitespace and compress for readable README size without changing meaning, then check the rendered README and asset paths.
+
+Do not add byte-identical regeneration on every backend commit, a required CI workflow, prose/alt-text unit tests, or an exhaustive light/dark/mobile image matrix for these captures.
+
 ## Live development with Hot Module Replacement (HMR)
 
 Assume the normal MoonMind development stack is already running, for example:
