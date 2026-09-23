@@ -94,6 +94,12 @@ class ControlStopRolloutPolicy(BaseModel):
     allowed_runtime: Literal["external/omnigent"] = Field(
         "external/omnigent", alias="allowedRuntime"
     )
+    # MoonLadderStudios/MoonMind#3933: this frozen continuation lane is bound to
+    # the codex-native product authority on purpose. It is historical
+    # replay/digest state, not a second harness catalog: "codex-native" must
+    # stay an approved registration (see harness_registry), but expanding this
+    # Literal would rewrite retained workflow histories. New harnesses continue
+    # through the generic Agent Profile plane, not by widening this lane.
     allowed_product: Literal["codex-native"] = Field(
         "codex-native", alias="allowedProduct"
     )
@@ -106,6 +112,8 @@ class FrozenProfileBoundLane(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     runtime: Literal["external/omnigent"]
+    # MoonLadderStudios/MoonMind#3933: frozen with allowed_product above.
+    # Historical lane state; see the registry note on ControlStopRolloutPolicy.
     product: Literal["codex-native"]
     execution_profile_id: str = Field(alias="executionProfileId", min_length=1)
     provider_profile_id: str = Field(alias="providerProfileId", min_length=1)

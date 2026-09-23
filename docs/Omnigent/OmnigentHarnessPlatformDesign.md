@@ -163,9 +163,11 @@ The plan never pretends to know an exact host or a leased credential generation 
 
 One immutable plan may govern multiple execution realizations. Each rerun, linked continuation, and recurring occurrence owns a distinct runtime-binding aggregate identified by `(planRef, executionScopeRef)`. Activity retries within that execution scope reconcile the same aggregate; they do not create a second live owner. The digest-addressed `runtimeBindingRef`, revision, and fencing generation advance when acquired or attested authority is replaced.
 
-Before creating a new runtime binding, admission verifies that the mutable
-Omnigent endpoint serves the major.minor series recorded in the immutable
-catalog selected by `harnessCatalogRef`. New v1 plans do not duplicate that
+Before creating a new runtime binding, admission reads the immutable catalog
+selected by `harnessCatalogRef` and checks endpoint and build provenance.
+A different parseable Omnigent release number alone does not veto the plan;
+exact-host attestation checks the selected image and required behavior.
+New v1 plans do not duplicate that
 version in their payload, including as a null field, so retained readers can
 consume them independently of the writer's MoonMind revision.
 Patch versions and build digests may differ, while the selected host image,
@@ -424,11 +426,10 @@ The exact host passes only when:
 - `hostClassRef`, architecture, and the canonical harness id match the plan.
 - the image digest matches the plan, or the launched image is qualified
   same-repository drift: digest-pinned, deployment-observed or
-  operator-pinned, present locally, and series-compatible with the admitted
-  Omnigent version (same major.minor; patch and SHA may evolve). A foreign
-  repository never qualifies.
+  operator-pinned, present locally, and reporting a parseable Omnigent version.
+  A foreign repository never qualifies. Required behavior is checked below.
 - the Omnigent build matches the plan, or drifted alongside qualified image
-  drift with a live-probed compatible series. An unchanged image with a
+  drift with a live-probed executable and required capabilities. An unchanged image with a
   different build label fails.
 - the harness implementation package, version, entry point, and digest match the trusted catalog record.
 - every required vendor runtime or CLI satisfies the same-major.minor series

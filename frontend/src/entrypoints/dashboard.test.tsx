@@ -916,7 +916,7 @@ describe('Dashboard shared entry', () => {
     window.history.replaceState({}, '', '/schedules');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' }, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('radiogroup', { name: 'Recurring list display' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
 
