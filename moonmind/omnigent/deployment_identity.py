@@ -82,7 +82,7 @@ def _resolve_deployed_host_image_ref(harness_id: str) -> str | None:
 async def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
     """Validate server compatibility without replacing immutable host authority.
 
-    The immutable catalog supplies the admitted major.minor independently of
+    The immutable catalog supplies the admitted version independently of
     MoonMind releases. Previously persisted inline version evidence is retained.
     The pinned host remains launchable when the default host image advances.
     """
@@ -156,7 +156,7 @@ async def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
         if not versions_compatible(version, observed_version):
             raise OmnigentDeploymentIdentityConflict(
                 "execution plan targets an Omnigent server build that is no longer "
-                "deployed with compatible major.minor evidence; "
+                "deployed with parseable version evidence; "
                 "the deployment owner must restore a compatible server"
             )
     if version or catalog_ref:

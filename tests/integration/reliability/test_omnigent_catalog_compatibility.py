@@ -93,7 +93,7 @@ async def test_admitted_catalog_survives_server_build_change(
             hostImageRef="original-host@sha256:" + "d" * 64,
         )
         before = repr(plan)
-        if case == "patch":
+        if case in {"patch", "minor"}:
             await deployment_identity.assert_plan_matches_deployed_runtime(plan)
         else:
             error = (

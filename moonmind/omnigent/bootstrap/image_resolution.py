@@ -302,10 +302,10 @@ async def _evaluate_opencode_host(
 ) -> _OpenCodeHostVerdict:
     """Judge one host image against the running server's build identity.
 
-    Compatibility requires the same executable major.minor release series
-    and the release bootstrap probe. Digests retain provenance. Every
-    candidate passes through the same ladder, so the admitted host is always
-    the one that proved compatibility with the server actually running.
+    Version probes establish that both binaries report parseable releases;
+    differing release numbers alone do not reject a candidate. The selected
+    immutable host must pass the functional bootstrap probe, and an explicit
+    operator build pin remains authoritative. Digests retain provenance.
     """
 
     build_digest = await _image_build_identity(image_ref)
@@ -319,8 +319,6 @@ async def _evaluate_opencode_host(
         failure = "omnigent_operator_host_build_mismatch"
     elif server_version is None or version is None:
         failure = "omnigent_server_host_version_probe_failed"
-    elif not versions_compatible(server_version, version):
-        failure = "omnigent_server_host_version_mismatch"
     elif not await _image_opencode_bootstrap_ready(image_ref):
         failure = "omnigent_host_bootstrap_contract_missing"
     else:
@@ -331,7 +329,6 @@ async def _evaluate_opencode_host(
 _SERVER_DRIFT_FAILURES = frozenset(
     {
         "omnigent_server_host_build_mismatch",
-        "omnigent_server_host_version_mismatch",
     }
 )
 _HOST_QUALIFICATION_FAILURES = frozenset(
@@ -353,6 +350,11 @@ def pending_host_remediation(failure_code: object) -> str:
     """
 
     code = str(failure_code or "").strip()
+    if code == "omnigent_server_host_version_mismatch":
+        # Historical state from the former version-equality gate. The current
+        # resolver must rejudge the image by its bootstrap result, not instruct
+        # the operator to move the server based on version numbers alone.
+        return "recheck host qualification with the current MoonMind release"
     if code in _SERVER_DRIFT_FAILURES:
         return (
             "the newer host targets a newer Omnigent server; update the "
@@ -486,7 +488,7 @@ async def resolve_omnigent_images(
 
     # Server and host build digests retain independent provenance. An explicit
     # operator build pin still requires that exact host label; default server
-    # compatibility is decided by major.minor and the bootstrap contract.
+    # readiness is decided by observed binaries and the bootstrap contract.
     if not server_image_digest and server_ref:
         server_image_digest = _extract_digest(server_ref)
     configured_build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()

@@ -1,4 +1,4 @@
-"""Major.minor interoperability keeps exact deployment and plan evidence."""
+"""Version observations coexist with exact deployment and plan evidence."""
 
 from types import SimpleNamespace
 
@@ -28,9 +28,9 @@ from tests.unit.omnigent.test_harness_platform import (  # noqa: F401 -- fixture
         ("0.12.0", "0.12.37", True),
         ("1.2.99", "1.2.0", True),
         ("0.12", "omnigent 0.12.1", True),
-        ("0.12.0", "0.13.0", False),
-        ("1.12.0", "2.12.0", False),
-        ("0.12.0", "0.120.0", False),
+        ("0.12.0", "0.13.0", True),
+        ("1.12.0", "2.12.0", True),
+        ("0.12.0", "0.120.0", True),
         ("0.12.0", "", False),
         ("0.12.0", "0.12.1garbage", False),
         ("", "", False),
@@ -47,7 +47,7 @@ def test_release_series(expected, observed, compatible):
     [
         ("0.12.0", "0.12.9", None),
         ("0.12.9", "0.12.0", None),
-        ("0.12.0", "0.13.0", "omnigent_server_host_version_mismatch"),
+        ("0.12.0", "0.13.0", None),
     ],
 )
 async def test_independently_built_hosts_share_a_release_series(
@@ -76,10 +76,38 @@ async def test_independently_built_hosts_share_a_release_series(
     assert result.build_digest == "sha256:" + "b" * 64
 
 
-@pytest.mark.parametrize("version,compatible", [("0.12.9", True), ("0.13.0", False)])
+@pytest.mark.asyncio
+async def test_bootstrap_ready_host_is_admitted_across_omnigent_minor_versions(
+    monkeypatch,
+):
+    async def build(_):
+        return "sha256:" + "b" * 64
+
+    async def version(_):
+        return "0.14.0"
+
+    async def ready(_):
+        return True
+
+    monkeypatch.setattr(image_resolution, "_image_build_identity", build)
+    monkeypatch.setattr(image_resolution, "_image_omnigent_version", version)
+    monkeypatch.setattr(image_resolution, "_image_opencode_bootstrap_ready", ready)
+
+    result = await image_resolution._evaluate_opencode_host(
+        "host@sha256:" + "c" * 64,
+        server_ref="server@sha256:" + "a" * 64,
+        server_image_digest="sha256:" + "a" * 64,
+        server_version="0.15.0",
+        configured_build_digest="",
+    )
+    assert result.failure_code is None
+    assert result.version == "0.14.0"
+
+
+@pytest.mark.parametrize("version", ["0.12.9", "0.13.0"])
 @pytest.mark.asyncio
 async def test_admitted_plan_survives_patch_update_without_replacing_host(
-    tmp_path, monkeypatch, version, compatible
+    tmp_path, monkeypatch, version
 ):
     monkeypatch.delenv("OMNIGENT_BUILD_DIGEST", raising=False)
     monkeypatch.delenv("OMNIGENT_IMAGE_REF", raising=False)
@@ -105,12 +133,8 @@ async def test_admitted_plan_survives_patch_update_without_replacing_host(
         supportIdentity=SimpleNamespace(omnigentServerBuildRef="sha256:" + "a" * 64),
         hostImageRef="old-host@sha256:" + "c" * 64,
     )
-    if compatible:
-        await deployment_identity.assert_plan_matches_deployed_runtime(plan)
-        assert plan.hostImageRef == "old-host@sha256:" + "c" * 64
-    else:
-        with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
-            await deployment_identity.assert_plan_matches_deployed_runtime(plan)
+    await deployment_identity.assert_plan_matches_deployed_runtime(plan)
+    assert plan.hostImageRef == "old-host@sha256:" + "c" * 64
 
 
 def test_missing_deployment_is_retryable_but_invalid_override_is_not(
@@ -160,25 +184,38 @@ def test_host_classes_keep_host_provenance_independent_of_server(
 ):
     from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
     from moonmind.omnigent.harness_platform.host_classes import (
+        OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
         OmnigentHostClassSelector,
+        _require_image_ref,
     )
 
     image = "host@sha256:" + "b" * 64
     host_digest = "sha256:" + "c" * 64
+    server_image = "server@sha256:" + "a" * 64
     state = ResolvedOmnigentDeploymentState(
+        serverImageRef=server_image,
+        opencodeHostImageRef=image,
         details={
             "opencodeHostCompatibility": {
                 "status": "ready",
+                "serverImageRef": server_image,
                 "hostImageRef": image,
                 "hostBuildDigest": host_digest,
-                "hostVersion": "0.12.9",
+                "hostVersion": "0.14.0",
             }
         }
     )
     monkeypatch.setattr(store, "load_resolved_state", lambda: state)
+    assert _require_image_ref(
+        {
+            "OMNIGENT_IMAGE_REF": server_image,
+            OMNIGENT_OPENCODE_HOST_IMAGE_ENV: image,
+        },
+        OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
+    ) == image
     catalog = _normalize_harness(
         {"id": harness_id},
-        omnigent_version="0.12.0",
+        omnigent_version="0.15.0",
         omnigent_build_digest="sha256:" + "a" * 64,
     )
     selector = OmnigentHostClassSelector(
@@ -190,9 +227,12 @@ def test_host_classes_keep_host_provenance_independent_of_server(
     )
     host = selector.select(
         harness=catalog,
-        omnigent_version="0.12.0",
+        omnigent_version="0.15.0",
         integration_mode="native-server",
         materializer_refs=["none@1"],
+        requested_host_class_ref=(
+            "omnigent-opencode@2" if harness_id == "opencode-native" else None
+        ),
     )
     assert host.omnigentBuildDigest == host_digest
     assert host.imageRef == image
@@ -316,10 +356,10 @@ async def test_bootstrap_selects_each_images_actual_provenance(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "replacement_version,compatible", [("1.0.99", True), ("1.1.0", False)]
+    "replacement_version", ["1.0.99", "1.1.0"]
 )
 async def test_host_override_never_masks_server_replacement(
-    tmp_path, monkeypatch, replacement_version, compatible
+    tmp_path, monkeypatch, replacement_version
 ):
     import json
     import os
@@ -415,11 +455,7 @@ async def test_host_override_never_masks_server_replacement(
     assert (
         deployment_identity.resolve_deployed_server_build_digest() == replacement_digest
     )
-    if compatible:
-        await deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
-    else:
-        with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
-            await deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+    await deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
 
 
 @pytest.mark.parametrize(
@@ -513,7 +549,7 @@ def test_compatible_deployed_fallback_prefers_qualified_same_repo():
         )
         is None
     )
-    # Same-repository candidate on another minor is rejected.
+    # A changed version alone does not invalidate observed same-repository provenance.
     assert (
         compatible_deployed_fallback(
             requested,
@@ -521,7 +557,7 @@ def test_compatible_deployed_fallback_prefers_qualified_same_repo():
             expected_omnigent_version="0.14.0",
             provenance=provenance,
         )
-        is None
+        == current
     )
     # The requested ref itself is never a fallback.
     assert (
