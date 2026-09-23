@@ -512,6 +512,19 @@ def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
     return SimpleNamespace(execute=AsyncMock(return_value=_ExecuteResult(rows)))
 
 
+class _AsyncNestedSessionContext:
+    """Savepoint stand-in honoring the ``session.begin_nested()`` contract."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
 class _SnapshotReuseSession:
     def __init__(
         self,
@@ -522,7 +535,21 @@ class _SnapshotReuseSession:
         self._canonical = canonical
         self._existing_link = existing_link
         self.added: list[object] = []
-        self.get = AsyncMock(return_value=canonical)
+        # The double answers canonical-row reads with the canned record and
+        # reports the execution projection as genuinely absent so the shared
+        # mutator exercises its missing-row repair instead of tripping the
+        # miswired-row guard.
+        async def _get(model: object, *args: object, **kwargs: object) -> object:
+            if model is TemporalExecutionCanonicalRecord:
+                return canonical
+            return None
+
+        self.get = AsyncMock(side_effect=_get)
+        # mutate_execution_projection flushes caller writes before its locked
+        # canonical+projection reads and repairs a missing projection inside
+        # a nested savepoint; the double honors that session contract.
+        self.flush = AsyncMock()
+        self.begin_nested = _AsyncNestedSessionContext
 
     async def execute(self, _statement: object) -> _ExecuteResult:
         rows = [self._existing_link] if self._existing_link is not None else []
