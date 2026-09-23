@@ -3423,13 +3423,10 @@ class MoonMindProviderProfileManagerWorkflow:
         if pending != profile.capacity_scope_ref:
             profile.capacity_scope_ref = pending
             if not self._shared_scope_record_missing(pending):
-                try:
-                    self._ensure_scope(
-                        pending,
-                        runtime_id=self._runtime_id or "",
-                    )
-                except Exception:
-                    pass
+                self._ensure_scope(
+                    pending,
+                    runtime_id=self._runtime_id or "",
+                )
         profile.pending_capacity_scope_ref = ""
         return True
 
