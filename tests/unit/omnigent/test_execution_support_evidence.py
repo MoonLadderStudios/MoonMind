@@ -573,3 +573,152 @@ def test_admission_still_blocks_when_both_tiers_refuse(
 
     with pytest.raises(ValueError, match="no admissible execution evidence"):
         resolve_execution_evidence(SimpleNamespace(), policy="either")
+
+
+def test_either_outage_fallthrough_agrees_across_probe_admission_and_rollout(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ordinary outage must not blanket-lock compatible work at any layer (#3832).
+
+    Wiring proof beyond the resolver unit boundary: with a lapsed protected
+    document and a current deployment document on disk (real file loaders, no
+    resolver mocks), the freshness probe, admission, and the rollout gate must
+    agree. Under ``either`` all three fall through to the deployment tier;
+    under explicitly selected ``protected`` all three fail closed without
+    substituting the deployment tier. The rollout context uses the same four
+    evidence fields ``compile_execution_plan`` supplies
+    (``moonmind/omnigent/harness_platform/planner.py``).
+    """
+
+    import json
+
+    from moonmind.omnigent.bootstrap.evidence import build_deployment_evidence
+    from moonmind.omnigent.evidence_resolver import (
+        resolve_execution_evidence,
+        resolve_support_evidence_freshness,
+    )
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RolloutReason,
+        RolloutSelectionContext,
+        RuntimeProviderCombination,
+        default_runtime_provider_rollout_policy,
+        resolve_rollout_decision,
+    )
+
+    plan = _plan()
+    protected_path = tmp_path / "execution-support-evidence.json"
+    protected_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    _evidence(plan, generated_at=datetime.now(UTC) - timedelta(days=90))
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    deployment_path = tmp_path / "deployment-execution-evidence.json"
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(protected_path)
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(deployment_path))
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abcdef1234567890")
+    deployment_built = build_deployment_evidence(
+        support_identity=plan.supportIdentity,
+        support_combination_key=plan.supportCombinationKey,
+        host_image_ref=plan.hostImageRef,
+        policy_snapshot_digest=plan.policySnapshotDigest,
+        effective_launch_snapshot_digest=plan.effectiveLaunchSnapshotDigest,
+        provider_profile_ref="provider-1",
+        credential_generation=1,
+        qualified_model_id="example/model",
+        effort="medium",
+        results={"readQualification": "passed"},
+        evidence_refs={"readRun": "artifact:read-run"},
+        resolved_state=None,
+    )
+    # Write the tmp document directly: the publisher helper also best-effort
+    # mirrors to the container compose volume, which pollutes the checkout
+    # when the suite runs inside the mounted workspace.
+    deployment_path.write_text(
+        json.dumps({"entries": [deployment_built]}), encoding="utf-8"
+    )
+
+    impl_ref = "omnigent-harness-implementation:sha256:" + "0" * 64
+    combination = RuntimeProviderCombination.model_validate(
+        {
+            "harnessId": "codex-native",
+            "harnessImplementationRef": impl_ref,
+            "agentProfileCompatibilityClass": "moonmind.omnigent-agent-profile.v2",
+            "providerRuntimeId": "codex_cli",
+            "providerClass": "codex-openai",
+            "hostClassRef": "omnigent-codex@1",
+            "runtimePackRef": "codex-native-pack@1",
+            "credentialMaterializerRef": "codex-oauth-home@1",
+            "launchPolicyRef": "omnigent-on-demand@2",
+            "hostMode": "on-demand",
+            "architecture": "linux/amd64",
+            "modelConfigurationClass": "sha256:" + "1" * 64,
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "pathClass": "generic_omnigent",
+        }
+    )
+    policy = default_runtime_provider_rollout_policy(
+        env={"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true"}
+    ).model_copy(
+        update={
+            "rules": tuple(
+                rule.model_copy(update={"requires_support_evidence": True})
+                for rule in default_runtime_provider_rollout_policy(
+                    env={"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true"}
+                ).rules
+            )
+        }
+    )
+
+    def _context_for(policy_name: str) -> RolloutSelectionContext:
+        freshness = resolve_support_evidence_freshness(
+            plan.supportIdentity, policy=policy_name
+        )
+        return (
+            freshness,
+            RolloutSelectionContext.model_validate(
+                {
+                    "supportEvidenceRef": freshness.evidence_ref,
+                    "supportEvidenceAgeSeconds": freshness.age_seconds,
+                    "supportEvidenceExpired": freshness.expired,
+                    "supportEvidenceUsable": freshness.usable,
+                }
+            ),
+        )
+
+    # Ordinary outage under ``either``: probe, admission, and rollout all use
+    # the current deployment tier instead of blanket-locking on the lapsed
+    # protected document.
+    freshness, context = _context_for("either")
+    assert freshness.tier == "deployment_qualified"
+    assert freshness.usable is True
+    evidence, tier = resolve_execution_evidence(plan, policy="either")
+    assert tier == "deployment_qualified"
+    decision = resolve_rollout_decision(
+        policy=policy, combination=combination, context=context
+    )
+    assert RolloutReason.support_evidence_missing not in decision.unavailable_reasons
+    assert RolloutReason.support_evidence_stale not in decision.unavailable_reasons
+
+    # Explicitly selected strict policy never downgrades: the same lapsed
+    # document fails closed at every layer and the deployment tier is not
+    # substituted.
+    strict_freshness, strict_context = _context_for("protected")
+    assert strict_freshness.tier == "supported"
+    assert strict_freshness.expired is True
+    with pytest.raises(ValueError):
+        resolve_execution_evidence(plan, policy="protected")
+    strict_decision = resolve_rollout_decision(
+        policy=policy, combination=combination, context=strict_context
+    )
+    assert RolloutReason.support_evidence_stale in strict_decision.unavailable_reasons
