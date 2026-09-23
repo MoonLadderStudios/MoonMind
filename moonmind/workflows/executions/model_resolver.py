@@ -108,6 +108,45 @@ class ResolvedModelEffort:
         }
 
 
+def _profile_provider_id(profile: Any | None) -> str | None:
+    """Return the selected profile's provider id, if it declares one."""
+    if profile is None:
+        return None
+    if isinstance(profile, Mapping):
+        raw = profile.get("provider_id", profile.get("providerId"))
+    else:
+        raw = getattr(profile, "provider_id", getattr(profile, "providerId", None))
+    text = str(raw or "").strip()
+    return text or None
+
+
+def _compatible_runtime_model(
+    runtime_model: str | None, profile: Any | None
+) -> str | None:
+    """Return the runtime default only when it can serve the selected provider.
+
+    MoonLadderStudios/MoonMind#4538: an inherited OpenCode default belonging
+    to another provider (``opencode-go/...``, ``opencode/...``,
+    ``openai/...``, ...) must never silently become an OpenRouter selection
+    or cause another account's credential to be used. Provider-qualified IDs
+    (``openrouter/<provider model id>``, which may contain additional slashes)
+    are preserved exactly; only the ``openrouter/`` prefix is checked. A bare
+    model without a qualifier is left for the launch consumer to qualify, and
+    a missing or mismatched default stays unresolved so the caller surfaces
+    an actionable choice instead of a silent wrong-provider selection.
+    """
+    if not runtime_model:
+        return None
+    provider_id = _profile_provider_id(profile)
+    if not provider_id:
+        return runtime_model
+    if "/" not in runtime_model:
+        return runtime_model
+    if runtime_model.startswith(f"{provider_id}/"):
+        return runtime_model
+    return None
+
+
 def resolve_effective_model(
     *,
     runtime_id: str | None,
@@ -159,15 +198,17 @@ def resolve_effective_model(
 
     # 3. Runtime default.  Always normalize (normalize_runtime_id falls back to
     # DEFAULT_WORKFLOW_RUNTIME for None/empty), so the runtime-default tier applies
-    # even when the caller omits targetRuntime.
+    # even when the caller omits targetRuntime. A provider-mismatched default
+    # stays unresolved (MoonLadderStudios/MoonMind#4538).
     canonical_runtime = normalize_runtime_id(runtime_id)
     runtime_model, _ = resolve_runtime_defaults(
         canonical_runtime,
         workflow_settings=workflow_settings,
         env=env,
     )
-    if runtime_model:
-        return runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT
+    compatible_model = _compatible_runtime_model(runtime_model, profile)
+    if compatible_model:
+        return compatible_model, _MODEL_SOURCE_RUNTIME_DEFAULT
 
     return None, _MODEL_SOURCE_NONE
 
@@ -207,7 +248,10 @@ def resolve_model_effort(
         model, model_source = _first_value(
             (clean_requested_model, _MODEL_SOURCE_TASK_OVERRIDE),
             (_legacy_profile_value(profile, "default_model"), _MODEL_SOURCE_PROFILE_DEFAULT),
-            (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
+            (
+                _compatible_runtime_model(runtime_model, profile),
+                _MODEL_SOURCE_RUNTIME_DEFAULT,
+            ),
         )
         effort, effort_source = _first_value(
             (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
@@ -251,7 +295,10 @@ def resolve_model_effort(
         model, model_source = _first_value(
             (tier_model, tier_source),
             (_legacy_profile_value(profile, "default_model"), _MODEL_SOURCE_PROFILE_DEFAULT),
-            (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
+            (
+                _compatible_runtime_model(runtime_model, profile),
+                _MODEL_SOURCE_RUNTIME_DEFAULT,
+            ),
         )
         effort, effort_source = _first_value(
             (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
@@ -289,7 +336,10 @@ def resolve_model_effort(
     )
     model, model_source = _first_value(
         (_legacy_profile_value(profile, "default_model"), _MODEL_SOURCE_PROFILE_DEFAULT),
-        (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
+        (
+            _compatible_runtime_model(runtime_model, profile),
+            _MODEL_SOURCE_RUNTIME_DEFAULT,
+        ),
     )
     effort, effort_source = _first_value(
         (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),

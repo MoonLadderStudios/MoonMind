@@ -1565,41 +1565,95 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
-_CODEX_OPENROUTER_QWEN36_PLUS_MODEL = "qwen/qwen3.6-plus"
-_LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL = "qwen/qwen3.6-plus:free"
+OPENCODE_OPENROUTER_PROFILE_ID = "opencode-openrouter"
+_LEGACY_CODEX_OPENROUTER_PROFILE_ID = "codex_openrouter_qwen36_plus"
+_LEGACY_CODEX_OPENROUTER_MODELS = frozenset(
+    {"qwen/qwen3.6-plus", "qwen/qwen3.6-plus:free"}
+)
+_LEGACY_CODEX_OPENROUTER_ACCOUNT_LABELS = frozenset(
+    {"Codex CLI via OpenRouter (auto-seeded)"}
+)
 
 
-def _codex_openrouter_qwen36_plus_file_templates(
-    model: str,
-) -> list[dict[str, object]]:
-    return [
-        {
-            "path": "{{runtime_support_dir}}/codex-home/config.toml",
-            "format": "toml",
-            "merge_strategy": "replace",
-            "content_template": {
-                "model_provider": "openrouter",
-                "model_reasoning_effort": "high",
-                "model": model,
-                "profile": "openrouter_qwen36_plus",
-                "model_providers": {
-                    "openrouter": {
-                        "name": "OpenRouter",
-                        "base_url": "https://openrouter.ai/api/v1",
-                        "env_key": "OPENROUTER_API_KEY",
-                        "wire_api": "responses",
-                    },
-                },
-                "profiles": {
-                    "openrouter_qwen36_plus": {
-                        "model_provider": "openrouter",
-                        "model": model,
-                    }
-                },
-            },
-            "permissions": "0600",
-        }
-    ]
+def _is_untouched_legacy_codex_openrouter_profile(
+    profile_id: str, row: dict[str, Any]
+) -> bool:
+    """Report whether a row is the untouched stock Codex/OpenRouter seed.
+
+    MoonLadderStudios/MoonMind#4538: the ``OPENROUTER_API_KEY`` seed used to
+    create ``codex_openrouter_qwen36_plus`` (``codex_cli`` + Qwen). Only rows
+    that still carry every stock marker are retired automatically; any
+    operator customization (model edits, tiers, templates, explicit
+    disable/default choices, other accounts) is preserved.
+    """
+    if profile_id != _LEGACY_CODEX_OPENROUTER_PROFILE_ID:
+        return False
+
+    def enum_value(key: str) -> Any:
+        value = row.get(key)
+        return getattr(value, "value", value)
+
+    if row.get("runtime_id") != "codex_cli":
+        return False
+    if row.get("provider_id") != "openrouter":
+        return False
+    if row.get("account_label") not in _LEGACY_CODEX_OPENROUTER_ACCOUNT_LABELS:
+        return False
+    if str(row.get("default_model") or "").strip() not in _LEGACY_CODEX_OPENROUTER_MODELS:
+        return False
+    if row.get("default_effort") is not None:
+        return False
+    tiers = row.get("model_tiers")
+    if tiers not in (None, []):
+        # Rows inserted without explicit tiers default to a single derived
+        # tier (see api_service/db/models.py): blank "Runtime default" when
+        # no model is set, or a "Legacy default" tier mirroring the seeded
+        # model. Either shape is still the stock seed; any other tier
+        # (custom model/effort/parameters) marks operator customization.
+        if not (
+            isinstance(tiers, list)
+            and len(tiers) == 1
+            and isinstance(tiers[0], dict)
+            and str(tiers[0].get("model") or "").strip()
+            in ({"", *_LEGACY_CODEX_OPENROUTER_MODELS})
+            and not str(tiers[0].get("effort") or "").strip()
+            and not tiers[0].get("parameters")
+            and not tiers[0].get("annotations")
+        ):
+            return False
+    if row.get("model_overrides") not in (None, {}):
+        return False
+    if row.get("secret_refs") != {"provider_api_key": "env://OPENROUTER_API_KEY"}:
+        return False
+    if row.get("home_path_overrides") != {
+        "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+    }:
+        return False
+    if row.get("command_behavior") != {"suppress_default_model_flag": True}:
+        return False
+    if row.get("file_templates") is None:
+        return False
+    try:
+        templates = row.get("file_templates") or []
+        if not isinstance(templates, list) or not templates:
+            return False
+        first = templates[0] if isinstance(templates[0], dict) else {}
+        content = first.get("content_template") if isinstance(first, dict) else None
+        if not isinstance(content, dict):
+            return False
+        providers = content.get("model_providers") or {}
+        openrouter = providers.get("openrouter") if isinstance(providers, dict) else None
+        if not isinstance(openrouter, dict):
+            return False
+        if openrouter.get("env_key") != "OPENROUTER_API_KEY":
+            return False
+    except Exception:
+        return False
+    # An explicit operator/policy disable or an explicit default selection
+    # is authoritative and must not be mistaken for the stock seed.
+    if enum_value("disabled_reason") in ("user_disabled", "policy_disabled"):
+        return False
+    return True
 
 
 def _codex_minimax_m27_file_templates() -> list[dict[str, object]]:
@@ -1632,55 +1686,6 @@ def _codex_minimax_m27_file_templates() -> list[dict[str, object]]:
             "permissions": "0600",
         }
     ]
-
-
-def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, object]]:
-    return [
-        {
-            "path": "{{runtime_support_dir}}/codex-home/config.toml",
-            "format": "toml",
-            "merge_strategy": "replace",
-            "content_template": {
-                "model_provider": "openrouter",
-                "profile": "openrouter_qwen36_plus",
-                "model_providers": {
-                    "openrouter": {
-                        "name": "OpenRouter",
-                        "base_url": "https://openrouter.ai/api/v1",
-                        "env_key": "OPENROUTER_API_KEY",
-                        "wire_api": "responses",
-                    },
-                },
-                "profiles": {
-                    "openrouter_qwen36_plus": {
-                        "model_provider": "openrouter",
-                        "model": _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL,
-                    }
-                },
-            },
-            "permissions": "0600",
-        }
-    ]
-
-
-def _should_reconcile_openrouter_codex_file_templates(
-    profile_id: str,
-    current_file_templates,
-    desired_file_templates,
-) -> bool:
-    if profile_id != "codex_openrouter_qwen36_plus":
-        return False
-    if desired_file_templates is None:
-        return False
-    if current_file_templates == desired_file_templates:
-        return False
-    deprecated_seed_templates = _codex_openrouter_qwen36_plus_file_templates(
-        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
-    )
-    return current_file_templates in (
-        deprecated_seed_templates,
-        _legacy_codex_openrouter_qwen36_plus_file_templates(),
-    )
 
 
 _LEGACY_SETUP_PROFILE_SPECS = {
@@ -2103,51 +2108,68 @@ async def _auto_seed_provider_profiles() -> list[str]:
             }
         )
 
-    if os.environ.get("OPENROUTER_API_KEY"):
+    # MoonLadderStudios/MoonMind#4538: OPENROUTER_API_KEY seeds an OpenCode
+    # profile executed through Omnigent, reusing the generic OpenCode API-key
+    # strategy (``opencode_api_key`` role, composite materialization,
+    # backend-owned isolation). The profile stays model-neutral
+    # (``default_model=None``) so the configured OpenCode default is inherited
+    # at launch; no Qwen/Codex model or Codex launch fields are seeded here.
+    # Missing, empty, and whitespace-only keys are treated as absent, and the
+    # existing OpenCode/Omnigent disable controls stay authoritative.
+    from moonmind.omnigent.settings import (
+        generic_host_enabled as _openrouter_generic_host_enabled,
+        opencode_support_enabled as _openrouter_opencode_enabled,
+    )
+
+    _openrouter_api_key_present = bool(
+        str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    )
+    _openrouter_gates_enabled = bool(
+        _openrouter_opencode_enabled() and _openrouter_generic_host_enabled()
+    )
+    if _openrouter_api_key_present and _openrouter_gates_enabled:
         _DEFAULT_PROFILES.append(
             {
-                "profile_id": "codex_openrouter_qwen36_plus",
-                "runtime_id": "codex_cli",
+                "profile_id": OPENCODE_OPENROUTER_PROFILE_ID,
+                "runtime_id": "opencode",
                 "is_default": False,
                 "provider_id": "openrouter",
                 "provider_label": "OpenRouter",
-                "default_model": _CODEX_OPENROUTER_QWEN36_PLUS_MODEL,
+                # Model-neutral: inherit the configured OpenCode default for
+                # the execution context Omnigent actually launches (see
+                # model_resolver). Never copy a default into this seed.
+                "default_model": None,
                 "credential_source": ProviderCredentialSource.SECRET_REF,
                 "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
                 "secret_refs": {
-                    "provider_api_key": "env://OPENROUTER_API_KEY",
+                    "opencode_api_key": "env://OPENROUTER_API_KEY",
                 },
-                "clear_env_keys": [
-                    "OPENAI_API_KEY",
-                    "OPENAI_BASE_URL",
-                    "OPENAI_ORG_ID",
-                    "OPENAI_PROJECT",
-                    "OPENROUTER_API_KEY",
-                ],
+                "clear_env_keys": _seed_clear_env_keys(
+                    runtime_id="opencode",
+                    provider_id="openrouter",
+                    authentication_method="api_key",
+                    credential_source="secret_ref",
+                    runtime_materialization_mode="composite",
+                    fallback=[
+                        "OPENCODE_AUTH_CONTENT",
+                        "OPENCODE_CONFIG",
+                        "OPENCODE_CONFIG_CONTENT",
+                        "OPENAI_API_KEY",
+                        "ANTHROPIC_API_KEY",
+                    ],
+                ),
                 "env_template": {
                     "OPENROUTER_API_KEY": {
-                        "from_secret_ref": "provider_api_key",
+                        "from_secret_ref": "opencode_api_key",
                     },
                 },
-                "file_templates": _codex_openrouter_qwen36_plus_file_templates(
-                    _CODEX_OPENROUTER_QWEN36_PLUS_MODEL
-                ),
-                "home_path_overrides": {
-                    "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
-                },
-                "command_behavior": {
-                    "suppress_default_model_flag": True,
-                },
-                "max_parallel_runs": 4,
-                "cooldown_after_429_seconds": 300,
-                "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
-                "max_lease_duration_seconds": 7200,
                 "volume_ref": None,
                 "volume_mount_path": None,
-                "account_label": "Codex CLI via OpenRouter (auto-seeded)",
+                "account_label": "OpenCode via OpenRouter",
                 "enabled": True,
                 "auth_state": ProviderProfileAuthState.CONNECTED,
                 "disabled_reason": None,
+                "tags": ["api-key", "opencode", "openrouter"],
                 "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
             }
         )
@@ -2335,6 +2357,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ", ".join(edited_legacy_profile_ids),
                 )
 
+
             first_party_env_api_profiles = {
                 "codex_openai_api": "OPENAI_API_KEY",
                 "claude_anthropic_api": "ANTHROPIC_API_KEY",
@@ -2350,6 +2373,59 @@ async def _auto_seed_provider_profiles() -> list[str]:
             # owns the invariant and refuses to overrule an explicit operator
             # selection.
             runtime_default_preferences: dict[str, str] = {}
+
+            # MoonLadderStudios/MoonMind#4538: retire the untouched stock
+            # Codex/OpenRouter seed (``codex_openrouter_qwen36_plus``) for
+            # future implicit selection. Customized legacy profiles, explicit
+            # disables/defaults, and other accounts are preserved. The stock
+            # seed is never recreated: the seeder above no longer emits it.
+            legacy_openrouter_row = existing_by_id.get(
+                _LEGACY_CODEX_OPENROUTER_PROFILE_ID
+            )
+            if legacy_openrouter_row is not None and (
+                _is_untouched_legacy_codex_openrouter_profile(
+                    _LEGACY_CODEX_OPENROUTER_PROFILE_ID, legacy_openrouter_row
+                )
+            ):
+                await session.execute(
+                    update(ManagedAgentProviderProfile)
+                    .where(
+                        ManagedAgentProviderProfile.profile_id
+                        == _LEGACY_CODEX_OPENROUTER_PROFILE_ID
+                    )
+                    .values(
+                        enabled=False,
+                        is_default=False,
+                        auth_state=ProviderProfileAuthState.NOT_CONFIGURED,
+                        disabled_reason=(
+                            ProviderProfileDisabledReason.MISSING_CREDENTIALS
+                        ),
+                    )
+                )
+                legacy_openrouter_row.update(
+                    {
+                        "enabled": False,
+                        "is_default": False,
+                        "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+                        "disabled_reason": (
+                            ProviderProfileDisabledReason.MISSING_CREDENTIALS
+                        ),
+                    }
+                )
+                touched_runtime_ids.add(
+                    str(legacy_openrouter_row.get("runtime_id") or "codex_cli")
+                )
+                needs_commit = True
+                logger.info(
+                    "Retired untouched legacy Codex/OpenRouter stock seed: %s",
+                    _LEGACY_CODEX_OPENROUTER_PROFILE_ID,
+                )
+            elif legacy_openrouter_row is not None:
+                logger.warning(
+                    "Preserved configured Codex/OpenRouter profile for manual "
+                    "review: %s",
+                    _LEGACY_CODEX_OPENROUTER_PROFILE_ID,
+                )
 
             # Codex owns and mutates its OAuth home (including refresh-token
             # state), so every existing OAuth-backed Codex profile must remain
@@ -2632,22 +2708,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 desired_default_model = profile_def.get("default_model")
                 if profile_id in existing_by_id:
                     current_model = existing_by_id[profile_id]["default_model"]
-                    # Only reconcile when the seeded profile has an explicit desired model
-                    # (non-None) and the existing row is blank or contains an old
-                    # deprecated seed value; never clear user-set values.
+                    # Only backfill a blank model when the seed declares an
+                    # explicit desired model (non-None). Model-neutral seeds
+                    # such as ``opencode-openrouter`` intentionally declare
+                    # None so inheritance keeps working; never clear or
+                    # overwrite user-set values here.
                     current_model_text = str(current_model or "").strip()
-                    legacy_openrouter_model = (
-                        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
-                    )
-                    should_reconcile_deprecated_model = (
-                        profile_id == "codex_openrouter_qwen36_plus"
-                        and current_model_text == legacy_openrouter_model
-                    )
                     should_reconcile_default_model = (
                         desired_default_model is not None
-                        and (
-                            not current_model_text or should_reconcile_deprecated_model
-                        )
+                        and not current_model_text
                     )
                     if should_reconcile_default_model:
                         stmt = (
@@ -2676,23 +2745,6 @@ async def _auto_seed_provider_profiles() -> list[str]:
                             )
                             await session.execute(stmt)
                             needs_commit = True
-                    desired_file_templates = profile_def.get("file_templates")
-                    current_file_templates = existing_by_id[profile_id][
-                        "file_templates"
-                    ]
-                    if _should_reconcile_openrouter_codex_file_templates(
-                        profile_id=profile_id,
-                        current_file_templates=current_file_templates,
-                        desired_file_templates=desired_file_templates,
-                    ):
-                        stmt = (
-                            update(ManagedAgentProviderProfile)
-                            .where(ManagedAgentProviderProfile.profile_id == profile_id)
-                            .values(file_templates=desired_file_templates)
-                        )
-                        await session.execute(stmt)
-                        needs_commit = True
-
             if not to_insert:
                 if needs_commit or runtime_default_preferences:
                     await session.flush()

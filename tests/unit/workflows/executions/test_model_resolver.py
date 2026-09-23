@@ -577,3 +577,140 @@ class TestResolveModelEffortTiers:
         assert resolved.effort == "legacy-effort"
         assert resolved.model_source == "provider_profile_default"
         assert resolved.effort_source == "provider_profile_default"
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#4538: OpenRouter-via-OpenCode model inheritance
+# ---------------------------------------------------------------------------
+
+def _openrouter_profile(**overrides):
+    base = {
+        "profile_id": "opencode-openrouter",
+        "runtime_id": "opencode",
+        "provider_id": "openrouter",
+        "default_model": None,
+        "default_effort": None,
+        "model_tiers": [],
+        "enabled": True,
+        "auth_state": "connected",
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+class TestOpenRouterModelInheritance:
+    def test_compatible_openrouter_default_is_inherited(self):
+        profile = _openrouter_profile()
+        model, source = resolve_effective_model(
+            runtime_id="opencode",
+            profile=profile,
+            requested_model=None,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/acme-model"},
+        )
+        assert model == "openrouter/acme-model"
+        assert source == "runtime_default"
+
+    def test_multi_slash_openrouter_id_preserved_exactly(self):
+        profile = _openrouter_profile()
+        model, source = resolve_effective_model(
+            runtime_id="opencode",
+            profile=profile,
+            requested_model=None,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/acme/model-v1"},
+        )
+        assert model == "openrouter/acme/model-v1"
+        assert source == "runtime_default"
+
+    def test_mismatched_provider_default_stays_unresolved(self):
+        profile = _openrouter_profile()
+        for mismatched in (
+            "opencode-go/muse-spark-1.3-contributor",
+            "opencode/muse-spark-1.3-contributor-free",
+            "openai/gpt-5.5",
+        ):
+            model, source = resolve_effective_model(
+                runtime_id="opencode",
+                profile=profile,
+                requested_model=None,
+                env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": mismatched},
+            )
+            assert model is None, mismatched
+            assert source == "none", mismatched
+
+    def test_missing_default_stays_unresolved_without_stock_model(self):
+        profile = _openrouter_profile()
+        model, source = resolve_effective_model(
+            runtime_id="opencode",
+            profile=profile,
+            requested_model=None,
+            env={},
+        )
+        assert model is None
+        assert source == "none"
+
+    def test_explicit_overrides_keep_precedence(self):
+        profile = _openrouter_profile(default_model="openrouter/profile-model")
+        model, source = resolve_effective_model(
+            runtime_id="opencode",
+            profile=profile,
+            requested_model=None,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/other-model"},
+        )
+        assert model == "openrouter/profile-model"
+        assert source == "provider_profile_default"
+
+        model, source = resolve_effective_model(
+            runtime_id="opencode",
+            profile=profile,
+            requested_model="openrouter/task-model",
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/other-model"},
+        )
+        assert model == "openrouter/task-model"
+        assert source == "task_override"
+
+    def test_tier_aware_inheritance_and_mismatch(self):
+        profile = _openrouter_profile()
+        resolved = resolve_model_effort(
+            runtime_id="opencode",
+            profile=profile,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/acme-model"},
+        )
+        assert resolved.model == "openrouter/acme-model"
+        assert resolved.model_source == "runtime_default"
+        # Inherited effort is not forced to a stock value.
+        assert resolved.effort is None
+
+        resolved = resolve_model_effort(
+            runtime_id="opencode",
+            profile=profile,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "opencode-go/other"},
+        )
+        assert resolved.model is None
+        assert resolved.model_source == "none"
+
+    def test_default_change_affects_later_inherited_selections_only(self):
+        profile = _openrouter_profile()
+        first, _ = resolve_effective_model(
+            runtime_id="opencode",
+            profile=profile,
+            requested_model=None,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/v1"},
+        )
+        second, _ = resolve_effective_model(
+            runtime_id="opencode",
+            profile=profile,
+            requested_model=None,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/v2"},
+        )
+        assert first == "openrouter/v1"
+        assert second == "openrouter/v2"
+        # An explicit profile choice is unaffected by the default change.
+        pinned = _openrouter_profile(default_model="openrouter/pinned")
+        model, source = resolve_effective_model(
+            runtime_id="opencode",
+            profile=pinned,
+            requested_model=None,
+            env={"MOONMIND_OMNIGENT_DEFAULT_MODEL": "openrouter/v2"},
+        )
+        assert model == "openrouter/pinned"
+        assert source == "provider_profile_default"
