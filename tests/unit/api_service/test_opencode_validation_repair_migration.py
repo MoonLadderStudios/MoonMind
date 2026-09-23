@@ -107,8 +107,10 @@ def test_repair_transitions_only_generic_stranded_rows() -> None:
     migration, rows = _run_upgrade(
         [
             _row("eligible"),
+            _row("stranded-without-credential", secret_refs=json.dumps({})),
             _row("explicit-disable", disabled_reason="user_disabled"),
-            _row("no-credential", secret_refs=json.dumps({})),
+            _row("no-credential-other-reason", secret_refs=json.dumps({}),
+                 command_behavior=other_behavior),
             _row(
                 "genuine-rejection",
                 command_behavior=other_behavior,
@@ -135,10 +137,30 @@ def test_repair_transitions_only_generic_stranded_rows() -> None:
     assert behavior["auth_state"] == "connected"
     assert "runtime_revalidation_failure" not in behavior
 
+    # Rows stranded by the historical path carry the generic marker without a
+    # saved key: they return to retryable enrollment pending, not to
+    # connected, and no credential is fabricated.
+    stranded = rows["stranded-without-credential"]
+    assert stranded["enabled"] == 0
+    assert stranded["auth_state"] == "api_key_pending"
+    assert stranded["disabled_reason"] == "missing_credentials"
+    assert json.loads(stranded["secret_refs"]) == {}
+    stranded_behavior = json.loads(stranded["command_behavior"])
+    stranded_readiness = stranded_behavior["auth_readiness"]
+    assert stranded_readiness["connected"] is False
+    assert stranded_readiness["backing_secret_exists"] is False
+    assert stranded_readiness["launch_ready"] is False
+    assert stranded_readiness["failure_reason"] != _GENERIC
+    assert "re-validation scheduled" in stranded_readiness["failure_reason"] or \
+        "Credential required" in stranded_behavior.get("auth_status_label", "")
+    assert stranded_behavior["auth_state"] == "api_key_pending"
+
     # Everything else is byte-identical to its input.
     assert rows["explicit-disable"]["disabled_reason"] == "user_disabled"
     assert rows["explicit-disable"]["enabled"] == 0
-    assert json.loads(rows["no-credential"]["secret_refs"]) == {}
+    assert json.loads(rows["no-credential-other-reason"]["command_behavior"]) == json.loads(
+        other_behavior
+    )
     assert json.loads(rows["genuine-rejection"]["command_behavior"]) == json.loads(
         other_behavior
     )

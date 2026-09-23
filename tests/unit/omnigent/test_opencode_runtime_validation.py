@@ -509,6 +509,21 @@ async def test_installed_requested_image_keeps_original_evidence(
             CREDENTIAL_REJECTED_MARKER,
         ),
         (
+            b"provider returned HTTP 403",
+            HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            "retry without changing the credential",
+        ),
+        (
+            b"HTTP 429 Too Many Requests",
+            HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            "retry without changing the credential",
+        ),
+        (
+            b"HTTP 500 Internal Server Error",
+            HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            "retry without changing the credential",
+        ),
+        (
             b"dial tcp: connection refused",
             HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             "retry without changing the credential",
@@ -530,8 +545,8 @@ async def test_installed_requested_image_keeps_original_evidence(
         ),
         (
             b"unexpected catalog shape",
-            HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
-            "unexpected catalog shape",
+            HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            "retry without changing the credential",
         ),
     ],
 )
@@ -557,8 +572,11 @@ async def test_catalog_failure_classes_keep_stderr_and_disposition(
     ("stderr", "rejected", "transient"),
     [
         (b"invalid api key", True, False),
+        (b"provider returned 403 unauthorized", True, False),
+        (b"provider returned HTTP 403", False, True),
+        (b"HTTP 429 Too Many Requests", False, True),
         (b"connection refused", False, True),
-        (b"unexpected catalog shape", False, False),
+        (b"unexpected catalog shape", False, True),
     ],
 )
 def test_failure_predicates_route_auth_invalid_and_budgets(
@@ -578,6 +596,38 @@ def test_failure_predicates_route_auth_invalid_and_budgets(
 def test_infra_error_never_counts_as_credential_rejection() -> None:
     err = HarnessPlatformError(
         "boom", code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED
+    )
+    assert is_confirmed_credential_rejection(err) is False
+    assert is_transient_validation_error(err) is True
+
+
+def test_catalog_probe_failure_redacts_active_secret() -> None:
+    from moonmind.omnigent.opencode_runtime_validation import (
+        _catalog_probe_failure,
+    )
+
+    secret = "sk-live-secret-value-123"
+    err = _catalog_probe_failure(
+        exit_code=1,
+        stderr=f"Incorrect API key provided: {secret}".encode(),
+        effective_image_ref=EFFECTIVE_IMAGE,
+        secrets_to_redact=(secret,),
+    )
+    assert secret not in str(err)
+    assert "[redacted]" in str(err)
+    # The redacted credential rejection still carries the verdict.
+    assert is_confirmed_credential_rejection(err) is True
+
+
+def test_plain_403_is_not_a_credential_rejection() -> None:
+    from moonmind.omnigent.opencode_runtime_validation import (
+        _catalog_probe_failure,
+    )
+
+    err = _catalog_probe_failure(
+        exit_code=1,
+        stderr=b"provider returned HTTP 403",
+        effective_image_ref=EFFECTIVE_IMAGE,
     )
     assert is_confirmed_credential_rejection(err) is False
     assert is_transient_validation_error(err) is True

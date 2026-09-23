@@ -8,25 +8,37 @@ no longer writes that marker for non-credential failures, but rows already
 written stay stranded: reconciliation never re-probes a disabled profile and
 readiness keeps reporting the generic cause.
 
+The historical API path validated the candidate key before
+``_upsert_managed_secret`` ran, and it only persisted the generic marker when
+the profile had no saved ``opencode_api_key`` role yet. The rows actually
+stranded by that path therefore carry the generic marker *without* a saved
+credential. Requiring a saved key would skip exactly the rows needing repair.
+
 This revision performs one explicit, safe transition for eligible rows only:
 
 * OpenCode profiles (``runtime_id == 'opencode'``) whose persisted state is
   exactly the automatic generic marker (``validation_failed`` /
-  ``auth_invalid`` with the generic pinned-runtime failure reason);
-* with a saved credential (``secret_refs`` still holds the
-  ``opencode_api_key`` role) and no explicit user/policy disable.
+  ``auth_invalid`` with the generic pinned-runtime failure reason) and with
+  no explicit user/policy disable.
 
-Eligible rows return to ``connected`` + enabled with credential generation and
-secrets untouched, their readiness restated as unknown-outcome
+Rows with a saved credential (``secret_refs`` still holds the
+``opencode_api_key`` role) return to ``connected`` + enabled with credential
+generation and secrets untouched, their readiness restated as unknown-outcome
 (``launch_ready`` false with an inconclusive-outcome reason), and any stale
 re-validation exhaustion latch retired. The next ordinary reconciliation pass
 re-probes them; a genuinely bad credential simply defers again without being
 re-disabled by this migration.
 
-Rows with absent credentials, explicit disables/revocations, genuinely
-rejected keys (specific failure reasons), non-OpenCode runtimes, or newer
-generations are left exactly as they are. Re-running the upgrade is harmless:
-transitioned rows no longer match the eligibility predicate.
+Rows without a saved credential return to retryable enrollment pending
+(``api_key_pending`` / ``missing_credentials``, disabled but re-enterable)
+with the same inconclusive-outcome reason instead of the terminal generic
+marker. No credential is fabricated; the operator re-enters the key through
+the ordinary setup path.
+
+Rows with explicit disables/revocations, genuinely rejected keys (specific
+failure reasons), non-OpenCode runtimes, or newer generations are left
+exactly as they are. Re-running the upgrade is harmless: transitioned rows
+no longer match the eligibility predicate.
 
 Revision ID: 389_opencode_validation_repair
 Revises: 388_github_event_receipts_3967
@@ -50,15 +62,32 @@ _INCONCLUSIVE_REASON = (
 )
 
 
+def _has_saved_credential(row: object) -> bool:
+    """Report whether a profile row still holds its saved OpenCode API key ref."""
+
+    get = row.get if isinstance(row, dict) else getattr
+    try:
+        secret_refs = get("secret_refs")
+    except Exception:
+        return False
+    if not isinstance(secret_refs, dict):
+        return False
+    return bool(str(secret_refs.get("opencode_api_key") or "").strip())
+
+
 def _eligible_for_recovery(row: object) -> bool:
-    """Report whether one profile row carries only the automatic generic marker."""
+    """Report whether one profile row carries only the automatic generic marker.
+
+    The historical enrollment path validated before persisting the secret, so
+    genuinely stranded rows usually have *no* saved ``opencode_api_key`` role.
+    Credential presence selects the recovery target, never eligibility.
+    """
 
     get = row.get if isinstance(row, dict) else getattr
     try:
         runtime_id = get("runtime_id")
         auth_state = get("auth_state")
         disabled_reason = get("disabled_reason")
-        secret_refs = get("secret_refs")
         behavior = get("command_behavior")
     except Exception:
         return False
@@ -68,10 +97,6 @@ def _eligible_for_recovery(row: object) -> bool:
         return False
     if str(disabled_reason or "").lower() != "auth_invalid":
         return False
-    if not isinstance(secret_refs, dict):
-        return False
-    if not str(secret_refs.get("opencode_api_key") or "").strip():
-        return False
     if not isinstance(behavior, dict):
         return False
     readiness = behavior.get("auth_readiness") or {}
@@ -80,18 +105,25 @@ def _eligible_for_recovery(row: object) -> bool:
     return readiness.get("failure_reason") == _GENERIC_PINNED_FAILURE
 
 
-def _recovered_behavior(behavior: dict) -> dict:
+def _recovered_behavior(behavior: dict, *, has_credential: bool) -> dict:
     """Restate one eligible behavior payload as unknown-outcome recovery."""
 
     recovered = dict(behavior)
     readiness = dict(recovered.get("auth_readiness") or {})
-    readiness["connected"] = True
-    readiness["backing_secret_exists"] = True
+    readiness["connected"] = bool(has_credential)
+    readiness["backing_secret_exists"] = bool(has_credential)
     readiness["launch_ready"] = False
     readiness["failure_reason"] = _INCONCLUSIVE_REASON
     recovered["auth_readiness"] = readiness
-    recovered["auth_state"] = "connected"
-    recovered["auth_status_label"] = "Re-validation scheduled"
+    if has_credential:
+        recovered["auth_state"] = "connected"
+        recovered["auth_status_label"] = "Re-validation scheduled"
+    else:
+        # No key was ever persisted: return to retryable enrollment pending
+        # without fabricating a credential. The operator re-enters the key
+        # through the ordinary setup path.
+        recovered["auth_state"] = "api_key_pending"
+        recovered["auth_status_label"] = "Credential required — re-enter API key"
     recovered.pop("runtime_revalidation_failure", None)
     return recovered
 
@@ -112,17 +144,31 @@ def upgrade() -> None:
         record = dict(row)
         if not _eligible_for_recovery(record):
             continue
+        has_credential = _has_saved_credential(record)
+        if has_credential:
+            values = {
+                "enabled": True,
+                "auth_state": "connected",
+                "disabled_reason": None,
+                "command_behavior": _recovered_behavior(
+                    dict(record["command_behavior"] or {}),
+                    has_credential=True,
+                ),
+            }
+        else:
+            values = {
+                "enabled": False,
+                "auth_state": "api_key_pending",
+                "disabled_reason": "missing_credentials",
+                "command_behavior": _recovered_behavior(
+                    dict(record["command_behavior"] or {}),
+                    has_credential=False,
+                ),
+            }
         connection.execute(
             profiles.update()
             .where(profiles.c.profile_id == record["profile_id"])
-            .values(
-                enabled=True,
-                auth_state="connected",
-                disabled_reason=None,
-                command_behavior=_recovered_behavior(
-                    dict(record["command_behavior"] or {})
-                ),
-            )
+            .values(**values)
         )
 
 
