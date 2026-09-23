@@ -93,6 +93,49 @@ async def test_guard_completes_lease_release_when_maintainer_is_cancelled() -> N
 
 
 @pytest.mark.asyncio
+async def test_guard_keeps_shutdown_cancellation_when_release_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A Temporal release error must not keep the cancelled maintainer alive."""
+
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def release_lease(_lease: object) -> None:
+        started.set()
+        await finish.wait()
+        raise RuntimeError("Temporal release unavailable")
+
+    guard = maintenance.CredentialMaintenanceGuard(
+        lease_client=SimpleNamespace(release_lease=release_lease),
+        lease=SimpleNamespace(lease_id="validation-lease"),
+    )
+    task = asyncio.create_task(guard.release())
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert "Temporal release unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_guard_reports_release_failure_without_cancellation() -> None:
+    async def release_lease(_lease: object) -> None:
+        raise RuntimeError("Temporal release unavailable")
+
+    guard = maintenance.CredentialMaintenanceGuard(
+        lease_client=SimpleNamespace(release_lease=release_lease),
+        lease=SimpleNamespace(lease_id="validation-lease"),
+    )
+    with pytest.raises(RuntimeError, match="Temporal release unavailable"):
+        await guard.release()
+
+
+@pytest.mark.asyncio
 async def test_drain_returns_janitor_result(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _install_adapter(
         monkeypatch, _ImmediateHandle({"cleaned": 2, "profile_id": "p"})
