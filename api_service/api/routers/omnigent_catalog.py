@@ -186,9 +186,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
         _SCHEMA_VERSION, alias="schemaVersion"
     )
     runtime_id: Literal["omnigent"] = Field("omnigent", alias="runtimeId")
-    display_name: Literal["Omnigent"] = Field(
-        "Omnigent", alias="displayName"
-    )
+    display_name: Literal["Omnigent"] = Field("Omnigent", alias="displayName")
     agent_kind: Literal["external"] = Field("external", alias="agentKind")
     agent_id: Literal["omnigent"] = Field("omnigent", alias="agentId")
     # MoonLadderStudios/MoonMind#3933: the legacy Codex readiness projection
@@ -235,9 +233,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
                     f"harness {item} has no approved product registration"
                 ) from exc
             if registration.authModel != "oauth_volume":
-                raise ValueError(
-                    f"harness {item} is not an OAuth host harness"
-                )
+                raise ValueError(f"harness {item} is not an OAuth host harness")
         return value
 
 
@@ -261,9 +257,7 @@ class GenericExecutionTargetReadiness(BaseModel):
     # which leaves the path explicit rather than promoted.
     rollout_target_id: str | None = Field(default=None, alias="rolloutTargetId")
     rollout_state: str | None = Field(default=None, alias="rolloutState")
-    rollout_generation: int | None = Field(
-        default=None, alias="rolloutGeneration"
-    )
+    rollout_generation: int | None = Field(default=None, alias="rolloutGeneration")
     rollout_policy_version: str | None = Field(
         default=None, alias="rolloutPolicyVersion"
     )
@@ -403,7 +397,7 @@ _REASONS: dict[str, tuple[str, str]] = {
         "/settings#omnigent",
     ),
     "omnigent_admission_readiness_failed": (
-        "Restore the blocked Omnigent runtime capability or refresh its protected evidence.",
+        "Omnigent runtime is not ready.",
         "/settings#omnigent",
     ),
     "omnigent_capacity_wait": (
@@ -519,9 +513,7 @@ def free_model_gate_reasons_for_profile(row: Any) -> dict[str, str]:
             catalog_ids_from_evidence,
         )
 
-        if default_model and default_model not in catalog_ids_from_evidence(
-            evidence
-        ):
+        if default_model and default_model not in catalog_ids_from_evidence(evidence):
             reasons["availability"] = f"not_in_catalog:{default_model}"
     privacy_reason: str | None = None
     if provider_id == "opencode":
@@ -540,8 +532,7 @@ def free_model_gate_reasons_for_profile(row: Any) -> dict[str, str]:
         if (
             supported is not None
             and default_effort
-            and default_effort.lower()
-            not in {item.lower() for item in supported}
+            and default_effort.lower() not in {item.lower() for item in supported}
         ):
             reasons["capability"] = f"unsupported_effort:{default_effort}"
     return reasons
@@ -557,9 +548,15 @@ def free_model_gate_reason(reasons: dict[str, str]) -> GateReason:
     never reported here: saturated capacity uses omnigent_capacity_wait /
     profile_capacity_unavailable as a wait state, never a paid fallback.
     """
-    ordered = {k: reasons[k] for k in ("availability", "pricing", "capability", "privacy") if k in reasons}
+    ordered = {
+        k: reasons[k]
+        for k in ("availability", "pricing", "capability", "privacy")
+        if k in reasons
+    }
     ordered.update({k: v for k, v in reasons.items() if k not in ordered})
-    detail = ", ".join(f"{axis}={value}" for axis, value in ordered.items()) or "unknown"
+    detail = (
+        ", ".join(f"{axis}={value}" for axis, value in ordered.items()) or "unknown"
+    )
     base = _reason("no_eligible_free_model")
     return GateReason(
         code=base.code,
@@ -889,7 +886,6 @@ class LiveDeploymentReadiness:
     enforced_egress_profile_refs: frozenset[str] = frozenset()
     workflow_types: frozenset[str] = frozenset()
     activity_types: frozenset[str] = frozenset()
-    immutable_worker_build: bool = False
 
 
 async def _live_deployment_readiness() -> LiveDeploymentReadiness:
@@ -920,8 +916,6 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
     backend_ready = False
     workflow_types: set[str] = set()
     activity_types: set[str] = set()
-    agent_build_id = ""
-    agent_build_ready = False
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             response = await client.get(agent_worker_url)
@@ -935,12 +929,6 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
             and backend.get("ready") is True
         )
         activity_types = {str(value) for value in payload.get("activityTypes", [])}
-        agent_build_id = str(payload.get("buildId") or "").strip()
-        agent_build_ready = bool(
-            payload.get("immutableReleaseIdentity") is True
-            and agent_build_id
-            and str(payload.get("registryFingerprint") or "").strip()
-        )
         enforced_network_refs = {
             str(value) for value in backend.get("enforcedNetworkRefs", [])
         }
@@ -951,8 +939,6 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
         # Readiness is fail-closed; malformed or unavailable worker metadata
         # must not advertise launch authority.
         pass
-    workflow_build_id = ""
-    workflow_build_ready = False
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             response = await client.get(workflow_worker_url)
@@ -964,22 +950,26 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
             and settings.temporal.workflow_task_queue in task_queues
         )
         if workflow_ready:
-            workflow_types = {str(value) for value in payload.get("workflowTypes", [])}
-        workflow_build_id = str(payload.get("buildId") or "").strip()
-        workflow_build_ready = bool(
-            workflow_ready
-            and payload.get("immutableReleaseIdentity") is True
-            and workflow_build_id
-            and str(payload.get("registryFingerprint") or "").strip()
-        )
+            children = payload.get("children")
+            if children is None:
+                workflow_types = {
+                    str(value) for value in payload.get("workflowTypes", [])
+                }
+            elif isinstance(children, list):
+                # The supervisor publishes a union at its top level. Require
+                # the workflow type and selected queue on the same ready child.
+                workflow_types = {
+                    str(workflow_type)
+                    for child in children
+                    if isinstance(child, dict)
+                    and child.get("ready") is True
+                    and settings.temporal.workflow_task_queue
+                    in child.get("taskQueues", [])
+                    for workflow_type in child.get("workflowTypes", [])
+                }
     except (httpx.HTTPError, ValueError, TypeError, AttributeError):
         # Readiness is fail-closed; malformed or unavailable worker metadata must not advertise launch authority.
         pass
-    immutable_worker_build = bool(
-        agent_build_ready
-        and workflow_build_ready
-        and agent_build_id == workflow_build_id
-    )
     return LiveDeploymentReadiness(
         endpoint_ready=endpoint_ready,
         backend_ready=backend_ready,
@@ -989,7 +979,6 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
         ),
         workflow_types=frozenset(workflow_types if backend_ready else ()),
         activity_types=frozenset(activity_types if backend_ready else ()),
-        immutable_worker_build=immutable_worker_build if backend_ready else False,
     )
 
 
@@ -1246,13 +1235,10 @@ async def get_omnigent_codex_catalog_readiness(
                 # The profile is launch-ready but the free-route policy blocks
                 # it: show exactly those axes, not the generic validation
                 # fallback.
-                gate_reasons = [
-                    free_model_gate_reason(free_route_blocked_reasons)
-                ]
+                gate_reasons = [free_model_gate_reason(free_route_blocked_reasons)]
             else:
                 gate_reasons = [
-                    _reason(code)
-                    for code in codes or ["profile_validation_required"]
+                    _reason(code) for code in codes or ["profile_validation_required"]
                 ]
             ineligible.append(
                 IneligibleProviderProfile(
@@ -1593,9 +1579,11 @@ async def get_omnigent_codex_catalog_readiness(
                 build_observation_fresh and observed_build_matches_support
             ),
             websocket_available=_websocket_runtime_available(),
-            worker_backend_ready=(
-                live_readiness.backend_ready and live_readiness.immutable_worker_build
-            ),
+            # /readyz proves the agent worker route and container backend.
+            # The workflow route is checked separately through its registered
+            # workflow type. A workflow supervisor exposes build IDs per child,
+            # and independent worker builds need not share an identity.
+            worker_backend_ready=live_readiness.backend_ready,
             container_backend_ready=backend_ready,
             observation_age=freshest_observation_age,
             janitor_healthy=janitor_healthy,
@@ -1633,6 +1621,19 @@ async def get_omnigent_codex_catalog_readiness(
             if admission.wait_for_capacity
             else "omnigent_admission_readiness_failed"
         )
+        if admission.structural_blocking:
+            gate = gate.model_copy(
+                update={
+                    "message": (
+                        f"{gate.message} Blocked capabilities: "
+                        + ", ".join(
+                            capability.value
+                            for capability in admission.structural_blocking
+                        )
+                        + "."
+                    )
+                }
+            )
         profile_views = [
             item.model_copy(
                 update={
@@ -1808,15 +1809,10 @@ async def get_omnigent_execution_readiness(
             view
             for view in rollout_catalog
             if view.harness_id == profile.harness.id
-            and view.path_class
-            is RuntimeProviderPathClass.generic_omnigent
+            and view.path_class is RuntimeProviderPathClass.generic_omnigent
         ]
         rollout_view = next(
-            (
-                view
-                for view in rollout_views
-                if view.explicit_selection_allowed
-            ),
+            (view for view in rollout_views if view.explicit_selection_allowed),
             rollout_views[0] if rollout_views else None,
         )
         rollout_blocked = bool(rollout_views) and not any(
@@ -1901,7 +1897,9 @@ async def get_omnigent_execution_readiness(
                         or "native-server",
                         materializer_refs=[materializer],
                         requested_host_mode=get_launch_policy(policy_ref).hostMode,
-                        requested_host_class_ref=harness_registration(harness.id).hostClassRef,
+                        requested_host_class_ref=harness_registration(
+                            harness.id
+                        ).hostClassRef,
                     )
                     for policy_ref in policy_refs
                 ]
@@ -1965,9 +1963,7 @@ async def get_omnigent_execution_readiness(
                     else None
                 ),
                 rolloutPolicyVersion=(
-                    rollout_view.policy_version
-                    if rollout_view is not None
-                    else None
+                    rollout_view.policy_version if rollout_view is not None else None
                 ),
                 compatibilityPath=bool(
                     rollout_view.compatibility_path

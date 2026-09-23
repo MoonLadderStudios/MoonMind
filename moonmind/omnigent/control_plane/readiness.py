@@ -9,11 +9,10 @@ capability results).
 
 Two issue invariants are structural:
 
-* **Fail closed for new admission.** A capability is ``READY`` only when it is
-  explicitly observed ready. An unknown (``None``) or negative signal makes the
-  session inadmissible — admission never proceeds on absent evidence
-  (acceptance criterion "new-admission readiness includes actual runtime
-  capability and evidence freshness").
+* **Fail closed for operational admission.** Required runtime capabilities must
+  be observed ready. Prior-run observations and protected release-support
+  evidence remain visible, but their absence does not prevent an otherwise
+  safe first launch or a subsequent launch after an image update.
 * **Historical reads and cleanup stay available.** Inadmissibility only gates
   *new* work; :attr:`AdmissionReadiness.allow_historical_reads` and
   :attr:`AdmissionReadiness.allow_cleanup` remain ``True`` so existing sessions
@@ -21,17 +20,14 @@ Two issue invariants are structural:
 
 MoonLadderStudios/MoonMind#3885 adds a third invariant:
 
-* **Stable qualification is separate from transient availability.** A
-  capability is either :attr:`ReadinessClass.STRUCTURAL` (this deployment can
-  run the combination at all) or :attr:`ReadinessClass.TRANSIENT` (this
-  deployment currently has a free slot). Structural capabilities fail closed on
-  unknown, as before. Transient capabilities are *observed pressure*: unknown
-  means "no pressure observed" and never blocks, and observed saturation makes
-  new work :attr:`AdmissionReadiness.wait_for_capacity` — durable waiting —
-  while :attr:`AdmissionReadiness.structurally_supported` stays ``True``. A
-  busy or throttled installation therefore does not flap to structurally
-  unsupported and can never be read as a reason to substitute another
-  credential, profile, or runtime.
+* **Operational qualification is separate from transient availability.** A
+  capability is either :attr:`ReadinessClass.STRUCTURAL` (stable runtime or
+  support state) or :attr:`ReadinessClass.TRANSIENT` (a free slot right now).
+  Required structural runtime capabilities fail closed on unknown. Transient
+  capabilities are *observed pressure*: unknown means "no pressure observed"
+  and never blocks. Observed saturation makes new work
+  :attr:`AdmissionReadiness.wait_for_capacity` — durable waiting — while
+  :attr:`AdmissionReadiness.structurally_supported` stays ``True``.
 """
 
 from __future__ import annotations
@@ -90,8 +86,8 @@ TRANSIENT_CAPABILITIES: frozenset[ReadinessCapability] = frozenset(
     }
 )
 
-#: Capabilities whose absence means this deployment is not qualified to run the
-#: combination at all. These fail closed on unknown.
+#: Stable runtime and release-support signals, separate from current pressure.
+#: Only the operational subset in REQUIRED_FOR_ADMISSION gates new work.
 STRUCTURAL_CAPABILITIES: frozenset[ReadinessCapability] = frozenset(
     capability
     for capability in ReadinessCapability
@@ -109,9 +105,25 @@ def readiness_class(capability: ReadinessCapability) -> ReadinessClass:
     )
 
 
-#: Capabilities required before a *new* session may be admitted. Every declared
-#: capability is required: admission fails closed unless all are READY.
-REQUIRED_FOR_ADMISSION: frozenset[ReadinessCapability] = frozenset(ReadinessCapability)
+#: Operational capabilities required before a new session may be admitted.
+#: The other signals describe prior-run observations or protected release
+#: qualification. Requiring them here makes the first ordinary launch
+#: impossible and lets an expired acceptance artifact disable local work.
+#: Image digest validity and policy compatibility are checked by the launch
+#: policy and host owners, independently of the protected support matrix.
+REQUIRED_FOR_ADMISSION: frozenset[ReadinessCapability] = frozenset(
+    {
+        ReadinessCapability.RECONCILER_GENERATION,
+        ReadinessCapability.SCHEMA,
+        ReadinessCapability.WEBSOCKET,
+        ReadinessCapability.WORKER_BACKEND,
+        ReadinessCapability.CONTAINER_BACKEND,
+        ReadinessCapability.JANITOR,
+        ReadinessCapability.PROVIDER_CAPACITY,
+        ReadinessCapability.HOST_CAPACITY,
+        ReadinessCapability.WORKER_CAPACITY,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -127,11 +139,12 @@ class CapabilityReadiness:
 
 @dataclass(frozen=True)
 class ReadinessInputs:
-    """Observed capability signals. ``None`` means *unknown* (fails closed).
+    """Observed capability signals. ``None`` means *unknown*.
 
     Boolean capability flags: ``True`` ready, ``False`` not ready, ``None``
-    unknown. Evidence freshness is expressed as an age plus a max age; a missing
-    age is unknown.
+    unknown. Required operational capabilities fail closed on unknown. Evidence
+    freshness is expressed as an age plus a max age; a missing age is unknown
+    for support reporting without becoming a launch blocker.
     """
 
     reconciler_generation_ready: Optional[bool] = None
@@ -188,7 +201,7 @@ class AdmissionReadiness:
 
     @property
     def structural_blocking(self) -> tuple[ReadinessCapability, ...]:
-        """Capabilities whose absence disqualifies this deployment."""
+        """Required operational capabilities that disqualify new admission."""
 
         return tuple(
             capability
@@ -208,7 +221,7 @@ class AdmissionReadiness:
 
     @property
     def structurally_supported(self) -> bool:
-        """Whether the deployment is qualified, ignoring current pressure."""
+        """Whether operational admission is ready, ignoring current pressure."""
 
         return not self.structural_blocking
 
@@ -293,68 +306,98 @@ def evaluate_admission_readiness(
             ReadinessCapability.RECONCILER_GENERATION,
             _flag_state(inputs.reconciler_generation_ready),
         ),
-        CapabilityReadiness(ReadinessCapability.SCHEMA, _flag_state(inputs.schema_compatible)),
         CapabilityReadiness(
-            ReadinessCapability.PROVIDER_SNAPSHOT, _flag_state(inputs.provider_snapshot_ready)
+            ReadinessCapability.SCHEMA, _flag_state(inputs.schema_compatible)
         ),
         CapabilityReadiness(
-            ReadinessCapability.EVENT_TRANSPORT, _flag_state(inputs.event_transport_ready)
+            ReadinessCapability.PROVIDER_SNAPSHOT,
+            _flag_state(inputs.provider_snapshot_ready),
         ),
-        CapabilityReadiness(ReadinessCapability.SERVER_BUILD, _flag_state(inputs.server_build_ready)),
-        CapabilityReadiness(ReadinessCapability.UI_BUILD, _flag_state(inputs.ui_build_ready)),
-        CapabilityReadiness(ReadinessCapability.HOST_BUILD, _flag_state(inputs.host_build_ready)),
+        CapabilityReadiness(
+            ReadinessCapability.EVENT_TRANSPORT,
+            _flag_state(inputs.event_transport_ready),
+        ),
+        CapabilityReadiness(
+            ReadinessCapability.SERVER_BUILD, _flag_state(inputs.server_build_ready)
+        ),
+        CapabilityReadiness(
+            ReadinessCapability.UI_BUILD, _flag_state(inputs.ui_build_ready)
+        ),
+        CapabilityReadiness(
+            ReadinessCapability.HOST_BUILD, _flag_state(inputs.host_build_ready)
+        ),
         CapabilityReadiness(
             ReadinessCapability.WEBSOCKET,
             _flag_state(inputs.websocket_available),
-            None if inputs.websocket_available else "WebSocket runtime capability unavailable",
+            (
+                None
+                if inputs.websocket_available
+                else "WebSocket runtime capability unavailable"
+            ),
         ),
         CapabilityReadiness(
             ReadinessCapability.WORKER_BACKEND, _flag_state(inputs.worker_backend_ready)
         ),
         CapabilityReadiness(
-            ReadinessCapability.CONTAINER_BACKEND, _flag_state(inputs.container_backend_ready)
+            ReadinessCapability.CONTAINER_BACKEND,
+            _flag_state(inputs.container_backend_ready),
         ),
         CapabilityReadiness(
             ReadinessCapability.OBSERVATION_FRESHNESS,
             _fresh_state(inputs.observation_age, inputs.observation_max_age),
         ),
-        CapabilityReadiness(ReadinessCapability.JANITOR, _flag_state(inputs.janitor_healthy)),
+        CapabilityReadiness(
+            ReadinessCapability.JANITOR, _flag_state(inputs.janitor_healthy)
+        ),
         CapabilityReadiness(
             ReadinessCapability.EXACT_IMAGE,
             _flag_state(inputs.exact_image_conformant),
-            None if inputs.exact_image_conformant else "exact-image conformance not confirmed",
+            (
+                None
+                if inputs.exact_image_conformant
+                else "exact-image conformance not confirmed"
+            ),
         ),
         CapabilityReadiness(
             ReadinessCapability.PROTECTED_LIVE_EVIDENCE,
             _fresh_state(
-                inputs.protected_live_evidence_age, inputs.protected_live_evidence_max_age
+                inputs.protected_live_evidence_age,
+                inputs.protected_live_evidence_max_age,
             ),
         ),
         CapabilityReadiness(
             ReadinessCapability.PROVIDER_CAPACITY,
             _capacity_state(inputs.provider_capacity_available),
-            None
-            if inputs.provider_capacity_available is not False
-            else "Provider Profile capacity is fully utilized; new work waits.",
+            (
+                None
+                if inputs.provider_capacity_available is not False
+                else "Provider Profile capacity is fully utilized; new work waits."
+            ),
         ),
         CapabilityReadiness(
             ReadinessCapability.HOST_CAPACITY,
             _capacity_state(inputs.host_capacity_available),
-            None
-            if inputs.host_capacity_available is not False
-            else "Generic host capacity is fully utilized; new work waits.",
+            (
+                None
+                if inputs.host_capacity_available is not False
+                else "Generic host capacity is fully utilized; new work waits."
+            ),
         ),
         CapabilityReadiness(
             ReadinessCapability.WORKER_CAPACITY,
             _capacity_state(inputs.worker_capacity_available),
-            None
-            if inputs.worker_capacity_available is not False
-            else "Execution worker capacity is fully utilized; new work waits.",
+            (
+                None
+                if inputs.worker_capacity_available is not False
+                else "Execution worker capacity is fully utilized; new work waits."
+            ),
         ),
     )
 
     admit_new = all(
-        entry.ready for entry in capabilities if entry.capability in REQUIRED_FOR_ADMISSION
+        entry.ready
+        for entry in capabilities
+        if entry.capability in REQUIRED_FOR_ADMISSION
     )
     return AdmissionReadiness(admit_new=admit_new, capabilities=capabilities)
 

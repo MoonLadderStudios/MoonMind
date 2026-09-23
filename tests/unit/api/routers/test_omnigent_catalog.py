@@ -44,7 +44,7 @@ def _set_ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
                     "failureCode": None,
                     "serverImageRef": server_ref,
                     "hostImageRef": host_ref,
-                }
+                },
             },
         ),
     )
@@ -248,7 +248,6 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
                     "integration.omnigent.oauth_host_janitor",
                 }
             ),
-            immutable_worker_build=True,
         )
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
@@ -677,6 +676,35 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     assert response.json()["available"] is True
 
 
+def test_codex_first_launch_does_not_require_protected_support_artifacts(monkeypatch):
+    client = TestClient(
+        _app(
+            monkeypatch,
+            session=_Session(
+                [_profile()],
+                bridge_sessions=(),
+                latest_observation_at=None,
+            ),
+        )
+    )
+    monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE", raising=False)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION", raising=False)
+    monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
+
+    body = client.get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is True
+    assert body["admissionReadiness"]["admitNew"] is True
+    assert body["gateReasons"] == []
+    assert any(profile["available"] for profile in body["executionProfiles"])
+    assert {
+        "acceptance_evidence_unavailable",
+        "exact_artifact_evidence_unavailable",
+        "live_verification_stale",
+    } <= {reason["code"] for reason in body["supportGateReasons"]}
+
+
 def test_reconciler_readiness_uses_the_actual_static_workflow_registration():
     assert catalog._reconciler_generation_available() is True
 
@@ -757,16 +785,13 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
         reason["code"] for reason in body["supportGateReasons"]
     }
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v2"
-    assert body["available"] is False
-    assert set(body["admissionReadiness"]["blocking"]) >= {
-        "provider_snapshot",
-        "event_transport",
-        "server_build",
-        "ui_build",
-        "host_build",
-        "exact_image",
-        "protected_live_evidence",
+    assert body["available"] is True
+    assert body["admissionReadiness"]["blocking"] == []
+    capabilities = {
+        item["capability"]: item["state"]
+        for item in body["admissionReadiness"]["capabilities"]
     }
+    assert capabilities["protected_live_evidence"] == "unknown"
     assert body["cutover"] == {
         "policyVersion": "moonmind.codex-omnigent-cutover/v1",
         "configuredPhase": "opt_in",
@@ -996,7 +1021,7 @@ def test_catalog_projects_authoritative_deployment_gates(
         ("/evidence/matrix.json", ""),
     ],
 )
-def test_catalog_fails_closed_when_protected_acceptance_evidence_is_missing(
+def test_catalog_reports_missing_protected_acceptance_evidence_without_blocking_launch(
     monkeypatch, manifest_path, source_commit
 ):
     app = _app(monkeypatch, session=_Session([_profile()]))
@@ -1012,12 +1037,12 @@ def test_catalog_fails_closed_when_protected_acceptance_evidence_is_missing(
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
-    assert body["available"] is False
+    assert body["available"] is True
     assert "acceptance_evidence_unavailable" in {
         reason["code"] for reason in body["supportGateReasons"]
     }
-    assert "protected_live_evidence" in body["admissionReadiness"]["blocking"]
-    assert "omnigent_admission_readiness_failed" in {
+    assert body["admissionReadiness"]["blocking"] == []
+    assert "omnigent_admission_readiness_failed" not in {
         reason["code"] for reason in body["gateReasons"]
     }
 
@@ -1039,6 +1064,13 @@ def test_catalog_fails_closed_on_missing_loaded_runtime_capability(
 
     assert body["available"] is False
     assert capability in body["admissionReadiness"]["blocking"]
+    reason = next(
+        item
+        for item in body["gateReasons"]
+        if item["code"] == "omnigent_admission_readiness_failed"
+    )
+    assert capability in reason["message"]
+    assert "protected evidence" not in reason["message"]
     assert body["admissionReadiness"]["allowHistoricalReads"] is True
     assert body["admissionReadiness"]["allowCleanup"] is True
 
@@ -1353,7 +1385,9 @@ def test_catalog_fails_closed_on_live_service_readiness(
     assert expected in {reason["code"] for reason in body["gateReasons"]}
 
 
-def test_catalog_blocks_new_admission_on_stale_persisted_observation(monkeypatch):
+def test_catalog_reports_stale_persisted_observation_without_blocking_launch(
+    monkeypatch,
+):
     session = _Session(
         [_profile()],
         latest_observation_at=datetime.now(UTC) - timedelta(minutes=11),
@@ -1363,7 +1397,13 @@ def test_catalog_blocks_new_admission_on_stale_persisted_observation(monkeypatch
         .get("/api/omnigent/codex-catalog-readiness")
         .json()
     )
-    assert "observation_freshness" in body["admissionReadiness"]["blocking"]
+    assert body["available"] is True
+    assert body["admissionReadiness"]["blocking"] == []
+    capabilities = {
+        item["capability"]: item["state"]
+        for item in body["admissionReadiness"]["capabilities"]
+    }
+    assert capabilities["observation_freshness"] == "not_ready"
     assert body["admissionReadiness"]["allowHistoricalReads"] is True
     assert body["admissionReadiness"]["allowCleanup"] is True
 
@@ -1381,7 +1421,6 @@ def test_catalog_blocks_new_admission_when_janitor_activity_is_not_deployed(
             enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
             workflow_types=frozenset({"MoonMind.AgentSession"}),
             activity_types=frozenset({"agent_runtime.reconcile_managed_sessions"}),
-            immutable_worker_build=True,
         )
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", readiness)
@@ -1391,7 +1430,7 @@ def test_catalog_blocks_new_admission_when_janitor_activity_is_not_deployed(
     assert body["admissionReadiness"]["allowCleanup"] is True
 
 
-def test_catalog_blocks_new_admission_on_stale_build_manifest(monkeypatch):
+def test_catalog_keeps_stale_build_manifest_out_of_launch_gates(monkeypatch):
     app = _app(monkeypatch, session=_Session([_profile()]))
     monkeypatch.setattr(
         catalog.Path,
@@ -1408,12 +1447,18 @@ def test_catalog_blocks_new_admission_on_stale_build_manifest(monkeypatch):
         ),
     )
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
-    assert "exact_image" in body["admissionReadiness"]["blocking"]
+    assert body["available"] is True
+    assert body["admissionReadiness"]["blocking"] == []
+    capabilities = {
+        item["capability"]: item["state"]
+        for item in body["admissionReadiness"]["capabilities"]
+    }
+    assert capabilities["exact_image"] == "not_ready"
     assert body["admissionReadiness"]["allowHistoricalReads"] is True
     assert body["admissionReadiness"]["allowCleanup"] is True
 
 
-def test_healthy_generic_endpoint_does_not_infer_provider_capabilities(monkeypatch):
+def test_healthy_endpoint_does_not_require_prior_run_observations(monkeypatch):
     body = (
         TestClient(
             _app(
@@ -1425,17 +1470,20 @@ def test_healthy_generic_endpoint_does_not_infer_provider_capabilities(monkeypat
         .json()
     )
 
-    assert body["available"] is False
-    assert set(body["admissionReadiness"]["blocking"]) >= {
-        "provider_snapshot",
-        "event_transport",
-        "observation_freshness",
+    assert body["available"] is True
+    assert body["admissionReadiness"]["blocking"] == []
+    capabilities = {
+        item["capability"]: item["state"]
+        for item in body["admissionReadiness"]["capabilities"]
     }
+    assert capabilities["provider_snapshot"] == "not_ready"
+    assert capabilities["event_transport"] == "not_ready"
+    assert capabilities["observation_freshness"] == "unknown"
     assert body["admissionReadiness"]["allowHistoricalReads"] is True
     assert body["admissionReadiness"]["allowCleanup"] is True
 
 
-def test_configured_images_do_not_replace_observed_deployment_manifest(monkeypatch):
+def test_previous_image_observation_does_not_block_new_policy_launch(monkeypatch):
     body = (
         TestClient(
             _app(
@@ -1452,18 +1500,18 @@ def test_configured_images_do_not_replace_observed_deployment_manifest(monkeypat
         .json()
     )
 
-    assert body["available"] is False
-    assert set(body["admissionReadiness"]["blocking"]) >= {
-        "server_build",
-        "ui_build",
-        "host_build",
-        "exact_image",
+    assert body["available"] is True
+    assert body["admissionReadiness"]["blocking"] == []
+    capabilities = {
+        item["capability"]: item["state"]
+        for item in body["admissionReadiness"]["capabilities"]
     }
+    assert capabilities["exact_image"] == "not_ready"
     assert body["admissionReadiness"]["allowHistoricalReads"] is True
     assert body["admissionReadiness"]["allowCleanup"] is True
 
 
-def test_stale_authenticated_bootstrap_evidence_fails_closed(monkeypatch):
+def test_stale_authenticated_bootstrap_evidence_cannot_qualify_support(monkeypatch):
     monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
     client = TestClient(
         _app(
@@ -1488,13 +1536,10 @@ def test_stale_authenticated_bootstrap_evidence_fails_closed(monkeypatch):
         },
     ).json()
 
-    assert body["available"] is False
-    assert set(body["admissionReadiness"]["blocking"]) >= {
-        "provider_snapshot",
-        "event_transport",
-        "server_build",
-        "host_build",
-        "protected_live_evidence",
+    assert body["available"] is True
+    assert body["admissionReadiness"]["blocking"] == []
+    assert "acceptance_evidence_unavailable" in {
+        reason["code"] for reason in body["supportGateReasons"]
     }
 
 
@@ -1565,8 +1610,95 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
                     "integration.omnigent.oauth_host_janitor",
                 }
             ),
-            immutable_worker_build=True,
         )
+    )
+
+
+@pytest.mark.parametrize("agent_session_on_workflow_queue", [True, False])
+def test_catalog_checks_workflow_supervisor_child_registration(
+    monkeypatch, agent_session_on_workflow_queue
+):
+    live_readiness = catalog._live_deployment_readiness
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
+    responses = iter(
+        [
+            _HealthResponse(),
+            _HealthResponse(
+                {
+                    "ready": True,
+                    "buildId": "agent-build",
+                    "registryFingerprint": "sha256:agent-registry",
+                    "immutableReleaseIdentity": True,
+                    "taskQueues": ["mm.activity.agent_runtime"],
+                    "activityTypes": [
+                        "agent_runtime.reconcile_managed_sessions",
+                        "integration.omnigent.oauth_host_janitor",
+                    ],
+                    "containerBackend": {
+                        "ready": True,
+                        "enforcedNetworkRefs": [OMNIGENT_EGRESS_NETWORK_REF],
+                        "enforcedEgressProfileRefs": [OMNIGENT_EGRESS_PROFILE.ref],
+                    },
+                }
+            ),
+            _HealthResponse(
+                {
+                    "ready": True,
+                    "taskQueues": ["mm.workflow"],
+                    "workflowTypes": ["MoonMind.AgentSession"],
+                    "buildIds": ["workflow-build"],
+                    "registryFingerprints": ["sha256:workflow-registry"],
+                    "children": [
+                        {
+                            "ready": True,
+                            "taskQueues": ["mm.workflow"],
+                            "workflowTypes": (
+                                ["MoonMind.AgentSession"]
+                                if agent_session_on_workflow_queue
+                                else []
+                            ),
+                            "buildId": "workflow-build",
+                            "registryFingerprint": "sha256:workflow-registry",
+                            "immutableReleaseIdentity": True,
+                        },
+                        {
+                            "ready": True,
+                            "taskQueues": ["mm.workflow.merge_automation"],
+                            "workflowTypes": (
+                                []
+                                if agent_session_on_workflow_queue
+                                else ["MoonMind.AgentSession"]
+                            ),
+                        },
+                    ],
+                }
+            ),
+        ]
+    )
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url):
+            return next(responses)
+
+    monkeypatch.setattr(catalog.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(catalog, "resolved_server_url", lambda: "http://omnigent")
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is agent_session_on_workflow_queue
+    assert body["admissionReadiness"]["admitNew"] is agent_session_on_workflow_queue
+    assert ("reconciler_generation" in body["admissionReadiness"]["blocking"]) is (
+        not agent_session_on_workflow_queue
     )
 
 
