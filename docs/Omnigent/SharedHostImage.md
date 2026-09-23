@@ -112,6 +112,10 @@ a new image fails that check. An ordinary MoonMind update uses the
 deployment controller to record server and host digests and refresh their
 consumers together. An explicit
 `OMNIGENT_SHARED_HOST_IMAGE_REF` pin remains authoritative.
+Active static Codex and Claude host profile services are recreated through
+Compose with their dependencies and health checks when the shared ref advances;
+inactive profiles remain inactive. Compose shell image overrides take precedence
+over values copied into `.env`.
 The former template default `1.18.11` for the default host repository is
 treated as the old mutable channel during an update and advanced to `latest`;
 an operator digest pin continues to select its exact image.

@@ -158,6 +158,51 @@ def test_production_update_reads_operator_pin_not_generated_overlay(
     assert inputs["OMNIGENT_SHARED_HOST_IMAGE_REF"] == UPSTREAM_HOST
 
 
+def test_deployment_inputs_keep_compose_shell_image_override(
+    release_module, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE", "registry.example/private-host")
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_TAG", "qualified")
+    operator_env = tmp_path / ".env"
+    operator_env.write_text(
+        'OMNIGENT_SHARED_HOST_IMAGE="ghcr.io/moonladderstudios/omnigent-host-moonmind"\n'
+        'OMNIGENT_SHARED_HOST_IMAGE_TAG="1.18.11"\n',
+        encoding="utf-8",
+    )
+    inputs = asyncio.run(release_module._default_deployment_inputs(operator_env))
+    assert inputs["OMNIGENT_SHARED_HOST_IMAGE"] == "registry.example/private-host"
+    assert inputs["OMNIGENT_SHARED_HOST_IMAGE_TAG"] == "qualified"
+
+
+def test_release_refreshes_only_active_static_host_profiles(release_module):
+    commands = []
+
+    class Runner:
+        async def up(self, *, command, **_kwargs):
+            commands.append(command)
+            return {"exitCode": 0}
+
+        async def capture_state(self, *, stack, phase):
+            assert stack == "moonmind"
+            assert phase == "pre-static-host-refresh"
+            return {
+                "services": [
+                    {"Service": "omnigent-host-codex", "State": "running"},
+                    {"Service": "omnigent-host-claude", "State": "exited"},
+                ]
+            }
+
+    drivers = release_module.production_drivers(
+        runner=Runner(), moonmind_image="moonmind:updated", actor="release"
+    )
+    asyncio.run(drivers.restart_server({"shared": UPSTREAM_HOST}))
+    assert commands[0][-1] == "omnigent"
+    assert commands[1][-2:] == ("api", "temporal-worker-agent-runtime")
+    assert commands[2][-1] == "omnigent-host-codex"
+    assert "--no-deps" not in commands[2]
+    assert all("omnigent-host-claude" not in command for command in commands)
+
+
 def _load_image_resolution_module(monkeypatch):
     """Load the real image_resolution with its light dependencies stubbed."""
     for name in (
