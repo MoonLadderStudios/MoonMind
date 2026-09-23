@@ -27,6 +27,7 @@ from moonmind.omnigent.harness_platform.shared_host_conformance import (
     build_shared_host_image_inventory,
     get_required_row,
     required_row_for_harness,
+    required_rows_for_harness,
 )
 
 _IMAGE = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "e" * 64
@@ -90,6 +91,44 @@ def test_required_row_catalog_covers_supported_trio_on_generic_realizer():
     assert required_row_for_harness("codex-native").rowId == "codex-shared-generic-v1"
     with pytest.raises(HarnessPlatformError):
         required_row_for_harness("not-a-harness")
+
+
+def test_opencode_rows_disambiguated_by_materializer():
+    # opencode-native owns two required rows (keyed vs credentialless Zen);
+    # a bare harness lookup must fail closed naming both candidates.
+    rows = required_rows_for_harness("opencode-native")
+    assert {row.rowId for row in rows} == {
+        "opencode-shared-generic-v1",
+        "opencode-shared-generic-zen-v1",
+    }
+    with pytest.raises(HarnessPlatformError) as exc:
+        required_row_for_harness("opencode-native")
+    assert "opencode-shared-generic-v1" in str(exc.value)
+    assert "opencode-shared-generic-zen-v1" in str(exc.value)
+    assert (
+        required_row_for_harness(
+            "opencode-native", materializer_ref="opencode-auth-json@1"
+        ).rowId
+        == "opencode-shared-generic-v1"
+    )
+    assert (
+        required_row_for_harness("opencode-native", materializer_ref="none@1").rowId
+        == "opencode-shared-generic-zen-v1"
+    )
+    assert (
+        required_row_for_harness("opencode-native", ownership_class="none").rowId
+        == "opencode-shared-generic-zen-v1"
+    )
+    assert (
+        required_row_for_harness(
+            "opencode-native", ownership_class="run_owned"
+        ).rowId
+        == "opencode-shared-generic-v1"
+    )
+    with pytest.raises(HarnessPlatformError):
+        required_row_for_harness("opencode-native", materializer_ref="nope@1")
+    with pytest.raises(HarnessPlatformError):
+        required_rows_for_harness("not-a-harness")
 
 
 def test_legacy_realizer_cannot_enter_required_catalog():
@@ -223,6 +262,39 @@ def test_one_harness_admission_and_substitution_rejected_before_provider_work():
                 support_combination_key="omnigent-support:sha256:" + "0" * 64,
             )
         )
+    # Extra in-class materializers are also substitution attempts: the
+    # credentialless Zen row must never admit a plan that also selects keyed
+    # auth, and a keyed row must not carry the credentialless selector.
+    with pytest.raises(HarnessPlatformError) as exc:
+        assert_one_harness_admission(
+            **_admission_kwargs(
+                "opencode-shared-generic-zen-v1",
+                materializer_refs=("none@1", "opencode-auth-json@1"),
+            )
+        )
+    assert (
+        exc.value.code
+        == HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE
+    )
+    with pytest.raises(HarnessPlatformError):
+        assert_one_harness_admission(
+            **_admission_kwargs(
+                "opencode-shared-generic-v1",
+                materializer_refs=("opencode-auth-json@1", "none@1"),
+            )
+        )
+    with pytest.raises(HarnessPlatformError):
+        assert_one_harness_admission(
+            **_admission_kwargs(
+                "codex-shared-generic-v1",
+                materializer_refs=("codex-oauth-home@1", "none@1"),
+            )
+        )
+    # The exact single selection still admits each row.
+    assert_one_harness_admission(
+        **_admission_kwargs("opencode-shared-generic-zen-v1")
+    )
+    assert_one_harness_admission(**_admission_kwargs("opencode-shared-generic-v1"))
 
 
 def test_credential_isolation_per_row_names_only():
