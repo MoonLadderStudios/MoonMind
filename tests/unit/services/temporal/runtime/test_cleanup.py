@@ -179,6 +179,44 @@ def test_mm_949_terminal_old_per_run_workspace_is_eligible_in_dry_run(
     assert result.candidate_samples[0].classification == "eligible"
     assert run_root.exists()
 
+
+def test_missing_record_workspace_does_not_exhaust_delete_budget(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    missing = root / "a-missing"
+    retained = root / "z-retained"
+    retained.mkdir(parents=True)
+    (retained / "work.txt").write_text("saved work", encoding="utf-8")
+    os.utime(retained, (OLD.timestamp(), OLD.timestamp()))
+    run_store, session_store = _stores(root)
+    run_store.save(
+        _run("missing", "completed", root=root, workspace_path=str(missing / "repo"))
+    )
+    run_store.save(
+        _run("retained", "completed", root=root, workspace_path=str(retained / "repo"))
+    )
+
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=replace(
+            _config(root, dry_run=False), max_delete_paths=1, record_retention=None
+        ),
+        docker_reference_provider=lambda: DockerReferenceState(),
+        now=lambda: NOW,
+    )
+    result = janitor.run()
+
+    assert result.deleted_roots == 1
+    assert result.estimated_deleted_bytes == len("saved work")
+    assert not retained.exists()
+    assert any(
+        decision.path == str(missing) and decision.classification == "already_absent"
+        for decision in result.decisions
+    )
+
+
 def test_mm_949_filesystem_workspace_without_records_is_ambiguous(
     tmp_path: Path,
 ) -> None:
@@ -460,6 +498,30 @@ def test_mm_949_symlink_and_ambiguous_owner_are_specific_skips(tmp_path: Path) -
 
     assert workspace_classifications["run-symlink"] == "skipped_unsafe_path"
     assert workspace_classifications["run-ambiguous.json"] == "skipped_ambiguous_owner"
+
+
+def test_workspace_through_symlinked_parent_is_unsafe(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    outside = tmp_path / "outside"
+    workspace = outside / "run-1"
+    _touch_old(workspace)
+    root.mkdir()
+    (root / "workspaces").symlink_to(outside, target_is_directory=True)
+    run_store, session_store = _stores(root)
+    run_store.save(
+        _run(
+            "run-1",
+            "completed",
+            root=root,
+            workspace_path=str(root / "workspaces" / "run-1" / "repo"),
+        )
+    )
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert decision.classification == "skipped_unsafe_path"
+    assert workspace.exists()
 
 
 def test_mm_949_live_docker_reference_prevents_deletion(tmp_path: Path) -> None:
