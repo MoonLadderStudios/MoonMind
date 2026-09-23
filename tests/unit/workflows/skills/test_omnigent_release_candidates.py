@@ -107,6 +107,57 @@ def test_resolve_candidates_prefers_upstream_refs(release_module):
     ]
 
 
+def test_deployment_inputs_preserve_explicit_operator_image_pins(
+    release_module, monkeypatch, tmp_path
+):
+    # Generated refs in a running worker are from .env.deploy and must not
+    # freeze the next update. Only an explicit operator .env pin is retained.
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", LIVE_SERVER)
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", LIVE_HOST)
+    operator_env = tmp_path / ".env"
+    operator_env.write_text(
+        f'OMNIGENT_OPENCODE_HOST_IMAGE_REF="{UPSTREAM_HOST}"\n'
+        'OMNIGENT_SHARED_HOST_IMAGE_TAG="latest"\n',
+        encoding="utf-8",
+    )
+    inputs = asyncio.run(release_module._default_deployment_inputs(operator_env))
+    assert "OMNIGENT_IMAGE_REF" not in inputs
+    assert inputs["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] == UPSTREAM_HOST
+    assert inputs["OMNIGENT_SHARED_HOST_IMAGE_TAG"] == "latest"
+
+
+def test_legacy_template_host_tag_advances_with_normal_update(
+    release_module, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", LIVE_HOST)
+    operator_env = tmp_path / ".env"
+    operator_env.write_text(
+        'OMNIGENT_SHARED_HOST_IMAGE="ghcr.io/moonladderstudios/omnigent-host-moonmind"\n'
+        'OMNIGENT_SHARED_HOST_IMAGE_TAG="1.18.11"\n',
+        encoding="utf-8",
+    )
+    inputs = asyncio.run(release_module._default_deployment_inputs(operator_env))
+    assert inputs["OMNIGENT_SHARED_HOST_IMAGE_TAG"] == "latest"
+    assert "OMNIGENT_SHARED_HOST_IMAGE_REF" not in inputs
+
+
+def test_production_update_reads_operator_pin_not_generated_overlay(
+    release_module, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", LIVE_HOST)
+    (tmp_path / ".env").write_text(
+        f'OMNIGENT_SHARED_HOST_IMAGE_REF="{UPSTREAM_HOST}"\n',
+        encoding="utf-8",
+    )
+    drivers = release_module.production_drivers(
+        runner=SimpleNamespace(local_project_dir=str(tmp_path)),
+        moonmind_image="moonmind:updated",
+        actor="release",
+    )
+    inputs = asyncio.run(drivers.deployment_inputs())
+    assert inputs["OMNIGENT_SHARED_HOST_IMAGE_REF"] == UPSTREAM_HOST
+
+
 def _load_image_resolution_module(monkeypatch):
     """Load the real image_resolution with its light dependencies stubbed."""
     for name in (

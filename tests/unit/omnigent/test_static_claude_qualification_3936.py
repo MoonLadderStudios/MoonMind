@@ -191,6 +191,12 @@ def test_effective_launch_image_covers_all_configuration_cases() -> None:
     assert ref is None and supported is False
     with pytest.raises(HarnessPlatformError):
         static_hosts.resolve_effective_static_host_image({})
+    # The bootstrap classifier and Compose must construct the same default tag.
+    ref, supported, _ = static_hosts.classify_effective_static_host_image(
+        {"OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind"}
+    )
+    assert ref == "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
+    assert supported is False
     # Mutable tag construction: development/bootstrap input only.
     ref, supported, reason = static_hosts.classify_effective_static_host_image(
         {
@@ -237,7 +243,7 @@ def test_rendered_compose_anchor_resolves_effective_image_per_case() -> None:
     # trusted boundary rejects as launch authority.
     rendered_default = _rendered({})
     assert rendered_default == (
-        "ghcr.io/moonladderstudios/omnigent-host-moonmind:1.18.11"
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
     )
     _, supported, _ = static_hosts.classify_effective_static_host_image({})
     assert supported is False
