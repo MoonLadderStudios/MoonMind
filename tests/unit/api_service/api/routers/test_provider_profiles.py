@@ -6056,3 +6056,211 @@ async def test_credential_maintenance_status_missing_profile(
         )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_kind", ["transient_infra", "credential_rejected", "missing_image"]
+)
+async def test_opencode_initial_validation_failure_disposition(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    """Initial enrollment distinguishes credential rejection from other causes.
+
+    Only an affirmative provider credential rejection may disable the Profile
+    and persist ``auth_invalid``. Infrastructure, image, discovery, and model
+    failures stay diagnosable and retryable without re-entering credentials.
+    """
+
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+
+    profile_id = f"opencode-initial-disposition-{failure_kind}"
+    raw_key = "candidate-initial-opencode-key"
+    owner = _override_current_user()
+    image_ref = "registry.test/opencode@sha256:" + "a" * 64
+    errors = {
+        "transient_infra": HarnessPlatformError(
+            "OpenCode catalog discovery unavailable (exit 1): connection "
+            "refused; retry without changing the credential",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        ),
+        "credential_rejected": HarnessPlatformError(
+            "OpenCode provider credential rejected by the pinned runtime "
+            "(exit 1): invalid api key",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        ),
+        "missing_image": HarnessPlatformError(
+            f"pinned OpenCode image {image_ref} not found: Error: No such image",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        ),
+    }
+
+    async def _failing_validation(self, **kwargs):
+        raise errors[failure_kind]
+
+    async def _maintenance_guard_override():
+        yield SimpleNamespace(lease=SimpleNamespace(lease_id="maintenance-1"))
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
+        lambda: image_ref,
+    )
+    monkeypatch.setattr(
+        OpenCodeProviderRuntimeValidationService,
+        "validate",
+        _failing_validation,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        AsyncMock(),
+    )
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="opencode",
+                    provider_id="opencode-go",
+                    provider_label="opencode-go",
+                    owner_user_id=owner.id,
+                    credential_source=ProviderCredentialSource.NONE,
+                    runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                    secret_refs={},
+                    credential_generation=1,
+                    enabled=True,
+                    auth_state=ProviderProfileAuthState.API_KEY_PENDING,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+
+    assert raw_key not in response.text
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+    assert persisted is not None
+    if failure_kind == "credential_rejected":
+        assert response.status_code == 422
+        assert "credential rejected" in response.text.lower()
+        assert persisted.enabled is False
+        assert persisted.auth_state is ProviderProfileAuthState.VALIDATION_FAILED
+        assert (
+            persisted.disabled_reason is ProviderProfileDisabledReason.AUTH_INVALID
+        )
+    else:
+        assert response.status_code == 502
+        assert "credential was not changed" in response.text
+        assert persisted.enabled is True
+        assert persisted.auth_state is ProviderProfileAuthState.API_KEY_PENDING
+        assert persisted.disabled_reason is None
+        assert persisted.secret_refs == {}
+
+
+@pytest.mark.asyncio
+async def test_opencode_successful_retry_clears_revalidation_latch(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit validation that succeeds retires stale exhaustion state."""
+
+    from datetime import UTC, datetime
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+
+    profile_id = "opencode-retry-clears-latch"
+    raw_key = "candidate-retry-opencode-key"
+    owner = _override_current_user()
+    image_ref = "registry.test/opencode@sha256:" + "a" * 64
+    evidence = {
+        "credentialGeneration": 1,
+        "imageRef": image_ref,
+        "validatedAt": datetime.now(UTC).isoformat(),
+        "runtimeVersions": {"opencode": "1.18.11"},
+        "models": [{"qualifiedId": "opencode-go/model"}],
+    }
+
+    async def _passing_validation(self, **kwargs):
+        return evidence
+
+    async def _maintenance_guard_override():
+        yield SimpleNamespace(lease=SimpleNamespace(lease_id="maintenance-1"))
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
+        lambda: image_ref,
+    )
+    monkeypatch.setattr(
+        OpenCodeProviderRuntimeValidationService, "validate", _passing_validation
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        AsyncMock(),
+    )
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="opencode",
+                    provider_id="opencode-go",
+                    provider_label="opencode-go",
+                    owner_user_id=owner.id,
+                    credential_source=ProviderCredentialSource.NONE,
+                    runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                    secret_refs={},
+                    credential_generation=1,
+                    enabled=True,
+                    auth_state=ProviderProfileAuthState.API_KEY_PENDING,
+                    command_behavior={
+                        REVALIDATION_FAILURE_KEY: {
+                            "imageRef": image_ref,
+                            "credentialGeneration": 1,
+                            "attempts": 3,
+                            "exhausted": True,
+                        }
+                    },
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+
+    assert response.status_code == 200, response.text
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+    assert persisted is not None
+    assert persisted.auth_state is ProviderProfileAuthState.CONNECTED
+    assert REVALIDATION_FAILURE_KEY not in (persisted.command_behavior or {})

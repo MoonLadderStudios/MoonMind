@@ -4093,22 +4093,42 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                 for link in brief_links
             )
 
+            # Resilience: a malformed agent brief copy must not fail the
+            # workflow. The trusted loader's durable brief remains
+            # authoritative; publication skips the copy and preserves progress.
             brief_path.write_text("not-json", encoding="utf-8")
-            with pytest.raises(
-                TemporalActivityRuntimeError,
-                match="issue brief artifact could not be read as JSON",
-            ):
-                await activities.agent_runtime_publish_artifacts(
-                    AgentRunResult(
-                        summary="Completed with malformed required brief.",
-                        metadata={
-                            "agentRunId": "assess-run-1",
-                            "brief_artifact_path": (
-                                "artifacts/jira-implement-brief.json"
-                            ),
-                        },
-                    )
+            recovered = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed with malformed brief copy.",
+                    metadata={
+                        "agentRunId": "assess-run-1",
+                        "brief_artifact_path": (
+                            "artifacts/jira-implement-brief.json"
+                        ),
+                    },
                 )
+            )
+            assert isinstance(recovered, AgentRunResult)
+            assert recovered.summary == "Completed with malformed brief copy."
+            assert "briefArtifactRef" not in (recovered.metadata or {})
+
+            # Same recovery when the agent never wrote the declared copy:
+            # "declared issue brief artifact was not produced" must not fail.
+            brief_path.unlink()
+            missing = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed without a brief copy.",
+                    metadata={
+                        "agentRunId": "assess-run-1",
+                        "brief_artifact_path": (
+                            "artifacts/jira-implement-brief.json"
+                        ),
+                    },
+                )
+            )
+            assert isinstance(missing, AgentRunResult)
+            assert missing.summary == "Completed without a brief copy."
+            assert "briefArtifactRef" not in (missing.metadata or {})
 
 
 async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspace(

@@ -183,7 +183,14 @@ def projection_readiness(
     harness: str | None = None,
     required_capabilities: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Return one explicit, server-owned launch readiness classification."""
+    """Return one explicit, server-owned launch readiness classification.
+
+    Freshness is observable but never blocks a launch on its own: an outage
+    retains the last-known snapshot as stale, and only a missing,
+    unavailable, incompatible, or contract-mismatched identity fails closed.
+    This keeps the default experience working across background-sync lag
+    without silently substituting a different upstream version.
+    """
     if projection is None:
         return {
             "ready": False,
@@ -219,8 +226,6 @@ def projection_readiness(
         reason = "stable upstream identity is incompatible"
     elif contract_mismatch:
         reason = "upstream metadata does not satisfy the requested profile contract"
-    elif stale:
-        reason = "upstream inventory is stale"
     else:
         reason = None
     return {
@@ -249,9 +254,10 @@ def readiness_actionable_detail(
 
     The leading ``reason`` string is preserved verbatim for contract
     compatibility; the suffix names the exact pinned identity, its freshness
-    and sync timestamps, and the executable recovery (catalog synchronize then
-    retry with the latest active version). Only non-sensitive identity and
-    timing fields are included, never credentials or raw provider text.
+    and sync timestamps, and the executable recovery (retry with the latest
+    active version; default float already synchronizes automatically, so no
+    manual catalog sync is required). Only non-sensitive identity and timing
+    fields are included, never credentials or raw provider text.
     """
 
     reason = str(readiness.get("reason") or "upstream identity is not ready")
@@ -265,9 +271,8 @@ def readiness_actionable_detail(
         f"{endpoint_ref}/{upstream_id}/{pinned_upstream}; "
         f"freshness={freshness}, "
         f"lastSuccessfulSyncAt={last_success}, lastAttemptAt={last_attempt}; "
-        "action: POST /api/omnigent/harness-catalog/synchronize then retry "
-        "with the latest active profile version; if you pinned a version "
-        "explicitly, omit version to use the default)"
+        "action: retry with the latest active profile version; if you pinned "
+        "a version explicitly, omit version to use the default)"
     )
 
 

@@ -24,6 +24,7 @@ from moonmind.workflows.skills.deployment_execution import (
     TemporalDeploymentEvidenceWriter,
     _command_plan_targeting_stack_services,
     _compose_up_args_for_services,
+    _compose_up_target_services,
     _docker_desktop_host_path,
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
@@ -777,10 +778,30 @@ def test_changed_services_command_omits_force_recreate() -> None:
         "compose",
         "up",
         "-d",
+        "--pull",
+        "never",
+        "--no-build",
         "--remove-orphans",
         "--wait",
     )
     assert "--force-recreate" not in plan.up_args
+
+
+def test_up_target_services_ignores_option_values() -> None:
+    # ``--pull never`` stages nothing by itself: ``never`` is the option's
+    # value, not a service to reconcile, exclude, or mistake for a one-shot.
+    plan = build_compose_command_plan(
+        mode="changed_services",
+        remove_orphans=True,
+        wait=True,
+        runner_mode="privileged_worker",
+    )
+    assert _compose_up_target_services(plan.up_args) == ()
+
+    rebuilt = _compose_up_args_for_services(plan.up_args, ("api",))
+    assert "--pull" in rebuilt and "never" in rebuilt
+    assert "--no-build" in rebuilt
+    assert rebuilt[-1] == "api"
 
 
 def test_force_recreate_and_policy_flags_are_closed() -> None:
@@ -797,6 +818,9 @@ def test_force_recreate_and_policy_flags_are_closed() -> None:
         "compose",
         "up",
         "-d",
+        "--pull",
+        "never",
+        "--no-build",
         "--force-recreate",
     )
     assert "--remove-orphans" not in plan.up_args
