@@ -401,6 +401,12 @@ class ProfileSlotState:
     authoritative_policy_confirmed: bool = False
     capacity_scope_ref: str = ""
     effective_limit: int = 0
+    # MoonLadderStudios/MoonMind#3882: a scope reassignment requested while
+    # leases are active is persisted here instead of discarded. New admissions
+    # against the old scope stay blocked until the affected use drains, at
+    # which point the pending scope applies (via the next profile sync or the
+    # release that drains the profile).
+    pending_capacity_scope_ref: str = ""
     # MoonLadderStudios/MoonMind#3878 ledger fields. ``purpose_aware_capacity``
     # keeps histories recorded before the patch on their original accounting.
     purpose_aware_capacity: bool = False
@@ -885,6 +891,7 @@ class ProfileSlotState:
             "default_model_tier": self.default_model_tier,
             "overCapacityLegacySnapshot": self.over_capacity_legacy_snapshot,
             "capacity_scope_ref": self.capacity_scope_ref,
+            "pending_capacity_scope_ref": self.pending_capacity_scope_ref,
             "configured_capacity": self.configured_capacity,
             "effective_capacity": self.effective_capacity,
             "execution_lease_count": self.execution_lease_count,
@@ -1302,6 +1309,10 @@ class MoonMindProviderProfileManagerWorkflow:
             released = profile.release(requester_id)
             if released:
                 self._unindex_lease(requester_id)
+                if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+                    # The drain that a deferred scope move was waiting for:
+                    # apply the persisted move without needing another sync.
+                    self._apply_pending_scope_move(profile)
             # A release also withdraws any pending maintenance request from the
             # same owner, so a caller that gave up cannot hold the queue head.
             # Pre-marker histories never withdrew a waiter here, and doing so
@@ -1379,6 +1390,10 @@ class MoonMindProviderProfileManagerWorkflow:
             released = profile.release(requester_id)
             if released:
                 self._unindex_lease(requester_id)
+                if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+                    # The drain that a deferred scope move was waiting for:
+                    # apply the persisted move without needing another sync.
+                    self._apply_pending_scope_move(profile)
             # A release also withdraws any pending maintenance request from the
             # same owner, so a caller that gave up cannot hold the queue head.
             profile.dequeue_maintenance_waiter(requester_id)
@@ -1959,6 +1974,16 @@ class MoonMindProviderProfileManagerWorkflow:
                     owner_id,
                 )
                 return
+        if self._shared_scope_record_missing(current_scope_ref):
+            # No configured record for this shared scope: fail closed
+            # instead of materializing derived capacity to throttle.
+            self._get_logger().warning(
+                "Ignoring throttle report for profile %s: scope %s has no "
+                "configured record",
+                profile_id,
+                current_scope_ref,
+            )
+            return
         scope = self._ensure_scope(current_scope_ref)
         reported_generation = payload.get(
             "scope_generation", payload.get("scopeGeneration")
@@ -3212,6 +3237,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     str(p.get("capacity_scope_ref") or "").strip()
                     or f"provider-profile:{pid}"
                 ),
+                pending_capacity_scope_ref=str(
+                    p.get("pending_capacity_scope_ref") or ""
+                ).strip(),
                 effective_limit=restored_effective,
                 purpose_aware_capacity=self._purpose_aware_capacity_ledger,
                 adaptive_capacity_limit=self._normalize_capacity_limit(
@@ -3380,6 +3408,31 @@ class MoonMindProviderProfileManagerWorkflow:
                     "metadata": dict(metadata) if isinstance(metadata, dict) else {},
                 }
 
+    def _apply_pending_scope_move(self, profile: ProfileSlotState) -> bool:
+        """Apply a persisted deferred scope move once the profile drains.
+
+        Returns True when a pending scope was applied. Running units stay
+        attributed to the scope admitted with their lease; the move applies
+        only with no active leases, so no consumption is ever moved into
+        another budget mid-flight.
+        """
+
+        pending = (profile.pending_capacity_scope_ref or "").strip()
+        if not pending or profile.current_leases:
+            return False
+        if pending != profile.capacity_scope_ref:
+            profile.capacity_scope_ref = pending
+            if not self._shared_scope_record_missing(pending):
+                try:
+                    self._ensure_scope(
+                        pending,
+                        runtime_id=self._runtime_id or "",
+                    )
+                except Exception:
+                    pass
+        profile.pending_capacity_scope_ref = ""
+        return True
+
     def _apply_profile_sync(
         self,
         profiles_data: list[dict[str, Any]],
@@ -3438,9 +3491,12 @@ class MoonMindProviderProfileManagerWorkflow:
                         # MoonLadderStudios/MoonMind#3882: active consumption
                         # stays attributed to the scope admitted with its
                         # lease. A Profile edit cannot move already-running
-                        # units into another budget; the reassignment applies
-                        # once the affected use drains and a later sync
-                        # carries the new scope with no active leases.
+                        # units into another budget; the requested scope is
+                        # persisted and applies once the affected use drains.
+                        # New admissions against the old scope stay blocked
+                        # until then (see _profile_admitted_by_capacity), so
+                        # fresh leases cannot keep the profile nonempty
+                        # against the old budget indefinitely.
                         self._get_logger().warning(
                             "Deferring capacity scope reassignment for profile "
                             "%s from %s to %s while %d lease(s) remain active",
@@ -3449,10 +3505,14 @@ class MoonMindProviderProfileManagerWorkflow:
                             new_scope,
                             len(existing.current_leases),
                         )
+                        existing.pending_capacity_scope_ref = new_scope
                     else:
                         existing.capacity_scope_ref = new_scope
+                        existing.pending_capacity_scope_ref = ""
                 elif not existing.capacity_scope_ref:
                     existing.capacity_scope_ref = f"provider-profile:{pid}"
+                if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+                    self._apply_pending_scope_move(existing)
                 existing.purpose_aware_capacity = (
                     self._purpose_aware_capacity_ledger
                 )
@@ -3466,10 +3526,14 @@ class MoonMindProviderProfileManagerWorkflow:
                 except Exception:
                     scoped_sync = False
                 if scoped_sync:
-                    self._ensure_scope(
-                        existing.capacity_scope_ref or f"provider-profile:{pid}",
-                        runtime_id=self._runtime_id or "",
+                    scope_ref = (
+                        existing.capacity_scope_ref or f"provider-profile:{pid}"
                     )
+                    if not self._shared_scope_record_missing(scope_ref):
+                        self._ensure_scope(
+                            scope_ref,
+                            runtime_id=self._runtime_id or "",
+                        )
                 self._apply_profile_pricing(existing, p)
                 if authoritative:
                     existing.authoritative_policy_confirmed = True
@@ -5447,6 +5511,29 @@ class MoonMindProviderProfileManagerWorkflow:
             self._scopes[scope_ref] = scope
         return scope
 
+    def _shared_scope_record_missing(self, scope_ref: str) -> bool:
+        """Whether a shared scope is referenced but has no configured record.
+
+        MoonLadderStudios/MoonMind#3882: `provider_profile.list` can return
+        profiles with an empty scope list when the scope query fails (or when
+        the migration/row is missing). Such a scope must fail closed at
+        admission instead of deriving positive capacity from profile maxima.
+        Per-profile fallback refs ("provider-profile:<id>") keep the derived
+        behavior; only an explicitly referenced shared scope with no record
+        is missing.
+        """
+
+        if not scope_ref or scope_ref.startswith("provider-profile:"):
+            return False
+        if scope_ref in self._scopes:
+            return False
+        if not self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+            return False
+        return any(
+            (profile.capacity_scope_ref or "").strip() == scope_ref
+            for profile in self._profiles.values()
+        )
+
     def _scope_active_units(self, scope_ref: str) -> int:
         return sum(
             p.scope_consuming_lease_count()
@@ -5601,7 +5688,18 @@ class MoonMindProviderProfileManagerWorkflow:
         return len(profile.current_leases) < max(1, effective)
 
     def _profile_scope_available(self, profile: ProfileSlotState) -> bool:
-        scope = self._ensure_scope(self._profile_scope_ref(profile))
+        scope_ref = self._profile_scope_ref(profile)
+        if self._shared_scope_record_missing(scope_ref):
+            # No configured record for an explicitly referenced shared
+            # scope: fail closed instead of deriving positive capacity.
+            self._get_logger().warning(
+                "Blocking admission for profile %s: scope %s has no "
+                "configured record",
+                profile.profile_id,
+                scope_ref,
+            )
+            return False
+        scope = self._ensure_scope(scope_ref)
         return self._scope_is_available(scope)
 
     def _profile_admitted_by_capacity(
@@ -5613,6 +5711,20 @@ class MoonMindProviderProfileManagerWorkflow:
             return True
         if not scoped:
             return True
+        try:
+            shared_ownership = self._workflow_patch_enabled(
+                SHARED_THROTTLE_OWNERSHIP_PATCH
+            )
+        except Exception:
+            shared_ownership = False
+        if shared_ownership and (profile.pending_capacity_scope_ref or "").strip():
+            if profile.pending_capacity_scope_ref != (
+                profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}"
+            ):
+                # A deferred scope move awaits drain: no new admissions
+                # against the old budget until the affected use drains and
+                # the pending scope applies.
+                return False
         if not self._profile_effective_available(profile):
             return False
         if len(profile.current_leases) + reserved_slots >= max(
@@ -5663,6 +5775,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         state.over_capacity_legacy_snapshot
                     ),
                     "capacity_scope_ref": state.capacity_scope_ref,
+                    "pending_capacity_scope_ref": state.pending_capacity_scope_ref,
                     "adaptive_capacity_limit": state.adaptive_capacity_limit,
                     "adaptive_capacity_updated_at": (
                         state.adaptive_capacity_updated_at
