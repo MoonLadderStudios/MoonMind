@@ -166,7 +166,7 @@ AI coding agents are remarkable, but long-running autonomous work needs more tha
 - What credentials did the agent receive, and what provider and model policy was used?
 - What happened before the run failed, stalled, or hit a rate limit?
 
-MoonMind exists to answer those questions. Progress against each promise below is tracked milestone by milestone in the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
+MoonMind exists to answer those questions. Product direction for each promise below lives in the [MoonMind Roadmap](docs/MoonMindRoadmap.md); implementation progress is tracked in GitHub issues and the [README claim/evidence checklist](docs/READMEClaimEvidence.md).
 
 ### 🛡️ Security — policy-enforced boundaries around each run
 

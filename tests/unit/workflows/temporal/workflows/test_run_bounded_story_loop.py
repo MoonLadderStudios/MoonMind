@@ -1678,3 +1678,167 @@ def test_terminal_gate_preserves_definitive_publication_refusals(
     )
     assert feasibility["feasible"] is False
     assert feasibility["reason"] == expected_reason
+
+
+def _native_verify_nodes() -> list[dict[str, Any]]:
+    return [
+        {"id": "verify", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "repair",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-next", "inputs": {"selectedSkill": "moonspec-verify"}},
+    ]
+
+
+def test_native_missing_action_stops_blocked_not_human(monkeypatch) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: a native NO_DETERMINATION result
+    without an explicit continuation and without current-runtime recovery
+    stops ``blocked`` under the report-recovery behavior, never implying a
+    human decision. Explicit human stops stay intact."""
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        parent,
+        "_patched_or_false_outside_workflow",
+        lambda patch: True,
+    )
+    gate = StepGateResult(
+        verdict="NO_DETERMINATION",
+        recommended_next_action=None,
+        recoverable_in_current_runtime=False,
+    )
+    decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/latest",
+        current_index=0,
+        ordered_nodes=_native_verify_nodes(),
+    )
+    assert decision["continueLoop"] is False
+    assert decision["state"] == "blocked"
+    assert decision["reason"] == "verification_requested_blocked"
+
+    explicit = StepGateResult(
+        verdict="NO_DETERMINATION",
+        recommended_next_action="needs_human",
+        recoverable_in_current_runtime=False,
+    )
+    explicit_decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=explicit,
+        gate_result_ref="artifact://gate/latest",
+        current_index=0,
+        ordered_nodes=_native_verify_nodes(),
+    )
+    assert explicit_decision["continueLoop"] is False
+    assert explicit_decision["state"] == "needs_human"
+    assert explicit_decision["reason"] == "verification_requested_needs_human"
+
+
+def test_native_missing_action_legacy_replay_stays_human(monkeypatch) -> None:
+    """Retained histories without the report-recovery marker keep their
+    recorded implicit routing instead of gaining new commands on replay."""
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        parent,
+        "_patched_or_false_outside_workflow",
+        lambda patch: (
+            False
+            if patch
+            in (
+                run_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+                run_module.RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH,
+            )
+            else True
+        ),
+    )
+    gate = StepGateResult(
+        verdict="NO_DETERMINATION",
+        recommended_next_action=None,
+        recoverable_in_current_runtime=False,
+    )
+    decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/latest",
+        current_index=0,
+        ordered_nodes=_native_verify_nodes(),
+    )
+    assert decision["continueLoop"] is False
+    assert decision["state"] == "needs_human"
+
+
+def test_native_low_confidence_missing_action_stops_blocked_not_human(
+    monkeypatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: low confidence without an explicit
+    continuation and without current-runtime recovery stops ``blocked``."""
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        parent,
+        "_patched_or_false_outside_workflow",
+        lambda patch: True,
+    )
+    gate = StepGateResult(
+        verdict="NO_DETERMINATION",
+        confidence="low",
+        recommended_next_action=None,
+        recoverable_in_current_runtime=False,
+    )
+    decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/latest",
+        current_index=0,
+        ordered_nodes=_native_verify_nodes(),
+    )
+    assert decision["continueLoop"] is False
+    assert decision["state"] == "blocked"
+    assert decision["reason"] == "verification_requested_blocked"
+
+
+def test_native_missing_tools_missing_action_stops_blocked_not_human(
+    monkeypatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: a report describing missing local
+    tools without an explicit continuation and without current-runtime
+    recovery stops ``blocked``, never implying a human decision."""
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        parent,
+        "_patched_or_false_outside_workflow",
+        lambda patch: True,
+    )
+    gate = StepGateResult(
+        verdict="NO_DETERMINATION",
+        feedback="missing local tool: container python-tests unavailable",
+        recommended_next_action=None,
+        recoverable_in_current_runtime=False,
+    )
+    decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/latest",
+        current_index=0,
+        ordered_nodes=_native_verify_nodes(),
+    )
+    assert decision["continueLoop"] is False
+    assert decision["state"] == "blocked"
+    assert decision["reason"] == "verification_requested_blocked"
+
+    explicit_blocked = StepGateResult(
+        verdict="NO_DETERMINATION",
+        recommended_next_action="blocked",
+        recoverable_in_current_runtime=False,
+    )
+    explicit_decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=explicit_blocked,
+        gate_result_ref="artifact://gate/latest",
+        current_index=0,
+        ordered_nodes=_native_verify_nodes(),
+    )
+    assert explicit_decision["continueLoop"] is False
+    assert explicit_decision["state"] == "blocked"

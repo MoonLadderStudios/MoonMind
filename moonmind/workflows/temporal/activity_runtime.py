@@ -8320,12 +8320,29 @@ class TemporalAgentRuntimeActivities:
             )
             if not canonical_action:
                 return canonical_payload
+            # MoonLadderStudios/MoonMind#4472: a native NO_DETERMINATION result
+            # without current-runtime recovery must not implicitly acquire a
+            # human decision. The canonical helper defaults that case to
+            # ``needs_human``; derive ``blocked`` instead when the producer
+            # did not supply an explicit valid action. Genuine explicit
+            # ``needs_human``/``blocked`` decisions are preserved above.
+            declared_verdict = (
+                str(canonical_payload.get("verdict") or "").strip().upper()
+            )
+            if declared_verdict == "INCONCLUSIVE":
+                declared_verdict = "NO_DETERMINATION"
             raw_action = canonical_payload.get("recommendedNextAction")
             if raw_action is None:
                 raw_action = canonical_payload.get("recommended_next_action")
             raw_action_text = (
                 raw_action.strip() if isinstance(raw_action, str) else None
             )
+            if (
+                declared_verdict == "NO_DETERMINATION"
+                and not recoverable
+                and raw_action_text not in recommended_next_actions()
+            ):
+                canonical_action = "blocked"
             if raw_action_text in recommended_next_actions():
                 canonical_payload["recommendedNextAction"] = raw_action_text
                 canonical_payload.pop("recommended_next_action", None)
@@ -8884,6 +8901,14 @@ class TemporalAgentRuntimeActivities:
             return published
 
         async def _publish_issue_brief_artifact() -> dict[str, Any]:
+            # The trusted issue loader owns the durable brief (see
+            # docs/Workflows/WorkflowPresetsSystem.md: loader persists the
+            # complete brief and briefArtifactRef carries it; agent copies
+            # never replace it). Agents consume via carried refs/attachments
+            # and only rewrite the local file when identity/freshness
+            # requires it, so a missing file is a skippable handoff gap, not
+            # a workflow failure. Preserve progress and keep this best-effort
+            # like the MoonSpec verify publisher.
             brief_path = _metadata_text(
                 "brief_artifact_path",
                 "briefArtifactPath",
@@ -8902,35 +8927,30 @@ class TemporalAgentRuntimeActivities:
                 None,
             )
             if path is None:
-                failure_class = str(
-                    result_dict.get("failureClass")
-                    or result_dict.get("failure_class")
-                    or ""
-                ).strip()
-                if failure_class:
-                    logger.warning(
-                        "Skipping missing issue brief artifact for failed agent "
-                        "result (%s): %s",
-                        failure_class,
-                        brief_path,
-                    )
-                    return {}
-                raise TemporalActivityRuntimeError(
-                    "Declared issue brief artifact was not produced: "
-                    f"{brief_path}"
+                logger.warning(
+                    "Skipping missing issue brief artifact; durable loader "
+                    "brief remains authoritative: %s",
+                    brief_path,
                 )
+                return {}
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise TemporalActivityRuntimeError(
-                    "Declared issue brief artifact could not be read as JSON: "
-                    f"{brief_path}"
-                ) from exc
-            if not isinstance(payload, Mapping):
-                raise TemporalActivityRuntimeError(
-                    "Declared issue brief artifact payload must be a JSON object: "
-                    f"{brief_path}"
+            except (OSError, json.JSONDecodeError):
+                logger.warning(
+                    "Skipping issue brief artifact that could not be read "
+                    "as JSON; durable loader brief remains authoritative: %s",
+                    brief_path,
+                    exc_info=True,
                 )
+                return {}
+            if not isinstance(payload, Mapping):
+                logger.warning(
+                    "Skipping issue brief artifact payload that must be a "
+                    "JSON object; durable loader brief remains authoritative: "
+                    "%s",
+                    brief_path,
+                )
+                return {}
             brief_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
@@ -9050,18 +9070,6 @@ class TemporalAgentRuntimeActivities:
             _metadata_text(
                 "assessment_artifact_path",
                 "assessmentArtifactPath",
-            )
-        ) and not bool(
-            str(
-                result_dict.get("failureClass")
-                or result_dict.get("failure_class")
-                or ""
-            ).strip()
-        )
-        brief_output_required = bool(
-            _metadata_text(
-                "brief_artifact_path",
-                "briefArtifactPath",
             )
         ) and not bool(
             str(
@@ -9320,8 +9328,6 @@ class TemporalAgentRuntimeActivities:
             if report_output_enabled and report_output_required:
                 raise
             if assessment_output_required:
-                raise
-            if brief_output_required:
                 raise
             return result
 

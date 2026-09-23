@@ -15,6 +15,7 @@ def build_github_token_git_environment(
     *,
     base_env: Mapping[str, str] | None = None,
     terminal_prompt: str = "0",
+    host: str = "github.com",
 ) -> dict[str, str]:
     """Return a Git command environment that authenticates GitHub HTTPS.
 
@@ -22,6 +23,8 @@ def build_github_token_git_environment(
     itself. This environment installs an in-memory credential helper through
     Git's per-process config variables so host-side clone/fetch operations use
     the same resolved GitHub token without writing the token to disk or argv.
+    ``host`` scopes the helper to one trusted Git host (default
+    ``github.com``); bound App flows pass the deployment endpoint host.
     """
 
     env = {str(key): str(value) for key, value in (base_env or {}).items()}
@@ -29,14 +32,15 @@ def build_github_token_git_environment(
     if not normalized_token:
         return env
 
+    normalized_host = str(host or "").strip().lower() or "github.com"
     env["GITHUB_TOKEN"] = normalized_token
     env["GIT_TERMINAL_PROMPT"] = str(
         env.get("GIT_TERMINAL_PROMPT") or terminal_prompt
     )
     env["GIT_CONFIG_COUNT"] = "2"
-    env["GIT_CONFIG_KEY_0"] = "credential.https://github.com.helper"
+    env["GIT_CONFIG_KEY_0"] = f"credential.https://{normalized_host}.helper"
     env["GIT_CONFIG_VALUE_0"] = ""
-    env["GIT_CONFIG_KEY_1"] = "credential.https://github.com.helper"
+    env["GIT_CONFIG_KEY_1"] = f"credential.https://{normalized_host}.helper"
     env["GIT_CONFIG_VALUE_1"] = _GITHUB_TOKEN_GIT_CREDENTIAL_HELPER
     return env
 

@@ -160,6 +160,26 @@ class ExecutionProfileReadiness(BaseModel):
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
 
 
+def _default_oauth_harnesses() -> list[str]:
+    """Return the registry-derived OAuth harness subset, sorted deterministically.
+
+    Pure offline derivation: reads only the in-process harness registry, never
+    a live provider catalog or database.
+    """
+
+    from moonmind.omnigent.harness_platform.harness_registry import (
+        approved_harness_ids_for_auth_model,
+    )
+
+    harnesses = list(approved_harness_ids_for_auth_model("oauth_volume"))
+    if "codex-native" in harnesses:
+        # Keep the historical primary first; the remainder stays sorted so
+        # generated types remain deterministic across registry additions.
+        harnesses.remove("codex-native")
+        harnesses = ["codex-native", *harnesses]
+    return harnesses
+
+
 class OmnigentCodexCatalogReadiness(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     schema_version: Literal["moonmind.omnigent-codex-readiness.v2"] = Field(
@@ -171,9 +191,14 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     )
     agent_kind: Literal["external"] = Field("external", alias="agentKind")
     agent_id: Literal["omnigent"] = Field("omnigent", alias="agentId")
-    harness: Literal["codex-native"] = "codex-native"
-    harnesses: list[Literal["codex-native", "claude-native"]] = Field(
-        default_factory=lambda: ["codex-native", "claude-native"]
+    # MoonLadderStudios/MoonMind#3933: the legacy Codex readiness projection
+    # advertises the registry-derived OAuth subset (authModel == "oauth_volume"),
+    # not a second hardcoded product list. A registry-only OAuth test harness
+    # appears here without editing this model; opencode/pi registrations stay
+    # discoverable through the generic execution-readiness surface instead.
+    harness: str = "codex-native"
+    harnesses: list[str] = Field(
+        default_factory=_default_oauth_harnesses,
     )
     available: bool
     default_execution_profile_ref: str = Field(alias="defaultExecutionProfileRef")
@@ -193,6 +218,27 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     cutover: dict[str, Any]
     remediation_release: dict[str, Any] = Field(alias="remediationRelease")
     admission_readiness: dict[str, Any] = Field(alias="admissionReadiness")
+
+    @field_validator("harness", "harnesses", mode="before")
+    @classmethod
+    def _require_approved_oauth_harness(cls, value: object) -> object:
+        from moonmind.omnigent.harness_platform.harness_registry import (
+            harness_registration,
+        )
+
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            try:
+                registration = harness_registration(str(item))
+            except Exception as exc:
+                raise ValueError(
+                    f"harness {item} has no approved product registration"
+                ) from exc
+            if registration.authModel != "oauth_volume":
+                raise ValueError(
+                    f"harness {item} is not an OAuth host harness"
+                )
+        return value
 
 
 class GenericExecutionTargetReadiness(BaseModel):

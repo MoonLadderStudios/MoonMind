@@ -2319,3 +2319,38 @@ def test_accepted_digests_fall_back_to_the_version_digest() -> None:
         _VERSION,
     )
     assert accepted_imported_content_digests({}, _VERSION) == (_VERSION,)
+
+
+def test_normalize_harness_accepts_bool_behavior_capabilities() -> None:
+    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+
+    row = {
+        "id": "devin-native",
+        "label": "Devin",
+        "capabilities": {
+            "integration_mode": "native-tui",
+            "steering": True,
+            "live_queue": True,
+            "images": True,
+            "compaction": True,
+        },
+        "setup_steps": [],
+    }
+    record = _normalize_harness(
+        row,
+        omnigent_version="0.15.0",
+        omnigent_build_digest="sha256:" + "a" * 64,
+    )
+    assert record.capabilities.steering is True
+    assert record.capabilities.liveQueue is True
+    assert record.capabilities.images is True
+    assert record.capabilities.compaction is True
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.15.0",
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        sourceDigest="sha256:" + "b" * 64,
+        harnesses=[record.model_dump()],
+        observedAt=datetime.now(UTC),
+    )
+    assert snapshot.harnesses[0].capabilities.steering is True

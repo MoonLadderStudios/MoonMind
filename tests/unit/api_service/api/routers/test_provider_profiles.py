@@ -5863,3 +5863,196 @@ async def test_explicit_disabled_reason_wins_over_the_operator_disable_marker(
             stored.disabled_reason
             == ProviderProfileDisabledReason.MISSING_CREDENTIALS
         )
+
+
+@pytest.mark.asyncio
+async def test_api_key_setup_drain_timeout_returns_retryable_503(
+    client_app: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hung host drain fails closed with the stable retry identity."""
+
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+    from moonmind.provider_profiles import maintenance
+
+    profile_id = "opencode-drain-timeout"
+    raw_key = "test-submitted-credential-never-echo"
+
+    async def _fake_acquire(**kwargs):
+        return SimpleNamespace(
+            lease=SimpleNamespace(lease_id="drain-timeout-lease"),
+            release=AsyncMock(),
+        )
+
+    async def _timed_out_drain(**kwargs):
+        raise TimeoutError("profile host drain timed out after 120s")
+
+    validate = AsyncMock()
+    monkeypatch.setattr(
+        maintenance, "acquire_credential_maintenance_guard", _fake_acquire
+    )
+    monkeypatch.setattr(maintenance, "drain_profile_bound_hosts", _timed_out_drain)
+    monkeypatch.setattr(OpenCodeProviderRuntimeValidationService, "validate", validate)
+    # Exercise the real HTTP dependency, not the successful guard fixture.
+    app.dependency_overrides.pop(provider_profiles_router._credential_validation_guard)
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={"opencode_api_key": "db://previous-opencode-key"},
+                credential_generation=7,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            headers={"Idempotency-Key": "drain-op-123"},
+            json={"api_key": raw_key},
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_credential_manager_unavailable"
+    assert detail["refusal"] == "credential_host_drain_timeout"
+    assert detail["retry_idempotency_key"] == "drain-op-123"
+    assert raw_key not in response.text
+    validate.assert_not_awaited()
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.credential_generation == 7
+        assert profile.secret_refs == {"opencode_api_key": "db://previous-opencode-key"}
+
+
+@pytest.mark.asyncio
+async def test_credential_maintenance_status_reports_queue_position(
+    client_app: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The enrollment drawer can poll where its deterministic owner waits."""
+
+    from moonmind.provider_profiles import maintenance
+    from moonmind.provider_profiles.lease_client import (
+        CredentialLeasePurpose,
+        deterministic_lease_owner_id,
+    )
+
+    profile_id = "opencode-status-queued"
+    captured: dict[str, Any] = {}
+
+    async def _fake_query(**kwargs):
+        captured.update(kwargs)
+        return {
+            "profile_id": profile_id,
+            "runtime_id": "opencode",
+            "known": True,
+            "exclusive_maintenance_waiters": 2,
+            "waiter_position": 2,
+            "lease_held": False,
+            "execution_lease_count": 1,
+        }
+
+    monkeypatch.setattr(maintenance, "query_credential_maintenance_status", _fake_query)
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(
+            f"/api/v1/provider-profiles/{profile_id}/credential-maintenance-status",
+            params={"idempotency_key": "status-op-456"},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["known"] is True
+    assert payload["exclusive_maintenance_waiters"] == 2
+    assert payload["waiter_position"] == 2
+    assert payload["lease_held"] is False
+    assert payload["execution_lease_count"] == 1
+    expected_owner = deterministic_lease_owner_id(
+        profile_id=profile_id,
+        purpose=CredentialLeasePurpose.CREDENTIAL_VALIDATION,
+        idempotency_key="status-op-456",
+    )
+    assert captured["owner_id"] == expected_owner
+    assert captured["runtime_id"] == "opencode"
+    assert captured["profile_id"] == profile_id
+
+
+@pytest.mark.asyncio
+async def test_credential_maintenance_status_unknown_when_manager_down(
+    client_app: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Status polling degrades to unknown instead of breaking enrollment."""
+
+    from moonmind.provider_profiles import maintenance
+
+    profile_id = "opencode-status-unknown"
+
+    async def _fake_query(**kwargs):
+        return {
+            "profile_id": profile_id,
+            "runtime_id": "opencode",
+            "known": False,
+            "exclusive_maintenance_waiters": None,
+            "waiter_position": None,
+            "lease_held": False,
+            "execution_lease_count": None,
+        }
+
+    monkeypatch.setattr(maintenance, "query_credential_maintenance_status", _fake_query)
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(
+            f"/api/v1/provider-profiles/{profile_id}/credential-maintenance-status",
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["known"] is False
+
+
+@pytest.mark.asyncio
+async def test_credential_maintenance_status_missing_profile(
+    client_app: AsyncClient,
+) -> None:
+    async with client_app as client:
+        response = await client.get(
+            "/api/v1/provider-profiles/does-not-exist/credential-maintenance-status",
+        )
+
+    assert response.status_code == 404

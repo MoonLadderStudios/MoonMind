@@ -153,10 +153,11 @@ async def test_unstarted_reservation_frees_the_issue_after_its_deadline(
 
 @pytest.mark.asyncio
 async def test_lease_is_not_renewed_while_queued_behind_unavailable_capacity():
-    """Reservation withdrawn by lapse; the deployment backs off, not the backlog."""
+    """Reservation released promptly as backoff; the deployment backs off, not the backlog."""
     from moonmind.workflows.temporal import github_issue_lease_workflow as lease_workflow
 
     clock = {"now": datetime(2026, 9, 14, tzinfo=UTC)}
+    start = clock["now"]
     renewals = []
     slot_assigned = {"value": False}
 
@@ -198,10 +199,12 @@ async def test_lease_is_not_renewed_while_queued_behind_unavailable_capacity():
             )
     finally:
         module.workflow = original
-    assert "lease expired" in str(caught.value)
+    assert "ISSUE_CLAIM_CAPACITY_BLOCKED" in str(caught.value)
     # Exactly one renewal: the pre-launch confirmation. Queued time never
-    # refreshes the reservation.
+    # refreshes the reservation, and the lease is released promptly instead of
+    # being held to expiry.
     assert len(renewals) == 1
+    assert clock["now"] - start <= timedelta(seconds=300)
 
 
 # -- Relinquishment is independent of contention ----------------------------

@@ -707,6 +707,7 @@ class CodexExecHandler:
         log_path: Path,
         cancel_event: asyncio.Event | None = None,
         output_chunk_callback: OutputChunkCallback | None = None,
+        bound_credential: Any | None = None,
     ) -> str | None:
 
         async def run_command_wrapper(
@@ -741,6 +742,7 @@ class CodexExecHandler:
             repo_dir=repo_dir,
             run_command=run_command_wrapper,
             repo=payload.repository,
+            bound_credential=bound_credential,
         )
         if isinstance(result, PublishResult):
             return result.summary_text()

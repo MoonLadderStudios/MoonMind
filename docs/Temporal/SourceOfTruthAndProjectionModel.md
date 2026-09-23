@@ -3,7 +3,7 @@
 **Project:** MoonMind  
 **Doc type:** System architecture / read-model and consistency contract  
 **Status:** Normative steady-state contract  
-**Last updated:** 2026-04-04 (UTC)
+**Last updated:** 2026-09-22 (UTC)
 
 ---
 
@@ -201,7 +201,11 @@ same-run running snapshot cannot reopen a terminal row.
 
 Field authority: a Temporal observation refreshes lifecycle but never changes
 the authorized principal, execution identity, or immutable admission
-parameters (stored values win; new parameter keys may be introduced). A
+parameters (stored values win; new parameter keys may be introduced). When
+canonical and projection rows disagree, the canonical admission record wins
+for protected identity/parameters even if the projection row carries a newer
+timestamp — protected values are never copied from the divergent projection
+row (MoonLadderStudios/MoonMind#3946). A
 canonical write supplies API fields but still may not move an existing
 execution to a different owner/namespace/type or rewrite immutable creation
 keys — those raise and must go through the existing API owner/coordination
@@ -210,6 +214,19 @@ refs; snapshot identity is immutable and binding revisions cannot move
 backwards. Repair-status bookkeeping (`sync_state`/`sync_error`/`source_mode`
 only) and artifact-linkage rows are narrow bookkeeping writes that never touch
 lifecycle, identity, parameters, or memo.
+
+Read-boundary error semantics (MoonLadderStudios/MoonMind#3946): the locked
+reads require the supported `AsyncSession` contract (`SELECT ... FOR UPDATE`
+via `session.get(..., with_for_update=True)`). Genuine absence returns `None`
+and repairs the missing projection inside a savepoint; any other
+database/adapter failure — including a miswired wrong-type row or a flush
+failure — propagates to the caller. It never retries unlocked, creates a
+missing row, or reports a fresh projection. The caller keeps bounded recovery
+(commit/retry/rollback, per-item savepoints in batch sync) and reconciles
+uncertain commits by execution/observation identity, never by restarting the
+workflow. Concurrent absent-row creation converges on one row per workflow;
+row locking, bounded conflict retry, and savepoint/rollback isolation are
+proven on PostgreSQL, which SQLite suites cannot cover.
 
 The execution service supplies complete parameter and ordinary memo snapshots,
 so intentional deletion of recovery or waiting metadata is retained. Temporal
@@ -273,7 +290,8 @@ Cross-owner and operator/excluded access on every path above fails closed
 with the generic `execution_not_found` / `403` shapes (no internal type or
 child data disclosed); product detail links for the owning user keep working
 after exclusions are introduced (covered by
-`test_execution_operator_links_3947.py`). Previously
+`tests/unit/api/routers/test_executions.py`: `test_owner_product_detail_surfaces_operator_child_parent_links`
+and `test_operator_type_detail_stays_out_of_product_cards_for_non_admin`). Previously
 misclassified rows are repaired only through the shared projection-mutation
 owner (`mutate_execution_projection`, §7.2 field ownership) against
 authoritative workflow/run and owner evidence: correct projection metadata

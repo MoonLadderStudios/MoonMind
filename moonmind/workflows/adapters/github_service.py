@@ -185,10 +185,17 @@ class GitHubService:
     This service is stateless and safe to share across activity invocations.
     Authentication is resolved from an explicit token, ``GITHUB_TOKEN`` env var,
     or the configured secret reference.
+
+    ``connection`` optionally carries the admitted ``github_app``
+    ``RepositoryConnection`` for this reader: reads for that connection
+    then issue installation tokens through the bound acquirer instead of
+    the PAT flow. Workflow bootstrap passes the connection it already
+    admitted; per-call ``connection`` arguments override it.
     """
 
-    def __init__(self, *, timeout: float = 30.0) -> None:
+    def __init__(self, *, timeout: float = 30.0, connection: Any | None = None) -> None:
         self._timeout = timeout
+        self._connection = connection
 
     async def read_pull_request(self, repository: str, url: str) -> dict[str, Any]:
         """Read authoritative PR identity through repository-scoped credentials."""
@@ -216,19 +223,43 @@ class GitHubService:
             raise ValueError("Repository reader returned mismatched pull request identity")
         return data
 
-    async def read_repository_target(self, repository: str, ref: str = "") -> dict[str, str]:
+    async def read_repository_target(
+        self,
+        repository: str,
+        ref: str = "",
+        *,
+        connection: Any | None = None,
+    ) -> dict[str, str]:
         """Read a completion branch through the repository's authorized reader.
 
         Omission resolves the remote default, never the current feature upstream.
         This supplies identity only; the portable verifier owns acceptance.
+
+        When a ``github_app`` ``RepositoryConnection`` is supplied (per call
+        or as this reader's admitted connection), the read consumes the App
+        installation credential through the existing bound acquirer (exact
+        restrictions, scope/expiry validation, opaque token) instead of the
+        PAT token flow; every other connection (or none) keeps the
+        existing resolution behavior unchanged.
         """
         from urllib.parse import quote
 
-        token, error = await self.resolve_github_token(repo=repository)
-        if not token:
-            raise ValueError(error or "Repository target read requires authorized GitHub access")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        active = connection if connection is not None else self._connection
+        headers: dict[str, str]
+        if (
+            active is not None
+            and str(getattr(getattr(active, "credential", None), "source", "") or "")
+            == "github_app"
+        ):
+            headers = await self.bound_app_headers_for_connection(
+                active, repository=repository
+            )
+        else:
+            token, error = await self.resolve_github_token(repo=repository)
+            if not token:
+                raise ValueError(error or "Repository target read requires authorized GitHub access")
             headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
             if not ref:
                 response = await client.get(f"https://api.github.com/repos/{repository}", headers=headers)
                 response.raise_for_status()
@@ -338,11 +369,104 @@ class GitHubService:
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
-        return {
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
+        """Build the GitHub REST headers through the shared bound helper.
+
+        Existing read/clone/hosting/publication HTTP consumes App-issued
+        bound credentials through this same path (see
+        :meth:`headers_from_bound_credential`): the wire shape is owned once
+        by ``moonmind.auth.github_app.build_bound_http_headers`` so PAT and
+        App tokens cannot drift into a parallel App-only implementation.
+        """
+
+        from moonmind.auth.github_app import build_bound_http_headers
+
+        if not str(token or "").strip():
+            # Preserve the historical empty-token shape for callers that
+            # branch on the resolved flag separately; real tokens always go
+            # through the shared bound helper below.
+            return {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+        return build_bound_http_headers(str(token).strip().encode("utf-8"))
+
+    @staticmethod
+    def headers_from_bound_credential(acquired: Any) -> dict[str, str]:
+        """Build headers from a bound acquisition without exposing material.
+
+        Consumes ``AcquiredCredential`` (PAT or ``github_app``) through the
+        trusted ``use_now`` boundary; the opaque token never leaves the
+        boundary except inside the returned header mapping held by the
+        server-held caller.
+        """
+
+        from moonmind.auth.github_app import build_bound_http_headers
+
+        holder: dict[str, str] = {}
+
+        def _build(raw: bytes) -> None:
+            holder.update(build_bound_http_headers(raw))
+
+        acquired.credential.use_now(_build)
+        return dict(holder)
+
+    async def bound_app_headers_for_connection(
+        self,
+        connection: Any,
+        *,
+        repository: str,
+        operations: tuple[str, ...] = ("read",),
+        revision_reader: Any | None = None,
+    ) -> dict[str, str]:
+        """Acquire bound App headers for one admitted server-side read (#4022).
+
+        Production consumer of the bound-acquirer construction site: the
+        installation token is issued via
+        ``moonmind.auth.github_app_wiring.acquire_bound_headers_for_connection``
+        with exact repository/permission restrictions and returned
+        scope/expiry validation, then shaped through the shared bound-header
+        wire (see :meth:`headers_from_bound_credential`). The read acts under
+        the connection's recorded ownership; connections without ownership
+        fail closed. Suspension, key changes, and disablement surface through
+        the acquirer's existing invalidation/revocation checks.
+        ``revision_reader`` optionally supplies the service-backed
+        ACTIVE-revision read so post-load connection changes still revoke.
+        """
+
+        from moonmind.auth.github_app_wiring import (
+            acquire_bound_headers_for_connection,
+        )
+
+        ownership = getattr(connection, "ownership", None)
+        principal_ref = (
+            str(getattr(ownership, "owner_ref", "") or "").strip()
+            if ownership is not None
+            else ""
+        )
+        if not principal_ref:
+            raise ValueError(
+                "GitHub App read requires a connection with recorded ownership"
+            )
+        scope_type = (
+            str(getattr(ownership, "scope_type", "system") or "system").strip()
+            if ownership is not None
+            else "system"
+        )
+        scope_ref = (
+            getattr(ownership, "scope_ref", None) if ownership is not None else None
+        )
+        headers, _redact = await acquire_bound_headers_for_connection(
+            connection,
+            operations=tuple(operations),
+            principal_ref=principal_ref,
+            principal_scope=(scope_type, scope_ref),
+            execution_owner=f"github-service:read:{repository}",
+            repository_display=repository,
+            repository=repository,
+            revision_reader=revision_reader,
+        )
+        return headers
 
     async def get_authenticated_user(
         self,

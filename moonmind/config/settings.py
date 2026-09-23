@@ -14,6 +14,7 @@ from moonmind.claude.runtime import (
 )
 from moonmind.config.jules_settings import JulesSettings
 from moonmind.config.paths import ENV_FILE
+from moonmind.runtime_identity import normalize_runtime_id
 from moonmind.jules.runtime import (
     JULES_RUNTIME_DISABLED_MESSAGE,
 )
@@ -1180,14 +1181,14 @@ class WorkflowSettings(BaseSettings):
     def _normalize_default_runtime(cls, value: object) -> str:
         """Normalize queue runtime fallback and reject unknown values.
 
-        Accepts both canonical IDs (codex_cli, claude_code) and legacy aliases
-        (codex, claude) and normalizes them to canonical form so internal state
-        is consistent with the runtime_defaults canonical-first direction.
+        Legacy aliases migrate through the shared
+        ``moonmind.runtime_identity`` map (MoonLadderStudios/MoonMind#3934),
+        so settings ingress can never diverge from submission admission.
+        Unknown explicit input is rejected with a precise correction, never
+        replaced by another runtime; omitted values keep the documented
+        ``omnigent`` default.
         """
-        normalized = str(value or "").strip().lower() or "omnigent"
-        # Map legacy aliases to canonical before validation.
-        _aliases = {"codex": "codex_cli", "claude": "claude_code"}
-        normalized = _aliases.get(normalized, normalized)
+        normalized = normalize_runtime_id(value)
         allowed = {"omnigent", "codex_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))

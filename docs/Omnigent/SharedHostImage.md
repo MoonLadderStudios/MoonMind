@@ -166,7 +166,7 @@ An existing Codex or Claude Code OAuth Provider Profile remains the account and 
 
 ## 5. Realizer admission
 
-The trusted planner (never the workflow) selects the execution realizer:
+The trusted planner (never the workflow) selects the execution realizer. The gates below describe the currently implemented contract and remain authoritative until their owning migrations land; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target.
 
 - `codex-native` keeps `codex-profile-bound@1` until the operator sets `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=true` after exact shared-image Codex evidence passes. Before then, an explicit `generic-omnigent-host@1` Codex selection fails closed.
 - `claude-native` requires `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=true`; before then, planning a `claude-native` combination fails closed rather than advertising an unqualified target.

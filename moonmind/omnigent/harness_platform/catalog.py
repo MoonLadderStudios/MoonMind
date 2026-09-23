@@ -81,10 +81,10 @@ class HarnessCapabilities(BaseModel):
     interrupt: bool | None = None
     streaming: bool | None = None
     subagents: bool | None = None
-    steering: str | bool | None = None
-    liveQueue: str | bool | None = Field(default=None, alias="liveQueue")
-    images: str | bool | None = None
-    compaction: str | bool | None = None
+    steering: bool | str | None = None
+    liveQueue: bool | str | None = Field(default=None, alias="liveQueue")
+    images: bool | str | None = None
+    compaction: bool | str | None = None
 
 
 class HarnessRecord(BaseModel):
@@ -233,8 +233,8 @@ def assert_catalog_refresh_attests(
 
     Agent Profile versions remain bound to their original catalog snapshot.
     A later synchronization can attest a different core release when declared
-    harness behavior is unchanged. Plugin identity stays exact;
-    the original snapshot is retained rather than rewritten.
+    required capabilities and runtime requirements are preserved. Plugin
+    identity stays exact; the original snapshot is retained rather than rewritten.
     """
 
     assert_catalog_fresh(observation)
