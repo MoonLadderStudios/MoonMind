@@ -33,7 +33,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from api_service.api.routers.executions import _serialize_remediation_link_summary
-from moonmind.omnigent.remediation_matrix import load_remediation_release_status
+from moonmind.omnigent.remediation_matrix import (
+    EGRESS_RESTRICTED_ALLOWED,
+    EGRESS_RESTRICTED_DENIED,
+    REMEDIATION_ROW_CATALOG_BY_ID,
+    load_remediation_release_status,
+)
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
@@ -41,6 +46,7 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationPermissionSet,
     RemediationSecurityProfile,
     remediation_action_capability,
+    remediation_action_capability_matrix,
 )
 from moonmind.workflows.temporal.remediation_verification import (
     EVIDENCE_UNAVAILABLE,
@@ -424,3 +430,79 @@ async def test_consumers_keep_readiness_livecert_autonomous_distinct() -> None:
         row.actionKind for row in summary.actionCapabilities if row.requestable
     }
     assert release.autonomous_rollout_authorized is False
+
+
+async def test_strict_certification_preserved_and_egress_owned_at_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict cert policy survives until deliberate migration; egress stays owned.
+
+    An explicitly selected strict (``protected``) execution-evidence policy
+    must fail closed instead of silently falling back to deployment
+    qualification; only a deliberate policy migration changes that. Required
+    egress enforcement stays at its real owner -- the remediation matrix
+    catalog rows -- and never leaks into the remediation action consumer's
+    capability projection.
+    """
+
+    from moonmind.omnigent import deployment_evidence as deployment_mod
+    from moonmind.omnigent import execution_support_evidence as protected_mod
+    from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
+    from moonmind.omnigent.settings import (
+        MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV,
+        omnigent_evidence_policy,
+    )
+
+    # The explicit selection is preserved: only a deliberate migration (an
+    # environment/policy change) moves it away from strict.
+    assert omnigent_evidence_policy(env={}) == "either"
+    assert (
+        omnigent_evidence_policy(
+            env={MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV: "protected"}
+        )
+        == "protected"
+    )
+
+    # Under the strict policy the resolver fails closed when protected
+    # evidence is missing instead of silently using deployment qualification.
+    monkeypatch.setattr(
+        protected_mod,
+        "load_protected_execution_support_evidence",
+        MagicMock(side_effect=ValueError("no protected evidence")),
+    )
+    deployment_calls: list[object] = []
+
+    def _deployment_evidence(payload: object, now: object = None) -> dict[str, str]:
+        deployment_calls.append(payload)
+        return {"tier": "deployment_qualified"}
+
+    monkeypatch.setattr(
+        deployment_mod, "load_deployment_evidence", _deployment_evidence
+    )
+    with pytest.raises(ValueError, match="no protected evidence"):
+        resolve_execution_evidence({"plan": "strict-3626"}, policy="protected")
+    assert deployment_calls == []
+
+    # A deliberate migration to ``either`` recovers through deployment evidence.
+    evidence, tier = resolve_execution_evidence(
+        {"plan": "strict-3626"}, policy="either"
+    )
+    assert tier == "deployment_qualified"
+    assert evidence == {"tier": "deployment_qualified"}
+    assert deployment_calls != []
+
+    # Egress enforcement stays at its real owner: the matrix catalog owns the
+    # egress authority per row; the action consumer carries no egress decision.
+    allowed_row = REMEDIATION_ROW_CATALOG_BY_ID[
+        "remediation.egress.restricted-allowed"
+    ]
+    denied_row = REMEDIATION_ROW_CATALOG_BY_ID[
+        "remediation.egress.restricted-denied"
+    ]
+    assert allowed_row.egress == EGRESS_RESTRICTED_ALLOWED
+    assert denied_row.egress == EGRESS_RESTRICTED_DENIED
+    assert allowed_row.owner == "moonmind.remediation.reliability"
+    assert denied_row.owner == "moonmind.remediation.reliability"
+    for entry in remediation_action_capability_matrix():
+        assert "egress" not in entry
+        assert "egressDecision" not in entry
