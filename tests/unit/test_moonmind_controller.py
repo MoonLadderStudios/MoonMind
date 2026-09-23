@@ -1241,9 +1241,6 @@ def test_startup_convergence_resumes_unfinished_work_without_repeat(tmp_path):
     pending["desired"]["services"] = ["api"]
     state.write_record(tmp_path / "operation.json", pending)
 
-    def ok_run(command, *, timeout, env=None):
-        return apply.CommandResult(returncode=0, output="ok")
-
     def ps_aware_run(command, *, timeout, env=None):
         if "ps" in command:
             return apply.CommandResult(
