@@ -20,11 +20,21 @@ from moonmind.omnigent.remediation_matrix import (
     REQUIRED_REMEDIATION_EVIDENCE_KINDS,
     REQUIRED_REMEDIATION_MATRIX_ROWS,
     RemediationMatrixError,
+    build_remediation_operation_evidence as _build_operation_evidence,
     derive_remediation_release_thresholds,
     derive_remediation_row_evidence,
     derive_remediation_telemetry,
     validate_remediation_evidence_artifact,
 )
+
+
+def build_remediation_operation_evidence(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Build scoped operation evidence, raising the conformance build error."""
+
+    try:
+        return _build_operation_evidence(*args, **kwargs)
+    except RemediationMatrixError as exc:
+        raise RemediationEvidenceBuildError(str(exc)) from exc
 
 
 class RemediationEvidenceBuildError(ValueError):
@@ -144,4 +154,5 @@ def build_remediation_release_evidence(
 __all__ = [
     "RemediationEvidenceBuildError",
     "build_remediation_release_evidence",
+    "build_remediation_operation_evidence",
 ]
