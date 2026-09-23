@@ -76,6 +76,10 @@ CREDENTIAL_REJECTED_MARKER = "OpenCode provider credential rejected"
 
 #: Substrings of catalog stderr that affirm the provider rejected the
 #: credential (as opposed to infrastructure failing to ask).
+#: A bare HTTP 403 alone is not credential evidence: insufficient model
+#: permissions, regional policy, billing, or an upstream WAF all surface as
+#: 403 for a valid key. Only explicit authentication-rejection wording (or a
+#: 401 status, which names the unauthorized condition) carries the verdict.
 _CREDENTIAL_REJECTED_SIGNALS = (
     "invalid api key",
     "invalid_api_key",
@@ -89,11 +93,8 @@ _CREDENTIAL_REJECTED_SIGNALS = (
     "credential rejected",
     "auth rejected",
     "status 401",
-    "status 403",
     "error 401",
-    "error 403",
     "http 401",
-    "http 403",
 )
 
 #: Substrings of catalog stderr showing the probe image cannot serve catalog
@@ -141,8 +142,49 @@ _CATALOG_INFRA_SIGNALS = (
 )
 
 
-def _stderr_excerpt(stderr: bytes, *, limit: int = 500) -> str:
-    return stderr.decode("utf-8", errors="replace").strip()[:limit]
+def _redact_known_secrets(text: str, secrets: tuple[str, ...] | None) -> str:
+    """Remove exact active-secret values from provider output before retaining it.
+
+    Providers echo the submitted key in errors such as ``Incorrect API key
+    provided: sk-...``. The generic text redactor does not recognize
+    arbitrary key shapes, so redact against the resolved/candidate secret
+    itself. Only values of at least 4 characters participate to avoid
+    scrubbing ordinary prose.
+    """
+
+    if not text or not secrets:
+        return text
+    redacted = text
+    for secret in secrets:
+        if not isinstance(secret, str) or len(secret) < 4:
+            continue
+        if secret in redacted:
+            redacted = redacted.replace(secret, "[redacted]")
+    return redacted
+
+
+def _stderr_excerpt(
+    stderr: bytes, *, limit: int = 500, secrets_to_redact: tuple[str, ...] | None = None
+) -> str:
+    raw = stderr.decode("utf-8", errors="replace").strip()
+    # Redact before truncating so a long key cannot leak its prefix in the
+    # retained excerpt.
+    redacted = _redact_known_secrets(raw, secrets_to_redact)
+    return redacted[:limit]
+
+
+def _active_secrets_for_redaction(
+    *, candidate_secret: str | None, secrets: ScopedSecretBundle | None
+) -> tuple[str, ...]:
+    found: list[str] = []
+    if candidate_secret:
+        found.append(candidate_secret)
+    values = getattr(secrets, "values", None)
+    if isinstance(values, dict):
+        for value in values.values():
+            if isinstance(value, str) and value and value not in found:
+                found.append(value)
+    return tuple(found)
 
 
 def _catalog_probe_failure(
@@ -150,6 +192,7 @@ def _catalog_probe_failure(
     exit_code: int,
     stderr: bytes,
     effective_image_ref: str,
+    secrets_to_redact: tuple[str, ...] | None = None,
 ) -> HarnessPlatformError:
     """Classify a nonzero catalog probe without dropping its stderr.
 
@@ -159,7 +202,7 @@ def _catalog_probe_failure(
     into one generic validation message.
     """
 
-    excerpt = _stderr_excerpt(stderr)
+    excerpt = _stderr_excerpt(stderr, secrets_to_redact=secrets_to_redact)
     lowered = excerpt.lower()
     detail = f"(exit {exit_code}): {excerpt}" if excerpt else f"(exit {exit_code})"
     if any(signal in lowered for signal in _CATALOG_UNSUPPORTED_SIGNALS):
@@ -179,9 +222,14 @@ def _catalog_probe_failure(
             f"{CREDENTIAL_REJECTED_MARKER} by the pinned runtime {detail}",
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
+    # Unknown catalog failures (HTTP 429/500, plain 403, unexpected shapes)
+    # carry no definitive credential or runtime verdict. Keep them retryable
+    # so re-validation preserves its attempt budget instead of latching a
+    # transient provider outage into a credential reconnect or image repin.
     return HarnessPlatformError(
-        f"OpenCode catalog discovery failed {detail}",
-        code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        f"OpenCode catalog discovery failed {detail}; "
+        "retry without changing the credential",
+        code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
     )
 
 
@@ -447,12 +495,17 @@ class OpenCodeProviderRuntimeValidationService:
             code, stdout, _stderr = await self._backend.run(
                 argv, timeout_seconds=120, output_limit_bytes=1_048_576
             )
+            secrets_to_redact = _active_secrets_for_redaction(
+                candidate_secret=candidate_secret, secrets=secrets
+            )
             if code != 0 and "Unable to find image" in _stderr.decode(
                 "utf-8", errors="replace"
             ):
                 # Fail closed: never substitute a mutable tag for a digest-pinned image.
+                raw_missing = _stderr.decode("utf-8", errors="replace")[:500]
                 raise HarnessPlatformError(
-                    f"pinned OpenCode image {effective_image_ref} not found: {_stderr.decode('utf-8', errors='replace')[:500]}",
+                    f"pinned OpenCode image {effective_image_ref} not found: "
+                    f"{_redact_known_secrets(raw_missing, secrets_to_redact)}",
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                 )
             if code != 0:
@@ -460,6 +513,7 @@ class OpenCodeProviderRuntimeValidationService:
                     exit_code=code,
                     stderr=_stderr,
                     effective_image_ref=effective_image_ref,
+                    secrets_to_redact=secrets_to_redact,
                 )
             text = stdout.decode("utf-8", errors="replace")
             try:
