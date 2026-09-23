@@ -5,7 +5,7 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-22
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
 
@@ -161,7 +161,21 @@ An unavailable optional integration is reported separately. Missing mandatory ve
 
 ### 10.8 Migrate the singular Omnigent release
 
-Coordinate the installed Omnigent server and required host images in this same update. Reconcile uncertain recreations before repeating them. Future launches follow the installed runtime while preserving explicit harness/provider choices.
+An ordinary MoonMind update also checks the deployment-configured Omnigent
+server and required host image channels for newly published artifacts. Resolve
+mutable tags to concrete digests, assess the required runtime behavior, and
+advance the installed release when a suitable new image is available. Record
+the selected digests in deployment-owned state and refresh their running
+consumers through the same Compose owner. This includes the server, API and
+agent runtime worker; already-running static host profiles follow a changed
+shared host image, while inactive profiles remain inactive. A MoonMind update
+with no suitable new Omnigent image leaves the installed release in place.
+An explicit operator digest pin remains authoritative until changed.
+
+Reconcile uncertain recreations before repeating them. Future launches follow
+the installed runtime while preserving explicit harness/provider choices and
+the actual image identity of attempts already in progress. A version-number
+difference by itself does not block an otherwise compatible release.
 
 Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
 

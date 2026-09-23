@@ -128,10 +128,19 @@ the desired state, recreates the installed fleet in place, and verifies every
 service against that release. There is one fleet at one version: no candidate
 or retained cohort is started, and recreation has a bounded downtime window.
 
+The same update checks the configured Omnigent server and host image channels.
+When a newer published image passes the required runtime checks, the updater
+records its immutable digest and refreshes the Omnigent server, API, agent
+runtime worker, and already-running static host profiles that consume it.
+Inactive host profiles stay inactive. The default `latest` channels therefore
+advance during ordinary MoonMind updates; an explicit `OMNIGENT_*_IMAGE_REF`
+digest pin remains fixed until the operator changes it. New upstream releases
+do not require editing Profile or schedule image versions by hand. See the
+[deployment update contract](docs/Steps/DockerComposeUpdateSystem.md) and
+[shared host image rules](docs/Omnigent/SharedHostImage.md).
+
 Use this updater for upgrades, including after a direct Compose replacement.
-Workers register their own version at startup, so if the outgoing fleet is
-still draining the new one retries the promotion in the background until
-routing moves. Resume an interrupted submission with the updater's
+Resume an interrupted submission with the updater's
 `--resume <submission-id>` option; an interrupted release is not resumed
 automatically, so re-running the script is the ordinary recovery.
 
