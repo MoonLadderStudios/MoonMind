@@ -36,7 +36,19 @@ class CredentialMaintenanceGuard:
     lease: CredentialLease
 
     async def release(self) -> None:
-        await self.lease_client.release_lease(self.lease)
+        # API shutdown cancels the background OpenCode maintainer. Finish its
+        # fenced release signal before propagating cancellation, or the next
+        # process inherits an exclusive validation lease with no live owner.
+        release_task = asyncio.create_task(self.lease_client.release_lease(self.lease))
+        cancelled = False
+        while not release_task.done():
+            try:
+                await asyncio.shield(release_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        await release_task
+        if cancelled:
+            raise asyncio.CancelledError
 
 
 async def acquire_credential_maintenance_guard(
