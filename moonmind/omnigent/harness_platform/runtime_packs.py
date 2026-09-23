@@ -350,7 +350,7 @@ register_runtime_pack(
         version_command=("claude", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
         supported_range=">=2.0.0,<3.0.0",
-        pinned_version="2.1.257",
+        pinned_version="2.1.281",
         credential_target="/home/app/.claude",
         forbidden=_SHARED_OAUTH_FORBIDDEN
         + ("CLAUDE_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
