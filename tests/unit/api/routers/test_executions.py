@@ -522,7 +522,10 @@ class _SnapshotReuseSession:
         self._canonical = canonical
         self._existing_link = existing_link
         self.added: list[object] = []
-
+        # The double answers canonical-row reads with the canned record and
+        # reports the execution projection as genuinely absent so the shared
+        # mutator exercises its missing-row repair instead of tripping the
+        # miswired-row guard.
         async def _model_aware_get(model: object, pk: object, **kwargs: object) -> object:
             if model is TemporalExecutionCanonicalRecord:
                 return self._canonical
@@ -531,6 +534,9 @@ class _SnapshotReuseSession:
             return None
 
         self.get = AsyncMock(side_effect=_model_aware_get)
+        # mutate_execution_projection flushes caller writes before its locked
+        # canonical+projection reads and repairs a missing projection inside
+        # a nested savepoint; the double honors that session contract.
         self.flush = AsyncMock()
 
     @asynccontextmanager
