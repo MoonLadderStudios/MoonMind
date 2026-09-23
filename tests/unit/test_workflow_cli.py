@@ -432,3 +432,86 @@ def test_download_command_saves_bytes_to_out(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0, unstyle(result.output)
     assert saved_path.read_bytes() == b'{"ok": true}'
     assert "wf-1" in unstyle(result.output)
+
+
+def test_hermetic_submit_to_download_journey_saves_bytes(tmp_path) -> None:
+    """MoonLadderStudios/MoonMind#3926 R1/R4/R7: hermetic submit-to-download.
+
+    Exercises the default installation-to-session-to-download contracts in
+    one journey through the same public ``/api/executions`` routes the
+    dashboard Workflow Detail page uses, with the hermetic
+    ``httpx.MockTransport`` external-provider substitute (no live network,
+    no credentials, no seeding): submit (admission) -> describe (status) ->
+    captured-evidence (result refs) -> download (saved bytes) -> local save
+    with overwrite safety and readable terminal text.
+
+    This proves the shared UI/CLI download contract hermetically. The live
+    installation-to-session-to-download run against a real stack (compose
+    up, dashboard/CLI download bytes, owned cleanup) remains separately
+    owed and is NOT claimed by this test.
+    """
+    from moonmind.workflow_cli import save_evidence_download
+
+    artifact_ref = "artifact://omnigent/corr-1/final.json"
+    saved_bytes = b'{"ok": true, "result": "useful bounded work"}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/api/executions":
+            body = json.loads(request.content.decode())
+            assert body["idempotencyKey"] == "req-journey-3926"
+            return httpx.Response(
+                201,
+                json={"workflowId": "wf-1", "status": "queued", "state": "scheduled"},
+            )
+        if request.url.path == "/api/executions/wf-1":
+            return httpx.Response(
+                200, json={"workflowId": "wf-1", "status": "completed"}
+            )
+        if request.url.path == "/api/executions/wf-1/captured-evidence":
+            return httpx.Response(
+                200,
+                json={
+                    "workflowId": "wf-1",
+                    "available": True,
+                    "summary": "done",
+                    "items": [{"label": "report", "artifactRef": artifact_ref}],
+                },
+            )
+        if request.url.path == "/api/executions/wf-1/captured-evidence/download":
+            assert dict(request.url.params)["ref"] == artifact_ref
+            return httpx.Response(
+                200,
+                content=saved_bytes,
+                headers={
+                    "content-disposition": 'attachment; filename="final.json"',
+                    "content-type": "application/json",
+                },
+            )
+        return httpx.Response(404, json={"detail": "nope"})
+
+    client = _client(handler)
+    try:
+        admitted = client.submit_execution(
+            build_execution_payload(
+                instructions="demo", skill="pr-resolver", idempotency_key="req-journey-3926"
+            )
+        )
+        assert admitted["workflowId"] == "wf-1"
+        assert client.describe_execution("wf-1")["status"] == "completed"
+        evidence = client.captured_evidence("wf-1")
+        assert evidence is not None and evidence["available"] is True
+        refs = [i["artifactRef"] for i in evidence["items"]]
+        assert refs == [artifact_ref]
+        downloaded = client.download_captured_evidence("wf-1", refs[0])
+        assert downloaded.content == saved_bytes
+        assert downloaded.filename == "final.json"
+        terminal = sanitize_terminal_text(evidence["summary"])
+        assert "done" in terminal
+        out = tmp_path / downloaded.filename
+        saved = save_evidence_download(out, downloaded.content, overwrite=False)
+        assert saved.read_bytes() == saved_bytes
+        with pytest.raises(WorkflowCliError, match="overwrite"):
+            save_evidence_download(out, b"other", overwrite=False)
+        assert saved.read_bytes() == saved_bytes
+    finally:
+        client.close()
