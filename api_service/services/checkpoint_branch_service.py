@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1231,6 +1231,8 @@ class CheckpointBranchService:
         terminal_ref: str | None = None,
         output_refs: list[str] | None = None,
         terminal_disposition: str | None = None,
+        save_commit: Mapping[str, Any] | None = None,
+        verification_handoff: Mapping[str, Any] | None = None,
     ) -> WorkflowCheckpointBranchTurn:
         """Persist truthful terminal delivery and verifier-handoff evidence."""
 
@@ -1253,6 +1255,20 @@ class CheckpointBranchService:
             }
             for field_name, expected in replay_values.items():
                 if existing_diagnostics.get(field_name) != expected:
+                    raise ValueError(
+                        f"immutable terminal field {field_name} cannot be changed"
+                    )
+            # Handoff metadata is informational: enforce it only when the
+            # stored turn already carries it, so retries of turns finalized
+            # before this handoff existed still replay without overwrite.
+            for field_name, expected in (
+                ("saveCommit", save_commit),
+                ("verificationHandoff", verification_handoff),
+            ):
+                if expected is None:
+                    continue
+                stored = existing_diagnostics.get(field_name)
+                if stored is not None and stored != dict(expected):
                     raise ValueError(
                         f"immutable terminal field {field_name} cannot be changed"
                     )
@@ -1303,6 +1319,12 @@ class CheckpointBranchService:
             "agentResultRef": agent_result_ref,
             "diagnosticsRef": diagnostics_ref,
             "terminalDisposition": terminal_disposition or delivery_stage,
+            **({"saveCommit": dict(save_commit)} if save_commit is not None else {}),
+            **(
+                {"verificationHandoff": dict(verification_handoff)}
+                if verification_handoff is not None
+                else {}
+            ),
         }
         if checkpoint_ref:
             branch.current_head_checkpoint_ref = checkpoint_ref
