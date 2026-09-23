@@ -15,6 +15,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -25,6 +26,9 @@ from redact import redact_mapping
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
+
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_MAX_IMAGE_CHARS = 1024
 
 
 class LegacyWriterUnknown(RuntimeError):
@@ -122,12 +126,24 @@ def converge_on_restart(
     by leaving it alone instead of launching a competing writer. When a
     legacy application-owned writer may still be active, unfinished work is
     deferred with an explicit reason instead of being taken over.
+
+    Stale open targets are reconciled before anything runs: only the newest
+    open operation per stack survives, and an open operation older than a
+    confirmed installation for the same stack is superseded instead of
+    replayed, so a restart can never recreate a stale image over a newer
+    confirmed one.
     """
     converged: list[str] = []
     deferred: list[dict] = []
     skipped: list[str] = []
+    superseded: list[str] = []
+    survivors = _reconcile_open_operations(store, stack=stack)
+    superseded.extend(
+        operation["operationId"]
+        for operation in survivors["superseded"]
+    )
     child_pid = _compose_child_alive(str(store.state_dir))
-    for operation in store.list_open(stack=stack):
+    for operation in survivors["open"]:
         if operation.get("installed") is not None:
             skipped.append(operation["operationId"])
             continue
@@ -156,7 +172,73 @@ def converge_on_restart(
                 continue
         applier(operation)
         converged.append(operation["operationId"])
-    return {"converged": converged, "deferred": deferred, "skippedInstalled": skipped}
+    return {
+        "converged": converged,
+        "deferred": deferred,
+        "skippedInstalled": skipped,
+        "superseded": superseded,
+    }
+
+
+def _reconcile_open_operations(
+    store: record_mod.OperationStore, *, stack: str | None = None
+) -> dict:
+    """Supersede stale open operations; return surviving opens + superseded."""
+    opens = store.list_open(stack=stack)
+    by_stack: dict[str, list[dict]] = {}
+    for operation in opens:
+        by_stack.setdefault(str(operation.get("stack")), []).append(operation)
+    confirmed: dict[str, dict] = {}
+    for terminal in store.list_terminal(stack=stack):
+        installed = terminal.get("installed") or {}
+        if not installed.get("image"):
+            continue
+        confirmed[str(terminal.get("stack"))] = terminal
+    surviving: list[dict] = []
+    superseded: list[dict] = []
+    for stack_name in sorted(by_stack):
+        candidates = sorted(
+            by_stack[stack_name], key=lambda op: str(op.get("createdAt") or "")
+        )
+        # Only the newest open operation per stack keeps restart intent;
+        # older opens are obsolete even before comparing with installations.
+        for operation in candidates[:-1]:
+            superseded.append(
+                store.supersede(
+                    operation["operationId"],
+                    reason=(
+                        "superseded by newer open operation "
+                        f"{candidates[-1]['operationId']} for stack "
+                        f"{stack_name!r}; restart recovery never replays "
+                        "stale open targets"
+                    ),
+                )
+            )
+        newest = candidates[-1]
+        terminal = confirmed.get(stack_name)
+        if terminal is not None and newest.get("installed") is None:
+            installed_image = (terminal.get("installed") or {}).get("image")
+            if (
+                newest.get("desired", {}).get("image") != installed_image
+                and str(newest.get("createdAt") or "")
+                < str(
+                    (terminal.get("installed") or {}).get("confirmedAt") or ""
+                )
+            ):
+                superseded.append(
+                    store.supersede(
+                        newest["operationId"],
+                        reason=(
+                            "superseded by confirmed installation "
+                            f"{installed_image!r} for stack {stack_name!r}; "
+                            "restart recovery never recreates a stale image "
+                            "over confirmed intent"
+                        ),
+                    )
+                )
+                continue
+        surviving.append(store.load(newest["operationId"]))
+    return {"open": surviving, "superseded": superseded}
 
 
 def check_legacy_cutover(
@@ -174,6 +256,81 @@ def check_legacy_cutover(
     except LegacyWriterUnknown as exc:
         return str(exc)
     return None
+
+
+def _validate_submission(body: dict) -> str | None:
+    """Reject privileged-endpoint submissions outside the safe shape.
+
+    The controller holds a direct Docker socket, so caller-supplied Compose
+    targets are validated before persistence: names are restricted to a safe
+    alphabet, compose files must be relative basenames inside the project
+    directory, and the desired image must be a bounded single token.
+    Deployment-owned image/policy allowlists remain the operator's
+    configuration; this check keeps the endpoint from accepting
+    path-escaping or malformed targets.
+    """
+    target = body.get("target") if isinstance(body.get("target"), dict) else {}
+    project = target.get("project", body.get("stack"))
+    if not _SAFE_NAME_RE.match(str(project or "")):
+        return f"refusing unsafe project name: {project!r}"
+    project_dir = target.get("projectDir", "")
+    if project_dir and not os.path.isdir(str(project_dir)):
+        return f"refusing unknown project directory: {project_dir!r}"
+    for compose_file in target.get("composeFiles", ()) or ():
+        name = str(compose_file or "")
+        parts = name.split("/")
+        if (
+            not name
+            or name.startswith("/")
+            or ".." in parts
+            or not all(_SAFE_NAME_RE.match(part) for part in parts)
+        ):
+            return f"refusing unsafe compose file: {compose_file!r}"
+    for service in target.get("services", ()) or ():
+        if not _SAFE_NAME_RE.match(str(service or "")):
+            return f"refusing unsafe service name: {service!r}"
+    image = body.get("desiredImage") or ""
+    if (
+        not isinstance(image, str)
+        or not image
+        or len(image) > _MAX_IMAGE_CHARS
+        or any(char.isspace() for char in image)
+    ):
+        return "desiredImage must be a single bounded image reference"
+    return None
+
+
+def _apply_with_bounded_retries(
+    store: record_mod.OperationStore,
+    operation_id: str,
+    run_apply: Callable[[dict], Any],
+) -> dict:
+    """Run the apply loop until success or the bounded attempt budget ends.
+
+    Staging/apply failures are recorded per attempt by the applier. The
+    controller itself drives retries up to ``MAX_AUTO_ATTEMPTS`` per attempt
+    group so a transient first failure reaches a terminal ``failed`` (or a
+    later ``succeeded``) instead of staying indefinitely open after one
+    recorded error. Unexpected exceptions are never retried here.
+    """
+    attempts = 0
+    while True:
+        operation = store.load(operation_id)
+        if operation.get("status") == "failed" or operation.get(
+            "autoAttemptsExhausted"
+        ):
+            return operation
+        try:
+            run_apply(operation)
+            return store.load(operation_id)
+        except (engine.StageError, engine.ApplyError):
+            attempts += 1
+            operation = store.load(operation_id)
+            if (
+                operation.get("status") == "failed"
+                or attempts >= record_mod.MAX_AUTO_ATTEMPTS
+            ):
+                raise
 
 
 def build_app(
@@ -231,6 +388,11 @@ def build_app(
             return _json_response(
                 start_response, "400 Bad Request", {"error": "stack and desiredImage are required"}
             )
+        rejection = _validate_submission(body)
+        if rejection is not None:
+            return _json_response(
+                start_response, "400 Bad Request", {"error": rejection}
+            )
         try:
             lock_mod.ensure_no_competing_writer(store.state_dir, stack)
             cutover_block = check_legacy_cutover(legacy_writer_probe)
@@ -249,8 +411,9 @@ def build_app(
             if not already_installed and operation.get("status") in ("pending", "staged", "applying"):
                 candidate = lock_mod.StackLock(store.state_dir, stack)
                 with candidate.acquire():
-                    run_apply(store.load(operation["operationId"]))
-                operation = store.load(operation["operationId"])
+                    operation = _apply_with_bounded_retries(
+                        store, operation["operationId"], run_apply
+                    )
         except lock_mod.LockBusyError as exc:
             return _json_response(start_response, "409 Conflict", {"error": str(exc)})
         except Exception:  # noqa: BLE001 - never expose exception detail
@@ -273,8 +436,9 @@ def build_app(
         try:
             candidate = lock_mod.StackLock(store.state_dir, operation["stack"])
             with candidate.acquire():
-                run_apply(store.load(operation_id))
-            operation = store.load(operation_id)
+                operation = _apply_with_bounded_retries(
+                    store, operation_id, run_apply
+                )
         except lock_mod.LockBusyError as exc:
             return _json_response(start_response, "409 Conflict", {"error": str(exc)})
         except Exception:  # noqa: BLE001 - never expose exception detail
@@ -297,6 +461,28 @@ def build_app(
         return _json_response(start_response, "200 OK", redact_mapping(logs))
 
     return app
+
+
+def _env_files_for_apply(target: dict, overlay: str) -> list:
+    """Layer deployment config under the controller-owned image overlay.
+
+    The deployment-owned `.env` (explicit ``target.envFile`` or
+    ``<projectDir>/.env`` when present) stays first so Compose keeps
+    operator authentication, bindings, and infrastructure versions; the
+    generated image overlay comes last and overrides only the release
+    selection.
+    """
+    files: list[str] = []
+    explicit = (target or {}).get("envFile")
+    if explicit:
+        files.append(str(explicit))
+    else:
+        project_dir = (target or {}).get("projectDir", "")
+        candidate = os.path.join(str(project_dir), ".env") if project_dir else ""
+        if candidate and os.path.isfile(candidate):
+            files.append(candidate)
+    files.append(overlay)
+    return files
 
 
 def write_image_overlay(state_dir: str, operation_id: str, image: str) -> str:
@@ -339,6 +525,7 @@ def production_apply(store: record_mod.OperationStore, operation: dict) -> dict:
     overlay = write_image_overlay(
         str(store.state_dir), operation["operationId"], operation["desired"]["image"]
     )
+    env_files = _env_files_for_apply(target, overlay)
     try:
         outcome = engine.apply(
             runner,
@@ -347,7 +534,7 @@ def production_apply(store: record_mod.OperationStore, operation: dict) -> dict:
             compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
             services=tuple(target.get("services", ())),
             images=(operation["desired"]["image"],),
-            env_file=target.get("envFile") or overlay,
+            env_files=env_files,
         )
     except engine.StageError as exc:
         store.record_attempt_error(operation["operationId"], error=f"staging failed: {exc} {exc.output}")

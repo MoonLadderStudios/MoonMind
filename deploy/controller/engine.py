@@ -91,6 +91,7 @@ def compose_base(
     project_dir: str,
     compose_files: Sequence[str],
     env_file: str | None = None,
+    env_files: Sequence[str] | None = None,
 ) -> tuple[str, ...]:
     base: list[str] = [
         "docker",
@@ -102,8 +103,14 @@ def compose_base(
     ]
     for compose_file in compose_files:
         base.extend(["-f", compose_file])
-    if env_file:
-        base.extend(["--env-file", env_file])
+    # Layered env files in order: Compose applies them left to right, so the
+    # deployment-owned `.env` stays first and the controller-owned image
+    # overlay overrides only the release selection. Passing only the overlay
+    # would replace Compose's implicit `.env` loading and render the stack
+    # with defaulted credentials, bindings, and infrastructure versions.
+    selected = list(env_files) if env_files else ([env_file] if env_file else [])
+    for item in selected:
+        base.extend(["--env-file", item])
     return tuple(base)
 
 
@@ -188,6 +195,7 @@ def apply(
     services: Sequence[str],
     images: Sequence[str],
     env_file: str | None = None,
+    env_files: Sequence[str] | None = None,
     own_service: str | None = None,
 ) -> dict:
     """Stage all images, then apply. Never replaces the controller itself."""
@@ -199,11 +207,12 @@ def apply(
         )
     if not targets:
         raise ValueError("Refusing an apply with no selected services.")
+    selected_env = list(env_files) if env_files else ([env_file] if env_file else [])
     base = compose_base(
         project=project,
         project_dir=project_dir,
         compose_files=compose_files,
-        env_file=env_file,
+        env_files=selected_env or None,
     )
     staged = stage_images(runner, base, tuple(images), services=tuple(targets))
     applied = apply_services(runner, base, tuple(targets))

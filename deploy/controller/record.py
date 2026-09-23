@@ -26,6 +26,9 @@ from typing import Any, Mapping
 MAX_AUTO_ATTEMPTS = 3
 MAX_ATTEMPT_GROUPS = 5
 
+OPEN_STATUSES = ("pending", "staged", "applying")
+TERMINAL_STATUSES = ("succeeded", "partially_verified", "failed", "superseded")
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -91,10 +94,17 @@ class OperationStore:
         A lost acknowledgment must not fork a duplicate writer: when an
         unfinished operation already targets the same concrete image, the
         caller reattaches to it instead of launching a competing apply.
+        When no unfinished operation targets the image but a completed
+        (succeeded or partially verified) one does, the caller reattaches
+        to that recorded success so a retried submission observes the
+        terminal result instead of repeating the Compose mutation.
         """
         for operation in self.list_open(stack=stack):
             if operation.get("desired", {}).get("image") == desired_image:
                 return operation
+        completed = self.find_completed(stack=stack, desired_image=desired_image)
+        if completed is not None:
+            return completed
         operation = {
             "operationId": str(uuid.uuid4()),
             "stack": stack,
@@ -134,9 +144,69 @@ class OperationStore:
                 continue
             if stack is not None and operation.get("stack") != stack:
                 continue
-            if operation.get("status") in ("pending", "staged", "applying"):
+            if operation.get("status") in OPEN_STATUSES:
                 operations.append(operation)
         return operations
+
+    def list_terminal(self, *, stack: str | None = None) -> list:
+        """Return terminal (non-open) operation records, newest last."""
+        operations = []
+        if not self.operations_dir.is_dir():
+            return operations
+        for path in sorted(self.operations_dir.glob("*.json")):
+            try:
+                operation = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if stack is not None and operation.get("stack") != stack:
+                continue
+            if operation.get("status") in TERMINAL_STATUSES:
+                operations.append(operation)
+        operations.sort(
+            key=lambda op: (
+                ((op.get("installed") or {}).get("confirmedAt") or ""),
+                op.get("updatedAt") or "",
+                op.get("createdAt") or "",
+            )
+        )
+        return operations
+
+    def find_completed(
+        self, *, stack: str, desired_image: str
+    ) -> dict | None:
+        """Return the newest completed record for the same target, if any.
+
+        Only successful terminal states reattach: a retried submission for
+        an already-installed image observes the recorded success instead
+        of repeating the mutation.
+        """
+        matches = [
+            operation
+            for operation in self.list_terminal(stack=stack)
+            if operation.get("desired", {}).get("image") == desired_image
+            and operation.get("status") in ("succeeded", "partially_verified")
+        ]
+        if not matches:
+            return None
+        return matches[-1]
+
+    def supersede(self, operation_id: str, *, reason: str = "") -> dict:
+        """Close an open operation as superseded without applying it.
+
+        Stale open targets (an older pending operation for a stack that has
+        since moved on) must never be replayed by restart recovery. The
+        record is retained with its diagnostics; only its status changes,
+        so ``list_open`` no longer returns it.
+        """
+        operation = self.load(operation_id)
+        if operation.get("status") in TERMINAL_STATUSES:
+            return operation
+        if operation.get("installed") is not None:
+            return operation
+        operation["status"] = "superseded"
+        operation["supersededReason"] = reason
+        operation["supersededAt"] = _utc_now()
+        return self._write(operation)
 
     def mark_stage(self, operation_id: str, *, stage: str) -> dict:
         operation = self.load(operation_id)
@@ -223,6 +293,8 @@ class OperationStore:
 __all__ = [
     "MAX_ATTEMPT_GROUPS",
     "MAX_AUTO_ATTEMPTS",
+    "OPEN_STATUSES",
+    "TERMINAL_STATUSES",
     "OperationStore",
     "error_summary",
 ]

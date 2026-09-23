@@ -165,3 +165,44 @@ def test_refusing_to_replace_the_controller_itself(controller_path):
             images=("img:controller",),
             own_service="controller",
         )
+
+
+def test_compose_base_layers_env_files_in_order(controller_path):
+    engine = load("engine")
+    base = engine.compose_base(
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml",),
+        env_files=("/srv/moonmind/.env", "/state/image-overlays/op.env"),
+    )
+    env_flags = [base[i + 1] for i, part in enumerate(base) if part == "--env-file"]
+    assert env_flags == ["/srv/moonmind/.env", "/state/image-overlays/op.env"]
+
+
+def test_compose_base_keeps_single_env_file_compatibility(controller_path):
+    engine = load("engine")
+    base = engine.compose_base(
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml",),
+        env_file="/state/image-overlays/op.env",
+    )
+    assert "--env-file" in base
+    assert "/state/image-overlays/op.env" in base
+
+
+def test_apply_passes_layered_env_files_to_compose(controller_path):
+    engine = load("engine")
+    runner = FakeRunner()
+    engine.apply(
+        runner,
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml",),
+        services=("api",),
+        images=("img:api",),
+        env_files=("/srv/moonmind/.env", "/state/image-overlays/op.env"),
+    )
+    for cmd, _ in runner.commands:
+        env_flags = [cmd[i + 1] for i, part in enumerate(cmd) if part == "--env-file"]
+        assert env_flags == ["/srv/moonmind/.env", "/state/image-overlays/op.env"]
