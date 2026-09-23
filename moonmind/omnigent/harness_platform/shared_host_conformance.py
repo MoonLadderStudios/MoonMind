@@ -224,16 +224,53 @@ def get_required_row(row_id: str) -> RequiredRow:
     )
 
 
-def required_row_for_harness(harness_id: str) -> RequiredRow:
+def required_rows_for_harness(harness_id: str) -> tuple[RequiredRow, ...]:
+    """Return every required row for one harness (keyed + credentialless)."""
+    matches = tuple(row for row in REQUIRED_ROWS if row.harnessId == harness_id)
+    if not matches:
+        raise HarnessPlatformError(
+            f"no shared-host required row for harness {harness_id}",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
+        )
+    return matches
+
+
+def required_row_for_harness(
+    harness_id: str,
+    *,
+    materializer_ref: str | None = None,
+    ownership_class: OwnershipClass | None = None,
+) -> RequiredRow:
+    """Return the single required row for one harness.
+
+    ``opencode-native`` owns two required rows (keyed ``opencode-auth-json@1``
+    vs credentialless ``none@1``), so callers must disambiguate with
+    ``materializer_ref`` and/or ``ownership_class``. A bare ambiguous lookup
+    fails closed naming the candidate rows rather than silently selecting the
+    keyed row for a credentialless plan (or vice versa).
+    """
     matches = [row for row in REQUIRED_ROWS if row.harnessId == harness_id]
     if not matches:
         raise HarnessPlatformError(
             f"no shared-host required row for harness {harness_id}",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
         )
-    if len(matches) > 1:
+    if materializer_ref is not None:
+        matches = [row for row in matches if row.materializerRef == materializer_ref]
+    if ownership_class is not None:
+        matches = [row for row in matches if row.ownershipClass == ownership_class]
+    if not matches:
         raise HarnessPlatformError(
-            f"shared-host required rows ambiguous for {harness_id}",
+            f"no shared-host required row for harness {harness_id} "
+            f"(materializerRef={materializer_ref!r}, "
+            f"ownershipClass={ownership_class!r})",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
+    if len(matches) > 1:
+        candidates = ", ".join(sorted(row.rowId for row in matches))
+        raise HarnessPlatformError(
+            f"shared-host required rows ambiguous for {harness_id} "
+            f"({candidates}); select by materializerRef or ownershipClass",
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
         )
     return matches[0]
@@ -431,12 +468,19 @@ def assert_one_harness_admission(
             f"{row.runtimePackRef}",
             code=HarnessPlatformFailure.OMNIGENT_RUNTIME_PACK_MISMATCH,
         )
-    if row.materializerRef not in materializer_refs:
+    # Exact materializer selection: the plan must select exactly this row's
+    # materializer and nothing else. An extra in-class selector (e.g. keyed
+    # auth alongside the credentialless Zen row, or the credentialless
+    # selector alongside a keyed row) is a cross-boundary substitution
+    # attempt even when every selected ref belongs to the Host Class
+    # allowlist.
+    if tuple(materializer_refs) != (row.materializerRef,):
         raise HarnessPlatformError(
-            f"row materializer {row.materializerRef} not selected",
+            f"row {row.rowId} requires exactly materializer "
+            f"{row.materializerRef!r} (got {list(materializer_refs)})",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
         )
-    # Cross-harness substitution fails here, before provider work: the Host
+    # Defense in depth behind the exact-selection check above: the Host
     # Class allowlist is exact, so any foreign materializer is a substitution
     # attempt even when the plan harness itself is correct.
     from moonmind.omnigent.harness_platform.host_classes import (
@@ -824,4 +868,5 @@ __all__ = [
     "build_shared_host_image_inventory",
     "get_required_row",
     "required_row_for_harness",
+    "required_rows_for_harness",
 ]
