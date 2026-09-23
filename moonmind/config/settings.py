@@ -2505,10 +2505,16 @@ class AppSettings(BaseSettings):
         """Ensure a blank interval behaves like an omitted one.
 
         An empty string must resolve to the documented default instead of
-        failing startup, while an explicit ``0`` stays ``0``.
+        failing startup, while an explicit ``0`` stays ``0``. Because
+        ``AliasChoices`` selects the blank canonical value before this
+        validator runs, a blank canonical input falls through to the legacy
+        ``MODEL_CACHE_REFRESH_INTERVAL`` override when one is set.
         """
 
         if v is None or (isinstance(v, str) and not v.strip()):
+            legacy = os.environ.get("MODEL_CACHE_REFRESH_INTERVAL", "")
+            if isinstance(legacy, str) and legacy.strip():
+                return legacy
             return 3600
         return v
 

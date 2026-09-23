@@ -28,8 +28,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from api_service.services.settings_catalog import SettingsCatalogService
 from moonmind.config.settings import AppSettings
 from moonmind.memory.context_pack import DEFAULT_MEMORY_CONTEXT_BUDGET_TOKENS
@@ -121,6 +119,19 @@ def test_model_cache_blank_behaves_like_omitted(monkeypatch) -> None:
     settings = AppSettings(_env_file=None)
 
     assert settings.model_cache_refresh_interval_seconds == _MODEL_CACHE_DEFAULT
+
+
+def test_model_cache_blank_canonical_falls_through_to_legacy(
+    monkeypatch,
+) -> None:
+    """A blank canonical value defers to the legacy override, like omission."""
+
+    monkeypatch.setenv(_CANONICAL_MODEL_CACHE_ENV, "")
+    monkeypatch.setenv(_LEGACY_MODEL_CACHE_ENV, "1800")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.model_cache_refresh_interval_seconds == 1800
 
 
 def test_model_cache_explicit_zero_is_preserved(monkeypatch) -> None:
