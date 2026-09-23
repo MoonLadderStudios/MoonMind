@@ -845,6 +845,40 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
+      - name: Build the candidate deployable image for the first-run journey
+        # MoonLadderStudios/MoonMind#3938: the boundary journey must run the
+        # checked-out revision, not an arbitrary released/cached image. This
+        # builds the same default deployable target the exact-artifact gate
+        # uses (api_service/Dockerfile, no target override) from this
+        # checkout; the journey step below pins MOONMIND_IMAGE at it.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api_service/Dockerfile
+          build-args: |
+            MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          load: true
+          tags: moonmind-first-run-3938:ci
+          cache-from: type=gha,scope=first-run-3938-api-runtime
+          cache-to: type=gha,scope=first-run-3938-api-runtime,mode=max
+      - name: Run disposable default first-run journey
+        # MoonLadderStudios/MoonMind#3938: one disposable default Compose
+        # installation (no .env, no inherited credentials) exercising the
+        # real API startup/admission/session/save path with its browser
+        # consumer. The runner records revision/image provenance and reuses
+        # the saved-work journey by reference. MOONMIND_IMAGE pins the
+        # candidate build above so the journey verifies this revision.
+        env:
+          MOONMIND_TEST_COMPOSE_PROJECT_NAME: moonmind-test-first-run-3938
+          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+        run: |
+          set -euo pipefail
+          # The hermetic suite above runs inside Docker (often as root),
+          # leaving var/ root-owned. Restore ownership so the journey can
+          # record provenance/submission evidence under var/artifacts.
+          sudo chown -R "$(id -u):$(id -g)" var 2>/dev/null || true
+          ./tools/first_run_journey_3938.sh --contract
+          ./tools/first_run_journey_3938.sh
       - name: Capture docker compose diagnostics
         if: failure()
         run: |
