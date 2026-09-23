@@ -34,6 +34,7 @@ ManagedRuntimeCandidateKind = Literal[
     "session_record",
 ]
 ManagedRuntimeCleanupClassification = Literal[
+    "already_absent",
     "protected_active",
     "protected_recent",
     "protected_shared",
@@ -771,6 +772,10 @@ class ManagedRuntimeWorkspaceJanitor:
                 return self._decision(
                     candidate, "skipped_unsafe_path", "candidate path is a symlink"
                 )
+            if not path.exists():
+                return self._decision(
+                    candidate, "already_absent", "candidate path no longer exists"
+                )
             if self._unreadable_owner_protects(candidate):
                 return self._decision(
                     candidate,
@@ -868,7 +873,10 @@ class ManagedRuntimeWorkspaceJanitor:
                     estimated_bytes,
                 )
             self._emit_progress("delete", candidate)
-            self._delete_candidate(candidate)
+            if not self._delete_candidate(candidate):
+                return self._decision(
+                    candidate, "already_absent", "candidate path vanished before deletion"
+                )
             budget.deleted_paths += 1
             budget.deleted_bytes += estimated_bytes
             return self._decision(candidate, "deleted", "deleted", newest, estimated_bytes)
@@ -910,18 +918,15 @@ class ManagedRuntimeWorkspaceJanitor:
 
     def _path_allowed(self, kind: ManagedRuntimeCandidateKind, path: Path) -> bool:
         roots = {
-            "workspace": (
-                self._config.runtime_store_root,
-                self._config.runtime_store_root / "workspaces",
-            ),
+            "workspace": (self._config.runtime_store_root,),
             "artifact": (self._config.artifact_root,),
             "run_record": (self._config.runtime_store_root / "managed_runs",),
             "session_record": (self._config.runtime_store_root / "managed_sessions",),
         }[kind]
         try:
-            candidate = path.absolute()
-            return any(candidate.is_relative_to(root.absolute()) for root in roots)
-        except OSError:
+            candidate = path.resolve()
+            return any(candidate.is_relative_to(root.resolve()) for root in roots)
+        except (OSError, RuntimeError):
             return False
 
     def _has_active_owner(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
@@ -1039,6 +1044,10 @@ class ManagedRuntimeWorkspaceJanitor:
         )
 
     def _rescan_blocks_delete(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
+        if not self._path_allowed(
+            candidate.kind, candidate.path
+        ) or candidate.path.is_symlink():
+            return True
         protected_before = self._unreadable_protected_paths
         try:
             run_records, session_records, unreadable = self._load_owner_records()
@@ -1074,22 +1083,23 @@ class ManagedRuntimeWorkspaceJanitor:
             # reporting against the ownership view it classified with.
             self._unreadable_protected_paths = protected_before
 
-    def _delete_candidate(self, candidate: ManagedRuntimeCleanupCandidate) -> None:
+    def _delete_candidate(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
+        if not candidate.path.exists():
+            return False
         if candidate.kind == "run_record":
             for record in candidate.run_records:
                 self._run_store.delete(record.run_id)
-            return
+            return True
         if candidate.kind == "session_record":
             for record in candidate.session_records:
                 self._session_store.delete(record.session_id)
-            return
-        if not candidate.path.exists():
-            return
+            return True
         quarantine = candidate.path.with_name(
             f".gc-{uuid.uuid4().hex}-{candidate.path.name}"
         )
         candidate.path.rename(quarantine)
         _delete_path(quarantine, progress_callback=self._progress_callback)
+        return True
 
     def _emit_progress(
         self,
