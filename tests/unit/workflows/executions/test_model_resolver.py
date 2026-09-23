@@ -627,6 +627,9 @@ class TestOpenRouterModelInheritance:
             "opencode-go/muse-spark-1.3-contributor",
             "opencode/muse-spark-1.3-contributor-free",
             "openai/gpt-5.5",
+            # Bare defaults never select the OpenRouter credential: only an
+            # explicit ``openrouter/``-qualified default is inherited.
+            "gpt-5.5",
         ):
             model, source = resolve_effective_model(
                 runtime_id="opencode",

@@ -130,10 +130,15 @@ def _compatible_runtime_model(
     ``openai/...``, ...) must never silently become an OpenRouter selection
     or cause another account's credential to be used. Provider-qualified IDs
     (``openrouter/<provider model id>``, which may contain additional slashes)
-    are preserved exactly; only the ``openrouter/`` prefix is checked. A bare
-    model without a qualifier is left for the launch consumer to qualify, and
-    a missing or mismatched default stays unresolved so the caller surfaces
-    an actionable choice instead of a silent wrong-provider selection.
+    are preserved exactly; only the ``openrouter/`` prefix is checked. For the
+    ``openrouter`` provider only an explicit ``openrouter/``-qualified runtime
+    default is inherited: a bare model without a qualifier stays unresolved
+    so the caller surfaces an actionable choice instead of silently
+    reinterpreting another provider's model as an OpenRouter model. Other
+    providers keep the established behavior where a bare model is left for
+    the launch consumer to qualify, and a missing or mismatched default stays
+    unresolved so the caller surfaces an actionable choice instead of a
+    silent wrong-provider selection.
     """
     if not runtime_model:
         return None
@@ -141,6 +146,8 @@ def _compatible_runtime_model(
     if not provider_id:
         return runtime_model
     if "/" not in runtime_model:
+        if provider_id == "openrouter":
+            return None
         return runtime_model
     if runtime_model.startswith(f"{provider_id}/"):
         return runtime_model

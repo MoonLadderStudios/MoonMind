@@ -228,6 +228,15 @@ def evidence_matches_launchable_identity(
     materializer the launch path uses, and it must contain the profile's
     selected model.
 
+    MoonLadderStudios/MoonMind#4538: the model-neutral ``opencode-openrouter``
+    profile (``default_model=None``) inherits the configured OpenCode default
+    at launch. When an ``openrouter/...``-qualified inherited default is
+    configured it must be present in the observed catalog; when no inherited
+    default is configured any non-empty catalog proves the credential and
+    image work, and model selection stays unresolved until an explicit
+    compatible choice is made. The execution host re-verifies the selected
+    model before session start.
+
     Exact image provenance schedules discovery refresh (see
     :func:`evidence_is_current`) but is not an execution veto: a compatible
     same-repository rebuild still answers for the selected model and required
@@ -269,7 +278,38 @@ def evidence_matches_launchable_identity(
         if isinstance(item, dict)
     }
     default_model = str(getattr(profile, "default_model", None) or "").strip()
-    return bool(default_model and default_model in models)
+    if default_model:
+        return bool(default_model in models)
+    # Model-neutral OpenCode/OpenRouter seed: inherit the configured OpenCode
+    # default for the execution context Omnigent actually launches. Only an
+    # explicit ``openrouter/``-qualified default counts; bare or
+    # cross-provider defaults stay unresolved at launch time.
+    if str(getattr(profile, "runtime_id", "") or "") == "opencode" and str(
+        getattr(profile, "provider_id", "") or ""
+    ) == "openrouter":
+        inherited = _inherited_openrouter_model()
+        if inherited:
+            return bool(inherited in models)
+        return bool(models)
+    return False
+
+
+def _inherited_openrouter_model() -> str | None:
+    """Return the configured OpenCode default when it selects OpenRouter."""
+    try:
+        from moonmind.workflows.executions.runtime_defaults import (
+            resolve_runtime_defaults,
+        )
+    except Exception:
+        return None
+    try:
+        runtime_model, _ = resolve_runtime_defaults("opencode")
+    except Exception:
+        return None
+    candidate = str(runtime_model or "").strip()
+    if candidate.startswith("openrouter/") and "/" in candidate:
+        return candidate
+    return None
 
 
 def evidence_is_current(
@@ -306,10 +346,11 @@ def _has_configured_runtime_authority(profile: Any) -> bool:
 
     Deliberately independent of ``enabled``. Enrollment applies API-key setup
     with ``enabled=True``, but only an explicit user or policy disable prevents
-    deployment configuration from repairing a disabled profile. The one
-    pending state accepted here is the startup seed's exact deployment
-    SecretRef: it is already materializable and must be promoted only by the
-    pinned-runtime evidence path below.
+    deployment configuration from repairing a disabled profile. The pending
+    states accepted here are the startup seeds' exact deployment SecretRefs
+    (``env://OPENCODE_API_KEY`` and ``env://OPENROUTER_API_KEY``): they are
+    already materializable and must be promoted only by the pinned-runtime
+    evidence path below.
     """
 
     from api_service.db.models import ProviderProfileAuthState
@@ -329,7 +370,7 @@ def _has_configured_runtime_authority(profile: Any) -> bool:
     secret_ref = str((profile.secret_refs or {}).get(OPENCODE_SECRET_ROLE) or "")
     return (state == ProviderProfileAuthState.CONNECTED.value and bool(secret_ref)) or (
         state == ProviderProfileAuthState.API_KEY_PENDING.value
-        and secret_ref == OPENCODE_DEPLOYMENT_SECRET_REF
+        and secret_ref in (OPENCODE_DEPLOYMENT_SECRET_REF, "env://OPENROUTER_API_KEY")
     )
 
 
