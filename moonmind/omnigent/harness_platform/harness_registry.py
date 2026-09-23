@@ -128,6 +128,57 @@ def approved_harness_ids() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRATIONS))
 
 
+def is_approved_harness_id(value: object) -> bool:
+    """Return True when ``value`` (canonical id or alias) is registered.
+
+    MoonLadderStudios/MoonMind#3933: registration validators, schemas, and
+    catalog projections derive harness membership from this pure registry
+    instead of maintaining a second hardcoded product list. No live provider
+    catalog, database, or repository inventory is consulted.
+    """
+
+    return find_harness_registration(canonical_harness_id(value)) is not None
+
+
+def require_approved_harness_id(value: object) -> str:
+    """Return the canonical id for an approved harness or raise.
+
+    Unknown ids raise ``HarnessPlatformError`` with
+    ``OMNIGENT_HARNESS_UNKNOWN`` at the admission boundary, before effects.
+    """
+
+    canonical = canonical_harness_id(value)
+    if find_harness_registration(canonical) is None:
+        raise HarnessPlatformError(
+            f"harness {value} has no approved product registration",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
+        )
+    return canonical
+
+
+def harness_auth_model(harness_id: str) -> str:
+    """Return the credential auth model for an approved harness."""
+
+    return harness_registration(harness_id).authModel
+
+
+def approved_harness_ids_for_auth_model(auth_model: str) -> tuple[str, ...]:
+    """Return approved harness ids using ``auth_model``, sorted deterministically.
+
+    OAuth host bindings, for example, are an intentional subset
+    (``oauth_volume``) of the full registry: opencode/pi registrations stay
+    discoverable without becoming OAuth-bindable.
+    """
+
+    return tuple(
+        sorted(
+            harness_id
+            for harness_id, registration in _REGISTRATIONS.items()
+            if registration.authModel == auth_model
+        )
+    )
+
+
 register_harness_product(
     HarnessProductRegistration.model_validate(
         {
@@ -181,9 +232,13 @@ register_harness_product(
 __all__ = [
     "HarnessProductRegistration",
     "approved_harness_ids",
+    "approved_harness_ids_for_auth_model",
     "canonical_harness_id",
     "find_harness_registration",
+    "harness_auth_model",
     "harness_registration",
+    "is_approved_harness_id",
     "product_execution_target_ref",
     "register_harness_product",
+    "require_approved_harness_id",
 ]

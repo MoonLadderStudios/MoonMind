@@ -76,9 +76,9 @@ def _compatibility_pair_detail(compatibility: Mapping[str, Any]) -> str:
         "server omnigent "
         f"{compatibility.get('serverVersion') or 'unknown'} build "
         f"{_short_digest(compatibility.get('serverBuildDigest'))} vs host omnigent "
-        f"{compatibility.get('hostVersion') or 'unknown'} built for "
-        f"{_short_digest(compatibility.get('hostBuildDigest'))}; update the "
-        "omnigent server image or pin a host built for the running server"
+        f"{compatibility.get('hostVersion') or 'unknown'} build "
+        f"{_short_digest(compatibility.get('hostBuildDigest'))}; "
+        "recheck host qualification and repair the failing image or pin"
     )
 
 
@@ -449,8 +449,8 @@ class OmnigentHostClassSelector:
                     continue
                 if not versions_compatible(omnigent_version, provenance.get("version")):
                     reasons.append(
-                        f"{template.ref}: selected host image lacks compatible "
-                        "Omnigent major.minor version evidence"
+                        f"{template.ref}: selected host image lacks parseable "
+                        "Omnigent version evidence"
                     )
                     continue
             candidates.append(

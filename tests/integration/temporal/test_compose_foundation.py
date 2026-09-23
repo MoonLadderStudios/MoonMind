@@ -18,7 +18,7 @@ MOUNTED_TOOL_PATH = (
 SHARED_STATIC_HOST_IMAGE = (
     "${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-"
     "ghcr.io/moonladderstudios/omnigent-host-moonmind}:"
-    "${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}"
+    "${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}"
 )
 GENERIC_STATIC_ENTRYPOINT = ["/opt/moonmind/start-omnigent-host.sh"]
 GENERIC_STATIC_HEALTHCHECK = {

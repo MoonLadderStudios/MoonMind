@@ -177,12 +177,20 @@ async def test_refresh_never_admits_unverified_or_substituted_authority(inventor
     async with sessions() as session:
         assert await session.scalar(select(OmnigentAgentProfileUsage)) is None
         projection = await session.get(OmnigentUpstreamAgentProjection, projection_id)
-        assert inventory_service.projection_readiness(
+        readiness = inventory_service.projection_readiness(
             projection, required_capabilities=["session.start"],
-        )["ready"] is False
+        )
+        # Outages retain last-known good as stale-but-launchable for
+        # background checks (default not displaced); new admissions still fail
+        # closed above because per-request refresh cannot verify. Genuine
+        # drift/removal/incompatibility still fails closed everywhere.
         if fault in {"outage", "timeout"}:
+            assert readiness["ready"] is True
+            assert readiness["freshness"] == "stale"
             assert "retry submission" in projection.error
             assert "fixture-inventory-credential" not in projection.error
+        else:
+            assert readiness["ready"] is False
     assert state.calls == 1
 
 

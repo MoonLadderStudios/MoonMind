@@ -44,11 +44,12 @@ _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
 
 # Only version-drift 409s may trigger catalog recovery. Incompatible,
 # contract-mismatch, capacity, and usage-conflict failures cannot be repaired
-# by synchronization, so they fail fast without upstream load.
+# by synchronization, so they fail fast without upstream load. Stale freshness
+# alone never blocks (last-known good remains launchable), so it never
+# triggers recovery.
 _DRIFT_RECOVERABLE_PREFIXES = (
     "stable upstream identity is unavailable",
     "stable upstream identity has not been synchronized",
-    "upstream inventory is stale",
 )
 # Admission-sized bound for the fallback sync (per-request client timeouts are
 # larger; without an aggregate deadline a degraded endpoint could hold an

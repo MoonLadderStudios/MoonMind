@@ -38,7 +38,7 @@ from .repository_contract import (
 # One canonical default. The runtime-provider rollout policy owns which target
 # that runtime resolves to (MoonLadderStudios/MoonMind#3833); no surface may
 # reconstruct a separate default from a literal or an environment variable.
-from .runtime_defaults import DEFAULT_WORKFLOW_RUNTIME
+from .runtime_defaults import DEFAULT_WORKFLOW_RUNTIME, normalize_runtime_id
 SUPPORTED_RUNTIME_MODES = {
     "codex",
     "codex_cli",
@@ -668,14 +668,25 @@ def _default_publish_mode() -> str:
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
 
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
+    """Validate a runtime spelling and return its canonical id.
+
+    Legacy spellings migrate at this ingress boundary through the shared
+    ``moonmind.runtime_identity`` map (MoonLadderStudios/MoonMind#3934), so
+    new writes never persist ``codex``/``claude``/``jules_api`` as distinct
+    runtime values. ``SUPPORTED_RUNTIME_MODES`` documents the accepted
+    ingress spellings; the returned value is always canonical. Unknown
+    explicit input raises a precise correction before resource effects and
+    is never replaced by another runtime.
+    """
+
     candidate = _clean_optional_str(value)
     if candidate is None:
         return None
-    lowered = candidate.lower()
-    if lowered not in SUPPORTED_RUNTIME_MODES:
+    canonical = normalize_runtime_id(candidate)
+    if canonical not in SUPPORTED_RUNTIME_MODES:
         supported = ", ".join(sorted(SUPPORTED_RUNTIME_MODES))
         raise WorkflowContractError(f"{field_name} must be one of: {supported}")
-    return lowered
+    return canonical
 
 
 def _raw_instruction_string(value: object) -> str:

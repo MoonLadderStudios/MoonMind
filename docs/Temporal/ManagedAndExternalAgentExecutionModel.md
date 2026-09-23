@@ -567,8 +567,51 @@ Capacity rules:
 - retry retains the same profile unless an explicit reroute policy authorizes a different selection before credential use;
 - profile lease ownership is deterministic and purpose-aware;
 - a host lease or container-job slot does not replace the profile lease;
-- provider-attributed 429/quota evidence updates the selected profile's cooldown policy;
+- provider-attributed 429/quota evidence updates the shared scope's cooldown policy (see below), never a duplicate per-profile throttle;
 - profile capacity is released only after every credential consumer is stopped or safely reconciled.
+
+### 8a. Shared capacity scopes: one accounting, one throttle owner
+
+Profiles that draw from the same upstream allowance share a capacity scope
+(`provider_capacity_scopes`, `scope_ref`). A grant is admitted only when
+both the profile ceiling and the scope effective limit have room, counted
+with the same purpose/cost accounting: admitted execution and
+provider-consuming validation spend the scope, local credential repair does
+not, and uncommitted or unreconciled grants stay spent until the durable
+ledger resolves them. OAuth exclusivity and machine/worker capacity stay
+separate layers.
+
+- Active consumption is attributed to the scope admitted with the lease. A
+  Profile edit cannot move already-running units into another budget: the
+  reassignment waits until the affected use drains. The requested scope is
+  persisted as pending and new admissions against the old scope stay blocked
+  until the drain applies it, so fresh leases cannot hold the old budget
+  open indefinitely. New configured limits
+  constrain new grants without terminating existing work, and a stale scope
+  refresh (older generation) cannot roll back a newer limit or re-enable a
+  disabled scope — only a newer generation carrying an explicit healthy
+  state re-enables.
+- The scope is the single throttle owner (additive-increase /
+  multiplicative-decrease, `additive-increase-multiplicative-decrease@1`).
+  A validated 429 report halves the scope effective limit once per cooldown
+  episode and arms the scope deadline; there is no competing per-profile
+  halving. Reports are validated against the actual attempt, Profile,
+  acquired scope, and generation, and deduplicated through the report
+  identity: a duplicate or conflicting report in the same episode cannot
+  halve again or extend the deadline, while a valid later provider deadline
+  is still honored. Credential failure, host exhaustion, unavailable
+  verification, and upstream quota stay distinct causes.
+- Cooldown expiry re-opens a bounded attempt under the same authority (up
+  to the reduced effective limit, through normal admission), not a
+  declaration of full provider health. Recovery adds at most one slot per
+  300-second interval, capped at the configured ceiling, and never revives
+  a disabled scope. Missing or corrupt records are an affected-scope
+  reconciliation problem, never positive capacity inferred from profile
+  maxima.
+- The `get_state` query projects the same scope aggregates admission uses
+  (`configured_limit`, `effective_limit`, used units, wait/cooldown
+  evidence) with no secrets, under single-operator admission and scoped
+  machine restrictions.
 
 ---
 
