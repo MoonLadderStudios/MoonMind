@@ -80,10 +80,10 @@ class HarnessCapabilities(BaseModel):
     interrupt: bool | None = None
     streaming: bool | None = None
     subagents: bool | None = None
-    steering: str | None = None
-    liveQueue: str | None = Field(default=None, alias="liveQueue")
-    images: str | None = None
-    compaction: str | None = None
+    steering: bool | str | None = None
+    liveQueue: bool | str | None = Field(default=None, alias="liveQueue")
+    images: bool | str | None = None
+    compaction: bool | str | None = None
 
 
 class HarnessRecord(BaseModel):
