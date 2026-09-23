@@ -128,20 +128,21 @@ def test_new_work_evidence_records_provenance_without_phase_or_fingerprint():
     assert evidence["policyVersion"] == policy.policy_version
     assert evidence["policyGeneration"] == policy.generation
     # No phase gate and no SHA/digest compatibility fingerprint in new-work
-    # provenance: compatibility is major.minor capability, not equal strings.
+    # provenance: launch admission checks required behavior, not equal versions.
     assert "phase" not in evidence
     assert "Phase" not in evidence
     assert "sha256" not in str(evidence).lower()
     assert "digest" not in str(evidence).lower()
 
 
-def test_patch_version_evolution_does_not_break_compatibility_series():
-    # Series helper only: same major.minor stays in-series across patch
-    # evolution. It is not the launch authority — missing capability or
+def test_version_evolution_only_requires_parseable_evidence():
+    # Version evidence alone cannot prove a runtime incompatible. This helper
+    # is not launch authority — missing capability or
     # retired admission still blocks via resolve_new_work_selection above
     # (NewWorkAdmissionRejected) and the shared rollout/admission owners.
     from moonmind.omnigent.compatibility import versions_compatible
 
-    assert versions_compatible("1.18.11", "1.18.9") is True
-    assert versions_compatible("1.18.11", "1.19.0") is False
-    assert versions_compatible("", "1.18.11") is False
+    assert versions_compatible("0.13.0", "0.13.9") is True
+    assert versions_compatible("0.13.0", "0.14.0") is True
+    assert versions_compatible("0.13.0", "1.0.0") is True
+    assert versions_compatible("", "0.13.0") is False
