@@ -162,15 +162,15 @@ An unavailable optional integration is reported separately. Missing mandatory ve
 ### 10.8 Migrate the singular Omnigent release
 
 An ordinary MoonMind update also checks the deployment-configured Omnigent
-server and required host image channels for newly published artifacts. Resolve
+server and required host image channels (image/tag inputs present in the operator `.env` or worker environment) for newly published artifacts. Resolve
 mutable tags to concrete digests, assess the required runtime behavior, and
-advance the installed release when a suitable new image is available. Record
-the selected digests in deployment-owned state and refresh their running
+advance the installed release when a suitable new image is available for a configured channel; channels without configured inputs retain their recorded refs. Record
+the selected digests in deployment-owned state before restarting consumers and refresh their running
 consumers through the same Compose owner. This includes the server, API and
 agent runtime worker; already-running static host profiles follow a changed
-shared host image, while inactive profiles remain inactive. A MoonMind update
-with no suitable new Omnigent image leaves the installed release in place.
-An explicit operator digest pin remains authoritative until changed.
+shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
+with no suitable new Omnigent image for a configured channel leaves the installed release in place.
+An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 
 Reconcile uncertain recreations before repeating them. Future launches follow
 the installed runtime while preserving explicit harness/provider choices and
