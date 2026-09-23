@@ -55,6 +55,7 @@ _COMPOSE_OPTION_FLAGS_WITH_VALUES = frozenset(
         "--policy",
         "--project-directory",
         "--project-name",
+        "--pull",
         "--wait-timeout",
         "-f",
         "-p",
@@ -2720,8 +2721,12 @@ def _ensure_runner_survives_update(
 def _compose_up_target_services(args: Sequence[str]) -> tuple[str, ...]:
     services: list[str] = []
     passthrough = False
+    skip_next = False
     for raw in args[3:]:
         part = str(raw)
+        if skip_next:
+            skip_next = False
+            continue
         if passthrough:
             services.append(part)
             continue
@@ -2729,6 +2734,10 @@ def _compose_up_target_services(args: Sequence[str]) -> tuple[str, ...]:
             passthrough = True
             continue
         if part.startswith("-"):
+            # Option values (for example ``--pull never``) are not services.
+            option_name = part.split("=", 1)[0]
+            if option_name in _COMPOSE_OPTION_FLAGS_WITH_VALUES and "=" not in part:
+                skip_next = True
             continue
         services.append(part)
     return tuple(services)
@@ -3433,7 +3442,7 @@ def build_compose_command_plan(
             },
         )
 
-    up_args = ["docker", "compose", "up", "-d"]
+    up_args = ["docker", "compose", "up", "-d", "--pull", "never", "--no-build"]
     if normalized_mode == "force_recreate":
         up_args.append("--force-recreate")
     if remove_orphans:
