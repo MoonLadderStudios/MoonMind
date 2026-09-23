@@ -52,7 +52,6 @@ class BranchPublishModeError(ValueError):
         self.code = code
 
 
-_BRANCH_PUBLISH_CANONICAL_MODES = ("none", "branch", "pull_request")
 _BRANCH_PUBLISH_ALIASES = {
     "pr": "pull_request",
     "pull-request": "pull_request",

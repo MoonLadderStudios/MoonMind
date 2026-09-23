@@ -192,6 +192,49 @@ def _sha256(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _normalize_publish_mode_spellings(node: Any) -> Any:
+    """Canonicalize every ``publishMode`` spelling in a decoded payload."""
+
+    if isinstance(node, Mapping):
+        normalized: dict[Any, Any] = {}
+        for key, value in node.items():
+            if key == "publishMode" and isinstance(value, str):
+                try:
+                    normalized[key] = compile_branch_publish_mode(value)
+                except BranchPublishModeError:
+                    normalized[key] = value
+            else:
+                normalized[key] = _normalize_publish_mode_spellings(value)
+        return normalized
+    if isinstance(node, list):
+        return [_normalize_publish_mode_spellings(item) for item in node]
+    return node
+
+
+def _launch_retry_payloads_equivalent(existing: bytes, candidate: bytes) -> bool:
+    """Decide whether a retry payload reattaches to an owned artifact.
+
+    Turns launched before the destination-spelling handoff stored the
+    canonical ``pull_request`` spelling in their owned launch artifacts;
+    retries running the new code serialize ``pr`` for the same authorized
+    intent. The bytes differ but the publication grant is identical, so an
+    idempotent retry must reattach to the already-owned artifact instead of
+    raising ``launch_artifact_conflict``. Any other difference still fails
+    closed.
+    """
+
+    if existing == candidate:
+        return True
+    try:
+        old_doc = json.loads(existing)
+        new_doc = json.loads(candidate)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return _normalize_publish_mode_spellings(old_doc) == (
+        _normalize_publish_mode_spellings(new_doc)
+    )
+
+
 def _canonical_follow_up_retrieval(value: Any) -> dict[str, Any] | None:
     """Normalize legacy budget spelling before compiling the runtime request."""
 
@@ -362,15 +405,35 @@ class CheckpointBranchTurnExecutionOwner:
                     )
                 ).scalar_one_or_none()
             if artifact is not None:
-                if (
-                    artifact.sha256 not in {None, digest}
-                    or artifact.size_bytes not in {None, len(payload)}
-                    or artifact.content_type not in {None, content_type}
-                ):
-                    raise CheckpointBranchTurnLaunchError(
-                        "launch_artifact_conflict",
-                        f"owned branch-turn artifact {kind} changed across retry",
+                metadata_matches = (
+                    artifact.sha256 in {None, digest}
+                    and artifact.size_bytes in {None, len(payload)}
+                    and artifact.content_type in {None, content_type}
+                )
+                if not metadata_matches:
+                    if getattr(artifact.status, "value", artifact.status) != (
+                        "complete"
+                    ):
+                        raise CheckpointBranchTurnLaunchError(
+                            "launch_artifact_conflict",
+                            f"owned branch-turn artifact {kind} changed across retry",
+                        )
+                    _stored, existing_payload = await artifacts.read(
+                        artifact_id=artifact.artifact_id,
+                        principal=self._principal,
+                        allow_restricted_raw=True,
                     )
+                    if not _launch_retry_payloads_equivalent(
+                        existing_payload, payload
+                    ):
+                        raise CheckpointBranchTurnLaunchError(
+                            "launch_artifact_conflict",
+                            f"owned branch-turn artifact {kind} changed across retry",
+                        )
+                    # Retain the historical serialization for already-owned
+                    # artifacts: the retry carries the same grant under the
+                    # current spelling, so reattach without rewriting history.
+                    return f"artifact://{artifact.artifact_id}"
                 if getattr(artifact.status, "value", artifact.status) == "complete":
                     _stored, existing_payload = await artifacts.read(
                         artifact_id=artifact.artifact_id,
@@ -1013,6 +1076,12 @@ class CheckpointBranchTurnExecutionOwner:
                 self._destination_authority_notes.append(
                     "credential_generation_rotated"
                 )
+                # Carry the live generation into the restore contract: the
+                # launch embeds this checkpoint copy in the AgentRun request,
+                # and the downstream branch_from_checkpoint boundary compares
+                # its generation with the then-current one. Leaving the stale
+                # value would fail one boundary later.
+                omnigent.credential_generation = profile.credential_generation
                 validation = validation.model_copy(
                     update={
                         "valid": True,

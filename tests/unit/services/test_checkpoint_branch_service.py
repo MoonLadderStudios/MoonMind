@@ -1328,6 +1328,92 @@ async def test_checkpoint_branch_finalize_persists_save_and_verification_handoff
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_handoff_is_indexed_and_readable(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    """The #3622 owner must discover terminal handoffs without the workflow.
+
+    Finalization indexes the latest handoff on the branch and exposes a
+    production reader, so completed branches can be checked by the
+    result-verification owner after terminal persistence.
+    """
+
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-handoff-read"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1100:cbr-handoff-read:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+    verification_handoff = {
+        "schemaVersion": "checkpoint-branch-verification-handoff/v1",
+        "verificationPending": True,
+    }
+    await service.finalize_turn_execution(
+        workflow_id="wf-1",
+        branch_id="cbr-handoff-read",
+        branch_turn_id=turn_id,
+        outcome="succeeded",
+        agent_result_ref="artifact://agent-result/read-turn-1",
+        diagnostics_ref="artifact://terminal-diagnostics/read-turn-1",
+        checkpoint_ref="artifact://checkpoint/read-turn-1",
+        checkpoint_digest="sha256:checkpoint-turn-1",
+        verification_handoff=verification_handoff,
+    )
+    await checkpoint_branch_session.commit()
+
+    stored = await checkpoint_branch_session.get(
+        WorkflowCheckpointBranch, "cbr-handoff-read"
+    )
+    assert stored is not None
+    assert stored.artifact_refs["latestBranchTurnVerificationHandoff"] == turn_id
+
+    loaded = await service.read_branch_turn_verification_handoff(
+        workflow_id="wf-1",
+        branch_id="cbr-handoff-read",
+        branch_turn_id=turn_id,
+    )
+    assert loaded == verification_handoff
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_handoff_reader_handles_missing_handoff(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    """Turns finalized without a handoff read back as None, not an error."""
+
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-handoff-missing"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1100:cbr-handoff-missing:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+    await service.finalize_turn_execution(
+        workflow_id="wf-1",
+        branch_id="cbr-handoff-missing",
+        branch_turn_id=turn_id,
+        outcome="failed",
+        agent_result_ref="artifact://agent-result/missing-turn-1",
+        diagnostics_ref="artifact://terminal-diagnostics/missing-turn-1",
+    )
+    await checkpoint_branch_session.commit()
+
+    loaded = await service.read_branch_turn_verification_handoff(
+        workflow_id="wf-1",
+        branch_id="cbr-handoff-missing",
+        branch_turn_id=turn_id,
+    )
+    assert loaded is None
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_service_rejects_launch_mutation_and_bad_key(
     checkpoint_branch_session: AsyncSession,
 ) -> None:
