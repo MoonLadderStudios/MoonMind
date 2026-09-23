@@ -560,49 +560,23 @@ def _projection_semantic_time(updated_at, search_attributes) -> datetime | None:
     return max((value for value in candidates if value is not None), default=None)
 
 
-async def _locked_get(session: Any, model: Any, pk: Any) -> Any | None:
-    """Fetch one row with row-level locking when the session supports it.
+async def _locked_get(session: AsyncSession, model: Any, pk: Any) -> Any | None:
+    """Fetch one row with row-level locking on the supported session contract.
 
-    Test doubles (AsyncMock with exhausted side_effect, hand-rolled get()
-    without locking kwargs, or SimpleNamespace sessions returning unrelated
-    payloads) must never crash the mutator: exhausted mocks yield None so the
-    caller follows the missing-row path, strict fakes fall back to a plain
-    get(), and wrong-type payloads are treated as absent so a canonical row
-    is never mistaken for a projection row (or vice versa).
+    Genuine absence returns None so the caller can repair the missing row. Any
+    database/adapter failure — including a miswired session returning the wrong
+    row type — propagates to the caller. It is never downgraded to an unlocked
+    read, a missing row, or a fresh projection. The caller owns bounded
+    recovery; see ``mutate_execution_projection``.
     """
-    get = getattr(session, "get", None)
-    if not callable(get):
+    result = await session.get(model, pk, with_for_update=True, populate_existing=True)
+    if result is None:
         return None
-    for attempt in ("locked", "plain"):
-        try:
-            if attempt == "locked":
-                result = await get(model, pk, with_for_update=True, populate_existing=True)
-            else:
-                result = await get(model, pk)
-        except TypeError:
-            # Strict fake get() without locking kwargs: retry plain.
-            if attempt == "locked":
-                continue
-            return None
-        except (StopAsyncIteration, StopIteration):
-            # AsyncMock side_effect exhausted by an earlier call in the same
-            # request (pre-mutator mocks sized for the old direct-write path).
-            return None
-        except AttributeError:
-            return None
-        else:
-            if result is None:
-                return None
-            try:
-                if isinstance(result, model):
-                    return result
-            except Exception:
-                return None
-            # Wrong-type payload (e.g. a canonical row returned for a
-            # projection lookup, or a provider-profile SimpleNamespace for an
-            # execution lookup): treat as absent, never as the requested row.
-            return None
-    return None
+    if not isinstance(result, model):
+        raise TypeError(
+            f"projection read returned {type(result).__name__} for {model.__name__}"
+        )
+    return result
 
 
 def _record_semantic_time(row: Any) -> datetime | None:
@@ -631,17 +605,17 @@ async def mutate_execution_projection(
     their memo keys and artifact refs. Reconciliation repairs either projection
     divergence or absence; caller owns commit/retry of the transaction. No writer
     uses wall-clock sync time as evidence that workflow state became newer.
+    Persistence failures propagate as errors and never read as absence: genuine
+    not-found returns None from the locked read and repairs, while any session
+    or serialization error aborts the mutation for the caller's bounded recovery.
     """
     if owner not in {"temporal", "canonical", "snapshot", "runtime_binding"}:
         raise ValueError("unknown execution projection mutation owner")
-    flush = getattr(session, "flush", None)
-    if callable(flush):
-        try:
-            await flush()
-        except (StopAsyncIteration, StopIteration, AttributeError, TypeError):
-            # Session double without flush support (unit mocks sized for the
-            # old direct-write path); the mutator reconciles from fetched rows.
-            pass
+    # Flush pending caller writes before the locked reads so the mutator
+    # reconciles from the caller's actual state. Flush failures are real
+    # persistence failures: they propagate and never trigger missing-row
+    # creation, an unlocked fallback, or a fresh projection.
+    await session.flush()
     canonical = await _locked_get(session, TemporalExecutionCanonicalRecord, workflow_id)
     projection = await _locked_get(session, TemporalExecutionRecord, workflow_id)
     records = [record for record in (canonical, projection) if record is not None]
@@ -688,8 +662,11 @@ async def mutate_execution_projection(
                     "Ignoring temporal %s change for %s: stored=%r incoming=%r",
                     field, workflow_id, stored_identity, incoming_identity,
                 )
-                incoming[field] = getattr(latest, field)
-        stored_params = dict(getattr(latest, "parameters", None) or {})
+                # The canonical admission record is authoritative even when the
+                # projection row carries a newer timestamp: never copy protected
+                # values from the divergent projection row.
+                incoming[field] = getattr(identity_source, field)
+        stored_params = dict(getattr(identity_source, "parameters", None) or {})
         incoming_params = incoming.get("parameters") or {}
         if isinstance(incoming_params, dict) and stored_params:
             # Temporal memo parameters may only introduce keys the canonical
@@ -904,108 +881,81 @@ async def mutate_execution_projection(
         else params
     )
     if projection is None:
-        _begin_nested = getattr(session, "begin_nested", None)
-        _session_add = getattr(session, "add", None)
-        _session_flush = getattr(session, "flush", None)
-        if not callable(_begin_nested) or not callable(_session_add):
-            # Session double without transactional write support (unit mocks
-            # sized for the old direct-write path): build the projection
-            # in-memory so callers holding the returned row still observe the
-            # reconciled fields. The caller owns persistence.
-            projection_fields = {
-                key: value
-                for key, value in merged.items()
-                if hasattr(TemporalExecutionRecord, key)
-            }
-            try:
+        # Missing-row repair runs inside a savepoint on the supported session
+        # contract so a concurrent insert conflict rolls back only this item.
+        # Any other persistence failure propagates: it never becomes an
+        # in-memory projection or a fresh read.
+        try:
+            async with session.begin_nested():
+                projection_fields = {
+                    key: value
+                    for key, value in merged.items()
+                    if hasattr(TemporalExecutionRecord, key)
+                }
                 projection = TemporalExecutionRecord(**projection_fields, projection_version=0)
-            except Exception:
-                projection = None
-            if projection is not None and callable(_session_add):
-                try:
-                    _session_add(projection)
-                except Exception:
-                    # Session double without add support; the in-memory
-                    # projection is still returned to the caller.
-                    pass
-        else:
-            try:
-                async with _begin_nested():
-                    projection_fields = {
-                        key: value
-                        for key, value in merged.items()
-                        if hasattr(TemporalExecutionRecord, key)
-                    }
-                    projection = TemporalExecutionRecord(**projection_fields, projection_version=0)
-                    _session_add(projection)
-                    if callable(_session_flush):
-                        try:
-                            await _session_flush()
-                        except (StopAsyncIteration, StopIteration, AttributeError, TypeError):
-                            # Session double without flush support; the added
-                            # row is still visible to the caller.
-                            pass
-            except IntegrityError:
-                # Concurrent insert race on the missing-row path: another
-                # transaction won the insert. The nested savepoint already rolled
-                # back; reconcile onto the now-present row instead of duplicating
-                # it. Never roll back the caller's outer transaction here.
-                canonical = await _locked_get(session, TemporalExecutionCanonicalRecord, workflow_id)
-                projection = await _locked_get(session, TemporalExecutionRecord, workflow_id)
-                if projection is None:
-                    raise
-                records = [record for record in (canonical, projection) if record is not None]
-                # Re-evaluate the winner after the conflict: decisions computed
-                # before the reload (merge, stale, ownership) used the pre-insert
-                # snapshot. Re-select the freshest stored row and recompute
-                # staleness so a losing concurrent writer cannot overwrite the
-                # winner's newer lifecycle observation with older payload data.
-                latest = max(records, key=lambda row: _record_semantic_time(row) or datetime.min.replace(tzinfo=UTC))
-                if owner == "temporal":
-                    identity_source = canonical if canonical is not None else latest
-                    for field in _TEMPORAL_PROTECTED_IDENTITY_FIELDS:
-                        stored_identity = _normalize_identity(getattr(identity_source, field, None))
-                        incoming_identity = _normalize_identity(incoming.get(field))
-                        if (
-                            stored_identity is not None
-                            and incoming_identity is not None
-                            and stored_identity != incoming_identity
-                        ):
-                            incoming[field] = getattr(identity_source, field)
-                    merged.update({
-                        key: incoming[key]
-                        for key in ("owner_id", "owner_type", "namespace", "workflow_type", "parameters")
-                        if key in incoming
-                    })
-                _re_prev = _projection_semantic_time(latest.updated_at, latest.search_attributes)
-                _re_in = _semantic_time(incoming.get("updated_at"))
-                _re_stale = False
-                if latest.run_id == incoming.get("run_id"):
-                    _re_stale = bool(_re_prev and _re_in and _re_in < _re_prev) or bool(
-                        latest.close_status and not incoming.get("close_status")
-                    )
-                else:
-                    _re_prev_match = bool(
-                        incoming.get("previous_run_id")
-                        and incoming.get("previous_run_id") == latest.run_id
-                    )
-                    _re_stored_first = (getattr(latest, "memo", None) or {}).get("first_run_id")
-                    _re_in_first = incoming.get("first_run_id")
-                    _re_chain = bool(
-                        _re_in_first and _re_stored_first and _re_in_first == _re_stored_first
-                    ) or bool(_re_in_first and latest.run_id and _re_in_first == latest.run_id)
-                    _re_succ = _re_prev_match or _re_chain
-                    if _re_prev and _re_in:
-                        if _re_in < _re_prev:
-                            _re_stale = True
-                        elif _re_in == _re_prev and not _re_succ:
-                            _re_stale = True
-                    elif not _re_succ:
+                session.add(projection)
+                await session.flush()
+        except IntegrityError:
+            # Concurrent insert race on the missing-row path: another
+            # transaction won the insert. The nested savepoint already rolled
+            # back; reconcile onto the now-present row instead of duplicating
+            # it. Never roll back the caller's outer transaction here.
+            canonical = await _locked_get(session, TemporalExecutionCanonicalRecord, workflow_id)
+            projection = await _locked_get(session, TemporalExecutionRecord, workflow_id)
+            if projection is None:
+                raise
+            records = [record for record in (canonical, projection) if record is not None]
+            # Re-evaluate the winner after the conflict: decisions computed
+            # before the reload (merge, stale, ownership) used the pre-insert
+            # snapshot. Re-select the freshest stored row and recompute
+            # staleness so a losing concurrent writer cannot overwrite the
+            # winner's newer lifecycle observation with older payload data.
+            latest = max(records, key=lambda row: _record_semantic_time(row) or datetime.min.replace(tzinfo=UTC))
+            if owner == "temporal":
+                identity_source = canonical if canonical is not None else latest
+                for field in _TEMPORAL_PROTECTED_IDENTITY_FIELDS:
+                    stored_identity = _normalize_identity(getattr(identity_source, field, None))
+                    incoming_identity = _normalize_identity(incoming.get(field))
+                    if (
+                        stored_identity is not None
+                        and incoming_identity is not None
+                        and stored_identity != incoming_identity
+                    ):
+                        incoming[field] = getattr(identity_source, field)
+                merged.update({
+                    key: incoming[key]
+                    for key in ("owner_id", "owner_type", "namespace", "workflow_type", "parameters")
+                    if key in incoming
+                })
+            _re_prev = _projection_semantic_time(latest.updated_at, latest.search_attributes)
+            _re_in = _semantic_time(incoming.get("updated_at"))
+            _re_stale = False
+            if latest.run_id == incoming.get("run_id"):
+                _re_stale = bool(_re_prev and _re_in and _re_in < _re_prev) or bool(
+                    latest.close_status and not incoming.get("close_status")
+                )
+            else:
+                _re_prev_match = bool(
+                    incoming.get("previous_run_id")
+                    and incoming.get("previous_run_id") == latest.run_id
+                )
+                _re_stored_first = (getattr(latest, "memo", None) or {}).get("first_run_id")
+                _re_in_first = incoming.get("first_run_id")
+                _re_chain = bool(
+                    _re_in_first and _re_stored_first and _re_in_first == _re_stored_first
+                ) or bool(_re_in_first and latest.run_id and _re_in_first == latest.run_id)
+                _re_succ = _re_prev_match or _re_chain
+                if _re_prev and _re_in:
+                    if _re_in < _re_prev:
                         _re_stale = True
-                if _re_stale:
-                    stale = True
-                    merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
-                    merged["workflow_id"] = workflow_id
+                    elif _re_in == _re_prev and not _re_succ:
+                        _re_stale = True
+                elif not _re_succ:
+                    _re_stale = True
+            if _re_stale:
+                stale = True
+                merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
+                merged["workflow_id"] = workflow_id
     # Snapshot the pre-write stored values before the write-back below: the
     # duplicate-observation check must compare against what was stored, not the
     # just-overwritten attributes (latest aliases one of the row objects).
@@ -1050,12 +1000,13 @@ async def mutate_execution_projection(
         and merged.get("parameters") == _prev_params
     )
     if projection is None:
-        # Session double without write support and no creatable row: there is
-        # nothing durable to advance. Return the freshest projection row when
-        # one exists so callers holding detached doubles still observe it.
-        if isinstance(latest, TemporalExecutionRecord):
-            return latest
-        return None
+        # Unreachable on the supported session contract: the missing-row path
+        # above either creates the projection or raises (IntegrityError race
+        # with no surviving row re-raises). Never fall back to returning a
+        # different row as if it were the repaired projection.
+        raise RuntimeError(
+            f"projection repair produced no row for {workflow_id}"
+        )
     # Snapshot and binding mutation also repair a missing projection from the
     # canonical source, without creating a second execution identity.
     for record in (canonical, projection):

@@ -7644,6 +7644,519 @@ def test_moonspec_contract_repair_feedback_for_degraded_verify_output(
     )
 
 
+def test_moonspec_report_recovery_repairs_at_most_once(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R2: a malformed final report gets at
+    most one report-only correction. Retained histories keep the legacy
+    budget instead of gaining new scheduling on replay."""
+    from moonmind.workflows.temporal.workflows.run import (
+        _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS,
+    )
+
+    assert _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS == 2
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 2
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+    )
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
+
+
+def test_moonspec_contract_repair_preserves_original_findings(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R1/R2: the bounded repair carries the
+    original bounded findings as untrusted data instead of dropping them."""
+    execution_result = {
+        "outputs": {
+            "moonSpecVerify": {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "create_pull_request",
+                "feedback": "original verifier note",
+                "issues": [
+                    {
+                        "severity": "error",
+                        "description": "original gap",
+                        "evidence": "gap evidence",
+                    }
+                ],
+            }
+        }
+    }
+    node_inputs = {"selectedSkill": "moonspec-verify"}
+    assert (
+        mock_run_workflow._moonspec_verify_contract_repair_feedback(
+            execution_result=execution_result,
+            tool_name="auto",
+            node_inputs=node_inputs,
+        )
+        is not None
+    )
+    preserved = mock_run_workflow._moonspec_contract_repair_issues(
+        execution_result=execution_result,
+        tool_name="auto",
+        node_inputs=node_inputs,
+    )
+    assert len(preserved) == 1
+    assert preserved[0]["description"] == "original gap"
+
+    assert (
+        mock_run_workflow._moonspec_contract_repair_issues(
+            execution_result={
+                "outputs": {
+                    "moonSpecVerify": {
+                        "verdict": "FULLY_IMPLEMENTED",
+                        "recommendedNextAction": "advance",
+                    }
+                }
+            },
+            tool_name="auto",
+            node_inputs=node_inputs,
+        )
+        == ()
+    )
+    assert (
+        mock_run_workflow._moonspec_contract_repair_issues(
+            execution_result=execution_result,
+            tool_name="auto",
+            node_inputs={"selectedSkill": "jira-issue-updater"},
+        )
+        == ()
+    )
+
+
+def test_moonspec_missing_verdict_repair_end_to_end_report_only(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R1/R2: a missing-verdict final report is
+    repaired once through the real parser boundary without rerunning a
+    business step or switching runtime/provider authority."""
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+    )
+    node_inputs = {"selectedSkill": "moonspec-verify"}
+    malformed_result = {
+        "outputs": {
+            "moonSpecVerify": {
+                "feedback": "verifier note without a verdict envelope",
+                "issues": [
+                    {
+                        "severity": "error",
+                        "description": "original gap",
+                        "evidence": "gap evidence",
+                    }
+                ],
+            }
+        }
+    }
+
+    gate = mock_run_workflow._moonspec_verify_gate_result(
+        malformed_result["outputs"]
+    )
+    assert gate.verdict == "NO_DETERMINATION"
+    assert gate.invalid and gate.degraded
+    assert "verdict is missing" in (gate.downgrade_reason or "")
+    assert gate.recommended_next_action == "blocked"
+
+    feedback = mock_run_workflow._moonspec_verify_contract_repair_feedback(
+        execution_result=malformed_result,
+        tool_name="auto",
+        node_inputs=node_inputs,
+    )
+    assert feedback is not None
+    assert "verdict is missing" in feedback
+    assert "Do not modify implementation source" in feedback
+    lowered = feedback.lower()
+    assert "switch account" not in lowered
+    assert "switch model" not in lowered
+    assert "invent" not in lowered
+
+    carried = mock_run_workflow._moonspec_contract_repair_issues(
+        execution_result=malformed_result,
+        tool_name="auto",
+        node_inputs=node_inputs,
+    )
+    assert len(carried) == 1
+    assert carried[0]["description"] == "original gap"
+
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
+
+    corrected_result = {
+        "outputs": {
+            "moonSpecVerify": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "recommendedNextAction": "reattempt_current_step",
+                "confidence": "medium",
+                "feedback": "verifier note without a verdict envelope",
+                "issues": [
+                    {
+                        "severity": "error",
+                        "description": "original gap",
+                        "evidence": "gap evidence",
+                    }
+                ],
+            }
+        }
+    }
+    regate = mock_run_workflow._moonspec_verify_gate_result(
+        corrected_result["outputs"]
+    )
+    assert regate.verdict == "ADDITIONAL_WORK_NEEDED"
+    assert not regate.invalid and not regate.degraded
+    assert regate.recommended_next_action == "reattempt_current_step"
+    assert (
+        mock_run_workflow._moonspec_verify_contract_repair_feedback(
+            execution_result=corrected_result,
+            tool_name="auto",
+            node_inputs=node_inputs,
+        )
+        is None
+    )
+    assert (
+        mock_run_workflow._moonspec_contract_repair_issues(
+            execution_result=corrected_result,
+            tool_name="auto",
+            node_inputs=node_inputs,
+        )
+        == ()
+    )
+
+
+def test_moonspec_malformed_matrix_stays_non_passing_with_diagnostics(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R3: persistent malformed envelopes stay
+    non-passing with actionable diagnostics; valid non-passing findings are
+    preserved without repair."""
+    from moonmind.workflows.skills.approval_policy import (
+        step_gate_contract_violations,
+    )
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+            run_workflow_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH,
+        },
+    )
+
+    malformed_cases = [
+        {"outputs": {}},
+        {
+            "outputs": {
+                "moonSpecVerify": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "recommendedNextAction": "blocked",
+                }
+            }
+        },
+        {
+            "outputs": {
+                "moonSpecVerify": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "recommendedNextAction": "advance",
+                    "degraded": True,
+                }
+            }
+        },
+    ]
+    for case in malformed_cases:
+        gate = mock_run_workflow._moonspec_verify_gate_result(case["outputs"])
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.invalid or gate.degraded
+        assert gate.recommended_next_action == "blocked"
+        assert gate.downgrade_reason
+
+    reasons = {
+        mock_run_workflow._moonspec_verify_gate_result(
+            case["outputs"]
+        ).downgrade_reason
+        for case in malformed_cases
+    }
+    assert len(reasons) == len(malformed_cases)
+
+    assert step_gate_contract_violations(
+        {
+            "verdict": "FULLY_IMPLEMENTED",
+            "recommendedNextAction": "advance",
+        },
+        require_acceptance=True,
+    ) != []
+
+    preserved = mock_run_workflow._moonspec_verify_gate_result(
+        {
+            "moonSpecVerify": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "recommendedNextAction": "reattempt_current_step",
+                "confidence": "medium",
+            }
+        }
+    )
+    assert preserved.verdict == "ADDITIONAL_WORK_NEEDED"
+    assert not preserved.invalid and not preserved.degraded
+    assert (
+        mock_run_workflow._moonspec_verify_contract_repair_feedback(
+            execution_result={
+                "outputs": {
+                    "moonSpecVerify": {
+                        "verdict": "ADDITIONAL_WORK_NEEDED",
+                        "recommendedNextAction": "reattempt_current_step",
+                        "confidence": "medium",
+                    }
+                }
+            },
+            tool_name="auto",
+            node_inputs={"selectedSkill": "moonspec-verify"},
+        )
+        is None
+    )
+
+
+def test_moonspec_native_fault_identities_preserved(
+    mock_run_workflow: MoonMindRunWorkflow,  # noqa: ARG001
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4: duplicate delivery reuses only the
+    same committed attempt identity; changed evidence follows the normal path
+    instead of inheriting another attempt's decision."""
+    from moonmind.workflows.skills.approval_policy import parse_step_gate_result
+    from moonmind.workflows.temporal.workflows.run import (
+        resolve_committed_gate_reuse,
+    )
+
+    committed_gate = parse_step_gate_result(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "recommendedNextAction": "reattempt_current_step",
+            "confidence": "medium",
+            "reviewProvenance": {"reviewAttemptIdentity": "attempt-1"},
+        }
+    )
+    committed = {
+        "attempt-1": {
+            "payload": committed_gate.to_payload(),
+            "artifactRef": "artifact://gate/attempt-1",
+        }
+    }
+    redelivery = parse_step_gate_result(
+        {
+            "verdict": "FULLY_IMPLEMENTED",
+            "recommendedNextAction": "advance",
+            "confidence": "high",
+            "reviewProvenance": {"reviewAttemptIdentity": "attempt-1"},
+        }
+    )
+    reused = resolve_committed_gate_reuse(committed, redelivery)
+    assert reused is not None
+    assert reused[0].verdict == "ADDITIONAL_WORK_NEEDED"
+    assert reused[1] == "artifact://gate/attempt-1"
+
+    changed = parse_step_gate_result(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "recommendedNextAction": "reattempt_current_step",
+            "confidence": "medium",
+            "reviewProvenance": {"reviewAttemptIdentity": "attempt-2"},
+        }
+    )
+    assert resolve_committed_gate_reuse(committed, changed) is None
+
+
+def test_moonspec_native_fault_timeout_cancel_lost_result_preserve_identities(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4472 R4/A4: timeout, cancellation, and
+    lost-result deliveries preserve attempt identities, recovery-budget
+    limits, accepted evidence, and publication permissions."""
+    from moonmind.workflows.skills.approval_policy import parse_step_gate_result
+    from moonmind.workflows.temporal.workflows.run import (
+        resolve_committed_gate_reuse,
+    )
+
+    committed_gate = parse_step_gate_result(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "recommendedNextAction": "reattempt_current_step",
+            "confidence": "medium",
+            "reviewProvenance": {"reviewAttemptIdentity": "attempt-1"},
+        }
+    )
+    committed = {
+        "attempt-1": {
+            "payload": committed_gate.to_payload(),
+            "artifactRef": "artifact://gate/attempt-1",
+        }
+    }
+    mock_run_workflow._committed_review_gates = dict(committed)
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "diagnostics_ref": "artifact://gate/attempt-1",
+        },
+    )
+    assert mock_run_workflow._blocking_moonspec_gate_reason() is not None
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert (
+        mock_run_workflow._publish_context["publicationBlockedBy"]
+        == "moonspec_verify"
+    )
+
+    # Timeout: empty outputs stay non-passing with actionable diagnostics,
+    # never authorize publication as verified work, and never inherit
+    # another attempt's committed decision.
+    timed_out = mock_run_workflow._moonspec_verify_gate_result({})
+    assert timed_out.verdict == "NO_DETERMINATION"
+    assert timed_out.invalid and timed_out.degraded
+    assert timed_out.verdict != "FULLY_IMPLEMENTED"
+    assert resolve_committed_gate_reuse(committed, timed_out) is None
+    assert (
+        mock_run_workflow._committed_review_gates["attempt-1"]["artifactRef"]
+        == "artifact://gate/attempt-1"
+    )
+    assert (
+        mock_run_workflow._publish_context["publicationBlockedBy"]
+        == "moonspec_verify"
+    )
+    # The timeout consumes no report-recovery budget: new histories still
+    # allow at most one report-only correction.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+    )
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
+
+    # Cancellation: a cancel request preserves the committed identities,
+    # accepted evidence, and publication block instead of clearing them,
+    # and a cancel-time duplicate still cannot upgrade the decision.
+    mock_run_workflow._cancel_requested = True
+    try:
+        assert (
+            mock_run_workflow._committed_review_gates["attempt-1"][
+                "artifactRef"
+            ]
+            == "artifact://gate/attempt-1"
+        )
+        assert (
+            mock_run_workflow._publish_context["publicationBlockedBy"]
+            == "moonspec_verify"
+        )
+        cancel_time_redelivery = parse_step_gate_result(
+            {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "advance",
+                "confidence": "high",
+                "reviewProvenance": {"reviewAttemptIdentity": "attempt-1"},
+            }
+        )
+        reused = resolve_committed_gate_reuse(
+            mock_run_workflow._committed_review_gates, cancel_time_redelivery
+        )
+        assert reused is not None
+        assert reused[0].verdict == "ADDITIONAL_WORK_NEEDED"
+        assert reused[1] == "artifact://gate/attempt-1"
+    finally:
+        mock_run_workflow._cancel_requested = False
+
+    # Lost-result: a redelivery without attempt provenance follows the
+    # normal path instead of inheriting a decision, while the stored
+    # committed decision and artifact ref remain intact for replay.
+    lost = parse_step_gate_result(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "recommendedNextAction": "reattempt_current_step",
+            "confidence": "medium",
+        }
+    )
+    assert resolve_committed_gate_reuse(committed, lost) is None
+    assert (
+        mock_run_workflow._committed_review_gates["attempt-1"]["artifactRef"]
+        == "artifact://gate/attempt-1"
+    )
+    assert (
+        mock_run_workflow._publish_context["publicationBlockedBy"]
+        == "moonspec_verify"
+    )
+
+
+
+def test_moonspec_contract_repair_bound_is_single_report_only_correction(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#4472: a malformed final verify report receives at most one
+    report-only correction. Retained histories without the single-repair
+    marker keep the legacy bound so replay preserves their command sequence."""
+    # Retained history: legacy bound preserved for replay safety.
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 2
+
+    # New history: exactly one report-only correction.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH,
+    )
+    assert mock_run_workflow._moonspec_contract_repair_max_attempts() == 1
+
+
+def test_moonspec_gate_blocked_continuation_preserves_legacy_for_replay(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retained histories without the blocked-continuation marker keep the
+    legacy needs_human continuation and terminal disposition so replay
+    preserves recorded state."""
+    # Retained history: legacy interpretation preserved.
+    assert mock_run_workflow._moonspec_gate_blocked_continuation_enabled() is False
+
+    node_id = "verify-final"
+    node_inputs = {"selectedSkill": "moonspec-verify"}
+    ordered_nodes = [
+        {"id": node_id, "inputs": dict(node_inputs)},
+        {"id": "create-pr", "inputs": {"title": "Create pull request"}},
+    ]
+    gate = mock_run_workflow._moonspec_verify_gate_result(
+        {"moonSpecVerify": {"confidence": "high", "summary": "omitted verdict"}}
+    )
+    assert gate.verdict == "NO_DETERMINATION"
+    decision = mock_run_workflow._bounded_story_loop_continuation_decision(
+        logical_step_id=node_id,
+        gate_result=gate,
+        gate_result_ref="artifact://art_verify_final",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    # Without the marker the fallthrough keeps needs_human semantics; the
+    # exact serialized state must not silently become blocked on replay.
+    assert decision["gate"]["verdict"] == "NO_DETERMINATION"
+
+    # New history: automation-owned blocked continuation.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH,
+    )
+    assert mock_run_workflow._moonspec_gate_blocked_continuation_enabled() is True
+
+
+
+
 def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -7674,6 +8187,225 @@ def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoin
     assert workspace["evidenceAccepted"] is True
     assert workspace["sourceExecutionOrdinal"] == source_execution
     assert not mock_run_workflow._workspace_policy_launch_blocked(workspace)
+
+
+def test_moonspec_final_boundary_preserves_identities_budgets_and_publication_permissions(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#4472 REQ-4: timeout/cancel/duplicate/changed-candidate/lost-result
+    cases through the real final verify -> artifact -> gate -> publication path
+    preserve attempt/artifact identities, repair/review budgets, diagnostics,
+    evidence refs, and publication permissions."""
+    # New history: action-less NO_DETERMINATION carries automation-owned
+    # blocked continuation. Retained histories without the marker keep the
+    # legacy needs_human interpretation (covered below).
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH,
+            run_workflow_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH,
+            run_workflow_module.RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
+        },
+    )
+
+    node_id = "verify-final"
+    node_inputs = {"selectedSkill": "moonspec-verify"}
+    tool_name = "auto"
+    ordered_nodes = [
+        {"id": node_id, "inputs": dict(node_inputs)},
+        {"id": "create-pr", "inputs": {"title": "Create pull request"}},
+    ]
+
+    def malformed_outputs(
+        diagnostics_ref: str | None = "art_verify_final",
+        gate_ref: str | None = "artifact://art_verify_final",
+    ) -> dict[str, Any]:
+        nested: dict[str, Any] = {
+            "confidence": "high",
+            "summary": "verifier omitted verdict",
+        }
+        if diagnostics_ref is not None:
+            nested["diagnosticsRef"] = diagnostics_ref
+        if gate_ref is not None:
+            nested["gateResultRef"] = gate_ref
+        return {"moonSpecVerify": nested}
+
+    def continuation_for(
+        gate_result: Any, gate_ref: str | None
+    ) -> dict[str, Any]:
+        return mock_run_workflow._bounded_story_loop_continuation_decision(
+            logical_step_id=node_id,
+            gate_result=gate_result,
+            gate_result_ref=gate_ref,
+            ordered_nodes=ordered_nodes,
+            current_index=0,
+        )
+
+    # Base malformed report: missing verdict must stay fail-closed without
+    # inventing a human-review requirement.
+    base_outputs = malformed_outputs()
+    base_gate = mock_run_workflow._moonspec_verify_gate_result(base_outputs)
+    assert base_gate.verdict == "NO_DETERMINATION"
+    assert base_gate.recommended_next_action == "blocked"
+    assert base_gate.recommended_next_action != "needs_human"
+    assert base_gate.invalid or base_gate.degraded
+    assert base_gate.downgrade_reason
+
+    feedback = mock_run_workflow._moonspec_verify_contract_repair_feedback(
+        execution_result={"outputs": base_outputs},
+        tool_name=tool_name,
+        node_inputs=node_inputs,
+    )
+    assert feedback is not None
+    assert "Do not modify implementation" in feedback
+
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id=node_id, outputs=base_outputs
+    )
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["verdict"] == "NO_DETERMINATION"
+    assert gate_context["diagnosticsRef"] == "art_verify_final"
+    assert gate_context["gateResultRef"] == "artifact://art_verify_final"
+    assert gate_context["recommendedNextAction"] == "blocked"
+
+    blocking_reason = mock_run_workflow._blocking_moonspec_gate_reason()
+    assert blocking_reason is not None
+    assert "NO_DETERMINATION" in blocking_reason
+    assert "art_verify_final" in blocking_reason
+
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert (
+        mock_run_workflow._publish_context["publicationBlockedBy"]
+        == "moonspec_verify"
+    )
+    status, message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+    assert status == "failed"
+    assert publish_failure is True
+    assert "MoonSpec verification did not approve publication" in message
+    assert "art_verify_final" in message
+
+    base_decision = continuation_for(base_gate, "artifact://art_verify_final")
+    assert base_decision["gate"]["verdict"] == "NO_DETERMINATION"
+    assert (
+        base_decision["gate"]["gateResultRef"] == "artifact://art_verify_final"
+    )
+    # The continuation gate carries artifact refs for evidence; the human-readable
+    # verifier diagnostics stay in the moonSpecGate publish context above.
+    assert base_decision["currentLogicalStepId"] == node_id
+    assert base_decision["nonSemanticRetryBudgets"]["consumesSemanticAttempt"] is False
+    base_attempt_id = base_decision["attempt"]["stepExecutionId"]
+
+    # Duplicate delivery: identical report reuses identities and stays blocked.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id=node_id, outputs=malformed_outputs()
+    )
+    dup_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert dup_context["verdict"] == gate_context["verdict"]
+    assert dup_context["diagnosticsRef"] == gate_context["diagnosticsRef"]
+    assert dup_context["gateResultRef"] == gate_context["gateResultRef"]
+    assert dup_context["recommendedNextAction"] == "blocked"
+    dup_gate = mock_run_workflow._moonspec_verify_gate_result(
+        malformed_outputs()
+    )
+    dup_decision = continuation_for(dup_gate, "artifact://art_verify_final")
+    assert dup_decision["attempt"]["stepExecutionId"] == base_attempt_id
+    assert dup_decision["gate"]["gateResultRef"] == (
+        base_decision["gate"]["gateResultRef"]
+    )
+    assert dup_decision["gate"]["diagnosticsRef"] == (
+        base_decision["gate"]["diagnosticsRef"]
+    )
+    assert dup_decision["gate"]["verdict"] == "NO_DETERMINATION"
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+
+    # Changed candidate evidence: new refs are recorded without changing the
+    # attempt identity, and publication stays blocked (never verified).
+    changed_outputs = malformed_outputs(
+        diagnostics_ref="art_verify_final_v2",
+        gate_ref="artifact://art_verify_final_v2",
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id=node_id, outputs=changed_outputs
+    )
+    changed_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert changed_context["diagnosticsRef"] == "art_verify_final_v2"
+    assert changed_context["gateResultRef"] == "artifact://art_verify_final_v2"
+    assert changed_context["recommendedNextAction"] == "blocked"
+    changed_gate = mock_run_workflow._moonspec_verify_gate_result(changed_outputs)
+    changed_decision = continuation_for(
+        changed_gate, "artifact://art_verify_final_v2"
+    )
+    assert changed_decision["attempt"]["stepExecutionId"] == base_attempt_id
+    assert changed_decision["gate"]["verdict"] == "NO_DETERMINATION"
+    assert (
+        changed_decision["gate"]["gateResultRef"]
+        == "artifact://art_verify_final_v2"
+    )
+    assert mock_run_workflow._blocking_moonspec_gate_reason() is not None
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    status, message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+    assert status == "failed" and publish_failure is True
+
+    # Lost result: refs absent but the malformed report still fails closed with
+    # diagnostics and blocked publication.
+    lost_outputs = malformed_outputs(diagnostics_ref=None, gate_ref=None)
+    lost_gate = mock_run_workflow._moonspec_verify_gate_result(lost_outputs)
+    assert lost_gate.verdict == "NO_DETERMINATION"
+    assert lost_gate.recommended_next_action == "blocked"
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id=node_id, outputs=lost_outputs
+    )
+    lost_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert lost_context["verdict"] == "NO_DETERMINATION"
+    assert lost_context["recommendedNextAction"] == "blocked"
+    assert "gateResultRef" not in lost_context
+    lost_decision = continuation_for(lost_gate, None)
+    assert lost_decision["gate"]["verdict"] == "NO_DETERMINATION"
+    assert lost_decision["gate"]["gateResultRef"] is None
+    assert lost_decision["attempt"]["stepExecutionId"] == base_attempt_id
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+
+    # Timeout analogue: an empty verify envelope fails closed, requests a
+    # report-only correction, and never becomes needs_human.
+    timeout_gate = mock_run_workflow._moonspec_verify_gate_result({})
+    assert timeout_gate.verdict == "NO_DETERMINATION"
+    assert timeout_gate.recommended_next_action == "blocked"
+    timeout_feedback = mock_run_workflow._moonspec_verify_contract_repair_feedback(
+        execution_result={"outputs": {}},
+        tool_name=tool_name,
+        node_inputs=node_inputs,
+    )
+    assert timeout_feedback is not None
+
+    # Cancellation preserves the recorded gate and blocked publication without
+    # inventing human review or verified work.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id=node_id, outputs=base_outputs
+    )
+    mock_run_workflow._cancel_requested = True
+    cancelled_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert cancelled_context["verdict"] == "NO_DETERMINATION"
+    assert cancelled_context["diagnosticsRef"] == "art_verify_final"
+    assert cancelled_context["recommendedNextAction"] == "blocked"
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    status, message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+    assert status == "failed" and publish_failure is True
+    assert "MoonSpec verification did not approve publication" in message
 
 
 def test_moonspec_gate_draft_publish_qualification(

@@ -46,6 +46,8 @@ def test_projection_readiness_requires_recent_success_without_error():
     now = datetime(2026, 7, 28, tzinfo=timezone.utc)
 
     assert projection_readiness(_projection(now), now=now)["ready"] is True
+    # Stale freshness alone never blocks: an outage retains last-known good
+    # while marking it stale; only missing/unavailable/incompatible block.
     stale = projection_readiness(
         _projection(now, last_successful_sync_at=now - timedelta(minutes=6)),
         now=now,
@@ -53,9 +55,11 @@ def test_projection_readiness_requires_recent_success_without_error():
     failed = projection_readiness(_projection(now, error="endpoint timeout"), now=now)
 
     assert stale["freshness"] == "stale"
-    assert stale["reason"] == "upstream inventory is stale"
+    assert stale["ready"] is True
+    assert stale["reason"] is None
     assert failed["freshness"] == "stale"
-    assert failed["ready"] is False
+    assert failed["ready"] is True
+    assert failed["reason"] is None
 
 
 def test_projection_readiness_explains_missing_unavailable_and_incompatible():
@@ -97,8 +101,9 @@ def test_readiness_actionable_detail_preserves_reason_and_steers():
     assert detail.startswith("stable upstream identity is unavailable")
     assert "omnigent-opencode-default@275" in detail
     assert "default/cf65137fc096a61a6434956c92093549/179" in detail
-    assert "POST /api/omnigent/harness-catalog/synchronize" in detail
-    assert "latest active profile version" in detail
+    assert "POST /api/omnigent/harness-catalog/synchronize" not in detail
+    assert "retry with the latest active profile version" in detail
+    assert "omit version to use the default" in detail
 
 
 def test_projection_readiness_enforces_requested_contract():

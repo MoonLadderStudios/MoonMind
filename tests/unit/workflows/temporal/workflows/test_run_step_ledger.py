@@ -5534,7 +5534,11 @@ async def test_run_execution_stage_records_review_evidence(
         expected_disposition = (
             stop_action if stop_authority_enabled else (
                 "failed_with_remaining_work"
-                if stop_verdict == "ADDITIONAL_WORK_NEEDED" else "needs_human"
+                if stop_verdict == "ADDITIONAL_WORK_NEEDED"
+                # MoonMind#4472: an inconclusive report without honored stop
+                # authority carries the automation-owned blocked disposition,
+                # never an implicit human requirement.
+                else "blocked"
             )
         )
         expected_status = "blocked" if expected_disposition == "blocked" else "failed"

@@ -1532,15 +1532,20 @@ def test_github_token_block_preserves_unrelated_config_contents() -> None:
         )
         (gh_dir / "config.yml").write_text("editor: vim\n")
         before_hosts = (gh_dir / "hosts.yml").read_text()
-        before_config = (gh_dir / "config.yml").read_text()
-        # Restart without a token preserves every persisted file untouched:
-        # the block has no deletion or directory-reset path.
+        # Restart without a token preserves every persisted credential
+        # untouched: the block has no deletion or directory-reset path. The
+        # one config.yml write it may make adds the gh schema version this
+        # projection already satisfies, so gh never runs its network-dependent
+        # multi-account migration, and it keeps the operator's own settings.
         result = _run_github_token_block(
             {**base_env, "XDG_CONFIG_HOME": str(config_home)}, gh_dir
         )
         assert result.returncode == 0, result.stderr
         assert (gh_dir / "hosts.yml").read_text() == before_hosts
-        assert (gh_dir / "config.yml").read_text() == before_config
+        repaired_config = (gh_dir / "config.yml").read_text()
+        assert "editor: vim" in repaired_config
+        assert 'version: "1"' in repaired_config
+        before_config = repaired_config
         # A rejected token preserves the previous connection and its neighbors.
         result = _run_github_token_block(
             {

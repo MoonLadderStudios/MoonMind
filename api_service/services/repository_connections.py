@@ -437,6 +437,94 @@ class RepositoryConnectionService:
             ) from exc
         return connection
 
+    async def create_github_app_connection(
+        self,
+        *,
+        setup_service: Any,
+        provider_installation: Mapping[str, Any],
+        expected_app_ref: str,
+        request_id: str,
+        connection_id: str,
+        expected_account: str = "",
+        permitted_repositories: Sequence[str] = (),
+        existing_by_request: Mapping[str, str] | None = None,
+        # Setup-callback path (single-use state bound to the admitted interaction).
+        state: str | None = None,
+        installation_ref: str | None = None,
+        caller_principal: str = "",
+        caller_scope: tuple[str, str | None] | None = None,
+        destination_connection_id: str = "",
+        # Explicitly authorized operator-import path (no public self-service).
+        operator_import: bool = False,
+        # Connection metadata persisted through the existing writer.
+        display_name: str = "GitHub App connection",
+        endpoint_ref: str = "https://github.com",
+        allowed_operations: Sequence[str] = ("read",),
+        owner_ref: str = "",
+        principal_ref: str = "",
+        principal_scope: tuple[str, str | None] | None = None,
+        actor_ref: str = "",
+        key_ref: str | None = None,
+    ) -> RepositoryConnection:
+        """Enroll one verified GitHub App installation (#4022).
+
+        Supported enrollment entry point mounted on this existing writer: the
+        trusted-boundary verification in
+        ``moonmind.auth.github_app_setup`` runs first (verified
+        user-authorization/installation-association record, single-use state,
+        replay/destination rejection), then persistence goes through
+        :meth:`create_connection` with the same ``request_id`` operation
+        identity, so ambiguous save retries converge on one connection.
+        Shared installations are never uninstalled as cleanup.
+        """
+
+        from moonmind.auth.github_app_setup import save_verified_app_connection
+
+        return await save_verified_app_connection(
+            setup_service=setup_service,
+            connection_service=self,
+            request_id=request_id,
+            connection_id=connection_id,
+            provider_installation=provider_installation,
+            expected_app_ref=expected_app_ref,
+            expected_account=expected_account,
+            permitted_repositories=permitted_repositories,
+            existing_by_request=existing_by_request,
+            state=state,
+            installation_ref=installation_ref,
+            caller_principal=caller_principal,
+            caller_scope=caller_scope,
+            destination_connection_id=destination_connection_id,
+            operator_import=operator_import,
+            display_name=display_name,
+            endpoint_ref=endpoint_ref,
+            allowed_operations=allowed_operations,
+            owner_ref=owner_ref,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+            actor_ref=actor_ref,
+            key_ref=key_ref,
+        )
+
+    async def get_connection(
+        self,
+        connection_id: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> RepositoryConnection | None:
+        """Return one recorded connection the principal may discover."""
+
+        record = await self._get_record((connection_id or "").strip())
+        if record is None or record.tombstone:
+            return None
+        return self._check_use(
+            record=record,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+            action="discover",
+        )
+
     async def update_connection(
         self,
         connection: RepositoryConnection,

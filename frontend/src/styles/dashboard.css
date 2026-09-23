@@ -6740,9 +6740,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-left: 2.35rem;
 }
 
-/* The branch search action lives inside the branch grid cell so the floating
- * row keeps its four-column contract (repo, branch, publish, submit) at every
- * breakpoint. The cell splits into input + action without affecting the outer grid. */
+/* The branch cell keeps the floating row contract (repo, branch, publish,
+ * submit) at every breakpoint. */
 .queue-inline-selector--branch {
   display: flex;
   gap: 0.4rem;
@@ -6752,11 +6751,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .queue-inline-selector--branch input {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.queue-branch-search {
-  flex: 0 0 auto;
-  white-space: nowrap;
 }
 
 .queue-step-authoring-controls {
@@ -8360,9 +8354,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* Skill descriptions are long prose: let catalog cells wrap instead of
  * inheriting the data-table nowrap default, and keep the description column
- * from stretching the table past the viewport. */
+ * from stretching the table past the viewport. The table itself stays
+ * transparent like the workflow `.queue-table-wrapper table` treatment: the
+ * generic `table` rule paints a panel fill, which would otherwise show through
+ * the transparent rows as an opaque slab. Separate borders let the
+ * sticky-header divider shadow render the same way. */
 .skills-catalog-page .data-table {
   white-space: normal;
+  background: transparent;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .skills-catalog-page .data-table td[data-column-key="description"] {

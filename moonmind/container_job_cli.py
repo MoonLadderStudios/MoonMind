@@ -343,6 +343,76 @@ def python_test_submission(
     }
 
 
+def passive_scan_submission(
+    *,
+    snapshot_relative_path: str = ".",
+    report_relative_path: str = "artifacts/passive-scan-report.json",
+    summary_relative_path: str = "artifacts/passive-scan-summary.md",
+    timeout_seconds: int = 1800,
+    env: Mapping[str, str] | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Build the supported passive-scan submission without hand-authored JSON.
+
+    Declares the scan workload through
+    :func:`moonmind.security.passive_repo_scan.build_scan_job_workload` and
+    stamps the workspace and correlation identity from the admitted managed
+    session, so the authorized operator runs the guided analysis
+    (MoonLadderStudios/MoonMind#3970) and receives its artifact references
+    without authoring a workload file.
+    """
+
+    from moonmind.security.passive_repo_scan import (  # noqa: PLC0415
+        build_scan_job_workload,
+    )
+
+    source = os.environ if env is None else env
+    workload = build_scan_job_workload(
+        snapshot_relative_path=snapshot_relative_path,
+        report_relative_path=report_relative_path,
+        summary_relative_path=summary_relative_path,
+        timeout_seconds=timeout_seconds,
+    )
+    return container_job_submission(
+        workload,
+        env=source,
+        request_id=request_id or f"passive-scan:{uuid4().hex}",
+    )
+
+
+def run_passive_scan_job(
+    *,
+    snapshot_relative_path: str = ".",
+    report_relative_path: str = "artifacts/passive-scan-report.json",
+    summary_relative_path: str = "artifacts/passive-scan-summary.md",
+    timeout_seconds: int = 1800,
+    env: Mapping[str, str] | None = None,
+    request_id: str | None = None,
+    poll_seconds: float = 2.0,
+    client: ContainerJobMcpClient | None = None,
+) -> ContainerJobResult:
+    """Run the supported passive repository scan through the generic job path."""
+
+    from moonmind.security.passive_repo_scan import (  # noqa: PLC0415
+        build_scan_job_workload,
+    )
+
+    source = os.environ if env is None else env
+    workload = build_scan_job_workload(
+        snapshot_relative_path=snapshot_relative_path,
+        report_relative_path=report_relative_path,
+        summary_relative_path=summary_relative_path,
+        timeout_seconds=timeout_seconds,
+    )
+    return run_container_job(
+        workload,
+        env=source,
+        request_id=request_id or f"passive-scan:{uuid4().hex}",
+        poll_seconds=poll_seconds,
+        client=client,
+    )
+
+
 def run_container_job(
     spec: Mapping[str, Any],
     *,

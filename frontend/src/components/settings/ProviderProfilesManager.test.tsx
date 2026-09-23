@@ -5,6 +5,7 @@ import type { ProviderProfile } from './ProviderProfilesManager';
 import {
   defaultFormState,
   PROVIDER_PROFILE_QUERY_KEY,
+  ENROLLMENT_REQUEST_TIMEOUT_MS,
   ProviderProfilesManager,
   toFormState,
   parseCommandBehavior,
@@ -4312,5 +4313,221 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe('conflict-review-profile');
     expect(fetchSpy.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1);
     expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
+  });
+});
+
+describe('OpenCode enrollment validation progress', () => {
+  const opencodeApiKeyCapabilities = {
+    version: 'provider-profile-creation-v1',
+    runtime_id: 'opencode',
+    provider_id: 'opencode-go',
+    supported: true,
+    authentication_methods: [
+      {
+        id: 'api_key',
+        label: 'API key',
+        setup_action: 'api_key',
+        launch_ready_after_setup: true,
+        fields: {
+          credential_source: {
+            value: 'secret_ref',
+            source: 'runtime_provider_strategy',
+            editable: false,
+            lock_reason: 'Guided API-key setup owns the credential source.',
+          },
+          runtime_materialization_mode: {
+            value: 'composite',
+            source: 'runtime_provider_strategy',
+            editable: false,
+            lock_reason: 'Guided API-key setup owns runtime materialization.',
+          },
+        },
+        secret_roles: [
+          {
+            role: 'opencode_api_key',
+            label: 'OpenCode API key',
+            required: true,
+            compatible_schemes: ['db', 'env'],
+          },
+        ],
+        imported_volume: {
+          supported: false,
+          mount_path: null,
+          source: 'runtime_provider_strategy',
+          lock_reason: 'API-key setup does not use a credential volume.',
+        },
+      },
+    ],
+    diagnostics: [],
+  };
+
+  function opencodeSavedProfile(profileId: string): ProviderProfile {
+    return {
+      profile_id: profileId,
+      runtime_id: 'opencode',
+      provider_id: 'opencode-go',
+      provider_label: 'OpenCode Go',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'composite',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: true,
+      auth_state: 'connected',
+      creation_capabilities: opencodeApiKeyCapabilities,
+    } as ProviderProfile;
+  }
+
+  function abortableHang(init?: RequestInit): Promise<Response> {
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal as AbortSignal | null | undefined;
+      if (signal?.aborted) {
+        reject(new DOMException('Aborted', 'AbortError'));
+        return;
+      }
+      signal?.addEventListener('abort', () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+    });
+  }
+
+  async function openOpencodePaste(profileId: string) {
+    fireEvent.click(screen.getByRole('button', { name: `Use OpenCode API key ${profileId}` }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-opencode-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
+  }
+
+  it('cancelling validation aborts the request and returns to paste', async () => {
+    const profileId = 'opencode-cancel-profile';
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === `/api/v1/provider-profiles/${profileId}/credentials/api-key`) {
+        requestSignal = (init as RequestInit | undefined)?.signal as AbortSignal;
+        return abortableHang(init as RequestInit | undefined);
+      }
+      if (url.startsWith(`/api/v1/provider-profiles/${profileId}/credential-maintenance-status`)) {
+        return { ok: true, json: async () => ({ known: false }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager([opencodeSavedProfile(profileId)]);
+    await openOpencodePaste(profileId);
+    expect(await screen.findByText(/Processing OpenCode API key enrollment/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel validation' }));
+    expect(requestSignal?.aborted).toBe(true);
+    expect(await screen.findByRole('button', { name: 'Return to API key paste' })).toBeTruthy();
+    expect(screen.getByText(/cancelled before completing/)).toBeTruthy();
+    const credentialCall = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/credentials/api-key'));
+    expect((credentialCall?.[1] as RequestInit | undefined)?.headers).toMatchObject({
+      'Idempotency-Key': expect.any(String),
+    });
+  });
+
+  it('timed-out validation surfaces a retryable failure that keeps the request identity', async () => {
+    vi.useFakeTimers();
+    const profileId = 'opencode-timeout-profile';
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === `/api/v1/provider-profiles/${profileId}/credentials/api-key`) {
+        return abortableHang(init as RequestInit | undefined);
+      }
+      if (url.startsWith(`/api/v1/provider-profiles/${profileId}/credential-maintenance-status`)) {
+        return { ok: true, json: async () => ({ known: false }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    try {
+      renderProviderProfilesManager([opencodeSavedProfile(profileId)]);
+      await openOpencodePaste(profileId);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText(/Processing OpenCode API key enrollment/)).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ENROLLMENT_REQUEST_TIMEOUT_MS + 1000);
+      });
+      expect(screen.getByRole('button', { name: 'Return to API key paste' })).toBeTruthy();
+      expect(screen.getByText(/timed out.*safe to retry/)).toBeTruthy();
+      const credentialCalls = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/credentials/api-key'));
+      expect(credentialCalls).toHaveLength(1);
+      const requestKey = ((credentialCalls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string> | undefined)?.['Idempotency-Key'];
+      expect(requestKey).toEqual(expect.any(String));
+      // Retrying reuses the same deterministic request identity.
+      fireEvent.click(screen.getByRole('button', { name: 'Return to API key paste' }));
+      fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-opencode-key' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const retryCalls = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/credentials/api-key'));
+      expect(retryCalls).toHaveLength(2);
+      expect(((retryCalls[1]?.[1] as RequestInit | undefined)?.headers as Record<string, string> | undefined)?.['Idempotency-Key']).toBe(requestKey);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('queued maintenance status is shown while validating', async () => {
+    const profileId = 'opencode-queued-profile';
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === `/api/v1/provider-profiles/${profileId}/credentials/api-key`) {
+        return abortableHang(init as RequestInit | undefined);
+      }
+      if (url.startsWith(`/api/v1/provider-profiles/${profileId}/credential-maintenance-status`)) {
+        return {
+          ok: true,
+          json: async () => ({
+            profile_id: profileId,
+            runtime_id: 'opencode',
+            known: true,
+            exclusive_maintenance_waiters: 2,
+            waiter_position: 2,
+            lease_held: false,
+            execution_lease_count: 1,
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager([opencodeSavedProfile(profileId)]);
+    await openOpencodePaste(profileId);
+    expect(await screen.findByText(/position 2 of 2/)).toBeTruthy();
+    const credentialCall = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/credentials/api-key'));
+    const statusCall = fetchSpy.mock.calls.find(([url]) => String(url).includes('/credential-maintenance-status'));
+    const requestKey = ((credentialCall?.[1] as RequestInit | undefined)?.headers as Record<string, string> | undefined)?.['Idempotency-Key'];
+    expect(requestKey).toEqual(expect.any(String));
+    expect(String(statusCall?.[0])).toContain(`idempotency_key=${requestKey}`);
+  });
+
+  it('drain wait is shown when a consumer holds the profile', async () => {
+    const profileId = 'opencode-draining-profile';
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === `/api/v1/provider-profiles/${profileId}/credentials/api-key`) {
+        return abortableHang(init as RequestInit | undefined);
+      }
+      if (url.startsWith(`/api/v1/provider-profiles/${profileId}/credential-maintenance-status`)) {
+        return {
+          ok: true,
+          json: async () => ({
+            profile_id: profileId,
+            runtime_id: 'opencode',
+            known: true,
+            exclusive_maintenance_waiters: 0,
+            waiter_position: null,
+            lease_held: false,
+            execution_lease_count: 1,
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager([opencodeSavedProfile(profileId)]);
+    await openOpencodePaste(profileId);
+    expect(await screen.findByText(/running workflow is using this profile/)).toBeTruthy();
   });
 });

@@ -1,1032 +1,253 @@
 # Execution Tool and Plan Contracts
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
+**Status:** Active contracts and specialized execution paths, with remaining general tool-plan integration tracked separately. This document is not evidence that every declared tool can execute through every product entrypoint.  
+**Updated:** 2026-09-21  
+**Authority:** Executable tool and plan semantics under [AGENTS.md](../../AGENTS.md). Instruction Skills remain owned by the [Skill System](../Steps/SkillSystem.md).
 
-MoonMind system design (Temporal-first)
-
-Status: **Implemented** (contracts active, runtime live)
-Last updated: 2026-04-04
-Related: [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
-
----
+Implementation gaps belong in existing issues, not a second checklist or registry in this document. The [previous full specification](https://github.com/MoonLadderStudios/MoonMind/blob/50262ac4d68f71ce5b73f83a37e2755dfd31ff5b/docs/Workflows/SkillAndPlanContracts.md) remains available for historical examples. Retained payloads keep their original meaning.
 
 ## 1) Document boundary and Purpose
 
-Define what **execution** means in MoonMind using **Temporal’s** core model:
+Temporal Workflow code coordinates recorded work. Activities and existing external services perform I/O and side effects. MoonMind's tool registry, plan contracts, Step Execution ledger, and artifact services supply the application boundary. Reuse them rather than creating another interpreter, scheduler, or result store.
 
-* A **Workflow Execution** orchestrates.
-* **Activities** perform side effects (LLM calls, filesystem, network, integrations).
-* MoonMind adds only what Temporal does not provide:
-
- * **Tool** (capability contract)
- * **Plan** (structured sequence/graph of tool invocations)
- * **Artifact** (large inputs/outputs stored outside workflow history)
- * **Agent Skill / Skill Set** (instruction bundles)
-
-This document explicitly covers executable MoonMind tools, plan structure, plan execution semantics, artifact-backed execution context, and deterministic workflow orchestration. 
-It establishes:
-
-* Tool interface: schemas, validation, error model
-* Plan format: DAG-first, concurrency, dependency semantics
-* Plan production: planning is expressed as an executable tool; plans are artifacts
-* Determinism boundaries: orchestration in workflow, execution in activities
-* Progress & intermediate outputs conventions
-* Deliverables: executable tool registry spec, plan schema/examples/validation, execution semantics (plan -> activity invocations)
-
-**Use this document for:**
-* `ToolDefinition`
-* tool invocation
-* plan DAG contracts
-* execution semantics
-* progress contracts
-
-**Use [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md) for:**
-* `AgentSkillDefinition`
-* `SkillSet`
-* `ResolvedSkillSet`
-* `.agents/skills`
-* `.agents/skills/local`
-* runtime materialization of instruction bundles
-
-This document does **not** define deployment-stored agent instruction bundles, skill-set resolution, or runtime materialization of agent skills.
+This document covers ToolDefinition, invocation, dependency/data-reference semantics, bounded execution, and progress. It does not own AgentSkillDefinition, SkillSet resolution, `.agents/skills`, or instruction materialization. A deterministic tool should not need an agent wrapper merely to invoke it, while an instruction Skill should not be converted into native policy merely because its name resembles a tool.
 
 ### 1.1 Terminology policy (Temporal era)
 
-Canonical terminology for execution payloads is:
+| Concept | Existing meaning |
+| --- | --- |
+| Workflow execution | The admitted user request, interpreted by the existing execution schema. |
+| Step | A compiled executable plan node with stable identity. |
+| `tool.type = "skill"` | The retained wire spelling for an executable tool contract, not an instruction bundle. |
+| `tool.type = "agent_runtime"` | Agent work dispatched through the existing AgentRun/runtime boundary. |
+| Runtime-native command | A typed selection within agent-runtime work, not a third tool type or an executable-registry entry. |
+| Agent Skill | A portable instruction bundle resolved by the Skill System. |
 
-* **workflow execution** (top-level user request; still carried on the `task` payload node until the hard switch)
-* **step** (plan node)
-* **tool** (executable capability — Temporal contract object)
+ToolDefinition, ToolResult, ToolFailure, Step, and ToolPolicies retain their existing Python aliases where actual consumers require them. Class aliases are not authored capability names. New tool invocations identify the tool by name; the existing parser owns legacy object spelling and rejected version fields. Do not add a new alias registry or rewrite old serialized records to match new terminology.
 
-The contract model recognizes two tool subtypes:
-
-* `tool.type = "skill"` — activity-backed executable tool contract using a `ToolDefinition` from the tool registry snapshot. Current `MoonMind.UserWorkflow` plans do not dispatch this legacy shape.
-* `tool.type = "agent_runtime"` — dispatched by `MoonMind.UserWorkflow` as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
-
-A runtime-native command is not a third `tool.type`.
-
-A runtime-native command is a MoonMind-native typed selection carried inside a
-`tool.type = "agent_runtime"` step and interpreted by the owning runtime adapter
-or managed-session plane.
-
-Examples include:
-
-* `review`
-
-Runtime-native commands are:
-
-* not `ToolDefinition` registry entries
-* not dispatched through `mm.tool.execute`
-* not `AgentSkillDefinition`s
-* not members of a `ResolvedSkillSet`
-
-They are execution-shaping selections for `agent_runtime` steps only.
-
-> **Important:** Executable tool skills and agent instruction skills are separate systems.
-> The term **"Agent Skill"** (in `.agents/skills/` directories and `SKILL.md` files)
-> refers to reusable instruction bundles that AI agents read for guidance as defined in
-> [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md).
-> This document only governs the executable **tool** side.
-
-Canonical Python class names:
-
-| Contract | Canonical class | Legacy alias |
-|---|---|---|
-| Tool definition | `ToolDefinition` | `SkillDefinition` |
-| Tool result | `ToolResult` | `SkillResult` |
-| Tool failure | `ToolFailure` | `SkillFailure` |
-| Plan node | `Step` | `SkillInvocation` |
-| Policies | `ToolPolicies` | `SkillPolicies` |
-
-Internal capability identity rule:
-
-* executable tools are identified by tool name only;
-* registry snapshot digests provide content-addressed evidence for the tool definition used;
-* Python class aliases are not capability identifiers and must not appear in authored payloads;
-* current `MoonMind.UserWorkflow` plan execution accepts `agent_runtime` nodes and rejects legacy `tool.type = "skill"` nodes.
-
----
+**Support boundary:** At the September 21 source baseline, the plan parser recognizes `skill` and `agent_runtime`, and `container.run_job` has dedicated canonical integration contracts. Recognition, registration, or a directly callable Activity does not establish complete normal-plan dispatch. The old document simultaneously described agent-only dispatch and generic tool execution. Those statements must not be used as a blanket completion claim. #973 owns verification and completion of the actual admitted tool path, preserving working specialized routes rather than rebuilding them.
 
 ## 2) Design principles
 
-1. **Workflow code orchestrates only.**
- No nondeterministic behavior in workflow code. All external I/O and LLM calls are Activities.
+Use one existing owner for each decision or effect. Plans are data, not executable code. Keep orchestration deterministic, side effects at trusted boundaries, and large payloads in artifacts. Preserve accepted results and retry only unfinished work.
 
-2. **Everything executable is a Tool invocation.**
- “Planning” is a Tool that outputs a Plan.
+Validate required interfaces, input/output contracts, and authority. Artifact digests establish identity and integrity, not a universal requirement that API, worker, host, and tool build strings match. No replacement compatibility fingerprint, whole-platform qualification matrix, or mandatory model review is needed for a narrow deterministic operation.
 
-3. **Plans are data, not code.**
- Plans are validated, stored as artifacts, and interpreted deterministically.
-
-4. **DAG-first plan model.**
- Linear plans are DAGs with a simple chain of dependencies.
-
-5. **Payload discipline.**
- Workflow history stays small: large content always lives in Artifacts.
-
-6. **Observable progress.**
- Execution progress is structured and retrievable without parsing logs.
-
----
+One operator can run concurrent workflows and use multiple accounts. Operator admission and scoped machine/resource permissions replace human tenancy, not enforcement. A registry entry cannot grant arbitrary infrastructure or credential access.
 
 ## 3) Artifact reference contract
 
-Large inputs/outputs (plans, manifests, patches, logs, model transcripts) are stored outside Temporal history. Workflows and activities pass **artifact references**.
-
 ### 3.1 ArtifactRef (canonical)
 
-```json
-{
- "artifact_ref": "art:sha256:BASE16…",
- "content_type": "application/json",
- "bytes": 12345,
- "created_at": "2026-03-05T00:00:00Z",
- "metadata": {
- "name": "plan.json",
- "producer": "skill:plan.generate",
- "labels": ["plan"]
- }
-}
-```
+Use the existing artifact reference and result schemas. References are opaque to ordinary callers and carry or resolve the required identity, content type, size, and provenance. Historical forms remain interpreted by their actual readers. This document does not introduce a new URI format or require every tool to implement its own artifact adapter.
 
 ### 3.2 Rules
 
-* `artifact_ref` is opaque to most code.
-* Artifacts are **immutable** once written.
-* Inputs/outputs larger than “small JSON” must be artifacts.
-* Artifacts may be encrypted; access is controlled by the Artifact System doc.
+Committed content is immutable. Large plans, input/output bodies, logs, patches, and transcripts stay outside Workflow history. Read through the authorized artifact owner with bounded size, scope, and required digest/completeness checks. A reference or safe preview is not authority for raw restore or publication. A pathname, incomplete upload, or fabricated digest is not a durable result.
 
----
+Use existing capture/finalization to preserve required content before destructive cleanup. Optional reporting failure cannot erase committed output. A source without Git can still produce saved artifacts; requested remote publication has its separate authority and result under [Workflow Publishing](WorkflowPublishing.md) and [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md).
 
 ## 4) Tool contract
 
 ### 4.1 Definition
 
-A **Tool** is a named capability defined by:
+A ToolDefinition declares a trusted named operation, input/output schemas, execution binding, capability requirements, and bounded policies. It is not another Workflow or an instruction Skill. Keep actual handler/routing information in the existing registry and composition, not mirrored in prose or reconstructed by the browser.
 
-* input schema
-* output schema
-* execution binding (how it is executed as an Activity or child workflow)
-* default policies (timeouts, retries)
-* capability requirements (what worker fleet can run it)
+| Invocation | Required execution ownership |
+| --- | --- |
+| Agent-runtime work | Existing AgentRun, selected runtime/Profile, and session lifecycle. |
+| Supported ordinary deterministic tool | Existing declared Activity/dispatcher, without an unnecessary AgentRun or model lease. General product wiring must be demonstrated, not inferred from registration. |
+| `container.run_job` | Existing canonical container-job submission, status, cancellation, and durable wait. No nested Docker or second job supervisor. |
 
-A Tool is not a workflow. `MoonMind.UserWorkflow` interprets current Plans as child workflows for `agent_runtime`; activity-backed executable tool contracts remain registry concepts outside the active Run dispatch path.
-A `ToolDefinition` is **not** an `AgentSkillDefinition`. Executable tool execution and agent-skill materialization are adjacent but separate concerns.
-Note: An agent-runtime step may simultaneously receive a `resolved_skillset_ref` or equivalent execution context from the Agent Skill System, but that is resolved separately.
+Container jobs retain parent-injected workflow/run/step ownership, trusted submission, bounded status Activities and Workflow timers, and idempotent cancellation. Compact results contain actual job identity, state/exit or failure classification, and log/artifact references. A cancellation request is not confirmed process shutdown.
 
-The plan contract defines these tool subtypes:
-
-| `tool.type` | Dispatch mechanism | Contract |
-|---|---|---|
-| `skill` | Typed executable tool contract. Ordinary tools dispatch through their declared Activity; `container.run_job` is durably coordinated by the parent workflow through the canonical container-job service. | `ToolDefinition` from registry snapshot |
-
-Containerized plan work uses the single `container.run_job` contract. The
-parent workflow injects owner plus workflow/run/step correlation, submits the
-canonical `ContainerJobSubmitRequest` through a trusted Activity, and polls the
-separately addressable job through bounded status Activities and durable
-workflow timers. Cancellation sends the job's idempotent cancellation request.
-The result returned to the plan contains only `jobId`, terminal state, exit and
-failure classification, and log/artifact references.
-
-Legacy `container.run_workload`, `container.run_container`, helper lifecycle,
-raw Docker, integration-CI, and Unreal wrapper names are absent from executable
-tool discovery and new dispatch. Their old `workload.run` Activity binding is
-retained only to let already-recorded Temporal commands replay; it has no
-registry entry or dispatcher registration and is removed after those histories
-drain. A payload translation adapter is intentionally unnecessary: recorded
-legacy commands keep their original Activity implementation, while new plans
-use a new canonical tool name and schema.
-| `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
-
----
+Legacy raw-Docker, helper, integration-CI, Unreal, and workload aliases must not reappear as alternative new tool APIs. Keep already-recorded Activity implementations only where real histories need them. Remove obsolete registrations and compatibility with their final consumer rather than building a permanent retirement catalog.
 
 ### 4.2 ToolDefinition schema (registry entry)
 
-Tools are declared in a registry (YAML or JSON). Example:
+The supplying executable model owns exact serialization. Retain the tool name, input/output schemas, declared executor binding, required capabilities, and bounded timeout/retry policies. An authored override can narrow or choose within allowed policy, never add credentials, arbitrary commands, import paths, privileged mounts, endpoints, or task queues.
 
-```yaml
-name: "repo.apply_patch"
-type: "skill"
-description: "Apply a patch artifact to a repo ref and optionally format."
-inputs:
- schema:
- type: object
- required: [repo_ref, patch_artifact]
- properties:
- repo_ref: { type: string }
- patch_artifact: { type: string } # ArtifactRef.artifact_ref
- format: { type: boolean, default: true }
-outputs:
- schema:
- type: object
- required: [files_changed]
- properties:
- files_changed: { type: integer }
- commit_sha: { type: string }
- diff_artifact: { type: string } # artifact_ref (optional)
-executor:
- # See §11 decision: hybrid model
- activity_type: "mm.tool.execute"
- selector:
- mode: "by_capability"
-requirements:
- capabilities:
- - "sandbox"
-policies:
- timeouts:
- start_to_close_seconds: 300
- schedule_to_close_seconds: 1800
- retries:
- max_attempts: 3
- backoff: "exponential"
- non_retryable_error_codes:
- - "INVALID_INPUT"
- - "PERMISSION_DENIED"
-security:
- allowed_roles: ["user", "admin"]
-```
-
-#### Required fields
-
-* `name`
-* `inputs.schema`, `outputs.schema` (JSON Schema)
-* `executor.activity_type`
-* `policies.timeouts`, `policies.retries`
-* `requirements.capabilities`
-
----
+A single general dispatcher is not a reason to broaden every worker's privileges. Reuse existing curated bindings when actual isolation or credential needs require them. Do not add a worker fleet for every new tool or human `user/admin` roles merely because the earlier example included them.
 
 ### 4.3 ToolInvocation schema
 
-A Plan node (step) references an executable Tool by name with inputs. Plan nodes do not carry semantic tool versions. The registry snapshot digest supplies content-addressed evidence for the definition used.
-Note: Step-level agent skill selectors are defined in `docs/Steps/SkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
+A compiled node retains its stable `id`, display-safe title, existing `tool` reference, small inputs, and permitted options. Names select declared operations; registry snapshot evidence identifies the contract used. New semantic tool-version fields and parallel request envelopes are not required.
 
-```json
-{
- "id": "n1",
- "tool": { "type": "skill", "name": "repo.apply_patch" },
- "inputs": {
- "repo_ref": "git:org/repo#branch",
- "patch_artifact": "art:sha256:…",
- "format": true
- },
- "options": {
- "timeouts_override": { "start_to_close_seconds": 120 },
- "retries_override": { "max_attempts": 2 }
- }
-}
-```
-
-Legacy `tool.version` and `skill.version` fields are invalid. Executable tools are identified by `tool.name` only.
-
-Legacy `skill` spelling remains an alias for the node object name, without version:
-
-```json
-{
- "id": "n1",
- "skill": { "name": "repo.apply_patch" },
- "inputs": {
- "repo_ref": "git:org/repo#branch",
- "patch_artifact": "art:sha256:…"
- }
-}
-```
-
-#### Rules
-
-* `id` unique within Plan.
-* Tool must exist in the pinned tool registry snapshot (see §8).
-* Inputs must validate against the tool input schema.
-* Overrides are optional and must be within policy limits.
-
----
+Inputs may contain authorized artifact references and existing upstream-result references. Validate supplied values against the actual selected definition. Preserve explicit false, zero, empty, and omitted meanings where supported. The existing parser owns historical aliases and rejects conflicting new input. No silent fallback to another operation or credential source.
 
 ### 4.3.1 Runtime selection for `agent_runtime` steps
 
-`tool.type = "agent_runtime"` steps may carry one optional typed runtime
-selection inside `inputs.runtimeSelection`.
+The existing `inputs.runtimeSelection` distinguishes `kind = "agent_skill"` from `kind = "runtime_command"`, with name and small validated arguments. This selection belongs only to agent-runtime work. Native commands use their runtime capability boundary and normal AgentRunResult/artifact handling, not the deterministic tool registry.
 
-Canonical shapes:
+Normal authoring retains Runtime and one Profile. Internal harness, Host Class, materializer, and realizer details are not additional required controls. Preserve meaningful model, cost/privacy, source, and publication choices. Do not hardcode direct Codex as the universal example/default or reinterpret an admitted session after a catalog refresh.
 
-```json
-{
- "kind": "agent_skill",
- "name": "jira-issue-creator",
- "args": {}
-}
-```
-
-```json
-{
- "kind": "runtime_command",
- "name": "review",
- "args": {}
-}
-```
-
-Representative `agent_runtime` step using an agent skill:
-
-```json
-{
- "id": "n1",
- "tool": { "type": "agent_runtime", "name": "codex_cli" },
- "inputs": {
- "instructions": "Use the selected runtime skill to create Jira stories.",
- "runtimeSelection": {
- "kind": "agent_skill",
- "name": "jira-issue-creator",
- "args": {}
- },
- "runtime": {
- "mode": "codex_cli"
- }
- }
-}
-```
-
-Representative `agent_runtime` step using a runtime-native command:
-
-```json
-{
- "id": "n2",
- "tool": { "type": "agent_runtime", "name": "codex_cli" },
- "inputs": {
- "instructions": "Review the current changes and publish the review as artifacts.",
- "runtimeSelection": {
- "kind": "runtime_command",
- "name": "review",
- "args": {}
- },
- "runtime": {
- "mode": "codex_cli"
- }
- }
-}
-```
-
-Rules:
-
-* `runtimeSelection` is valid only for `tool.type = "agent_runtime"`.
-* `kind = "agent_skill"` selects a runtime-facing agent skill or skill preset
- for that step.
-* `kind = "runtime_command"` selects a MoonMind-native runtime command
- implemented by the owning runtime adapter or managed-session plane.
-* A runtime command is not resolved from the executable tool registry snapshot.
-* A runtime command must be capability-gated by runtime. Unsupported commands
- must fail validation or fail fast before the run starts.
-* `args` must remain small JSON and must validate against command-specific
- runtime validation rules.
-* Any outputs produced by a runtime command use the normal `AgentRunResult` and
- artifact contracts.
-
-Migration rule:
-
-* Legacy `selectedSkill` and `selectedSkillArgs` payloads may be accepted during
- migration and normalized to
- `inputs.runtimeSelection = { "kind": "agent_skill", ... }`.
-* This legacy acceptance is deprecated and exists only for in-flight runs
- created before `runtimeSelection` became the canonical contract. Remove
- `selectedSkill` and `selectedSkillArgs` acceptance once those in-flight runs
- have completed or been explicitly cut over.
-
----
+Retained `selectedSkill`/`selectedSkillArgs` decoding belongs at its existing ingress/history boundary until actual consumers are gone. Fresh destination admission and live-session continuation remain distinct. Removing old field handling requires the relevant consumer/replay disposition, not an arbitrary release-count rule.
 
 ### 4.4 ToolResult schema
 
-Tool execution returns a structured result:
+Keep the existing typed status, small outputs, and output-artifact references. A parsed result is not necessarily success. The actual owner distinguishes completed effect, failed operation, uncertain delivery, and pending external work using the providing contract.
 
-```json
-{
- "status": "SUCCEEDED",
- "outputs": {
- "files_changed": 4,
- "commit_sha": "abc123"
- },
- "output_artifacts": [
- { "artifact_ref": "art:sha256:…", "content_type": "application/json", "bytes": 2048 }
- ],
- "progress": {
- "message": "Patch applied and formatted",
- "percent": 100
- }
-}
-```
-
-#### Rules
-
-* `outputs` is small JSON only.
-* Any large data is written to artifacts and referenced in `output_artifacts`.
-
----
+Validate outputs before making them available to dependents. Preserve confirmed tool output through later progress, preview, verification, or publication failure. Do not rerun a completed operation to reconstruct an optional report or relabel failed compute as successful because saving worked.
 
 ### 4.5 Error model (ToolFailure)
 
-All failures normalize to:
+Reuse the existing error taxonomy and original cause. Invalid input, denied authority, conflict, unavailable observation, throttling, timeout, cancellation, and actual external failure must not collapse into a generic retry. Keep bounded diagnostic references rather than raw logs or sensitive payloads in Workflow history.
 
-```json
-{
- "error_code": "RATE_LIMITED",
- "message": "Upstream provider rate limit",
- "retryable": true,
- "details": { "provider": "Jules", "retry_after_seconds": 30 },
- "cause": {
- "error_code": "HTTP_429",
- "message": "Too Many Requests"
- }
-}
-```
-
-#### Standard error codes (v1)
-
-* `INVALID_INPUT` (non-retryable)
-* `PERMISSION_DENIED` (non-retryable)
-* `NOT_FOUND` (non-retryable)
-* `CONFLICT` (non-retryable unless inputs change)
-* `RATE_LIMITED` (retryable)
-* `TRANSIENT` (retryable)
-* `TIMEOUT` (policy-driven)
-* `EXTERNAL_FAILED` (usually non-retryable)
-* `CANCELLED`
-* `INTERNAL` (retryable up to max attempts)
-
-#### Retry semantics
-
-* Activity retry policy is derived from ToolDefinition defaults.
-* `non_retryable_error_codes` stop retries immediately.
-* `retryable` is informative; the actual retry decision is policy-driven.
-* For model-provider rate limits in managed agent-runtime steps, see
-  [`docs/Temporal/ErrorTaxonomy.md`](../Temporal/ErrorTaxonomy.md),
-  [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md),
-  and [`docs/Temporal/StepLedgerAndProgressModel.md`](../Temporal/StepLedgerAndProgressModel.md).
-
----
+Derive retry bounds from the admitted tool policy once. A normally returned failure object is not an exception automatically retried by an Activity RetryPolicy. Normalize that result at the existing consumer or Activity boundary, without overlapping whole-operation loops. A non-idempotent tool needs its existing effect reconciliation before another attempt. Unknown delivery is not proof that nothing happened.
 
 ## 5) Executable tool registry spec
 
 ### 5.1 Declaration format
 
-* Repository-hosted tool registry files (YAML/JSON).
-* Each executable tool definition is validated at build time and worker startup.
+Reuse the current registry loader, supplying schemas, and focused behavior tests. Tool definitions are trusted deployment input, not arbitrary workflow-authored Python, shell, or plugin code. Do not build another dynamic registry or repeat a full inventory check at every layer.
 
 ### 5.2 Discovery model (v1: static)
 
-**Static tool registry snapshot** is the v1 requirement:
-
-* Executable tools are bundled with worker deployments and API deployment.
-* The tool registry has an immutable build identifier/digest (see §12).
-* Deploying a new tool means deploying workers that can execute it.
+The existing static snapshot records selected definitions. Preserve its digest and original bytes where required for plan interpretation. Shipping a definition does not prove an appropriate handler is registered, available, or authorized. Discovery and temporary capacity are different facts.
 
 ### 5.3 Worker capability model
 
-Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`, `integration:jira`). ToolDefinitions declare requirements. The runtime selects a task queue based on capabilities (details in Worker Topology doc).
+Resolve the declared binding through current routing and worker capability policy. Validate actual necessary dependencies and credentials at their owner. One queue name does not establish process isolation, and a running worker is not proof that every tool is supported. No second scheduler or credential-discovery loop belongs here.
 
 ### 5.4 Story Output Tools
 
-Broad MoonSpec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `artifacts/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
+Story breakdown and instruction interpretation remain with the existing portable Skills. A structured deterministic output tool may consume an already resolved target and bounded story inputs through its actual integration adapter. Its definition alone does not prove admission through the normal plan path.
 
-MoonSpec doc slicing is the deterministic doc-native path between canonical
-documentation indexing and story breakdown. `tools/index_moonspec_docs.py`
-writes `artifacts/moonspec-doc-index/index.json` with durable canonical claim
-IDs. `tools/slice_moonspec_docs.py` consumes that index and emits temporary
-derived workflow artifacts under `artifacts/moonspec-doc-slices/`:
+Reuse existing story handoffs under `artifacts/story-breakdowns/`, doc-index/slice artifacts, and Source Packets where those producing features require them. Derived `doc-slices.json` and `implementation-packets.json` are temporary execution inputs, not canonical design documents. They contain references and bounded metadata rather than document bodies in Workflow history. Do not introduce a mandatory doc-indexing pipeline for a fully specified tool request.
 
-* `doc-slices.json` maps one or more stable canonical claim IDs and run-local
-  coverage IDs to one independently testable story candidate with explicit
-  dependencies.
-* `implementation-packets.json` carries compact Source Packet references for
-  downstream `moonspec-specify`, `moonspec-plan`, `moonspec-tasks`,
-  `moonspec-implement`, and `moonspec-verify` stages.
+The `story.create_jira_issues` and `story.create_github_issues` owners retain target resolution, source traceability, returned mappings, and partial-write reconciliation. Prefer inline bounded input or authorized artifact references to a protected branch push merely for handoff. Repository fallback reads stay explicitly scoped. A new plan must still use a genuinely supported dispatch path.
 
-These artifacts are not source-of-truth documents. They contain compact paths,
-claim IDs, coverage IDs, digests, and metadata; they do not embed canonical
-document bodies in workflow payloads. If a downstream `spec.md` is produced for
-compatibility, it remains a temporary derived adapter from the doc slice Source
-Packet, not the authoritative design object.
+Preserve provider-neutral `issueCreation` semantics and the providing legacy `jiraCreation` decoder. Already implemented work is skipped; partial work preserves original traceability and describes remaining work. A routine evidence/tooling gap uses the existing authorized automated continuation rather than becoming a human-only review request. Genuine approval or unresolved authority is not silently waived. Historical `manual_review` records keep their meaning without becoming the default for new missing-evidence cases.
 
-When a workflow execution requests Jira issue creation from ambiguous user intent, the planner should dispatch an `agent_runtime` step with the `jira-issue-creator` agent skill selected. The agent uses the Jira connector/API to resolve projects, issue types, create fields, and issue descriptions.
+Canonical document sources retain `sourceReference.path` and real stable `claimIds`. Generated extraction `coverageIds` are run-local and must not be promoted into fabricated canonical IDs. Imperative or pasted input need not invent a source-file path. Explicit traceability policy is enforced through the supplying schema, not imposed on every workflow.
 
-```json
-{
- "tool": {
- "type": "agent_runtime",
- "name": "codex_cli"
- },
- "inputs": {
- "runtimeSelection": {
- "kind": "agent_skill",
- "name": "jira-issue-creator",
- "args": {}
- },
- "instructions": "Use the selected runtime skill to create a Jira story for each story in artifacts/story-breakdowns/example.",
- "runtime": {
- "mode": "codex_cli"
- }
- }
-}
-```
-
-Pure Jira issue creation does not require branch or PR publishing. A PR is required only when the agent produces repository changes that need to be published.
-
-When a workflow execution already has fully structured story JSON and a concrete Jira target,
-the planner may use the narrower deterministic batch tool:
-
-```json
-{
- "tool": {
- "type": "skill",
- "name": "story.create_jira_issues"
- },
- "inputs": {
- "storyOutput": {
- "mode": "jira",
- "jira": {
- "projectKey": "MM",
- "issueTypeName": "Story",
- "dependencyMode": "linear_blocker_chain"
- }
- },
- "storyBreakdownArtifactRef": "art_01ABC...",
- "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json"
- }
-}
-```
-
-`story.create_jira_issues` is backed by `mm.tool.execute` and requires
-`integration:jira`. It creates one Jira issue per story from inline `stories`,
-from `storyBreakdownArtifactRef`, from previous step story-output payloads, or
-from `storyBreakdownPath`, resolves `issueTypeName` through the trusted Jira
-metadata surface when `issueTypeId` is not supplied, and creates dependency
-links when `dependencyMode = linear_blocker_chain`. Repository path reads are a
-publication fallback; workflow-local story handoff should use inline stories or
-artifact refs so Jira creation does not depend on a protected branch push. It is
-not the default path for ambiguous Jira requests.
-
-When a breakdown has been reconciled against the current repository
-implementation, `story.create_jira_issues` honors per-story provider-neutral
-`issueCreation` metadata, with `jiraCreation` accepted as a legacy alias for
-existing Jira handoffs. Stories marked `issueCreation.action = "skip"` or
-`implementationStatus = "fully_implemented"` do not create Jira issues. Stories
-marked `issueCreation.action = "manual_review"` or
-`implementationStatus = "unverifiable"` are reported as blocked manual-review
-items and do not create Jira issues. Stories marked
-`issueCreation.action = "create_remaining_work_issue"` or
-`implementationStatus = "partially_implemented"` create Jira issues from their
-`remainingWork` payload while preserving original story traceability. The output
-reports `skippedStories`, `blockedStories`, and `partialStoriesAdjusted` so
-downstream orchestration can create follow-up work only for returned Jira issue mappings.
-
-For breakdown-driven Jira output derived from a canonical source document, the
-canonical traceability shape is `sourceReference.path` plus
-`sourceReference.claimIds` on every story, with `source.referencePath` or
-`source.path` as a breakdown-level path fallback. `claimIds` are stable
-canonical claim identifiers for the selected canonical file-backed source
-document; generated `DESIGN-REQ-*` `coverageIds` remain run-local extraction
-IDs. Non-canonical file-backed sources and imperative-input breakdowns preserve
-their source path when one exists, but they use run-local `coverageIds` rather
-than fabricated canonical `claimIds`. The tool also accepts path-only generated
-forms, `sourceReference: "<path>"` and top-level `sourceDocument: "<path>"`, and
-normalizes those before Jira issue creation. Direct pasted declarative or
-imperative text is also valid input: if no source document path exists, Jira
-creation proceeds and issue mappings report an empty `sourceDesignPath`.
-Callers that require every Jira issue to carry document traceability must set
-`sourceReferencePolicy: "required"` on the tool inputs or `storyOutput`. The
-policy also accepts booleans and standard truthy/falsy strings such as `"true"`
-and `"false"` for callers that produce typed or form encoded payloads.
-
-If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `artifacts/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
-
-`story.create_github_issues` uses the same runtime story breakdown inputs and
-reconciliation semantics as `story.create_jira_issues`, but creates GitHub
-issues through the trusted GitHub integration. It preserves source
-path/title/section/claim/source issue traceability in each GitHub issue body and
-returns stable `github.issueMappings` for downstream workflow creation. GitHub
-breakdown presets treat `source_issue_key` as traceability-only; the source
-content must come from the Source Document Path, inline Workflow Instructions,
-or a trusted story breakdown artifact. GitHub issue dependency output is
-conservative: the tool supports only
-`dependencyMode = "none"` and `dependencyCount = 0` unless a trusted GitHub API
-operation has actually established a dependency relationship.
-
-`story.create_github_issue_implement_workflows` and
-`story.create_github_issue_orchestrate_workflows` consume the GitHub issue
-mappings and create downstream MoonMind workflow executions using the
-`github-issue-implement` and `github-issue-orchestrate` presets. Their output is
-reported under `githubWorkflowOrchestration` and uses workflow terminology such
-as `createdWorkflowCount`, `dependencyMode`, and `dependencyCount`; dependency
-counts refer to MoonMind workflow dependencies, not GitHub issue dependencies.
-
----
+Tracker success, saved output, and Git publication are distinct effects. A requested fallback must already be authorized; a tracker outage cannot silently choose a new publication destination. Reconcile existing issue mappings before retrying a batch so accepted issues are not duplicated. GitHub issue dependency claims require actual established provider relationships. Downstream MoonMind workflow dependencies are different and use their existing preset/admission owner.
 
 ## 6) Plan contract
 
 ### 6.1 Definition
 
-A **Plan** is a DAG of tool invocations (Steps) with explicit dependencies and policy.
-
-Preset composition is an authoring concern. Preset includes and nested preset
-trees MUST be resolved before a Plan is stored as an execution artifact. The
-stored Plan is the flattened execution contract after expansion: executable
-nodes, dependency edges, policies, artifact references, and tool contracts.
-An unresolved preset include is invalid in a stored Plan artifact.
-
-Optional source provenance may be retained on executable nodes for audit,
-diagnostics, and reconstruction. Provenance is metadata only. It does not select
-tools, alter inputs, change dependency behavior, override policies, or otherwise
-participate in execution.
+A Plan is the existing flattened executable graph, not a nested preset tree. Resolve authoring includes before persistence. Each admitted node has an executable operation, inputs, dependency edges, and applicable policy. Optional source provenance explains origin but does not select a different tool, widen permissions, or change dependencies.
 
 ### 6.2 Plan schema (DAG-first)
 
-```json
-{
- "plan_version": "1.0",
- "metadata": {
- "title": "Fix failing tests",
- "created_at": "2026-03-05T00:00:00Z",
- "registry_snapshot": {
- "digest": "reg:sha256:…",
- "artifact_ref": "art:sha256:…"
- }
- },
- "policy": {
- "failure_mode": "FAIL_FAST",
- "max_concurrency": 8
- },
- "nodes": [
- {
- "id": "n1",
- "title": "Run test suite",
- "tool": { "type": "skill", "name": "repo.run_tests" },
- "inputs": { "repo_ref": "git:org/repo#branch" },
- "source": {
- "binding_id": "preset-binding-123",
- "include_path": ["release-readiness", "test-suite"],
- "blueprint_step_slug": "run-tests",
- "detached": false
- }
- },
- {
- "id": "n2",
- "title": "Generate follow-up plan",
- "tool": { "type": "skill", "name": "plan.generate" },
- "inputs": { "context_artifact": "art:sha256:…" }
- }
- ],
- "edges": [
- { "from": "n1", "to": "n2" }
- ]
-}
-```
+The current model owns `plan_version`, metadata, policy, nodes, and edges. Reuse its stable node IDs and registry/artifact references. This document is not authority to create a new Plan version or copy its full schema into another validator.
+
+Examples in the historical specification illustrate contracts, not guaranteed runnable tools. In particular, `repo.apply_patch`, `repo.run_tests`, or `plan.generate` examples do not establish current registry/dispatch support. Implementation tests must choose a real supported operation.
 
 ### 6.3 Dependency semantics
 
-* `from → to` means:
-
- * `to` may start only after `from` succeeds (v1).
- * `to.inputs` may reference `from` outputs via references (see below).
-
-Operator-facing plan rule:
-
-* every node must have a stable `id`
-* every node should have a display-safe `title`
-* dependency information must be sufficient to reconstruct `dependsOn` for the step ledger
-* every stored node must be executable; unresolved preset include objects are invalid in stored plan artifacts
-* source provenance is optional; absent provenance is valid when the executable node is otherwise valid
-
-Plan producers MAY be manual authoring flows, preset expansion flows, or other
-tools that generate Plans. Regardless of authoring origin, all producers MUST
-emit the same flattened node-and-edge graph shape for execution.
+Dependencies determine readiness and must agree with the Step Execution ledger. A dependent consumes successful required predecessor results, not a merely terminal or partially saved predecessor. Independent branches can continue only under the existing admitted failure policy. Preset origin, optional provenance, or display ordering does not create an implicit dependency.
 
 ### 6.4 Data references between nodes
 
-Inputs can reference outputs of prior nodes:
-
-```json
-{
- "ref": { "node": "n1", "json_pointer": "/outputs/test_report_artifact" }
-}
-```
-
-Rules:
-
-* references must resolve to a valid node and output path.
-* resolving a reference is deterministic given recorded activity results.
+Use the existing `ref.node` and `json_pointer` form where supported. Resolve it from recorded upstream outputs and validate the receiving input. Missing nodes, inaccessible artifacts, invalid pointers, or incompatible values are explicit errors, not empty success or guessed defaults. Read large content through Activities outside Workflow history.
 
 ### 6.5 Concurrency
 
-* A node is **ready** when all dependencies have succeeded.
-* Up to `policy.max_concurrency` ready nodes may run concurrently.
+Use the existing plan concurrency bound together with actual worker, provider, and resource limits. Deterministic tools do not consume a model lease unless they actually invoke that provider capability. Do not add a plan-specific global capacity service or assume per-worker settings cap every queued operation.
 
 ### 6.6 Failure policy (v1)
 
-* `FAIL_FAST`: first failure ends execution; outstanding work is cancelled.
-* `CONTINUE`: independent branches continue; failures are reported in final summary.
+`FAIL_FAST` stops new dependent work and requests cancellation through existing owners. It cannot undo already committed effects or prove that external consumers stopped. `CONTINUE` allows eligible independent branches and reports failures; it does not run dependents with missing required outputs. Preserve useful results and remaining cleanup obligations in either case.
 
-> v1 intentionally does **not** include conditional edges; see §11.
-
----
+Conditional edges are not introduced by this cleanup. Unknown conditional fields must not be silently ignored to run unauthorized work. No new condition-node engine, plan-segment service, or failure-policy vocabulary is required.
 
 ## 7) Plan production
 
 ### 7.1 Planning is expressed as an executable tool
 
-Planning is expressed as one or more tools (e.g., `plan.generate`) executed as Activities. A planner may be LLM-driven or not, but it is always invoked as an executable Tool.
+This retained heading describes one supported production mechanism, not a requirement that every already-authored plan call a planner or model. Manual/structured input and existing preset expansion use the same compiler. Where planning needs an agent or tool, it uses the existing admitted path rather than a new planning service.
 
 ### 7.2 Plans are artifacts
 
-* The planner tool writes the Plan as an artifact and returns `plan_artifact`.
-* Workflows pass only the reference.
-
----
+Persist validated execution inputs and plan references through the existing artifact owner. Preserve original intent and source identity. A retry reads the recorded plan rather than expanding a changed live preset and calling it the same attempt.
 
 ## 8) Determinism boundaries
 
 ### 8.1 Workflow code responsibilities (deterministic)
 
-* load plan (via activity)
-* validate structure / graph properties (or accept validated plan)
-* schedule activities based on plan readiness
-* track node states and aggregate outcomes
-* emit structured progress (see §10)
+The existing root Workflow schedules ready work, handles recorded results, enforces admitted bounds, and maintains compact state. No direct filesystem/network calls, live registry fetches, or model decisions belong in Workflow code. Avoid a parallel executor around that root.
 
 ### 8.2 Activity responsibilities (nondeterministic allowed)
 
-* execute a tool invocation (LLM calls, shell, git, integrations)
-* read/write artifacts
-* transform data
-
-(Note: separate activities may also resolve and materialize agent instruction skill snapshots, but those are defined by the Agent Skill System and are not executable plan tools by default).
-
----
+Trusted Activities resolve/materialize artifacts, invoke declared operations, and observe external effects. Their side effects remain scoped and retry-aware. Agent Skill materialization remains a separate existing responsibility, not a reason to turn every tool into agent execution.
 
 ## 9) Execution semantics (Plan → Activity invocations)
 
 ### 9.1 The Plan Executor (workflow algorithm)
 
-1. Read the plan artifact reference.
-2. Validate plan:
+Use the existing normalization, validation, readiness, dispatch, Step Execution, result, and finalization path. Complete only missing handoffs. The conceptual sequence is load/validate, select ready nodes within bounds, invoke their owner, record validated results, and apply the failure policy. It is not a new interpreter implementation checklist.
 
- * structural checks in workflow (cheap)
- * deep schema checks in a validation Activity (authoritative) — see §11
-3. Compute ready set (nodes with satisfied deps).
-4. Schedule activity for each ready node up to concurrency cap.
-5. When a node completes:
-
- * store its result reference
- * update state
- * unlock dependents whose deps are all succeeded
-6. Apply failure policy:
-
- * fail fast or continue, per plan policy.
-7. Produce final summary artifact.
+General deterministic-tool support requires a real normal-plan integration test. Keep the working agent and canonical container-job paths intact. A helper test or document marked Implemented cannot substitute for that evidence.
 
 ### 9.2 Mapping a node to an Activity invocation
 
-**Inputs**
+Resolve the declared ToolDefinition and permitted execution binding, then pass small validated inputs, references, correlation/operation identity, and bounded options. Agent-runtime work instead uses the existing AgentExecutionRequest and separate instruction/context resolution. Special external jobs retain their actual submit/status/cancel owner rather than being squeezed into an unbounded blocking Activity.
 
-* `Step` (plan node)
-* pinned `registry_snapshot`
-
-**Resolution**
-
-* Resolve `ToolDefinition` from the pinned tool registry snapshot.
-* Any agent instruction skill snapshot used by an agent-runtime step is resolved separately and passed as execution context, not looked up in the executable tool registry.
-* For `tool.type = "agent_runtime"`, any `inputs.runtimeSelection` is passed
- through the `AgentExecutionRequest` or equivalent managed-session input and is
- interpreted by the owning runtime adapter or managed-session plane. It is not
- resolved from the executable tool registry snapshot.
-* Derive Activity Type and routing target (task queue) from ToolDefinition + worker capabilities.
-
-**Invocation payload**
-
-* `tool.name`
-* `inputs` (with references resolved to concrete values or artifact refs)
-* an execution context (execution identifiers, correlation IDs)
-* optional overrides (timeouts/retries within allowed bounds)
-
-**Result**
-
-* `ToolResult` recorded by Temporal as the activity result (small)
-* large outputs written as artifacts and referenced
-
----
+Persist/reconcile operation identity before repeating effects. Reuse recorded outputs for already completed nodes. Match external result identity before advancing dependencies or releasing resources. Publication-only recovery belongs to the publisher, not another agent run or a blanket replay of the graph.
 
 ## 10) Progress and intermediate outputs
 
 ### 10.1 Progress model (v1)
 
-Progress is represented as a small structured object:
-
-```json
-{
- "total_nodes": 12,
- "pending": 4,
- "running": 3,
- "succeeded": 4,
- "failed": 1,
- "last_event": "Completed repo.run_tests",
- "updated_at": "2026-03-05T00:10:00Z"
-}
-```
-
-This progress object is the lightweight execution-detail summary only. The canonical live per-step surface is the step-ledger query described in `docs/Temporal/StepLedgerAndProgressModel.md`.
+The [Step Ledger and Progress Model](../Temporal/StepLedgerAndProgressModel.md) owns execution-detail state. The existing typed AgentRun progress schema owns compact child observations. Do not add another progress/result store or generic parent-metadata writer to make deterministic tools visible.
 
 ### 10.2 How progress is exposed (v1)
 
-* Workflow maintains progress state internally.
-* Workflow exposes a **Query** that returns the progress object.
-* Workflow exposes a separate **step-ledger Query** for detailed per-step state, attempts, checks, and refs.
-* Additionally, the workflow periodically writes a `progress.json` artifact for durable retrieval (optional but recommended).
+Use existing Workflow queries and authorized API/projection surfaces. Bind child updates to actual parent, step, attempt/generation, and revision. Reject stale or foreign observations. Legitimate wait-to-running transitions follow the real lifecycle, not an assumed rank of every status name. A progress update cannot reopen terminal work, grant authority, or overwrite a replacement attempt.
 
-> Search Attributes/Memo updates for dashboard display are specified in the Workflow Lifecycle doc; this doc defines the plan and bounded progress contract, while the step-ledger schema lives in `docs/Temporal/StepLedgerAndProgressModel.md`.
+Delivery and projection repair stay bounded and observational. A reporting outage cannot cause repeated successful compute. Optional progress artifacts are not a second mandatory source of truth or a new per-poll write requirement. Keep original errors available without an LLM or live chat.
 
 ### 10.3 Intermediate outputs
 
-* Each node completion produces a `ToolResult`.
-* If `ToolResult` is small, store inline in interpreter state.
-* If large, store as artifact and keep only `artifact_ref`.
-* Nodes may reference previous outputs via `ref` pointers (resolved deterministically).
-
----
+Keep small results in recorded interpreter state and large content in authorized artifacts. A partial stream is not a committed final result. Intermediate refs grant no extra read rights. Preserve confirmed output when a later summary, review, or remote publication fails.
 
 ## 11) Validation rules (authoritative)
 
 ### 11.1 Executable tool registry validation
 
-* unique `name`
-* valid JSON Schemas
-* valid policy bounds (timeouts, retries)
-* executor binding defined
-* capabilities listed
+The existing validator checks name uniqueness, schemas, declared bindings/capabilities, and policy bounds. Validate actual behavior at supplying/consuming boundaries rather than duplicate the same schema check in a series of services. Registration remains separate from real execution support.
 
 ### 11.2 Plan validation (v1 rules)
 
-Structural checks:
-
-* `plan_version` supported
-* node IDs unique
-* edges reference existing nodes
-* acyclic graph required
-* nodes are executable plan nodes only; unresolved preset include entries are rejected before execution
-* referenced tools exist in the pinned tool registry snapshot
-* node inputs validate against the tool input schema
-* data references point to valid nodes + output pointers
-* absent provenance is allowed
-* structurally valid provenance is accepted as metadata only
-* invalid claimed preset provenance is rejected rather than silently ignored
-
----
+Check supported schema, unique node IDs, valid acyclic edges, resolved includes, referenced tool definitions, bounded inputs/options, and valid output dependencies. Optional provenance may be absent. Supplied provenance remains bounded metadata and must not masquerade as execution authority. Failure preserves useful diagnostics without a model-based permission decision.
 
 ### 11.3 Execution invariants
 
-Runtime execution consumes the flattened Plan graph only. Nested preset semantics
-do not exist at runtime, and provenance is never executable logic.
-
-The executor uses:
-
-* node readiness from dependency edges
-* failure behavior from policy
-* tool invocation details from node tool contracts and inputs
-* artifact references from node inputs or prior outputs
-
-The executor does not use:
-
-* live preset includes
-* nested preset trees
-* source provenance to select tools, alter inputs, or change dependencies
-* authoring-time fallback semantics
+Consume the flattened recorded graph and declared policy. Do not re-expand live presets, infer runtime choice from a label, or use optional provenance to change execution. No artifact, progress summary, comparison score, or review verdict can authorize additional tools or publication.
 
 ## 12) Open questions — resolved with recommended solutions
 
-This section **locks decisions** for implementation.
-
 ### Q1) Do we pin Plans to a tool registry snapshot or resolve “latest” tools at runtime?
 
-**Decision (recommended): Pin to a tool registry snapshot.**
-
-**Why**
-
-* Reproducibility: the same plan re-runs the same tool contracts.
-* Debuggability: you can answer “what tool code/schema was used?”
-* Integrity: avoids surprise changes from concurrent deployments.
-
-**How**
-
-* Every plan includes `metadata.registry_snapshot` with:
-
- * `digest` (immutable identifier)
- * `artifact_ref` to the snapshot content (the tool registry file(s) used)
-
-**Validation rule**
-
-* Interpreter must resolve tool definitions from the plan’s snapshot, not from “latest.”
-
----
+Preserve the selected definition snapshot and original serialized intent where the current contract requires it. Its digest identifies the definition used. It does not require all deployed components to have equal build IDs or create another rollout policy. A fresh admitted operation may use a compatible installed implementation under the existing compiler, without rewriting the old plan. Incompatible schemas, corrupted artifacts, or missing required capabilities remain actionable failures.
 
 ### Q2) Do we allow conditional edges in v1?
 
-**Decision (recommended): No conditional edges in v1.**
-
-**Why**
-
-* Conditional execution explodes semantics (skip vs fail vs partial).
-* Greatly complicates validation, progress reporting, and user expectations.
-
-**Forward-compatible extension**
-Reserve fields without enabling them:
-
-* `edges[].condition` (optional, ignored/invalid in v1)
-* introduce explicit **condition nodes** later (`tool:decision.evaluate`) that gate downstream nodes by producing a boolean output and generating a new plan segment (or triggering Continue-As-New).
-
-**v1 rule**
-
-* Dependencies are strict: a node runs only if all deps succeeded.
-
----
+No new conditional semantics are introduced here. Keep the existing dependency behavior. A future actual requirement belongs in a deliberately scoped change, not speculative reserved fields or a new branching framework built to complete #973.
 
 ### Q3) How much validation happens in workflow code vs in an Activity?
 
-**Decision (recommended): Split validation.**
-
-* **Workflow does lightweight structural checks** (acyclic, IDs, edges reference nodes).
-* **Activity performs deep validation** (JSON Schema validation against pinned tool registry snapshot, reference resolution checks).
-
-**Why**
-
-* Keeps workflow deterministic and small.
-* Produces consistent validation errors (same error model as other tools).
-* Allows updating validators without touching workflow determinism concerns while keeping snapshot cutovers explicit.
-
-**Activity**
-
-* `plan.validate(plan_artifact_ref, registry_snapshot_ref)` → returns either:
-
- * `validated_plan_ref` (could be the same ref) or
- * a `ToolFailure` error.
-
-**v1 rule**
-
-* Execution begins only after `plan.validate` succeeds.
-
----
+Keep cheap deterministic structural checks in the existing Workflow/compiler where appropriate. External reads and required deep validation use the current Activity boundary. Reuse `plan.validate` where it is the actual owner rather than add a second mandatory validation workflow or independently repeat every check at each layer. Changing a validator does not automatically make changed recorded decisions replay-compatible.
 
 ### Q4) Should `mm.tool.execute` / `mm.skill.execute` be the only Activity Type, or should there be per-tool activity types?
 
-**Decision (recommended): Hybrid model (dispatcher + curated activity types).**
-
-**Why**
-
-* A single dispatcher Activity Type (`mm.tool.execute` / `mm.skill.execute`) is flexible and keeps catalogs small.
-* But some boundaries benefit from explicit types for routing/isolation/least-privilege:
-
- * `artifact.read/write`
- * `integration.jules.*`
- * `integration.github.*`
- * `sandbox.exec` (high-risk)
-
-**Implementation**
-
-* Default: Tools bind to `mm.tool.execute`.
-* Exception: Tools may bind directly to a curated Activity Type if they require special worker isolation or credentials.
-
-**Rule**
-
-* The executable tool registry must declare the activity type; the interpreter does not guess.
-
----
+Reuse the existing dispatcher and curated bindings. The registry declares the route; the interpreter does not guess from names. Keep a distinct binding only where a real protocol, credential, or isolation need justifies it. Existing legacy Activity names remain solely for their actual history consumers. No new universal executor or per-tool worker fleet is required.
 
 ## 13) Deliverables (this doc’s outputs)
 
-### A) Tool registry spec
+The deliverable is a consistent contract used by existing code, not a second collection of schemas, catalogs, or mandatory status reports. #973 covers the missing real tool-plan handoff, #1088 progress, #2615 optional workspace admission, and #1090 publication. Their implementation evidence stays with the existing issues and tests.
 
-* ToolDefinition schema (required fields, validation)
-* Static snapshot mechanism (digest + artifact ref)
-* Capability requirements and policy defaults
-* Activity type binding rules (hybrid model)
-
-### B) Plan schema + examples + validation rules
-
-* DAG-first plan schema (nodes/edges/policy/metadata)
-* Reference format (`ref.node` + `json_pointer`)
-* Examples:
-
- * linear chain
- * parallel branches
- * continue-on-failure
-
-### C) Execution semantics
-
-* Plan Executor algorithm (deterministic orchestration)
-* Node → activity invocation mapping (tool registry snapshot resolution)
-* Concurrency rules and failure modes
-* Progress and intermediate output contracts
-
----
+Optional configuration comparison and quality/risk assessment under #2215 and #983 reuse ordinary admitted runs, artifact readers, and reports. They do not create an experiment platform, authorize new inference from a read request, or become default gates on deterministic tools. A model's advisory assessment cannot replace required tests, security enforcement, or explicit approval.
 
 ## 14) Engineering backlog
 
-Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.UserWorkflow`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked under `docs/tmp/` or in local handoffs under `artifacts/` when needed.
+Inspect current code and existing PRs before adding a component named in the historical backlog. The registry, plan model, dispatcher bindings, progress schema, and container-job path already have owners. Extend or remove a proven gap, not a duplicate implementation. An evidence-backed no-code disposition is valid where the requested behavior already works.
 
-Deployment-backed agent instruction skill work is tracked separately in `docs/Steps/SkillSystem.md` and related tracking files under `docs/tmp/`.
+Use focused development tests and existing broader GitHub Actions. A mixed deterministic-tool/agent journey should prove actual dispatch, output dependencies, least privilege, bounded failure/cancellation, and preserved results without unnecessary model calls. Add only missing integration and replay cases. Do not unit-test document wording, headings, counts, or metadata, or require a full local suite before opening a PR.
+
+Missing local tools use the existing authorized CI/container continuation path. Preserve the candidate, accepted work, concrete gap, original error, and consumed budget. Do not replace that handoff with mandatory human-only review or claim a continuation was scheduled unless its owner accepted it. This document authorizes no live provider spending, production mutation, or weakened execution safeguards.
 
 ## Objective acceptance evidence
 

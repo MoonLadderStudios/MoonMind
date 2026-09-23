@@ -2432,7 +2432,9 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
     ) -> tuple[int, str, str]:
         captured.append((argv, input_bytes))
         if "clone" in " ".join(argv):
-            relative_target = argv[-1].removeprefix("/work/")
+            # The clone argv ends with branch, source, target, then the
+            # repository-local commit identity as positional data.
+            relative_target = argv[-3].removeprefix("/work/")
             (tmp_path / relative_target).mkdir(parents=True)
         return 0, "", ""
 
@@ -2451,7 +2453,7 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
 
     clone_argv, clone_input = captured[0]
     assert materialized["kind"] == "bind"
-    assert clone_argv[-3:] == [
+    assert clone_argv[-5:-2] == [
         "main",
         "https://github.com/MoonLadderStudios/MoonMind.git",
         f"/work/temporal_sandbox/{workspace_id}/repo",

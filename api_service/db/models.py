@@ -1808,6 +1808,43 @@ class ManagedSecret(Base):
     )
 
 
+class GitHubEventDeliveryReceipt(Base):
+    """Durable receipt for one GitHub webhook delivery (#3967).
+
+    Single dedup owner for the opt-in event trigger path: the scoped
+    delivery key is inserted before acknowledgment or dispatch, so a
+    redelivery of the same body reuses the stored logical request and a
+    changed-body duplicate under the same delivery id is recorded as a
+    conflict instead of fresh work. Only metadata is stored (delivery key,
+    digest, decision, execution reference) — never the secret-bearing raw
+    payload.
+    """
+
+    __tablename__ = "github_event_delivery_receipts"
+    __table_args__ = (
+        Index("ix_github_event_delivery_receipts_repository", "repository"),
+    )
+
+    delivery_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    repository: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    payload_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    preset_slug: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    execution_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class SecretMutationReceipt(Base):
     """Stable request-identity receipt for one secret mutation (#4006).
 

@@ -522,7 +522,20 @@ class _SnapshotReuseSession:
         self._canonical = canonical
         self._existing_link = existing_link
         self.added: list[object] = []
-        self.get = AsyncMock(return_value=canonical)
+
+        async def _model_aware_get(model: object, pk: object, **kwargs: object) -> object:
+            if model is TemporalExecutionCanonicalRecord:
+                return self._canonical
+            # Projection row is absent so the shared mutator exercises the
+            # missing-projection repair path (one record add).
+            return None
+
+        self.get = AsyncMock(side_effect=_model_aware_get)
+        self.flush = AsyncMock()
+
+    @asynccontextmanager
+    async def begin_nested(self) -> Iterator[object]:
+        yield self
 
     async def execute(self, _statement: object) -> _ExecuteResult:
         rows = [self._existing_link] if self._existing_link is not None else []
@@ -2241,6 +2254,113 @@ def test_list_executions_source_temporal_excluded_only_page_keeps_continuation()
     assert body["count"] is None
     assert body["countMode"] == "estimated_or_unknown"
     assert body["degradedCount"] is True
+    temporal_client.count_workflows.assert_not_awaited()
+
+def test_list_executions_source_temporal_mixed_page_filters_and_stays_bounded() -> None:
+    """MoonLadderStudios/MoonMind#3947 (R1/R2): a mixed upstream page filters
+    per row through the registry policy, keeps the underlying continuation
+    token, and still reports an unknown total — with a single bounded fetch
+    (no overscan drain, no count RPC)."""
+    import base64 as _base64
+
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    class _EmptyCanonicalResult:
+        def scalars(self) -> "_EmptyCanonicalResult":
+            return self
+
+        def all(self) -> list[TemporalExecutionCanonicalRecord]:
+            return []
+
+    class _Session:
+        async def execute(self, _stmt: object) -> _EmptyCanonicalResult:
+            return _EmptyCanonicalResult()
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def _product_memo():
+        return {"title": "Product row"}
+
+    async def _operator_memo():
+        return {"title": "operator row"}
+
+    product_workflow = SimpleNamespace(
+        id="mm:wf-product-1",
+        run_id="run-product",
+        namespace="default",
+        workflow_type="MoonMind.UserWorkflow",
+        status="RUNNING",
+        start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+        close_time=None,
+        execution_time=None,
+        search_attributes={
+            "mm_state": "executing",
+            "mm_owner_id": "system",
+            "mm_owner_type": "system",
+            "mm_entry": "run",
+        },
+        memo=_product_memo,
+    )
+    operator_workflow = SimpleNamespace(
+        id="mm:operator-1",
+        run_id="run-operator",
+        namespace="default",
+        workflow_type="MoonMind.ProviderProfileManager",
+        status="RUNNING",
+        start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+        close_time=None,
+        execution_time=None,
+        search_attributes={},
+        memo=_operator_memo,
+    )
+
+    fetch_calls = 0
+
+    class _WorkflowIterator:
+        current_page = [product_workflow, operator_workflow]
+        next_page_token: bytes | None = b"underlying-token"
+
+        async def fetch_next_page(self) -> None:
+            nonlocal fetch_calls
+            fetch_calls += 1
+            return None
+
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(custom_attributes={})
+            )
+        ),
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=9)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "ownerType": "system"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    # Only the product row survives per-row registry filtering; the operator
+    # row is dropped without leaking its type.
+    assert [item["workflowId"] for item in body["items"]] == ["mm:wf-product-1"]
+    assert "ProviderProfileManager" not in response.text
+    # Later pages may still hold excluded types, so the total stays unknown.
+    assert body["count"] is None
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["degradedCount"] is True
+    # Bounded continuation: the underlying token is preserved for Next, with
+    # exactly one upstream fetch and no count RPC.
+    assert body["nextPageToken"] == _base64.b64encode(b"underlying-token").decode("utf-8")
+    assert fetch_calls == 1
+    temporal_client.list_workflows.assert_called_once()
     temporal_client.count_workflows.assert_not_awaited()
 
 def test_product_temporal_scope_query_derives_from_registry(monkeypatch) -> None:
@@ -11612,6 +11732,108 @@ def test_owner_product_detail_surfaces_operator_child_parent_links() -> None:
     assert (
         merge_automation["workflowId"]
         == "merge-automation:mm:wf-1:pr:1614:head:abc123"
+    )
+
+
+def test_owner_product_detail_surfaces_publication_recovery_parent_link() -> None:
+    """MoonLadderStudios/MoonMind#3947 R3: the owning user reaches the
+    publication-recovery diagnostic through the parent execution detail.
+
+    The recovery child has no standalone product route; its read model is the
+    parent detail ``actions.actionEvidence.retryPublication`` evidence carrying
+    the child ``publicationRecoveryWorkflowId`` link.
+    """
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    user = _override_user_dependencies(app, is_superuser=False)
+    record = _build_execution_record(
+        owner_id=str(user.id), state=MoonMindWorkflowState.FAILED
+    )
+    record.finish_summary_json = {
+        "controlStop": {
+            "workspaceHeadRef": "artifact://workspace/final",
+            "remainingWorkRef": "artifact://remaining/final",
+            "auxiliaryOutcomes": {
+                "gitPublication": {
+                    "status": "failed",
+                    "recoveryWorkflowId": "publication-recovery:mm:wf-1:publish-1",
+                    "recoveryResult": "pending",
+                    "recoveryContract": {
+                        "sourceWorkflowId": record.workflow_id,
+                        "sourceRunId": record.run_id,
+                        "sourceSemanticOutcome": "failed",
+                        "target": {
+                            "kind": "publication",
+                            "publicationKind": "pull_request",
+                            "sourcePublicationOperationId": "publish-1",
+                            "semanticContext": "incomplete_draft_handoff",
+                        },
+                        "continuation": {
+                            "phase": "resume_publication",
+                            "candidateRef": "artifact://workspace/final",
+                        },
+                        "intent": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "baseRef": "main",
+                            "headRef": "issue-3947",
+                            "mode": "draft_pr",
+                            "branchPolicy": "reuse_exact_head",
+                            "githubAuthorityRef": "managed-secret://github/source",
+                        },
+                        "candidateAccepted": False,
+                        "hasPublishableChange": True,
+                        "publicationAuthorityCurrent": True,
+                    },
+                }
+            },
+        }
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "total": 1,
+            "pending": 0,
+            "ready": 0,
+            "executing": 0,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "completed": 0,
+            "failed": 1,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": None,
+            "updatedAt": "2026-04-08T12:00:00Z",
+        },
+        summary={
+            "status": "failed",
+            "prNumber": None,
+            "prUrl": None,
+            "latestHeadSha": "abc123",
+            "blockers": [],
+            "resolverChildWorkflowIds": [],
+            "artifactRefs": {},
+        },
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-2",
+            "runScope": "latest",
+            "steps": [],
+        },
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workflowId"] == "mm:wf-1"
+    retry_publication = body["actions"]["actionEvidence"]["retryPublication"]
+    assert (
+        retry_publication["publicationRecoveryWorkflowId"]
+        == "publication-recovery:mm:wf-1:publish-1"
     )
 
 

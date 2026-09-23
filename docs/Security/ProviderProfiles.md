@@ -996,6 +996,30 @@ of orphaning a competing owner behind the original. The key carries no
 credential material. The Settings OpenCode drawer stores it from the 503 and
 resends it on the next submit for that profile.
 
+The profile host drain after acquisition is bounded (120s) by one monotonic
+deadline covering connection, workflow start, and the janitor result
+together. A janitor drain that never answers is cancelled best-effort
+before returning the same 503 shape with
+`refusal: credential_host_drain_timeout` and the same stable
+`retry_idempotency_key`; rotation stays atomic, so saved credentials are
+unchanged and the retry reattaches to the same owner instead of colliding
+with the still-running workflow ID.
+
+While the drawer shows "validating token", it polls
+`GET /provider-profiles/{profile_id}/credential-maintenance-status?idempotency_key=<key>`
+for the caller's queue position. The response projects only counts and the
+caller's own 1-based `waiter_position` (`exclusive_maintenance_waiters`,
+`waiter_position`, `lease_held`, `execution_lease_count`); other waiters'
+identities are never exposed, and manager unavailability degrades to
+`known: false` instead of failing the poll. The drawer always sends a
+client-generated `Idempotency-Key` on the first submit so the poll key and
+the lease owner agree; the enrollment POST itself times out client-side after
+10 minutes with a retryable failure that keeps the same key. Aborting the
+request (Cancel validation) or hitting the client timeout only stops the
+browser from waiting: the server may still commit the credential, so the
+drawer reports the outcome as uncertain and the retry reuses the same key
+to reattach to the same operation rather than starting a conflicting one.
+
 ### 9.4 Recommended first-party API-key mappings
 
 ```yaml
