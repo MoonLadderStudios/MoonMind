@@ -19,6 +19,15 @@ This boundary closes both gaps from deployment configuration alone:
 * re-validation re-runs the pinned-runtime check against the already-enrolled
   SecretRef when only the evidence is stale.
 
+MoonLadderStudios/MoonMind#4538: the ``OPENROUTER_API_KEY`` route
+(``opencode``/``openrouter`` via the ``opencode_api_key`` role) shares this
+same re-validation path. ``_opencode_profiles`` selects every ``opencode``
+runtime row, so the OpenRouter profile is revalidated, rotated via its
+``env://OPENROUTER_API_KEY`` SecretRef, and probed with the same bounded
+transient-retry contract. Key presence alone never claims launch readiness:
+readiness still requires persisted catalog evidence for the current host
+image.
+
 Exact image provenance schedules discovery refresh, but it is not a
 runtime-compatibility veto: evidence observed on a compatible same-repository
 rebuild still answers for execution, while only an observation on the exact

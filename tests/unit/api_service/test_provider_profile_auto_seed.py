@@ -143,6 +143,9 @@ def _clear_seed_env(monkeypatch):
         "OPENROUTER_API_KEY",
         "OPENCODE_API_KEY",
         "MOONMIND_SKIP_PROVIDER_PROFILE_SEED",
+        "MOONMIND_OMNIGENT_OPENCODE_ENABLED",
+        "MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED",
+        "MOONMIND_OMNIGENT_DEFAULT_MODEL",
     ):
         monkeypatch.delenv(env_name, raising=False)
 
@@ -1353,17 +1356,24 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
+async def test_auto_seed_creates_opencode_openrouter_profile_when_env_set(
     _module_db, monkeypatch
 ):
-    """OPENROUTER_API_KEY should seed a composite Codex provider profile."""
+    """MoonLadderStudios/MoonMind#4538: OPENROUTER_API_KEY seeds OpenCode/OpenRouter.
+
+    Fresh DB + key creates the model-neutral ``opencode-openrouter`` profile
+    (runtime ``opencode``, provider ``openrouter``) and no
+    ``codex_openrouter_qwen36_plus`` stock profile. The profile reuses the
+    generic OpenCode credential strategy (``opencode_api_key`` role, composite
+    materialization) with no Codex launch fields.
+    """
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
 
     seeded = await _auto_seed_provider_profiles()
-    assert "codex_cli" in seeded
+    assert "opencode" in seeded
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(select(ManagedAgentProviderProfile))
@@ -1371,188 +1381,273 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
 
     assert len(profiles) == len(BASE_PROFILE_IDS) + 1
     profile_ids = {p.profile_id for p in profiles}
-    assert "codex_openrouter_qwen36_plus" in profile_ids
+    assert "opencode-openrouter" in profile_ids
+    assert "codex_openrouter_qwen36_plus" not in profile_ids
 
-    profile = next(
-        p for p in profiles if p.profile_id == "codex_openrouter_qwen36_plus"
-    )
-    assert profile.runtime_id == "codex_cli"
+    profile = next(p for p in profiles if p.profile_id == "opencode-openrouter")
+    assert profile.runtime_id == "opencode"
     assert profile.provider_id == "openrouter"
-    assert profile.is_default is True
-    assert profile.default_model == "qwen/qwen3.6-plus"
-    assert profile.secret_refs == {"provider_api_key": "env://OPENROUTER_API_KEY"}
-    assert profile.env_template == {
-        "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
-    }
-    assert profile.file_templates == [
-        {
-            "path": "{{runtime_support_dir}}/codex-home/config.toml",
-            "format": "toml",
-            "merge_strategy": "replace",
-            "content_template": {
-                "model_provider": "openrouter",
-                "model_reasoning_effort": "high",
-                "model": "qwen/qwen3.6-plus",
-                "profile": "openrouter_qwen36_plus",
-                "model_providers": {
-                    "openrouter": {
-                        "name": "OpenRouter",
-                        "base_url": "https://openrouter.ai/api/v1",
-                        "env_key": "OPENROUTER_API_KEY",
-                        "wire_api": "responses",
-                    }
-                },
-                "profiles": {
-                    "openrouter_qwen36_plus": {
-                        "model_provider": "openrouter",
-                        "model": "qwen/qwen3.6-plus",
-                    }
-                },
-            },
-            "permissions": "0600",
-        }
-    ]
-    assert profile.home_path_overrides == {
-        "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
-    }
-    assert profile.command_behavior == {"suppress_default_model_flag": True}
-    assert profile.max_parallel_runs == 4
-    assert profile.cooldown_after_429_seconds == 300
-
-    codex_oauth = next(p for p in profiles if p.profile_id == "codex_openai_oauth")
-    assert codex_oauth.is_default is False
-
-
-@pytest.mark.asyncio
-async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existing_profile(
-    _module_db, monkeypatch
-):
-    from api_service.main import (
-        _auto_seed_provider_profiles,
-        _legacy_codex_openrouter_qwen36_plus_file_templates,
-    )
-
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
-    await _auto_seed_provider_profiles()
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
-        )
-        profile.file_templates = _legacy_codex_openrouter_qwen36_plus_file_templates()
-        await session.commit()
-
-    seeded = await _auto_seed_provider_profiles()
-    assert seeded == []
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
-        )
-
-    content_template = profile.file_templates[0]["content_template"]
-    assert content_template["model_provider"] == "openrouter"
-    assert content_template["model_reasoning_effort"] == "high"
-    assert content_template["model"] == "qwen/qwen3.6-plus"
-
-
-@pytest.mark.asyncio
-async def test_auto_seed_reconciles_deprecated_openrouter_codex_seed_model(
-    _module_db, monkeypatch
-):
-    from api_service.main import (
-        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL,
-        _auto_seed_provider_profiles,
-        _codex_openrouter_qwen36_plus_file_templates,
-    )
-
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
-    await _auto_seed_provider_profiles()
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
-        )
-        profile.default_model = _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
-        profile.file_templates = _codex_openrouter_qwen36_plus_file_templates(
-            _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
-        )
-        await session.commit()
-
-    seeded = await _auto_seed_provider_profiles()
-    assert seeded == []
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
-        )
-
-    assert profile.default_model == "qwen/qwen3.6-plus"
-    content_template = profile.file_templates[0]["content_template"]
-    assert content_template["model"] == "qwen/qwen3.6-plus"
+    assert profile.provider_label == "OpenRouter"
+    assert profile.account_label == "OpenCode via OpenRouter"
+    # Model-neutral: inheritance resolves the configured OpenCode default.
+    # (The row carries the standard blank "Runtime default" tier; no model
+    # or tier is pinned.)
+    assert profile.default_model is None
+    assert profile.default_effort is None
+    for tier in list(profile.model_tiers or []):
+        assert not str(tier.get("model") or "").strip()
+        assert not str(tier.get("effort") or "").strip()
+    assert profile.credential_source == ProviderCredentialSource.SECRET_REF
     assert (
-        content_template["profiles"]["openrouter_qwen36_plus"]["model"]
-        == "qwen/qwen3.6-plus"
+        profile.runtime_materialization_mode
+        == RuntimeMaterializationMode.COMPOSITE
     )
+    assert profile.secret_refs == {"opencode_api_key": "env://OPENROUTER_API_KEY"}
+    assert profile.env_template == {
+        "OPENROUTER_API_KEY": {"from_secret_ref": "opencode_api_key"}
+    }
+    # No Codex launch behavior survives in the OpenCode path.
+    assert not profile.file_templates
+    assert not profile.home_path_overrides
+    assert profile.command_behavior is None
+    assert profile.enabled is True
+    assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+    assert profile.last_auth_method == ProviderProfileAuthMethod.SECRET_REF
+    # Backend-owned isolation, not a Codex copy: the OpenCode auth content
+    # keys are cleared and no Codex OPENAI_* scoping leaks in.
+    assert "OPENCODE_AUTH_CONTENT" in list(profile.clear_env_keys or [])
+
+    # An unrelated default is never silently replaced: the credentialless Zen
+    # seed keeps the opencode runtime default.
+    zen = next(p for p in profiles if p.profile_id == "opencode-zen-free")
+    assert zen.is_default is True
+    assert profile.is_default is False
 
 
 @pytest.mark.asyncio
-async def test_auto_seed_does_not_overwrite_custom_openrouter_codex_config_template(
-    _module_db, monkeypatch
-):
+async def test_auto_seed_ignores_blank_openrouter_key(_module_db, monkeypatch):
+    """Missing, empty, and whitespace-only keys create neither profile."""
     from api_service.main import _auto_seed_provider_profiles
 
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    # Seed the base profiles first (the credentialless Zen seed reports the
+    # opencode runtime), then prove blank keys add neither OpenRouter profile.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    await _auto_seed_provider_profiles()
+    for blank in ("", "   "):
+        monkeypatch.setenv("OPENROUTER_API_KEY", blank)
+        await _auto_seed_provider_profiles()
+        async with db_base.async_session_maker() as session:
+            result = await session.execute(select(ManagedAgentProviderProfile))
+            profile_ids = {p.profile_id for p in result.scalars().all()}
+        assert "opencode-openrouter" not in profile_ids
+        assert "codex_openrouter_qwen36_plus" not in profile_ids
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_respects_opencode_disable_controls_for_openrouter(
+    _module_db, monkeypatch
+):
+    """Explicit OpenCode/Omnigent disable controls suppress the OpenRouter seed."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "false")
+    seeded = await _auto_seed_provider_profiles()
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentProviderProfile))
+        profile_ids = {p.profile_id for p in result.scalars().all()}
+    assert "opencode-openrouter" not in profile_ids
+    assert "opencode" not in seeded
+
+    monkeypatch.delenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", raising=False)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "false")
+    seeded = await _auto_seed_provider_profiles()
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentProviderProfile))
+        profile_ids = {p.profile_id for p in result.scalars().all()}
+    assert "opencode-openrouter" not in profile_ids
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_repeated_startup_is_idempotent_for_openrouter(
+    _module_db, monkeypatch
+):
+    """Repeat startup neither duplicates the profile nor overwrites model edits."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    first = await _auto_seed_provider_profiles()
+    assert "opencode" in first
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "opencode-openrouter"
+        )
+        profile.default_model = "openrouter/acme-custom"
+        await session.commit()
+
+    second = await _auto_seed_provider_profiles()
+    assert second == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "opencode-openrouter"
+        )
+        result = await session.execute(select(ManagedAgentProviderProfile))
+        profile_ids = [p.profile_id for p in result.scalars().all()]
+    assert profile.default_model == "openrouter/acme-custom"
+    assert profile_ids.count("opencode-openrouter") == 1
+    assert "codex_openrouter_qwen36_plus" not in profile_ids
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_retires_untouched_legacy_codex_openrouter_seed(
+    _module_db, monkeypatch
+):
+    """Upgrades disable the untouched legacy stock seed without resurrection."""
+    from api_service.main import (
+        _auto_seed_provider_profiles,
+        _is_untouched_legacy_codex_openrouter_profile,
+    )
+    from api_service.db.models import (
+        ManagedAgentRateLimitPolicy,
+    )
+
+    # Untouched legacy stock row, as previously seeded.
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex_openrouter_qwen36_plus",
+                runtime_id="codex_cli",
+                provider_id="openrouter",
+                provider_label="OpenRouter",
+                default_model="qwen/qwen3.6-plus",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+                env_template={
+                    "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+                },
+                file_templates=[
+                    {
+                        "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                        "format": "toml",
+                        "merge_strategy": "replace",
+                        "content_template": {
+                            "model_provider": "openrouter",
+                            "model_providers": {
+                                "openrouter": {
+                                    "name": "OpenRouter",
+                                    "env_key": "OPENROUTER_API_KEY",
+                                }
+                            },
+                        },
+                        "permissions": "0600",
+                    }
+                ],
+                home_path_overrides={
+                    "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+                },
+                command_behavior={"suppress_default_model_flag": True},
+                account_label="Codex CLI via OpenRouter (auto-seeded)",
+                enabled=True,
+                is_default=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                max_parallel_runs=4,
+                cooldown_after_429_seconds=300,
+                rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                max_lease_duration_seconds=7200,
+            )
+        )
+        await session.commit()
+
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
     await _auto_seed_provider_profiles()
 
-    custom_template = [
-        {
-            "path": "{{runtime_support_dir}}/codex-home/config.toml",
-            "format": "toml",
-            "merge_strategy": "replace",
-            "content_template": {
-                "model_provider": "openrouter",
-                "model_reasoning_effort": "medium",
-                "model": "openrouter/custom-model",
-                "profile": "openrouter_qwen36_plus",
-                "model_providers": {
-                    "openrouter": {
-                        "name": "OpenRouter",
-                        "base_url": "https://openrouter.ai/api/v1",
-                        "env_key": "OPENROUTER_API_KEY",
-                        "wire_api": "responses",
-                    }
-                },
-                "profiles": {
-                    "openrouter_qwen36_plus": {
-                        "model_provider": "openrouter",
-                        "model": "openrouter/custom-model",
-                    }
-                },
-            },
-            "permissions": "0600",
-        }
-    ]
-
     async with db_base.async_session_maker() as session:
-        profile = await session.get(
+        legacy = await session.get(
             ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
         )
-        profile.file_templates = custom_template
+        assert legacy.enabled is False
+        assert legacy.is_default is False
+        assert (
+            legacy.auth_state == ProviderProfileAuthState.NOT_CONFIGURED
+        )
+        replacement = await session.get(
+            ManagedAgentProviderProfile, "opencode-openrouter"
+        )
+        assert replacement is not None
+        assert replacement.runtime_id == "opencode"
+
+    # A second startup must not resurrect the retired seed.
+    await _auto_seed_provider_profiles()
+    async with db_base.async_session_maker() as session:
+        legacy = await session.get(
+            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
+        )
+        assert legacy.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_preserves_customized_legacy_codex_openrouter_profile(
+    _module_db, monkeypatch
+):
+    """A customized legacy profile is preserved, never renamed or re-harnessed."""
+    from api_service.main import _auto_seed_provider_profiles
+    from api_service.db.models import (
+        ManagedAgentRateLimitPolicy,
+    )
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex_openrouter_qwen36_plus",
+                runtime_id="codex_cli",
+                provider_id="openrouter",
+                provider_label="OpenRouter",
+                default_model="openrouter/acme-custom",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+                env_template={
+                    "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+                },
+                file_templates=[
+                    {
+                        "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                        "format": "toml",
+                        "merge_strategy": "replace",
+                        "content_template": {"model": "custom"},
+                        "permissions": "0600",
+                    }
+                ],
+                home_path_overrides={
+                    "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+                },
+                command_behavior={"suppress_default_model_flag": True},
+                account_label="Codex CLI via OpenRouter (auto-seeded)",
+                enabled=True,
+                is_default=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                max_parallel_runs=4,
+                cooldown_after_429_seconds=300,
+                rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                max_lease_duration_seconds=7200,
+            )
+        )
         await session.commit()
 
-    seeded = await _auto_seed_provider_profiles()
-    assert seeded == []
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    await _auto_seed_provider_profiles()
 
     async with db_base.async_session_maker() as session:
-        profile = await session.get(
+        legacy = await session.get(
             ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
         )
-
-    assert profile.file_templates == custom_template
+        assert legacy.enabled is True
+        assert legacy.runtime_id == "codex_cli"
+        assert legacy.default_model == "openrouter/acme-custom"
 
 
 @pytest.mark.asyncio
