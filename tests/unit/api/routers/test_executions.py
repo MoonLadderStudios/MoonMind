@@ -522,7 +522,26 @@ class _SnapshotReuseSession:
         self._canonical = canonical
         self._existing_link = existing_link
         self.added: list[object] = []
-        self.get = AsyncMock(return_value=canonical)
+        # The double answers canonical-row reads with the canned record and
+        # reports the execution projection as genuinely absent so the shared
+        # mutator exercises its missing-row repair instead of tripping the
+        # miswired-row guard.
+        async def _model_aware_get(model: object, pk: object, **kwargs: object) -> object:
+            if model is TemporalExecutionCanonicalRecord:
+                return self._canonical
+            # Projection row is absent so the shared mutator exercises the
+            # missing-projection repair path (one record add).
+            return None
+
+        self.get = AsyncMock(side_effect=_model_aware_get)
+        # mutate_execution_projection flushes caller writes before its locked
+        # canonical+projection reads and repairs a missing projection inside
+        # a nested savepoint; the double honors that session contract.
+        self.flush = AsyncMock()
+
+    @asynccontextmanager
+    async def begin_nested(self) -> Iterator[object]:
+        yield self
 
     async def execute(self, _statement: object) -> _ExecuteResult:
         rows = [self._existing_link] if self._existing_link is not None else []

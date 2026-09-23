@@ -5,7 +5,7 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-22
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
 
@@ -31,7 +31,7 @@ One portable controller implements updates for the host entrypoint and the Setti
 
 The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery. Temporal and the UI may request or observe an update, but neither is required for the controller to keep making progress. An observer must not become a second update algorithm.
 
-Use existing Docker/Compose, local job files, and process ownership. Do not add a release service, parallel supervisor, promotion state machine, or mandatory approval workflow.
+Use existing Docker/Compose, local job files, and process ownership. The controller is one small separate release service in its own Compose project (see section 11.2), not a parallel supervisor, promotion state machine, or mandatory approval workflow.
 
 ## 3. Terminology
 
@@ -39,7 +39,7 @@ Use existing Docker/Compose, local job files, and process ownership. Do not add 
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector. Resolve and record the concrete image that will run.
 
-**Controller:** The existing portable update implementation, capable of outliving the worker or API that submitted it. Its privileged execution boundary is deployment-owned, not selectable by an agent.
+**Controller:** The standalone deployment controller in its own Compose project (`deploy/moonmind-controller`), capable of outliving the worker or API that submitted work to it. Its privileged execution boundary is deployment-owned, not selectable by an agent. The controller never replaces itself; its lifecycle is host-owned.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -161,7 +161,21 @@ An unavailable optional integration is reported separately. Missing mandatory ve
 
 ### 10.8 Migrate the singular Omnigent release
 
-Coordinate the installed Omnigent server and required host images in this same update. Reconcile uncertain recreations before repeating them. Future launches follow the installed runtime while preserving explicit harness/provider choices.
+An ordinary MoonMind update also checks the deployment-configured Omnigent
+server and required host image channels (image/tag inputs present in the operator `.env` or worker environment) for newly published artifacts. Resolve
+mutable tags to concrete digests, assess the required runtime behavior, and
+advance the installed release when a suitable new image is available for a configured channel; channels without configured inputs retain their recorded refs. Record
+the selected digests in deployment-owned state before restarting consumers and refresh their running
+consumers through the same Compose owner. This includes the server, API and
+agent runtime worker; already-running static host profiles follow a changed
+shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
+with no suitable new Omnigent image for a configured channel leaves the installed release in place.
+An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
+
+Reconcile uncertain recreations before repeating them. Future launches follow
+the installed runtime while preserving explicit harness/provider choices and
+the actual image identity of attempts already in progress. A version-number
+difference by itself does not block an otherwise compatible release.
 
 Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
 
@@ -185,9 +199,9 @@ Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon
 
 The existing deployment-control worker is a submission/observation adapter where available. It is not the sole path to recovery. Privileged Docker operations remain in trusted deployment infrastructure and cannot be supplied by arbitrary agent-authored code.
 
-### 11.2 Ephemeral updater container
+### 11.2 Separate controller project
 
-Reuse the detached controller execution boundary so an update can replace its submitting worker. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts. A caller timing out reattaches to that operation rather than duplicating mutation.
+The controller runs as one small service in its own Compose project with durable state, a configured restart policy, and a direct Docker socket mount, so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access.
 
 ### 11.3 Runner image policy
 
@@ -279,7 +293,7 @@ Use existing operation status plus a small progress message and log reference. K
 
 ## 20. Locked decisions
 
-One controller serves host and UI requests. Normal updates pull and recreate changed services without routine teardown. Recovery works independently of the application being repaired. Local state and original errors survive interruption. Deployment integrity, operator access, and saved work remain protected.
+One controller serves host and UI requests from its own Compose project. Normal updates pull and recreate changed services without routine teardown. Recovery works independently of the application being repaired. Local state and original errors survive interruption. Deployment integrity, operator access, and saved work remain protected.
 
 Permanent candidate/retained fleets, promotion qualification, and independent schedule/profile image pins are not part of the desired default. Transitional support has real consumers and an explicit removal condition. Do not preserve it solely because an older issue or test checklist described it.
 

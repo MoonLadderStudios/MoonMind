@@ -1790,3 +1790,116 @@ async def test_failure_budget_is_counted_per_evidence_identity() -> None:
     assert record["evidenceIdentity"] == "identity-b"
     assert record["attempts"] == 1
     assert record["exhausted"] is False
+
+
+def test_compatible_rebuild_answers_for_execution_but_schedules_refresh() -> None:
+    """Exact provenance triggers discovery refresh without an execution veto."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        evidence_matches_launchable_identity,
+    )
+
+    drifted = _profile(evidence_image=PREVIOUS_IMAGE)
+    assert evidence_matches_launchable_identity(
+        drifted.model_catalog_evidence_json,
+        profile=drifted,
+        image_ref=CURRENT_IMAGE,
+    )
+    # The same observation still schedules a refresh on the exact image.
+    assert not evidence_is_current(drifted, image_ref=CURRENT_IMAGE)
+
+
+def test_different_image_family_does_not_answer_for_execution() -> None:
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        evidence_matches_launchable_identity,
+    )
+
+    foreign = _profile(
+        evidence_image="ghcr.io/other/family@sha256:" + "c" * 64,
+    )
+    assert not evidence_matches_launchable_identity(
+        foreign.model_catalog_evidence_json,
+        profile=foreign,
+        image_ref=CURRENT_IMAGE,
+    )
+    assert not evidence_is_current(foreign, image_ref=CURRENT_IMAGE)
+
+
+@pytest.mark.asyncio
+async def test_transient_probe_failure_preserves_the_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recoverable outage must not latch into an operator-actionable hold."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        MAX_REVALIDATION_ATTEMPTS,
+        REVALIDATION_FAILURE_KEY,
+    )
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    async def validate(*_args, **_kwargs):
+        raise HarnessPlatformError(
+            "OpenCode catalog discovery unavailable (exit 1): connection "
+            "refused; retry without changing the credential",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [_profile()]
+
+    for _ in range(MAX_REVALIDATION_ATTEMPTS):
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory(rows), controller=_Controller()
+        )
+        assert outcome.ready is False
+        assert outcome.deferred == ("opencode-go-default",)
+
+    assert REVALIDATION_FAILURE_KEY not in rows[0].command_behavior
+    assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+    assert rows[0].enabled is True
+    assert rows[0].auth_state == "connected"
+
+
+@pytest.mark.asyncio
+async def test_recovery_after_transient_failures_refreshes_without_new_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unchanged valid config recovers once the outage lifts."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    calls = []
+
+    async def validate(profile, image_ref, lease, _kwargs):
+        calls.append(image_ref)
+        if len(calls) == 1:
+            raise HarnessPlatformError(
+                "OpenCode catalog discovery unavailable (exit 1): connection "
+                "refused; retry without changing the credential",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        return _evidence(profile, image_ref)
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [_profile()]
+
+    deferred = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+    assert deferred.deferred == ("opencode-go-default",)
+    assert REVALIDATION_FAILURE_KEY not in rows[0].command_behavior
+
+    refreshed = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+    assert refreshed.refreshed == ("opencode-go-default",)
+    assert rows[0].model_catalog_evidence_json["imageRef"] == CURRENT_IMAGE

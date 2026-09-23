@@ -490,10 +490,10 @@ async def test_resolution_accepts_an_explicit_independently_paired_build(
 
 
 @pytest.mark.asyncio
-async def test_resolution_quarantines_server_and_host_build_drift(
+async def test_resolution_records_server_and_host_build_drift_without_quarantine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replay the 0.12 server / 0.11 OpenCode host production failure."""
+    """A release difference alone does not defeat a passing bootstrap probe."""
 
     from moonmind.omnigent.bootstrap import store
 
@@ -543,8 +543,8 @@ async def test_resolution_quarantines_server_and_host_build_drift(
     assert resolved.opencode_host_image_ref == HOST_REF
     assert resolved.omnigent_build_digest == server_build
     assert resolved.details["opencodeHostCompatibility"] == {
-        "status": "blocked",
-        "failureCode": "omnigent_server_host_version_mismatch",
+        "status": "ready",
+        "failureCode": None,
         "serverImageRef": SERVER_REF,
         "hostImageRef": HOST_REF,
         "serverBuildDigest": server_build,
@@ -556,7 +556,7 @@ async def test_resolution_quarantines_server_and_host_build_drift(
 
 
 @pytest.mark.asyncio
-async def test_resolution_quarantines_mislabeled_host_version_drift(
+async def test_resolution_records_mislabeled_host_version_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.omnigent.bootstrap import store
@@ -601,8 +601,9 @@ async def test_resolution_quarantines_mislabeled_host_version_drift(
     resolved = await image_resolution.resolve_omnigent_images({})
 
     compatibility = resolved.details["opencodeHostCompatibility"]
-    assert compatibility["status"] == "blocked"
-    assert compatibility["failureCode"] == "omnigent_server_host_version_mismatch"
+    assert compatibility["status"] == "ready"
+    assert compatibility["failureCode"] is None
+    assert compatibility["hostVersion"] == "0.11.0"
 
 
 @pytest.mark.asyncio
@@ -854,8 +855,8 @@ def test_host_selection_preserves_adjacent_image_failures(
 # Replay of the 2026-09-09 production failure: the host publish workflow
 # tracks ``omnigent-server:latest`` and republished the mutable ``1.18.11`` tag
 # for Omnigent 0.13.0 while Compose was still running the 0.12.0 server. The
-# resolver must keep the admitted compatible host as launch authority and
-# surface the newer image as pending instead of quarantining the Host Class.
+# resolver keeps the admitted host when the new image fails its own bootstrap
+# contract, regardless of the observed version numbers.
 
 HOST_REPOSITORY = "ghcr.io/moonladderstudios/omnigent-host-moonmind"
 RUNNING_SERVER_BUILD = "sha256:" + "1" * 64
@@ -875,6 +876,7 @@ def _install_paired_runtime_fakes(
     shared_host: str | None = None,
     previous: ResolvedOmnigentDeploymentState | None,
     server_unavailable: bool = False,
+    bootstrap_fail_hosts: frozenset[str] = frozenset(),
 ) -> dict[str, list]:
     from moonmind.omnigent.bootstrap import store
 
@@ -903,6 +905,8 @@ def _install_paired_runtime_fakes(
         del timeout
         if cmd[0] == "sh":
             observed["probes"].append(cmd[2])
+            if cmd[2] in bootstrap_fail_hosts:
+                return 1, "", "bootstrap failed"
             return 0, "", ""
         if cmd[:3] == ["docker", "image", "inspect"]:
             ref = cmd[3]
@@ -951,7 +955,7 @@ def _admitted_previous(host: str = ADMITTED_HOST) -> ResolvedOmnigentDeploymentS
 
 
 @pytest.mark.asyncio
-async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
+async def test_newer_host_with_failed_bootstrap_keeps_the_admitted_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Replay: registry host moved to 0.13.0 while Compose still runs 0.12.0."""
@@ -963,13 +967,13 @@ async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
         fresh_host=NEWER_HOST,
         shared_host=NEWER_HOST,
         previous=_admitted_previous(),
+        bootstrap_fail_hosts=frozenset({NEWER_HOST}),
     )
 
     resolved = await image_resolution.resolve_omnigent_images({})
 
     assert resolved.opencode_host_image_ref == ADMITTED_HOST
-    # The shared host resolved to the same incompatible image and follows the
-    # admitted digest: one paired runtime, not a mismatched Codex/Claude host.
+    # The shared host follows the admitted digest after the fresh image fails.
     assert resolved.shared_host_image_ref == ADMITTED_HOST
     assert resolved.omnigent_build_digest == RUNNING_SERVER_BUILD
     assert resolved.details["buildIdentitySource"] == "server-image-digest"
@@ -986,11 +990,10 @@ async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
             "imageRef": NEWER_HOST,
             "buildDigest": NEWER_SERVER_BUILD,
             "version": "0.13.0",
-            "failureCode": "omnigent_server_host_version_mismatch",
+            "failureCode": "omnigent_host_bootstrap_contract_missing",
         },
     }
-    # Only the admitted host reached the bootstrap probe.
-    assert observed["probes"] == [ADMITTED_HOST]
+    assert observed["probes"] == [NEWER_HOST, ADMITTED_HOST]
 
 
 @pytest.mark.asyncio
@@ -1021,10 +1024,10 @@ async def test_updated_server_adopts_the_pending_host(
 
 
 @pytest.mark.asyncio
-async def test_no_compatible_host_quarantines_the_fresh_candidate(
+async def test_no_bootstrap_ready_host_quarantines_the_fresh_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Server moved past both the registry host and the admitted host."""
+    """Neither candidate can start OpenCode with the required offline cache."""
 
     unrelated_server_build = "sha256:" + "5" * 64
     observed = _install_paired_runtime_fakes(
@@ -1033,6 +1036,7 @@ async def test_no_compatible_host_quarantines_the_fresh_candidate(
         server_version="0.14.0",
         fresh_host=NEWER_HOST,
         previous=_admitted_previous(),
+        bootstrap_fail_hosts=frozenset({NEWER_HOST, ADMITTED_HOST}),
     )
 
     resolved = await image_resolution.resolve_omnigent_images({})
@@ -1042,13 +1046,13 @@ async def test_no_compatible_host_quarantines_the_fresh_candidate(
     assert resolved.details["buildIdentitySource"] == "server-image-quarantine"
     compatibility = resolved.details["opencodeHostCompatibility"]
     assert compatibility["status"] == "blocked"
-    assert compatibility["failureCode"] == "omnigent_server_host_version_mismatch"
+    assert compatibility["failureCode"] == "omnigent_host_bootstrap_contract_missing"
     assert compatibility["hostImageRef"] == NEWER_HOST
     assert compatibility["hostBuildDigest"] == NEWER_SERVER_BUILD
     assert compatibility["pendingHost"] is None
-    # Both candidates were judged; neither reached the bootstrap probe.
+    # Both candidates were judged and failed the bootstrap probe.
     assert set(observed["version_probes"]) >= {ADMITTED_HOST, NEWER_HOST}
-    assert observed["probes"] == []
+    assert observed["probes"] == [NEWER_HOST, ADMITTED_HOST]
 
 
 @pytest.mark.asyncio
@@ -1061,6 +1065,7 @@ async def test_explicit_operator_pin_is_quarantined_never_replaced(
         server_version="0.12.0",
         fresh_host=NEWER_HOST,
         previous=_admitted_previous(),
+        bootstrap_fail_hosts=frozenset({NEWER_HOST}),
     )
 
     resolved = await image_resolution.resolve_omnigent_images(
@@ -1070,7 +1075,7 @@ async def test_explicit_operator_pin_is_quarantined_never_replaced(
     assert resolved.opencode_host_image_ref == NEWER_HOST
     compatibility = resolved.details["opencodeHostCompatibility"]
     assert compatibility["status"] == "blocked"
-    assert compatibility["failureCode"] == "omnigent_server_host_version_mismatch"
+    assert compatibility["failureCode"] == "omnigent_host_bootstrap_contract_missing"
     assert compatibility["pendingHost"] is None
     # The explicit OpenCode image is not substituted. The separately selected
     # shared image still receives its own provenance probe.
@@ -1089,6 +1094,7 @@ async def test_previous_host_from_another_repository_is_not_a_candidate(
         server_version="0.12.0",
         fresh_host=NEWER_HOST,
         previous=_admitted_previous(foreign_host),
+        bootstrap_fail_hosts=frozenset({NEWER_HOST}),
     )
 
     resolved = await image_resolution.resolve_omnigent_images({})
@@ -1153,8 +1159,8 @@ def test_quarantine_error_names_the_judged_pair(
     message = str(caught.value)
     assert "omnigent_server_host_version_mismatch" in message
     assert "server omnigent 0.12.0 build sha256:111111111111" in message
-    assert "host omnigent 0.13.0 built for sha256:999999999999" in message
-    assert "update the omnigent server image" in message
+    assert "host omnigent 0.13.0 build sha256:999999999999" in message
+    assert "recheck host qualification" in message
 
 
 @pytest.mark.asyncio
@@ -1196,7 +1202,7 @@ async def test_unavailable_server_evidence_retains_the_admitted_host(
     "failure_code, expects_server_update",
     [
         ("omnigent_server_host_build_mismatch", True),  # Historical persisted state.
-        ("omnigent_server_host_version_mismatch", True),
+        ("omnigent_server_host_version_mismatch", False),
         ("omnigent_operator_host_build_mismatch", False),
         ("omnigent_host_build_identity_unavailable", False),
         ("omnigent_server_host_version_probe_failed", False),
@@ -1210,6 +1216,9 @@ def test_pending_host_remediation_matches_the_failure(
     """Only server drift is cured by moving the server (PR #4170 review)."""
 
     remediation = image_resolution.pending_host_remediation(failure_code)
+    if failure_code == "omnigent_server_host_version_mismatch":
+        assert "recheck" in remediation
+        return
     prescribes_update = remediation.startswith(
         "the newer host targets a newer Omnigent server"
     )

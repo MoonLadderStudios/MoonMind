@@ -11,8 +11,22 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
-DEFAULT_WORKFLOW_RUNTIME = "omnigent"
+# The single legacy-alias map and normalizer live in
+# ``moonmind.runtime_identity`` (MoonLadderStudios/MoonMind#3934) so settings
+# ingress and submission admission share them without importing this
+# workflow package. They are re-exported here for existing importers.
+from moonmind.runtime_identity import (
+    DEFAULT_WORKFLOW_RUNTIME,
+    normalize_runtime_id,
+)
+
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
+
+
+def _clean_optional_string(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
 
 # Canonical runtime ids as primary keys.
 _DEFAULT_RUNTIME_MODELS: dict[str, str] = {
@@ -21,13 +35,6 @@ _DEFAULT_RUNTIME_MODELS: dict[str, str] = {
 }
 _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
     "codex_cli": "high",
-}
-
-# Short aliases → canonical ids.
-_RUNTIME_ALIASES: dict[str, str] = {
-    "codex": "codex_cli",
-    "claude": "claude_code",
-    "jules_api": "jules",
 }
 
 _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {
@@ -45,20 +52,6 @@ _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "claude_code": ("MOONMIND_CLAUDE_EFFORT", "CLAUDE_REASONING_EFFORT"),
     "jules": ("MOONMIND_JULES_EFFORT", "JULES_REASONING_EFFORT"),
 }
-
-def _clean_optional_string(value: object) -> str | None:
-    text = str(value).strip() if value is not None else ""
-    return text or None
-
-def normalize_runtime_id(runtime: object) -> str:
-    """Return the canonical managed runtime id for *runtime*.
-
-    Applies short aliases (``codex`` → ``codex_cli``, ``claude`` →
-    ``claude_code``) and lowercases the result.  Unknown values are
-    returned as-is (lowercased) so callers can handle them gracefully.
-    """
-    key = (_clean_optional_string(runtime) or DEFAULT_WORKFLOW_RUNTIME).lower()
-    return _RUNTIME_ALIASES.get(key, key)
 
 def resolve_default_workflow_runtime(
     workflow_settings: Any,

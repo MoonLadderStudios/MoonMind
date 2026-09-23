@@ -2422,6 +2422,7 @@ async def setup_provider_api_key(
             )
             from moonmind.omnigent.opencode_runtime_validation import (
                 OpenCodeProviderRuntimeValidationService,
+                is_confirmed_credential_rejection,
             )
             from moonmind.omnigent.production import build_omnigent_secret_resolver
 
@@ -2438,17 +2439,13 @@ async def setup_provider_api_key(
         except Exception as exc:
             # Rotation is atomic: the previously validated SecretRef,
             # generation, and launch readiness remain authoritative.
-            if not rotated:
+            if not rotated and is_confirmed_credential_rejection(exc):
                 await _mark_api_key_validation_failed(
                     session=session,
                     profile=profile,
-                    reason="Pinned OpenCode runtime validation failed.",
+                    reason="OpenCode credential rejected by the provider.",
                 )
-            status = 422 if isinstance(exc, ValueError) else 502
-            raise HTTPException(
-                status_code=status,
-                detail="Pinned OpenCode runtime validation failed.",
-            ) from exc
+            raise _opencode_validation_http_error(exc) from exc
     await _upsert_managed_secret(
         session=session,
         slug=secret_slug,
@@ -2491,6 +2488,14 @@ async def setup_provider_api_key(
             "runtime_versions": evidence["runtimeVersions"],
             "model_count": len(models),
         }
+        # An explicit validation just succeeded: retire any stale
+        # re-validation exhaustion latch so ordinary reconciliation resumes
+        # with unchanged configuration instead of demanding a new key/image.
+        from moonmind.omnigent.bootstrap.provider_revalidation import (
+            REVALIDATION_FAILURE_KEY,
+        )
+
+        behavior.pop(REVALIDATION_FAILURE_KEY, None)
         profile.command_behavior = behavior
 
     await session.flush()
@@ -3055,6 +3060,36 @@ def _apply_api_key_setup_to_profile(
         }
     )
     row.command_behavior = behavior
+
+
+def _opencode_validation_http_error(exc: Exception) -> HTTPException:
+    """Translate an OpenCode validation failure into a diagnosable API error.
+
+    Only an affirmative provider credential rejection is reported as a 422
+    credential problem. Infrastructure, runtime-image, and discovery failures
+    are 502s carrying their bounded redacted cause so the operator can tell a
+    retryable outage from a wrong key without re-entering working credentials.
+    """
+
+    from moonmind.omnigent.opencode_runtime_validation import (
+        is_confirmed_credential_rejection,
+    )
+
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=422, detail=str(exc)[:300])
+    if is_confirmed_credential_rejection(exc):
+        redacted = str(
+            redact_sensitive_payload(f"OpenCode credential rejected: {exc}")
+        )[:300]
+        return HTTPException(status_code=422, detail=redacted)
+    cause = str(redact_sensitive_payload(str(exc)))[:300]
+    return HTTPException(
+        status_code=502,
+        detail=(
+            "OpenCode validation could not complete; the credential was not "
+            f"changed. Cause: {cause}"
+        )[:400],
+    )
 
 
 async def _mark_api_key_validation_failed(

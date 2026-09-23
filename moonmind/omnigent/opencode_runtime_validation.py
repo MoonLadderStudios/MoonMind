@@ -21,6 +21,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.host_image_drift import compatible_deployed_fallback
 from moonmind.omnigent.harness_platform.materializers import (
     materializer_ref_for_provider,
 )
@@ -66,6 +67,213 @@ def _validated_models(value: Any, *, provider_id: str) -> list[str]:
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
     return models
+
+
+#: Prefix marking an affirmative provider-side credential rejection. The API
+#: enrollment boundary persists ``auth_invalid`` only for errors carrying this
+#: marker; every other validation failure keeps the enrolled credential.
+CREDENTIAL_REJECTED_MARKER = "OpenCode provider credential rejected"
+
+#: Substrings of catalog stderr that affirm the provider rejected the
+#: credential (as opposed to infrastructure failing to ask).
+#: A bare HTTP 403 alone is not credential evidence: insufficient model
+#: permissions, regional policy, billing, or an upstream WAF all surface as
+#: 403 for a valid key. Only explicit authentication-rejection wording (or a
+#: 401 status, which names the unauthorized condition) carries the verdict.
+_CREDENTIAL_REJECTED_SIGNALS = (
+    "invalid api key",
+    "invalid_api_key",
+    "incorrect api key",
+    "wrong api key",
+    "api key is invalid",
+    "unauthorized",
+    "unauthenticated",
+    "authentication failed",
+    "bad credentials",
+    "credential rejected",
+    "auth rejected",
+    "status 401",
+    "error 401",
+    "http 401",
+)
+
+#: Substrings of catalog stderr showing the probe image cannot serve catalog
+#: discovery for this provider route (a runtime incompatibility, not a
+#: credential verdict).
+_CATALOG_UNSUPPORTED_SIGNALS = (
+    "unknown command",
+    "unknown flag",
+    "unknown shorthand",
+    "executable file not found",
+    "command not found",
+    ": not found",
+    "no such file or directory",
+)
+
+#: Substrings of catalog stderr showing temporary infrastructure or transport
+#: failure. These must stay retryable and must never be persisted as
+#: credential rejection.
+_CATALOG_INFRA_SIGNALS = (
+    "connection refused",
+    "connection reset",
+    "connection timed out",
+    "timed out",
+    "timeout",
+    "temporary failure",
+    "try again",
+    "name resolution",
+    "network is unreachable",
+    "network unreachable",
+    "socket hang up",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "cannot connect to the docker daemon",
+    "context deadline",
+    "i/o timeout",
+    "econnrefused",
+    "econnreset",
+    "etimedout",
+    "enotfound",
+    "tls",
+    "certificate",
+    "proxy",
+    "dns",
+)
+
+
+def _redact_known_secrets(text: str, secrets: tuple[str, ...] | None) -> str:
+    """Remove exact active-secret values from provider output before retaining it.
+
+    Providers echo the submitted key in errors such as ``Incorrect API key
+    provided: sk-...``. The generic text redactor does not recognize
+    arbitrary key shapes, so redact against the resolved/candidate secret
+    itself. Only values of at least 4 characters participate to avoid
+    scrubbing ordinary prose.
+    """
+
+    if not text or not secrets:
+        return text
+    redacted = text
+    for secret in secrets:
+        if not isinstance(secret, str) or len(secret) < 4:
+            continue
+        if secret in redacted:
+            redacted = redacted.replace(secret, "[redacted]")
+    return redacted
+
+
+def _stderr_excerpt(
+    stderr: bytes, *, limit: int = 500, secrets_to_redact: tuple[str, ...] | None = None
+) -> str:
+    raw = stderr.decode("utf-8", errors="replace").strip()
+    # Redact before truncating so a long key cannot leak its prefix in the
+    # retained excerpt.
+    redacted = _redact_known_secrets(raw, secrets_to_redact)
+    return redacted[:limit]
+
+
+def _active_secrets_for_redaction(
+    *, candidate_secret: str | None, secrets: ScopedSecretBundle | None
+) -> tuple[str, ...]:
+    found: list[str] = []
+    if candidate_secret:
+        found.append(candidate_secret)
+    values = getattr(secrets, "values", None)
+    if isinstance(values, dict):
+        for value in values.values():
+            if isinstance(value, str) and value and value not in found:
+                found.append(value)
+    return tuple(found)
+
+
+def _catalog_probe_failure(
+    *,
+    exit_code: int,
+    stderr: bytes,
+    effective_image_ref: str,
+    secrets_to_redact: tuple[str, ...] | None = None,
+) -> HarnessPlatformError:
+    """Classify a nonzero catalog probe without dropping its stderr.
+
+    Credential rejection, required runtime incompatibility, and temporary
+    infrastructure failure receive different failure codes so callers can
+    recover (retry, re-pin, re-enroll) instead of collapsing every cause
+    into one generic validation message.
+    """
+
+    excerpt = _stderr_excerpt(stderr, secrets_to_redact=secrets_to_redact)
+    lowered = excerpt.lower()
+    detail = f"(exit {exit_code}): {excerpt}" if excerpt else f"(exit {exit_code})"
+    if any(signal in lowered for signal in _CATALOG_UNSUPPORTED_SIGNALS):
+        return HarnessPlatformError(
+            f"OpenCode runtime image {effective_image_ref} does not support "
+            f"provider catalog discovery {detail}",
+            code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
+        )
+    if any(signal in lowered for signal in _CATALOG_INFRA_SIGNALS):
+        return HarnessPlatformError(
+            "OpenCode catalog discovery unavailable "
+            f"{detail}; retry without changing the credential",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    if any(signal in lowered for signal in _CREDENTIAL_REJECTED_SIGNALS):
+        return HarnessPlatformError(
+            f"{CREDENTIAL_REJECTED_MARKER} by the pinned runtime {detail}",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        )
+    # Unknown catalog failures (HTTP 429/500, plain 403, unexpected shapes)
+    # carry no definitive credential or runtime verdict. Keep them retryable
+    # so re-validation preserves its attempt budget instead of latching a
+    # transient provider outage into a credential reconnect or image repin.
+    return HarnessPlatformError(
+        f"OpenCode catalog discovery failed {detail}; "
+        "retry without changing the credential",
+        code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+    )
+
+
+def is_confirmed_credential_rejection(exc: BaseException) -> bool:
+    """Report whether a validation error affirms provider credential rejection.
+
+    Only this verdict authorizes the API enrollment boundary to persist
+    ``auth_invalid``. Infrastructure, runtime-incompatibility, and
+    model-discovery failures never qualify, even when they surface through
+    the same validation path.
+    """
+
+    if not isinstance(exc, HarnessPlatformError):
+        return False
+    if exc.code != HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE:
+        return False
+    text = str(exc).lower()
+    return CREDENTIAL_REJECTED_MARKER.lower() in text or any(
+        signal in text for signal in _CREDENTIAL_REJECTED_SIGNALS
+    )
+
+
+def is_transient_validation_error(exc: BaseException) -> bool:
+    """Report whether a validation error must not consume a failure budget.
+
+    Transient infrastructure, lease, secret-resolution, and materialization
+    failures carry no verdict about the credential or the runtime, so the
+    re-validation exhaustion budget and any persisted failure latch must
+    survive them intact.
+    """
+
+    if not isinstance(exc, HarnessPlatformError):
+        return False
+    return exc.code in {
+        HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        HarnessPlatformFailure.OMNIGENT_HOST_REGISTRATION_TIMEOUT,
+        HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+        HarnessPlatformFailure.OMNIGENT_SECRET_RESOLUTION_FAILED,
+        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+        HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+        HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+        HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE,
+    }
 
 
 def _model_probe_argv(
@@ -155,6 +363,44 @@ class OpenCodeProviderRuntimeValidationService:
             session_factory
         )
 
+    async def _resolve_effective_image_ref(self) -> str:
+        """Return the one concrete image this operation runs.
+
+        When the requested digest-pinned image is missing locally but a
+        qualified same-repository deployment image is installed, the whole
+        operation — credential preparation, catalog discovery, version
+        probes, and recorded evidence — uses that replacement. Otherwise the
+        requested ref is returned unchanged so downstream probes fail closed
+        on the missing image instead of substituting a mutable tag.
+        """
+
+        requested = self._image_ref
+        try:
+            code, _, _ = await self._backend.run(
+                ["docker", "image", "inspect", requested, "--format", "{{.Id}}"]
+            )
+        except Exception:
+            # The presence probe itself could not run (Docker/transport
+            # failure). Return the requested ref unchanged: the credential
+            # materializer owns pull-or-fail and surfaces the real cause.
+            return requested
+        if code == 0:
+            return requested
+        try:
+            fallback = compatible_deployed_fallback(requested)
+        except Exception:
+            fallback = None
+        if fallback is not None:
+            try:
+                fallback_code, _, _ = await self._backend.run(
+                    ["docker", "image", "inspect", fallback, "--format", "{{.Id}}"]
+                )
+            except Exception:
+                return requested
+            if fallback_code == 0:
+                return fallback
+        return requested
+
     async def validate(
         self,
         *,
@@ -228,19 +474,20 @@ class OpenCodeProviderRuntimeValidationService:
         )
         handle = None
         try:
+            effective_image_ref = await self._resolve_effective_image_ref()
             handle = await materializer.materialize(
                 CredentialMaterializationContext(
                     request=request,
                     acquired=acquired,
                     secrets=secrets,
-                    writer_image_ref=self._image_ref,
+                    writer_image_ref=effective_image_ref,
                     artifact_gateway=self._artifacts,
                     provider_route_ref=str(profile.provider_id or ""),
                 )
             )
             attachment = handle.attachments[0] if handle.attachments else None
             argv = _model_probe_argv(
-                image_ref=self._image_ref,
+                image_ref=effective_image_ref,
                 provider_id=str(profile.provider_id or ""),
                 credential_source=(attachment.sourceRef if attachment else None),
                 credential_target=(attachment.targetPath if attachment else None),
@@ -248,18 +495,25 @@ class OpenCodeProviderRuntimeValidationService:
             code, stdout, _stderr = await self._backend.run(
                 argv, timeout_seconds=120, output_limit_bytes=1_048_576
             )
+            secrets_to_redact = _active_secrets_for_redaction(
+                candidate_secret=candidate_secret, secrets=secrets
+            )
             if code != 0 and "Unable to find image" in _stderr.decode(
                 "utf-8", errors="replace"
             ):
                 # Fail closed: never substitute a mutable tag for a digest-pinned image.
+                raw_missing = _stderr.decode("utf-8", errors="replace")[:500]
                 raise HarnessPlatformError(
-                    f"pinned OpenCode image {self._image_ref} not found: {_stderr.decode('utf-8', errors='replace')[:500]}",
+                    f"pinned OpenCode image {effective_image_ref} not found: "
+                    f"{_redact_known_secrets(raw_missing, secrets_to_redact)}",
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                 )
             if code != 0:
-                raise HarnessPlatformError(
-                    "pinned OpenCode runtime rejected the Provider Profile",
-                    code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+                raise _catalog_probe_failure(
+                    exit_code=code,
+                    stderr=_stderr,
+                    effective_image_ref=effective_image_ref,
+                    secrets_to_redact=secrets_to_redact,
                 )
             text = stdout.decode("utf-8", errors="replace")
             try:
@@ -280,7 +534,7 @@ class OpenCodeProviderRuntimeValidationService:
                         "none",
                         "--entrypoint",
                         binary,
-                        self._image_ref,
+                        effective_image_ref,
                         "--version",
                     ]
                 )
@@ -289,7 +543,7 @@ class OpenCodeProviderRuntimeValidationService:
                 ):
                     # Fail closed: never substitute a mutable tag for version check.
                     raise HarnessPlatformError(
-                        f"pinned image {self._image_ref} not found for {binary} version check: {_version_err.decode('utf-8', errors='replace')[:500]}",
+                        f"pinned image {effective_image_ref} not found for {binary} version check: {_version_err.decode('utf-8', errors='replace')[:500]}",
                         code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                     )
                 if version_code != 0:
@@ -300,10 +554,10 @@ class OpenCodeProviderRuntimeValidationService:
                 versions[binary] = version_out.decode(
                     "utf-8", errors="replace"
                 ).strip()[:128]
-            return {
+            evidence: dict[str, Any] = {
                 "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
                 "models": [{"qualifiedId": item} for item in models],
-                "imageRef": self._image_ref,
+                "imageRef": effective_image_ref,
                 "runtimeVersions": versions,
                 "validatedAt": datetime.now(UTC).isoformat(),
                 "credentialGeneration": generation,
@@ -311,6 +565,12 @@ class OpenCodeProviderRuntimeValidationService:
                 "credentialAttestationRef": handle.attestationRef,
                 "secretValueRecorded": False,
             }
+            if effective_image_ref != self._image_ref:
+                # Record the substitution truthfully: observations name the
+                # image that actually ran, and the requested digest is kept
+                # alongside for diagnosis. Historical records stay immutable.
+                evidence["requestedImageRef"] = self._image_ref
+            return evidence
         finally:
             secrets.clear()
             if handle is not None:
@@ -336,7 +596,10 @@ class OpenCodeProviderRuntimeValidationService:
 
 
 __all__ = [
+    "CREDENTIAL_REJECTED_MARKER",
     "OpenCodeProviderRuntimeValidationService",
     "_model_probe_argv",
     "_validated_models",
+    "is_confirmed_credential_rejection",
+    "is_transient_validation_error",
 ]
