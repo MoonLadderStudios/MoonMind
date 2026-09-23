@@ -444,6 +444,39 @@ def commit_branch_turn_save(
     )
 
 
+def attach_upstream_save_claim(
+    save_commit: Mapping[str, Any],
+    upstream_save_claim: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Nest the upstream save claim and preserve an incomplete workspace save.
+
+    The terminal save commits agent-result/diagnostics refs, but when the
+    upstream workspace save reports ``incomplete`` the useful workspace was
+    not durably captured. The incomplete status stays at the top level
+    instead of letting metadata artifacts masquerade as the saved workspace;
+    the upstream claim is always preserved alongside for reconciliation.
+    """
+
+    if not upstream_save_claim:
+        return dict(save_commit)
+    merged = {**save_commit, "upstreamClaim": dict(upstream_save_claim)}
+    if (
+        str(upstream_save_claim.get("status") or "").strip().lower()
+        == "incomplete"
+        and str(merged.get("status") or "").strip().lower() == "committed"
+    ):
+        merged["status"] = "incomplete"
+        merged["reason"] = (
+            upstream_save_claim.get("reason") or "upstream-save-incomplete"
+        )
+        merged["orphanAction"] = (
+            upstream_save_claim.get("orphanAction")
+            or merged.get("orphanAction")
+            or "reconcile-with-finalization-owner"
+        )
+    return merged
+
+
 def build_branch_turn_verification_handoff(
     *,
     branch_id: str,
@@ -1158,8 +1191,7 @@ async def persist_checkpoint_branch_turn_terminal(
             ),
         )
         upstream_save_claim = _mapping(payload.get("saveCommit"))
-        if upstream_save_claim:
-            save_commit = {**save_commit, "upstreamClaim": upstream_save_claim}
+        save_commit = attach_upstream_save_claim(save_commit, upstream_save_claim)
         verification_handoff = build_branch_turn_verification_handoff(
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,

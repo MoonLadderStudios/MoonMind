@@ -1010,6 +1010,31 @@ class CheckpointBranchService:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         return await self._branch_graph(branch)
 
+    async def read_branch_turn_verification_handoff(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+    ) -> dict[str, Any] | None:
+        """Load one terminal turn's handoff for the result-verification owner.
+
+        Completed branch turns persist their terminal candidate handoff in
+        turn diagnostics at finalization time. This production reader lets
+        the MoonLadderStudios/MoonMind#3622 owner discover that candidate
+        without replaying the Temporal workflow result; turns finalized
+        without a handoff read back as None.
+        """
+
+        await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        turn = await self._require_turn_on_branch(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            relation="branchTurnId",
+        )
+        handoff = (turn.diagnostics or {}).get("verificationHandoff")
+        return dict(handoff) if isinstance(handoff, dict) else None
+
     async def claim_turn_execution(
         self,
         *,
@@ -1340,6 +1365,13 @@ class CheckpointBranchService:
         }
         if checkpoint_ref:
             branch.artifact_refs["latestBranchTurnCheckpoint"] = checkpoint_ref
+        if verification_handoff is not None:
+            # Index the terminal handoff beside the result refs so the #3622
+            # result-verification owner can discover completed candidates
+            # without replaying the Temporal workflow result.
+            branch.artifact_refs["latestBranchTurnVerificationHandoff"] = (
+                branch_turn_id
+            )
         for kind, ref, digest in (
             ("runtime.branch_turn.agent_result.json", agent_result_ref, None),
             ("output.branch_turn.diagnostics.json", diagnostics_ref, None),

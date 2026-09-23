@@ -15,6 +15,7 @@ from api_service.services.checkpoint_branch_service import CheckpointBranchServi
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     CheckpointBranchTurnLaunchError,
+    _launch_retry_payloads_equivalent,
     build_branch_turn_execution_identity,
 )
 from moonmind.workflows.temporal.remediation_verification import (
@@ -603,13 +604,14 @@ async def _validate_split_owner(
         expected_head_version=1,
     )
     assert follow_up_retrieval is None
-    return await owner._validate_destination_authority(
+    profile, resolved = await owner._validate_destination_authority(
         branch=branch,
         turn=turn,
         binding=binding,
         checkpoint=checkpoint,
         follow_up_retrieval=follow_up_retrieval,
     )
+    return profile, resolved, checkpoint
 
 
 @pytest.mark.asyncio
@@ -630,7 +632,7 @@ async def test_destination_authority_accepts_cold_restore_without_live_session(
         policy=policy
     )
 
-    profile, resolved = await _validate_split_owner(
+    profile, resolved, _checkpoint = await _validate_split_owner(
         owner,
         monkeypatch,
         checkpoint_bytes=checkpoint_bytes,
@@ -651,7 +653,6 @@ async def test_destination_authority_tolerates_authorized_credential_rotation(
 ) -> None:
     """Rotation of a still-authorized Profile must not invalidate content."""
 
-    import api_service.services.checkpoint_branch_turn_execution as owner_module
     from moonmind.omnigent.checkpoints import validate_restore_material as real_validate
 
     session = _Session()
@@ -672,10 +673,11 @@ async def test_destination_authority_tolerates_authorized_credential_rotation(
         return real_validate(checkpoint, **kwargs)
 
     monkeypatch.setattr(
-        owner_module, "validate_restore_material", _recording_validate
+        "api_service.services.checkpoint_branch_turn_execution.validate_restore_material",
+        _recording_validate,
     )
 
-    profile, _resolved = await _validate_split_owner(
+    profile, _resolved, checkpoint = await _validate_split_owner(
         owner,
         monkeypatch,
         checkpoint_bytes=checkpoint_bytes,
@@ -690,6 +692,12 @@ async def test_destination_authority_tolerates_authorized_credential_rotation(
     # rotation reason is tolerated, and the tolerance is recorded.
     assert seen.get("credential_generation") == 2
     assert owner._destination_authority_notes == ["credential_generation_rotated"]
+    # The tolerated rotation must be carried into the restore contract: the
+    # launch embeds this checkpoint copy, and the downstream
+    # branch_from_checkpoint boundary compares its generation with the live
+    # one. Leaving the stale value would fail one boundary later.
+    assert checkpoint.omnigent is not None
+    assert checkpoint.omnigent.credential_generation == 2
 
 
 @pytest.mark.asyncio
@@ -1265,3 +1273,88 @@ def test_branch_turn_verification_pending_is_not_graph_success() -> None:
     )
     assert handoff["verificationPending"] is False
     assert handoff["candidate"]["checkpointRef"] is None
+
+
+def test_launch_retry_tolerates_historical_publish_mode_spelling() -> None:
+    """An upgrade must not strand a retry on the publishMode spelling.
+
+    Turns launched before the destination-spelling handoff stored the
+    canonical ``pull_request`` spelling in their owned launch artifacts;
+    retries serialize ``pr`` for the same authorized intent. The bytes
+    differ but the publication grant is identical, so the retry must
+    reattach instead of raising ``launch_artifact_conflict``.
+    """
+
+    old = json.dumps(
+        {"parameters": {"publishMode": "pull_request"}, "other": [1, 2]},
+        sort_keys=True,
+    ).encode()
+    new = json.dumps(
+        {"parameters": {"publishMode": "pr"}, "other": [1, 2]}, sort_keys=True
+    ).encode()
+    assert _launch_retry_payloads_equivalent(old, new) is True
+    assert _launch_retry_payloads_equivalent(new, old) is True
+    assert _launch_retry_payloads_equivalent(old, old) is True
+
+
+def test_launch_retry_still_rejects_unrelated_artifact_changes() -> None:
+    """Only the known spelling migration is tolerated, nothing else."""
+
+    base = json.dumps(
+        {"parameters": {"publishMode": "pr"}, "other": [1, 2]}, sort_keys=True
+    ).encode()
+    changed_intent = json.dumps(
+        {"parameters": {"publishMode": "branch"}, "other": [1, 2]}, sort_keys=True
+    ).encode()
+    changed_other = json.dumps(
+        {"parameters": {"publishMode": "pr"}, "other": [1, 3]}, sort_keys=True
+    ).encode()
+    assert _launch_retry_payloads_equivalent(base, changed_intent) is False
+    assert _launch_retry_payloads_equivalent(base, changed_other) is False
+    assert _launch_retry_payloads_equivalent(base, b"not-json") is False
+    assert _launch_retry_payloads_equivalent(b"not-json", b"not-json") is True
+
+
+def test_terminal_save_preserves_upstream_incomplete_status() -> None:
+    """A failed workspace capture must not read as a committed save.
+
+    Terminal persistence commits agent-result/diagnostics refs, but when the
+    upstream workspace save reports incomplete the useful workspace was not
+    durably captured. The incomplete status stays at the top level instead
+    of letting metadata artifacts masquerade as the saved workspace.
+    """
+
+    committed = {"status": "committed", "manifestDigest": "sha256:abc"}
+    upstream = {
+        "status": "incomplete",
+        "reason": "terminal-checkpoint-failed",
+        "orphanAction": "reconcile-with-finalization-owner",
+    }
+    merged = branch_turn_module.attach_upstream_save_claim(committed, upstream)
+    assert merged["status"] == "incomplete"
+    assert merged["reason"] == "terminal-checkpoint-failed"
+    assert merged["upstreamClaim"] == upstream
+
+
+def test_terminal_save_keeps_local_failure_and_nests_upstream_claim() -> None:
+    """An already-incomplete terminal save keeps its own reason."""
+
+    incomplete = {
+        "status": "incomplete",
+        "reason": "missing-required-objects",
+        "orphanAction": "reconcile-with-finalization-owner",
+    }
+    upstream = {"status": "incomplete", "reason": "terminal-checkpoint-failed"}
+    merged = branch_turn_module.attach_upstream_save_claim(incomplete, upstream)
+    assert merged["status"] == "incomplete"
+    assert merged["reason"] == "missing-required-objects"
+    assert merged["upstreamClaim"] == upstream
+
+
+def test_terminal_save_without_upstream_claim_is_unchanged() -> None:
+    """No upstream claim means the terminal commit stands as computed."""
+
+    committed = {"status": "committed", "manifestDigest": "sha256:abc"}
+    assert branch_turn_module.attach_upstream_save_claim(committed, {}) == (
+        committed
+    )
