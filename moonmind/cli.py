@@ -30,7 +30,7 @@ app = typer.Typer(
         "Manifest/RAG ingestion product was retired "
         "(MoonLadderStudios/MoonMind#4192): there is no `manifest` command "
         "group and no retrieval/embedding inspection command. "
-        "`workflow run/status/logs` is the thin authenticated client for "
+        "`workflow run/status/logs/download` is the thin authenticated client for "
         "ordinary workflows (MoonLadderStudios/MoonMind#3939)."
     )
 )
@@ -40,7 +40,7 @@ workflow_app = typer.Typer(
     help=(
         "Submit and observe ordinary workflows through the public execution API. "
         "Presets, defaults, model/profile selection, and publication "
-        "normalization remain server-owned. Only run/status/logs exist here."
+        "normalization remain server-owned. Only run/status/logs/download exist here."
     )
 )
 app.add_typer(worker_app, name="worker")
@@ -608,6 +608,84 @@ def workflow_logs(
             err=True,
         )
         raise typer.Exit(code=3) from exc
+    finally:
+        client.close()
+
+
+@workflow_app.command(
+    "download",
+    help=(
+        "Download one saved captured-evidence artifact via "
+        "GET /api/executions/{workflowId}/captured-evidence/download?ref=... — "
+        "the same authorized evidence refs the Workflow Detail page links "
+        "(MoonLadderStudios/MoonMind#3926). Requires --ref (an authorized "
+        "artifact ref; list them with `moonmind workflow logs --json`) and "
+        "--out (destination file). An existing file is never silently "
+        "replaced (pass --overwrite). Ctrl-C stops the local download only, "
+        "never the remote workflow."
+    ),
+)
+def workflow_download(
+    workflow_id: str = typer.Argument(..., help="Workflow ID that owns the evidence."),
+    ref: str | None = typer.Option(
+        None, "--ref", help="Authorized artifact ref to download."
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Destination file path for the saved bytes."
+    ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", help="Replace the --out file when it already exists."
+    ),
+    api_base: str | None = typer.Option(None, "--api-base", help="API base URL."),
+) -> None:
+    from moonmind.workflow_cli import (
+        WorkflowCliError,
+        detail_url as _detail_url,
+        sanitize_terminal_text,
+        save_evidence_download,
+    )
+
+    clean_ref = (ref or "").strip()
+    if not clean_ref:
+        _workflow_fail(
+            "an artifact --ref is required; pick one from "
+            "`moonmind workflow logs --json <workflow-id>`."
+        )
+        return
+    if out is None or not str(out).strip():
+        _workflow_fail(
+            "an --out file path is required so saved bytes land explicitly."
+        )
+        return
+    clean_workflow_id = workflow_id.strip()
+    if not clean_workflow_id:
+        _workflow_fail("a workflow ID is required.")
+        return
+    client, base = _workflow_client(api_base)
+    try:
+        try:
+            downloaded = client.download_captured_evidence(clean_workflow_id, clean_ref)
+        except WorkflowCliError as exc:
+            typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        try:
+            saved = save_evidence_download(out, downloaded.content, overwrite=overwrite)
+        except WorkflowCliError as exc:
+            typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        url = _detail_url(base, clean_workflow_id)
+        typer.echo(
+            f"saved {len(downloaded.content)} bytes to {saved} "
+            f"(ref {sanitize_terminal_text(clean_ref, max_chars=500)})"
+        )
+        typer.echo(f"details: {url}")
+    except KeyboardInterrupt as exc:
+        typer.secho(
+            "Stopped download; the remote workflow continues.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     finally:
         client.close()
 
