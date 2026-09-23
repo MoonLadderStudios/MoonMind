@@ -154,7 +154,8 @@ def test_first_run_provenance_records_revision_and_images(tmp_path) -> None:
     del tmp_path
     root = _repo_root()
     revision = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ["git", "-c", "safe.directory=*", "-C", str(root), "rev-parse", "HEAD"],
+        text=True,
     ).strip()
     assert len(revision) == 40
     compose = root / "docker-compose.yaml"
@@ -276,11 +277,13 @@ def test_omitted_inputs_match_documented_defaults_no_publication() -> None:
         misfire_grace_seconds=900,
         jitter_seconds=0,
     )
-    # Explicit no-publication intent: the scratch request carries no
-    # publication target, so later publication (owned by #4014-4018 and
-    # exercised by test_saved_workspace_journey.py) requires no model rerun.
-    scratch_request = {"prompt": "small scratch task", "publication": None}
-    assert scratch_request["publication"] is None
+    # Explicit no-publication intent: the scratch request carries the
+    # supported publishMode none, so later publication (owned by #4014-4018
+    # and exercised by test_saved_workspace_journey.py) requires no model
+    # rerun. A top-level publication field would be silently discarded by
+    # the execution request schema.
+    scratch_request = {"prompt": "small scratch task", "publishMode": "none"}
+    assert scratch_request["publishMode"] == "none"
 
 
 def test_scratch_session_saves_downloadable_artifact_and_cleans_up(tmp_path) -> None:
