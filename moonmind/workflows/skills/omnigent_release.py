@@ -446,10 +446,14 @@ async def _default_deployment_inputs(
             ):
                 continue
             value = raw_value.strip().strip('"\'').strip()
-            if value:
+            if key in OMNIGENT_RELEASE_ENV_KEYS:
+                # Only the operator file can distinguish an intentional pin
+                # from a generated ref inherited from .env.deploy.
+                if value:
+                    inputs[key] = value
+            elif key not in inputs and value:
+                # Compose shell variables outrank .env interpolation.
                 inputs[key] = value
-            else:
-                inputs.pop(key, None)
     # The old template copied an OpenCode vendor-version tag into .env. That
     # mutable tag was a default channel, not an immutable operator image pin.
     # Promote it to the current publication channel during an ordinary update;
@@ -808,13 +812,15 @@ def production_drivers(
     operator-invoked authority from ``update-moonmind.sh``.
     """
 
-    async def _up_services(services: tuple[str, ...], phase: str) -> None:
+    async def _up_services(
+        services: tuple[str, ...], phase: str, *, include_dependencies: bool = False
+    ) -> None:
         result = await runner.up(
             stack=stack,
             command=(
                 "up",
                 "-d",
-                "--no-deps",
+                *(() if include_dependencies else ("--no-deps",)),
                 "--wait",
                 "--wait-timeout",
                 "300",
@@ -853,6 +859,26 @@ def production_drivers(
             ("api", "temporal-worker-agent-runtime"),
             "restart-consumers",
         )
+        if target.get("shared"):
+            state = await runner.capture_state(
+                stack=stack, phase="pre-static-host-refresh"
+            )
+            active = tuple(
+                service
+                for service in ("omnigent-host-codex", "omnigent-host-claude")
+                if any(
+                    row.get("Service") == service and row.get("State") == "running"
+                    for row in state.get("services", ())
+                    if isinstance(row, Mapping)
+                )
+            )
+            if active:
+                # Targeting only running profile services avoids activating
+                # unused hosts. Dependencies rerun changed init images, and
+                # Compose --wait checks each refreshed host's health.
+                await _up_services(
+                    active, "restart-static-hosts", include_dependencies=True
+                )
 
     async def cut_policy_versions(target: dict[str, str]) -> dict[str, list[str]]:
         return await _default_cut_policy_versions(target, actor=actor)
