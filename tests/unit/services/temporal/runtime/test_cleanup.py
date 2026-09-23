@@ -203,7 +203,7 @@ def test_missing_record_workspace_does_not_exhaust_delete_budget(
         config=replace(
             _config(root, dry_run=False), max_delete_paths=1, record_retention=None
         ),
-        docker_reference_provider=lambda: DockerReferenceState(),
+        docker_reference_provider=DockerReferenceState,
         now=lambda: NOW,
     )
     result = janitor.run()
