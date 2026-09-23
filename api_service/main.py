@@ -1653,6 +1653,10 @@ def _is_untouched_legacy_codex_openrouter_profile(
     # is authoritative and must not be mistaken for the stock seed.
     if enum_value("disabled_reason") in ("user_disabled", "policy_disabled"):
         return False
+    if row.get("is_default") is True:
+        return False
+    if row.get("default_selected_by_operator") is True:
+        return False
     return True
 
 
@@ -2166,10 +2170,31 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "volume_ref": None,
                 "volume_mount_path": None,
                 "account_label": "OpenCode via OpenRouter",
+                # Pending until the pinned-runtime validation path promotes
+                # this row: key presence alone never claims launch readiness.
+                # ``provider_profile_launch_ready()`` stays False (auth_state
+                # != CONNECTED and auth_readiness.launch_ready False) until
+                # revalidation observes catalog evidence and promotes the row
+                # to CONNECTED.
                 "enabled": True,
-                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "auth_state": ProviderProfileAuthState.API_KEY_PENDING,
                 "disabled_reason": None,
                 "tags": ["api-key", "opencode", "openrouter"],
+                "command_behavior": {
+                    "supported_auth_methods": ["secret_ref"],
+                    "auth_actions": ["use_api_key"],
+                    "auth_strategy": "api_key_env",
+                    "auth_state": "api_key_pending",
+                    "auth_status_label": "Validating OpenRouter credential",
+                    "auth_readiness": {
+                        "connected": False,
+                        "backing_secret_exists": True,
+                        "launch_ready": False,
+                        "failure_reason": (
+                            "Awaiting pinned-runtime validation."
+                        ),
+                    },
+                },
                 "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
             }
         )
@@ -2269,6 +2294,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.env_template,
                     ManagedAgentProviderProfile.enabled,
                     ManagedAgentProviderProfile.is_default,
+                    ManagedAgentProviderProfile.default_selected_by_operator,
                     ManagedAgentProviderProfile.auth_state,
                     ManagedAgentProviderProfile.disabled_reason,
                     ManagedAgentProviderProfile.command_behavior,
@@ -2305,6 +2331,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "env_template": row.env_template,
                     "enabled": row.enabled,
                     "is_default": row.is_default,
+                    "default_selected_by_operator": row.default_selected_by_operator,
                     "auth_state": row.auth_state,
                     "disabled_reason": row.disabled_reason,
                     "command_behavior": row.command_behavior,
