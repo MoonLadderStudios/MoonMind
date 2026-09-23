@@ -128,13 +128,12 @@ the desired state, recreates the installed fleet in place, and verifies every
 service against that release. There is one fleet at one version: no candidate
 or retained cohort is started, and recreation has a bounded downtime window.
 
-The same update checks the configured Omnigent server and host image channels.
-When a newer published image passes the required runtime checks, the updater
+The same update checks the deployment-configured Omnigent server and host image channels (image/tag inputs present in the operator `.env` or worker environment).
+When a newer published image for a configured channel passes the required runtime checks, the updater
 records its immutable digest and refreshes the Omnigent server, API, agent
 runtime worker, and already-running static host profiles that consume it.
-Inactive host profiles stay inactive. The default `latest` channels therefore
-advance during ordinary MoonMind updates; an explicit `OMNIGENT_*_IMAGE_REF`
-digest pin remains fixed until the operator changes it. New upstream releases
+Inactive host profiles stay inactive. Channels without configured image/tag inputs retain their previously recorded refs instead of resolving `latest`, so the default `latest` channels advance only when configured; an explicit `OMNIGENT_*_IMAGE_REF`
+digest pin persisted in the operator `.env` remains fixed until the operator changes it (shell-only `*_IMAGE_REF` values are not read as pins). New upstream releases
 do not require editing Profile or schedule image versions by hand. See the
 [deployment update contract](docs/Steps/DockerComposeUpdateSystem.md) and
 [shared host image rules](docs/Omnigent/SharedHostImage.md).
