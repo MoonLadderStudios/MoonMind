@@ -197,6 +197,9 @@ def evidence_download_filename(
             try:
                 candidate = unquote(candidate)
             except ValueError:
+                # Keep the raw candidate: unquote only fails on malformed
+                # %-escapes, and the sanitization below still yields a safe
+                # bare filename.
                 pass
     if not candidate:
         candidate = (
