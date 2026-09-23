@@ -25,6 +25,7 @@ authorized live observation and is explicitly not made here.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -46,8 +47,11 @@ def test_journey_runner_uses_disposable_default_compose() -> None:
     # Default deployment file owns the path, not the test-only compose file.
     assert 'COMPOSE_FILE="$REPO_ROOT/docker-compose.yaml"' in script
     assert "docker-compose.test.yaml" not in script
-    # Disposable default install: a repo .env is rejected, not copied.
+    # Disposable default install: a repo .env is never read by the stack.
+    # The runner stashes a pre-existing file (created by test_integration.sh)
+    # aside and restores it on exit instead of copying or deleting it.
     assert 'requires no $REPO_ROOT/.env' in script
+    assert "ENV_STASH_DIR" in script
     assert "cp " not in script or ".env-template" not in script
     # Project guard keeps teardown scoped to this journey's project.
     assert "moonmind-test-first-run-3938" in script
@@ -71,6 +75,24 @@ def test_journey_runner_uses_disposable_default_compose() -> None:
     assert "/api/executions" in script
     # The substitute is named in the runner output.
     assert SUBSTITUTE_IDENTITY_3938 in script
+    # Supported product envelope: UserWorkflow with instructions and an
+    # explicit no-publication mode; the retired scratch type and the
+    # discarded top-level publication field stay out.
+    assert '"workflowType": "MoonMind.UserWorkflow"' in script
+    assert '"publishMode": "none"' in script
+    # Completion honesty: observed success is tracked, terminal failure and
+    # timeout fail, and the credential-free smoke path never claims
+    # completion. Saved output is verified through artifactRefs + download.
+    assert "SEEN_SUCCESS" in script
+    assert "artifactRefs" in script
+    assert "FIRST_RUN_3938_LIVE" in script
+    # Credential-bearing named volumes are re-scoped to journey-owned names.
+    assert "CODEX_VOLUME_NAME" in script
+    assert "CLAUDE_VOLUME_NAME" in script
+    assert "MOONMIND_SECRETS_VOLUME_NAME" in script
+    # The API URL follows the Compose publish binding by default.
+    assert "MOONMIND_API_PUBLISH_HOST" in script
+    assert "MOONMIND_API_HOST_PORT" in script
 
 
 def test_real_api_transport_owns_submission_and_session_read() -> None:
@@ -93,8 +115,10 @@ def test_real_api_transport_owns_submission_and_session_read() -> None:
     assert "executions_router" in main
     assert "sessions_router" in main
     # Omitted/default selections with explicit no-publication intent match
-    # the journey payload shape the runner submits.
-    assert '"publication": None' in (
+    # the journey payload shape the runner submits: the supported envelope
+    # carries this choice as publishMode none (a top-level publication field
+    # is silently discarded by the request schema).
+    assert '"publishMode": "none"' in (
         _repo_root()
         / "tests"
         / "integration"
@@ -156,28 +180,43 @@ def test_compose_journey_contract_script_passes() -> None:
     assert "contract OK" in proc.stdout
 
 
-def test_provenance_is_well_formed_never_an_equality_gate() -> None:
-    """R-C1: revision + compose digest are provenance, not a version gate."""
+def test_provenance_is_well_formed_never_an_equality_gate(tmp_path) -> None:
+    """R-C1: revision + compose digest are provenance, not a version gate.
+
+    Exercises the runner's own --provenance-only behavior and validates the
+    produced artifact: the recorded revision is a full commit SHA and the
+    compose digest is a full SHA-256 prefix of the actual file. Nothing here
+    compares identities across components as a compatibility fingerprint.
+    """
     root = _repo_root()
-    revision = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-    ).strip()
-    assert re.fullmatch(r"[0-9a-f]{40}", revision)
-    digest_path = root / "docker-compose.yaml"
-    assert digest_path.is_file()
+    log_dir = tmp_path / "provenance-3938"
+    proc = subprocess.run(
+        ["bash", str(root / "tools" / "first_run_journey_3938.sh"), "--provenance-only"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**dict(os.environ), "FIRST_RUN_3938_LOG_DIR": str(log_dir)},
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    provenance = (log_dir / "provenance.log").read_text()
+    revision = re.search(r"revision=([0-9a-f]{40})", provenance)
+    assert revision is not None
+    assert (
+        subprocess.check_output(
+            ["git", "-c", "safe.directory=*", "-C", str(root), "rev-parse", "HEAD"],
+            text=True,
+        ).strip()
+        == revision.group(1)
+    )
+    digest = re.search(r"compose-sha256=([0-9a-f]{16})", provenance)
+    assert digest is not None
     import hashlib
 
-    digest = hashlib.sha256(digest_path.read_bytes()).hexdigest()
-    assert re.fullmatch(r"[0-9a-f]{64}", digest)
-    # No cross-component equality assertion over these identities exists in
-    # this issue's tests: provenance is recorded, never compared as a
-    # compatibility fingerprint.
-    for name in (
-        "test_first_run_journey_3938.py",
-        "test_first_run_compose_3938.py",
-    ):
-        body = (root / "tests" / "integration" / "single_user" / name).read_text()
-        assert "equality gate" in body or "never" in body
+    assert hashlib.sha256((root / "docker-compose.yaml").read_bytes()).hexdigest()[
+        :16
+    ] == digest.group(1)
+    assert SUBSTITUTE_IDENTITY_3938 in provenance
 
 
 def test_no_live_availability_claim_in_compose_scope() -> None:
@@ -196,3 +235,47 @@ def test_no_live_availability_claim_in_compose_scope() -> None:
         / "test_first_run_journey_3938.py"
     ).read_text()
     assert "live_evidence_observed = False" in hermetic
+
+
+def test_journey_step_pins_candidate_image() -> None:
+    """R-C1: the boundary journey runs the checkout build, not :latest."""
+    import yaml
+
+    workflow = yaml.safe_load(
+        (_repo_root() / ".github" / "workflows" / "pytest-unit-tests.yml").read_text()
+    )
+    job = workflow["jobs"]["integration-ci"]
+    steps = job["steps"]
+    journey = next(
+        step
+        for step in steps
+        if step.get("name") == "Run disposable default first-run journey"
+    )
+    # The journey step pins MOONMIND_IMAGE so docker-compose.yaml resolves
+    # every MoonMind service to the candidate instead of the default tag.
+    assert journey["env"]["MOONMIND_IMAGE"] == "moonmind-first-run-3938:ci"
+    builders = [
+        step
+        for step in steps
+        if "moonmind-first-run-3938:ci" in str(step.get("with", {}).get("tags", ""))
+    ]
+    assert len(builders) == 1
+    assert builders[0]["with"]["file"] == "api_service/Dockerfile"
+
+
+def test_journey_rejects_unimplemented_fault_modes() -> None:
+    """Only implemented FIRST_RUN_3938_FAULT values are accepted."""
+    import os
+
+    root = _repo_root()
+    env = dict(os.environ, FIRST_RUN_3938_FAULT="interruption")
+    proc = subprocess.run(
+        ["bash", str(root / "tools" / "first_run_journey_3938.sh"), "--contract"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "not implemented" in proc.stderr
