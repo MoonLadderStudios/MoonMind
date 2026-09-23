@@ -4270,6 +4270,63 @@ class TestSharedThrottleOwnership3882:
             patcher.stop()
         assert wf._profiles["p1"].capacity_scope_ref == "scope-b"
 
+    def test_deferred_scope_move_persists_and_blocks_new_admissions(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["scope-a"] = CapacityScopeState(
+            scope_ref="scope-a", configured_limit=10, effective_limit=10
+        )
+        wf._scopes["scope-b"] = CapacityScopeState(
+            scope_ref="scope-b", configured_limit=10, effective_limit=10
+        )
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf._apply_profile_sync(
+                [
+                    {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 8,
+                        "capacity_scope_ref": "scope-b",
+                        "enabled": True,
+                    }
+                ]
+            )
+            # The deferred move is persisted, not discarded.
+            assert wf._profiles["p1"].pending_capacity_scope_ref == "scope-b"
+            # New admissions against the old scope are blocked while the
+            # move awaits drain, so fresh leases cannot keep the profile
+            # nonempty against scope-a indefinitely.
+            assert wf._profile_admitted_by_capacity(wf._profiles["p1"]) is False
+        finally:
+            patcher.stop()
+
+    def test_missing_shared_scope_record_fails_closed(self):
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        _holding_profile(
+            wf,
+            "p1",
+            scope_ref="shared-missing",
+            max_runs=8,
+            lease_ids=[],
+            now=now,
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            # No scope record exists for the explicitly referenced shared
+            # scope: admission must fail closed, never derive positive
+            # capacity from profile maxima.
+            assert wf._profile_admitted_by_capacity(wf._profiles["p1"]) is False
+        finally:
+            patcher.stop()
+
     def test_scope_sync_ignores_stale_generation(self):
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             CapacityScopeState,

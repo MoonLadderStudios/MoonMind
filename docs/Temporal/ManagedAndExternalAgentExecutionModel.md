@@ -583,7 +583,10 @@ separate layers.
 
 - Active consumption is attributed to the scope admitted with the lease. A
   Profile edit cannot move already-running units into another budget: the
-  reassignment waits until the affected use drains. New configured limits
+  reassignment waits until the affected use drains. The requested scope is
+  persisted as pending and new admissions against the old scope stay blocked
+  until the drain applies it, so fresh leases cannot hold the old budget
+  open indefinitely. New configured limits
   constrain new grants without terminating existing work, and a stale scope
   refresh (older generation) cannot roll back a newer limit or re-enable a
   disabled scope — only a newer generation carrying an explicit healthy
