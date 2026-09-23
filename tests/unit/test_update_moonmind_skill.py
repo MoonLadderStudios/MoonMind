@@ -560,3 +560,70 @@ def test_unpublished_tip_does_not_mask_auth_failure(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="docker login"):
         update.main(["--repo", str(repo)])
     assert len(pulls) == 1
+
+
+def test_resolve_compose_files_defaults_to_base_plus_override(tmp_path, monkeypatch):
+    monkeypatch.delenv("COMPOSE_FILE", raising=False)
+    assert update._resolve_compose_files(tmp_path) == ["docker-compose.yaml"]
+    (tmp_path / "docker-compose.override.yaml").write_text("services: {}\n")
+    assert update._resolve_compose_files(tmp_path) == [
+        "docker-compose.yaml",
+        "docker-compose.override.yaml",
+    ]
+
+
+def test_resolve_compose_files_honors_deployment_selection(tmp_path, monkeypatch):
+    (tmp_path / "docker-compose.yaml").write_text("services: {}\n")
+    (tmp_path / "site.yaml").write_text("services: {}\n")
+    monkeypatch.setenv("COMPOSE_FILE", "docker-compose.yaml:site.yaml")
+    assert update._resolve_compose_files(tmp_path) == [
+        "docker-compose.yaml",
+        "site.yaml",
+    ]
+
+
+def test_resolve_compose_files_rejects_missing_selection(tmp_path, monkeypatch):
+    monkeypatch.setenv("COMPOSE_FILE", "docker-compose.yaml:missing.yaml")
+    with pytest.raises(RuntimeError, match="does not exist"):
+        update._resolve_compose_files(tmp_path)
+
+
+def test_submit_via_controller_passes_resolved_file_set_and_idempotency(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    (repo / "site.yaml").write_text("services: {}\n")
+    (repo / ".env").write_text("AUTH_PROVIDER=disabled\n")
+    monkeypatch.setenv("COMPOSE_FILE", "docker-compose.yaml:site.yaml")
+    _install_controller_secret(repo)
+    image = "ghcr.io/moonladderstudios/moonmind@sha256:" + "b" * 64
+    posted = _stub_controller_success(monkeypatch, image)
+    monkeypatch.setattr(
+        update,
+        "run",
+        lambda args, **kwargs: json.dumps(
+            {"name": "existing-project", "services": {"api": {}}}
+        ),
+    )
+    record = {
+        "project": "existing-project",
+        "image": image,
+        "inputs": {"sourceRevision": "rev1", "reason": "test"},
+        "context": {
+            "idempotency_key": "host-update:sub-1",
+            "deployment_operator_urls": ["http://installed.example:7000"],
+        },
+        "submissionId": "sub-1",
+    }
+    assert (
+        update._submit_via_controller(
+            record, repo, controller_url="http://127.0.0.1:8472", secret_file=None
+        )
+        == 0
+    )
+    target = posted[0]["target"]
+    assert target["composeFiles"] == ["docker-compose.yaml", "site.yaml"]
+    assert target["envFile"] == str(repo / ".env")
+    assert target["operatorUrls"] == ["http://installed.example:7000"]
+    assert target["idempotencyKey"] == "host-update:sub-1"

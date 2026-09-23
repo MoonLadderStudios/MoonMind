@@ -135,6 +135,10 @@ A broken application health check is diagnostic input, not a prerequisite that p
 
 Reuse the existing per-stack local lock across host and UI submissions. A second request observes/reattaches to its existing operation or waits within a bound. Do not transfer ownership merely because a PID or timestamp looks old in another container namespace.
 
+Staging/apply failures retry automatically up to the bounded per-group attempt budget, so a transient first failure reaches a terminal `failed` (or a later `succeeded`) instead of staying indefinitely open. Controller replacement (install/update/restore) holds this same stack lock, so it shares one atomic exclusion boundary with deployment mutation rather than a separate controller-only lock.
+
+Restart recovery reconciles before applying: only the newest open operation per stack survives, and an open operation older than a confirmed installation for the same stack is superseded, never replayed over confirmed intent. A retried submission for an already-installed image reattaches to the recorded terminal success (including after a lost response) instead of repeating the mutation.
+
 Do not retain a second background availability owner that competes for this lock or changes the target. Locks for separate deployment projects remain independent.
 
 ### 10.3 Capture before state
@@ -163,7 +167,7 @@ docker compose up -d --pull never --no-build --remove-orphans --wait
 under bounded timeouts, after staging all images needed for the requested
 update and before any recreation. These are semantic commands after resolving
 the correct deployment files, env overlays, project, and service set, not
-permission to operate on an arbitrary project. Do not use routine
+permission to operate on an arbitrary project. The deployment-owned Compose file set (including `COMPOSE_FILE` selection) passes through unchanged, and the deployment-owned `.env` layers under the controller-generated image overlay so operator authentication, bindings, and infrastructure versions are preserved. Privileged-endpoint submissions validate the safe shape of project, paths, services, and image references before persistence. Do not use routine
 `docker compose down`, force-recreate, or volume/image pruning; those are
 explicit repair operations only, never automatic escalation. Recreate only
 changed services by default.
@@ -194,7 +198,7 @@ Persist the primary result before secondary cleanup and release ownership safely
 
 A development bind mount can change files without restarting imported code. Recreate affected processes through the same supported owner. Record actual startup provenance for diagnosis, but do not turn checkout equality into a universal runtime admission or compatibility gate.
 
-Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon's host bind namespace is not the same as a WSL user-distro `/mnt/<drive>` path. Resolve existing daemon-visible mounts, including `/run/desktop/mnt/host/<drive>` where applicable, and do not create an empty directory over a missing source mount. This behavior is a supported deployment boundary, not a reason to add a second Windows updater.
+Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon's host bind namespace is not the same as a WSL user-distro `/mnt/<drive>` path. Resolve existing daemon-visible mounts, including `/run/desktop/mnt/host/<drive>` where applicable, and do not create an empty directory over a missing source mount. Controller bootstrap resolves both bind sources through this adapter before rendering its Compose project, failing fast on a missing required source. This behavior is a supported deployment boundary, not a reason to add a second Windows updater.
 
 ## 11. Updater runner execution model
 

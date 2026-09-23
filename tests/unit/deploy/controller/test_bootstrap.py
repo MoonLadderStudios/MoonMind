@@ -43,3 +43,38 @@ def test_bootstrap_update_serializes_against_active_mutation(
     )
     with pytest.raises(bootstrap.ActiveOperationError):
         bootstrap.main(["update", "--state-dir", str(tmp_path)], env={})
+
+
+def test_bootstrap_update_holds_the_target_stack_lock(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    held_during_compose = {}
+
+    def fake_compose(state_dir, *args):
+        held_during_compose["stack_locked"] = lock_mod.StackLock(
+            state_dir, "moonmind"
+        ).probe()
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_compose", fake_compose)
+    assert bootstrap.main(["update", "--state-dir", str(tmp_path)], env={}) == 0
+    # Controller replacement shares the target stack's exclusion boundary,
+    # the same lock submissions hold across pull/apply.
+    assert held_during_compose.get("stack_locked") is True
+
+
+def test_bootstrap_render_resolves_daemon_visible_bind_sources(
+    controller_path, tmp_path
+):
+    bootstrap = load("bootstrap")
+    from pathlib import Path
+
+    rendered = bootstrap.render_compose_file(
+        state_dir=tmp_path,
+        repo=Path("/mnt/c/moonmind"),
+    )
+    content = rendered.read_text()
+    assert "/run/desktop/mnt/host/c/moonmind" in content

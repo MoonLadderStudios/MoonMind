@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import lock as lock_mod
+import mounts as mounts_mod
 import record as record_mod
 
 CONTROLLER_PROJECT = "moonmind-controller"
@@ -86,7 +87,16 @@ def render_compose_file(
     image: str = DEFAULT_IMAGE,
     port: int = DEFAULT_PORT,
 ) -> Path:
-    """Render the separate controller Compose project (REQ-02)."""
+    """Render the separate controller Compose project (REQ-02).
+
+    Bind sources are resolved through the daemon-visible mount adapter so
+    the Windows/WSL Docker Desktop boundary receives daemon-namespace
+    paths (``/run/desktop/mnt/host/<drive>/...``) instead of missing local
+    ``/mnt/<drive>`` mounts. A missing required host source fails fast
+    instead of becoming an auto-created empty directory.
+    """
+    state_src = mounts_mod.resolve_bind_source(str(state_dir))
+    repo_src = mounts_mod.resolve_bind_source(str(repo))
     path = state_dir / "controller-compose.yaml"
     content = f"""# MoonMind standalone deployment controller (issue #4500).
 # Separate Compose project: own durable state, restart policy, and direct
@@ -106,8 +116,8 @@ services:
     ports:
       - "127.0.0.1:{port}:{port}"
     volumes:
-      - {state_dir}:/var/lib/moonmind-controller
-      - {repo}:{repo}:ro
+      - {state_src}:/var/lib/moonmind-controller
+      - {repo_src}:{repo}:ro
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
       moonmind.controller.managed: "true"
@@ -179,7 +189,11 @@ def cmd_update(args, env) -> int:
             f"operation(s) on stack {stack!r} are open; controller update is "
             "serialized against active deployment mutation."
         )
-    lock_candidate = lock_mod.StackLock(state_dir, f"{CONTROLLER_PROJECT}-update")
+    # Controller replacement and stack mutation share one atomic exclusion
+    # boundary: the target stack's lock, the same lock submissions hold
+    # across pull/apply. A submission that begins after the open-operation
+    # check above still blocks here instead of racing the recreation.
+    lock_candidate = lock_mod.StackLock(state_dir, stack)
     with lock_candidate.acquire():
         code = _compose(state_dir, "pull", CONTROLLER_SERVICE)
         if code != 0:
@@ -195,6 +209,7 @@ def cmd_restore(args, env) -> int:
     """Restore a missing/broken controller without touching deployment state."""
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
+    state_dir.mkdir(parents=True, exist_ok=True)
     repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
     ensure_secret(state_dir)
     render_compose_file(

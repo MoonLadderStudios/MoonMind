@@ -98,3 +98,77 @@ def test_writes_are_atomic_across_interruption(controller_path, tmp_path):
     assert json.loads(raw)["operationId"] == op["operationId"]
     leftovers = list(tmp_path.rglob("*.tmp"))
     assert leftovers == []
+
+
+def test_begin_reattaches_to_completed_instead_of_forking_duplicate(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    op = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    store.confirm_installed(op["operationId"], image="ghcr.io/org/app@sha256:abc")
+    # A retried submission after a lost terminal response observes the
+    # recorded success instead of repeating the Compose mutation.
+    again = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    assert again["operationId"] == op["operationId"]
+    assert again["status"] == "succeeded"
+    assert again["installed"]["image"] == "ghcr.io/org/app@sha256:abc"
+
+
+def test_begin_still_forks_a_new_operation_for_a_new_image(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    op = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    store.confirm_installed(op["operationId"], image="ghcr.io/org/app@sha256:abc")
+    other = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:def",
+        source_revision="abc124",
+    )
+    assert other["operationId"] != op["operationId"]
+    assert other["status"] == "pending"
+
+
+def test_supersede_closes_stale_open_without_applying(controller_path, tmp_path):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    op = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    closed = store.supersede(op["operationId"], reason="stale test target")
+    assert closed["status"] == "superseded"
+    assert closed["supersededReason"] == "stale test target"
+    assert store.list_open(stack="moonmind") == []
+    assert store.load(op["operationId"])["attempts"] == []
+
+
+def test_supersede_never_clears_a_confirmed_installation(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    op = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    store.confirm_installed(op["operationId"], image="ghcr.io/org/app@sha256:abc")
+    kept = store.supersede(op["operationId"], reason="must not apply")
+    assert kept["status"] == "succeeded"
+    assert kept["installed"]["image"] == "ghcr.io/org/app@sha256:abc"
