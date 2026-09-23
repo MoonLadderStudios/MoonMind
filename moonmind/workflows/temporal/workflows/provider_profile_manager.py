@@ -112,6 +112,17 @@ MAINTENANCE_QUEUE_DURABILITY_PATCH = (
 # rewrite that every grant previously performed.
 PROVIDER_INCREMENTAL_LEASE_PATCH = "provider-profile-manager-incremental-lease-v1"
 
+# MoonLadderStudios/MoonMind#3882: one shared throttle owner. The capacity
+# scope carries the whole rate-limit episode (halving plus cooldown
+# deadline); per-profile halving is retired, duplicate or conflicting
+# reports in one episode cannot halve again, Profile edits cannot move
+# running units into another budget, stale scope refreshes cannot roll back
+# limits or clear a disabled scope, and cooldown expiry re-opens a bounded
+# attempt without declaring provider health.
+SHARED_THROTTLE_OWNERSHIP_PATCH = (
+    "provider-profile-manager-shared-throttle-ownership-v1"
+)
+
 # MoonLadderStudios/MoonMind#3883: the incremental row write becomes the whole
 # durable ordering contract. A grant is not usable authority until its row
 # commits, an ambiguous write outcome is reconciled against the ledger instead
@@ -390,6 +401,12 @@ class ProfileSlotState:
     authoritative_policy_confirmed: bool = False
     capacity_scope_ref: str = ""
     effective_limit: int = 0
+    # MoonLadderStudios/MoonMind#3882: a scope reassignment requested while
+    # leases are active is persisted here instead of discarded. New admissions
+    # against the old scope stay blocked until the affected use drains, at
+    # which point the pending scope applies (via the next profile sync or the
+    # release that drains the profile).
+    pending_capacity_scope_ref: str = ""
     # MoonLadderStudios/MoonMind#3878 ledger fields. ``purpose_aware_capacity``
     # keeps histories recorded before the patch on their original accounting.
     purpose_aware_capacity: bool = False
@@ -874,6 +891,7 @@ class ProfileSlotState:
             "default_model_tier": self.default_model_tier,
             "overCapacityLegacySnapshot": self.over_capacity_legacy_snapshot,
             "capacity_scope_ref": self.capacity_scope_ref,
+            "pending_capacity_scope_ref": self.pending_capacity_scope_ref,
             "configured_capacity": self.configured_capacity,
             "effective_capacity": self.effective_capacity,
             "execution_lease_count": self.execution_lease_count,
@@ -1291,6 +1309,10 @@ class MoonMindProviderProfileManagerWorkflow:
             released = profile.release(requester_id)
             if released:
                 self._unindex_lease(requester_id)
+                if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+                    # The drain that a deferred scope move was waiting for:
+                    # apply the persisted move without needing another sync.
+                    self._apply_pending_scope_move(profile)
             # A release also withdraws any pending maintenance request from the
             # same owner, so a caller that gave up cannot hold the queue head.
             # Pre-marker histories never withdrew a waiter here, and doing so
@@ -1368,6 +1390,10 @@ class MoonMindProviderProfileManagerWorkflow:
             released = profile.release(requester_id)
             if released:
                 self._unindex_lease(requester_id)
+                if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+                    # The drain that a deferred scope move was waiting for:
+                    # apply the persisted move without needing another sync.
+                    self._apply_pending_scope_move(profile)
             # A release also withdraws any pending maintenance request from the
             # same owner, so a caller that gave up cannot hold the queue head.
             profile.dequeue_maintenance_waiter(requester_id)
@@ -1837,6 +1863,9 @@ class MoonMindProviderProfileManagerWorkflow:
             )
             profile.cooldown_until = (now + timedelta(seconds=cooldown_seconds)).isoformat()
             return
+        if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+            self._report_scope_throttle(profile_id, profile, payload, now)
+            return
         retry_after = payload.get("retry_after_seconds")
         try:
             retry_after_seconds = int(retry_after) if retry_after is not None else None
@@ -1860,6 +1889,145 @@ class MoonMindProviderProfileManagerWorkflow:
         )
         profile.effective_limit = max(1, profile.effective_limit // 2) if profile.effective_limit else max(1, profile.max_parallel_runs // 2)
         profile.cooldown_until = (now + timedelta(seconds=max(1, min(3600, int(retry_after_seconds))))).isoformat()
+
+    def _report_scope_throttle(
+        self,
+        profile_id: str,
+        profile: ProfileSlotState,
+        payload: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        """Apply one validated throttle report to the shared scope only.
+
+        MoonLadderStudios/MoonMind#3882: the capacity scope is the single
+        throttle owner. There is no duplicate per-profile halving because
+        profile admission already gates on scope availability
+        (:meth:`_profile_admitted_by_capacity`), so a scope episode is the
+        whole transition. Reports are validated against the actual attempt,
+        Profile, acquired scope, and generation: contradictory enriched
+        fields fail closed while minimal legacy payloads (profile plus
+        cooldown) keep working. Deduplication covers the whole transition
+        through the report identity, and halving is edge-triggered per
+        cooldown episode so delayed or conflicting redelivery cannot
+        repeatedly halve allowance — while a valid later provider deadline
+        is still honored.
+        """
+
+        report_id = payload.get("report_id") or payload.get("idempotency_key")
+        report_key = str(report_id).strip() if report_id else ""
+        if report_key and report_key in self._seen_rate_limit_reports:
+            # Duplicate delivery of an already-applied report: no re-halving
+            # and no deadline extension.
+            return
+        retry_after = payload.get("retry_after_seconds")
+        try:
+            retry_after_seconds = int(retry_after) if retry_after is not None else None
+        except (TypeError, ValueError):
+            retry_after_seconds = None
+        if retry_after_seconds is None:
+            try:
+                retry_after_seconds = int(
+                    payload.get("cooldown_seconds", profile.cooldown_after_429_seconds)
+                )
+            except (TypeError, ValueError):
+                retry_after_seconds = int(profile.cooldown_after_429_seconds)
+        current_scope_ref = (
+            profile.capacity_scope_ref or f"provider-profile:{profile_id}"
+        )
+        requested_scope_ref = str(payload.get("capacity_scope_ref") or "").strip()
+        if requested_scope_ref and requested_scope_ref != current_scope_ref:
+            # A report naming a budget this profile is not admitted against
+            # must not spend another scope's allowance.
+            self._get_logger().warning(
+                "Ignoring throttle report for profile %s naming scope %s "
+                "while admitted against scope %s",
+                profile_id,
+                requested_scope_ref,
+                current_scope_ref,
+            )
+            return
+        owner_id: str | None = None
+        for key in (
+            "requester_workflow_id",
+            "requesterWorkflowId",
+            "owner_id",
+            "ownerId",
+            "lease_id",
+            "leaseId",
+        ):
+            candidate = payload.get(key)
+            if candidate:
+                owner_id = str(candidate).strip() or None
+                if owner_id:
+                    break
+        if owner_id:
+            if (
+                owner_id not in profile.current_leases
+                and owner_id not in self._uncommitted_lease_grants
+            ):
+                # Delayed or misdirected report for an attempt this profile
+                # does not hold: it cannot halve allowance or extend cooldown.
+                self._get_logger().warning(
+                    "Ignoring throttle report for profile %s from attempt %s "
+                    "with no held lease",
+                    profile_id,
+                    owner_id,
+                )
+                return
+        if self._shared_scope_record_missing(current_scope_ref):
+            # No configured record for this shared scope: fail closed
+            # instead of materializing derived capacity to throttle.
+            self._get_logger().warning(
+                "Ignoring throttle report for profile %s: scope %s has no "
+                "configured record",
+                profile_id,
+                current_scope_ref,
+            )
+            return
+        scope = self._ensure_scope(current_scope_ref)
+        reported_generation = payload.get(
+            "scope_generation", payload.get("scopeGeneration")
+        )
+        try:
+            reported_generation = (
+                int(reported_generation)
+                if reported_generation is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            reported_generation = None
+        if (
+            reported_generation is not None
+            and reported_generation < scope.generation
+        ):
+            # Superseded report from before the current scope policy.
+            self._get_logger().warning(
+                "Ignoring superseded throttle report for scope %s "
+                "(report generation %d < %d)",
+                current_scope_ref,
+                reported_generation,
+                scope.generation,
+            )
+            return
+        if report_key:
+            self._seen_rate_limit_reports.append(report_key)
+            del self._seen_rate_limit_reports[:-500]
+        if scope.backpressure_state == "disabled":
+            # Disabled allowance stays disabled: a throttle report cannot
+            # halve it further or arm a cooldown whose later expiry could be
+            # misread as recovery. The report identity is recorded above so
+            # redelivery stays idempotent.
+            self._get_logger().warning(
+                "Ignoring throttle report for disabled scope %s",
+                current_scope_ref,
+            )
+            return
+        self._apply_scope_rate_limit(
+            scope_ref=current_scope_ref,
+            retry_after_seconds=retry_after_seconds,
+            report_id=None,
+            now=now,
+        )
 
     @workflow.signal
     def sync_profiles(self, payload: dict[str, Any]) -> None:
@@ -3069,6 +3237,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     str(p.get("capacity_scope_ref") or "").strip()
                     or f"provider-profile:{pid}"
                 ),
+                pending_capacity_scope_ref=str(
+                    p.get("pending_capacity_scope_ref") or ""
+                ).strip(),
                 effective_limit=restored_effective,
                 purpose_aware_capacity=self._purpose_aware_capacity_ledger,
                 adaptive_capacity_limit=self._normalize_capacity_limit(
@@ -3237,6 +3408,28 @@ class MoonMindProviderProfileManagerWorkflow:
                     "metadata": dict(metadata) if isinstance(metadata, dict) else {},
                 }
 
+    def _apply_pending_scope_move(self, profile: ProfileSlotState) -> bool:
+        """Apply a persisted deferred scope move once the profile drains.
+
+        Returns True when a pending scope was applied. Running units stay
+        attributed to the scope admitted with their lease; the move applies
+        only with no active leases, so no consumption is ever moved into
+        another budget mid-flight.
+        """
+
+        pending = (profile.pending_capacity_scope_ref or "").strip()
+        if not pending or profile.current_leases:
+            return False
+        if pending != profile.capacity_scope_ref:
+            profile.capacity_scope_ref = pending
+            if not self._shared_scope_record_missing(pending):
+                self._ensure_scope(
+                    pending,
+                    runtime_id=self._runtime_id or "",
+                )
+        profile.pending_capacity_scope_ref = ""
+        return True
+
     def _apply_profile_sync(
         self,
         profiles_data: list[dict[str, Any]],
@@ -3287,9 +3480,36 @@ class MoonMindProviderProfileManagerWorkflow:
                 )
                 new_scope = str(p.get("capacity_scope_ref") or "").strip()
                 if new_scope:
-                    existing.capacity_scope_ref = new_scope
+                    if (
+                        self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH)
+                        and new_scope != existing.capacity_scope_ref
+                        and existing.current_leases
+                    ):
+                        # MoonLadderStudios/MoonMind#3882: active consumption
+                        # stays attributed to the scope admitted with its
+                        # lease. A Profile edit cannot move already-running
+                        # units into another budget; the requested scope is
+                        # persisted and applies once the affected use drains.
+                        # New admissions against the old scope stay blocked
+                        # until then (see _profile_admitted_by_capacity), so
+                        # fresh leases cannot keep the profile nonempty
+                        # against the old budget indefinitely.
+                        self._get_logger().warning(
+                            "Deferring capacity scope reassignment for profile "
+                            "%s from %s to %s while %d lease(s) remain active",
+                            pid,
+                            existing.capacity_scope_ref,
+                            new_scope,
+                            len(existing.current_leases),
+                        )
+                        existing.pending_capacity_scope_ref = new_scope
+                    else:
+                        existing.capacity_scope_ref = new_scope
+                        existing.pending_capacity_scope_ref = ""
                 elif not existing.capacity_scope_ref:
                     existing.capacity_scope_ref = f"provider-profile:{pid}"
+                if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+                    self._apply_pending_scope_move(existing)
                 existing.purpose_aware_capacity = (
                     self._purpose_aware_capacity_ledger
                 )
@@ -3303,10 +3523,14 @@ class MoonMindProviderProfileManagerWorkflow:
                 except Exception:
                     scoped_sync = False
                 if scoped_sync:
-                    self._ensure_scope(
-                        existing.capacity_scope_ref or f"provider-profile:{pid}",
-                        runtime_id=self._runtime_id or "",
+                    scope_ref = (
+                        existing.capacity_scope_ref or f"provider-profile:{pid}"
                     )
+                    if not self._shared_scope_record_missing(scope_ref):
+                        self._ensure_scope(
+                            scope_ref,
+                            runtime_id=self._runtime_id or "",
+                        )
                 self._apply_profile_pricing(existing, p)
                 if authoritative:
                     existing.authoritative_policy_confirmed = True
@@ -3369,6 +3593,7 @@ class MoonMindProviderProfileManagerWorkflow:
         grants without terminating work, since admission compares usage to
         the clamped effective.
         """
+        shared_ownership = self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH)
         for entry in scopes_data:
             if not isinstance(entry, dict):
                 continue
@@ -3390,13 +3615,42 @@ class MoonMindProviderProfileManagerWorkflow:
                 generation = int(entry.get("generation") or scope.generation)
             except (TypeError, ValueError):
                 generation = scope.generation
+            if shared_ownership and generation < scope.generation:
+                # MoonLadderStudios/MoonMind#3882: a stale policy refresh
+                # cannot roll back a newer limit or re-enable a disabled
+                # scope. Only the newer authority wins.
+                continue
+            previous_generation = scope.generation
             if generation > scope.generation:
                 scope.generation = generation
             scope.runtime_id = str(entry.get("runtime_id") or scope.runtime_id)
             scope.provider_class = str(entry.get("provider_class") or scope.provider_class)
             scope.configured_limit = configured
             scope.effective_limit = min(scope.effective_limit or configured, configured)
-            if scope.effective_limit >= scope.configured_limit:
+            if not shared_ownership:
+                if scope.effective_limit >= scope.configured_limit:
+                    scope.backpressure_state = "healthy"
+                continue
+            entry_state = str(entry.get("backpressure_state") or "").strip()
+            if entry_state == "disabled":
+                # An authorized disable wins immediately and fail-closed.
+                scope.backpressure_state = "disabled"
+            elif scope.backpressure_state == "disabled":
+                # Only a newer generation carrying an explicit healthy state
+                # re-enables; an equal or stale refresh never does.
+                if (
+                    generation > previous_generation
+                    and entry_state == "healthy"
+                ):
+                    scope.backpressure_state = "healthy"
+            elif (
+                scope.backpressure_state == "probing"
+                and scope.cooldown_until is None
+                and scope.effective_limit >= scope.configured_limit
+            ):
+                # Fully recovered through the paced recovery routine: safe to
+                # mark healthy again. Live "reduced"/"cooldown" episodes are
+                # owned by the recovery routine, never by a reload.
                 scope.backpressure_state = "healthy"
 
     def _prune_disabled_profiles_without_leases(self) -> None:
@@ -5254,6 +5508,29 @@ class MoonMindProviderProfileManagerWorkflow:
             self._scopes[scope_ref] = scope
         return scope
 
+    def _shared_scope_record_missing(self, scope_ref: str) -> bool:
+        """Whether a shared scope is referenced but has no configured record.
+
+        MoonLadderStudios/MoonMind#3882: `provider_profile.list` can return
+        profiles with an empty scope list when the scope query fails (or when
+        the migration/row is missing). Such a scope must fail closed at
+        admission instead of deriving positive capacity from profile maxima.
+        Per-profile fallback refs ("provider-profile:<id>") keep the derived
+        behavior; only an explicitly referenced shared scope with no record
+        is missing.
+        """
+
+        if not scope_ref or scope_ref.startswith("provider-profile:"):
+            return False
+        if scope_ref in self._scopes:
+            return False
+        if not self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
+            return False
+        return any(
+            (profile.capacity_scope_ref or "").strip() == scope_ref
+            for profile in self._profiles.values()
+        )
+
     def _scope_active_units(self, scope_ref: str) -> int:
         return sum(
             p.scope_consuming_lease_count()
@@ -5294,6 +5571,12 @@ class MoonMindProviderProfileManagerWorkflow:
     def _recover_scope_capacity(self, now: datetime) -> None:
         healthy_interval = timedelta(seconds=300)
         for scope in self._scopes.values():
+            if scope.backpressure_state == "disabled":
+                # MoonLadderStudios/MoonMind#3882: disabled allowance never
+                # self-restores on timer, poll, or restart. Only an
+                # authorized re-enablement (a newer scope generation) revives
+                # it through _apply_scope_sync.
+                continue
             if scope.cooldown_until is not None:
                 continue
             if scope.effective_limit >= scope.configured_limit:
@@ -5318,6 +5601,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 if scope.effective_limit >= scope.configured_limit:
                     scope.backpressure_state = "healthy"
         for profile in self._profiles.values():
+            # MoonLadderStudios/MoonMind#3882: this leg only converges a
+            # profile effective limit left behind by a pre-#3882 throttle
+            # toward its configured ceiling. It makes no throttle decisions:
+            # the scope above is the single owner of halving, cooldown, and
+            # paced recovery, and scope admission still gates every grant.
             effective = profile.effective_limit or profile.max_parallel_runs
             if effective >= profile.max_parallel_runs:
                 continue
@@ -5339,6 +5627,32 @@ class MoonMindProviderProfileManagerWorkflow:
             self._seen_rate_limit_reports.append(report_id)
             del self._seen_rate_limit_reports[:-500]
         scope = self._ensure_scope(scope_ref)
+        if (
+            self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH)
+            and scope.backpressure_state != "disabled"
+            and retry_after_seconds is not None
+            and retry_after_seconds > 0
+        ):
+            try:
+                existing_until = (
+                    datetime.fromisoformat(scope.cooldown_until)
+                    if scope.cooldown_until
+                    else None
+                )
+                if existing_until is not None and existing_until.tzinfo is None:
+                    existing_until = existing_until.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                existing_until = None
+            if existing_until is not None and now < existing_until:
+                # MoonLadderStudios/MoonMind#3882: halving is edge-triggered
+                # per cooldown episode. A duplicate or conflicting report
+                # inside the active episode cannot halve allowance again; a
+                # valid later provider deadline is still honored via max().
+                bounded = max(1, min(3600, int(retry_after_seconds)))
+                new_until = now + timedelta(seconds=bounded)
+                if new_until > existing_until:
+                    scope.cooldown_until = new_until.isoformat()
+                return
         scope.effective_limit = max(1, scope.effective_limit // 2)
         scope.last_decrease_at = now.isoformat()
         scope.healthy_since = None
@@ -5371,7 +5685,18 @@ class MoonMindProviderProfileManagerWorkflow:
         return len(profile.current_leases) < max(1, effective)
 
     def _profile_scope_available(self, profile: ProfileSlotState) -> bool:
-        scope = self._ensure_scope(self._profile_scope_ref(profile))
+        scope_ref = self._profile_scope_ref(profile)
+        if self._shared_scope_record_missing(scope_ref):
+            # No configured record for an explicitly referenced shared
+            # scope: fail closed instead of deriving positive capacity.
+            self._get_logger().warning(
+                "Blocking admission for profile %s: scope %s has no "
+                "configured record",
+                profile.profile_id,
+                scope_ref,
+            )
+            return False
+        scope = self._ensure_scope(scope_ref)
         return self._scope_is_available(scope)
 
     def _profile_admitted_by_capacity(
@@ -5383,6 +5708,20 @@ class MoonMindProviderProfileManagerWorkflow:
             return True
         if not scoped:
             return True
+        try:
+            shared_ownership = self._workflow_patch_enabled(
+                SHARED_THROTTLE_OWNERSHIP_PATCH
+            )
+        except Exception:
+            shared_ownership = False
+        if shared_ownership and (profile.pending_capacity_scope_ref or "").strip():
+            if profile.pending_capacity_scope_ref != (
+                profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}"
+            ):
+                # A deferred scope move awaits drain: no new admissions
+                # against the old budget until the affected use drains and
+                # the pending scope applies.
+                return False
         if not self._profile_effective_available(profile):
             return False
         if len(profile.current_leases) + reserved_slots >= max(
@@ -5433,6 +5772,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         state.over_capacity_legacy_snapshot
                     ),
                     "capacity_scope_ref": state.capacity_scope_ref,
+                    "pending_capacity_scope_ref": state.pending_capacity_scope_ref,
                     "adaptive_capacity_limit": state.adaptive_capacity_limit,
                     "adaptive_capacity_updated_at": (
                         state.adaptive_capacity_updated_at
