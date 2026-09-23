@@ -11,9 +11,8 @@ This ends the stale-pin saga where each authority pinned a different
 upstream moment: the schedule input says 0.13, the policy says 0.13, the
 running container says 0.14, and every dispatch fails until a human
 re-admits each layer by hand. With one record, ``update-moonmind.sh``
-advances the whole deployment in one audited operation; the major.minor
-dispatch gate stays in place as a backstop that can then only fire on
-genuine out-of-band drift.
+advances the whole deployment in one audited operation. Runtime admission
+checks observed behavior rather than requiring matching version numbers.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import copy
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 # Release-owned desired-state env keys. These live in the release-owned
@@ -43,8 +43,8 @@ OMNIGENT_RELEASE_RECORD_KEY = "omnigentRelease"
 # definitions (`host_image_kind`).
 OMNIGENT_RELEASE_HOST_KINDS = ("codex", "opencode", "shared", "pi")
 
-# Deployment-owned tag inputs the release resolves into digests. REF keys are
-# deliberately absent: inputs are always tags, authority is always digests.
+# Mutable operator image inputs. The worker's process environment may contain
+# generated REF values from .env.deploy; those must not pin the next update.
 OMNIGENT_RELEASE_INPUT_KEYS = (
     "OMNIGENT_IMAGE",
     "OMNIGENT_IMAGE_TAG",
@@ -423,14 +423,46 @@ async def _default_qualify_host_drift(
     return dispositions
 
 
-async def _default_deployment_inputs() -> Mapping[str, str]:
+async def _default_deployment_inputs(
+    operator_env_file: Path | None = None,
+) -> Mapping[str, str]:
     import os
 
-    return {
+    inputs = {
         key: str(os.environ.get(key) or "").strip()
         for key in OMNIGENT_RELEASE_INPUT_KEYS
         if str(os.environ.get(key) or "").strip()
     }
+    if operator_env_file is not None:
+        try:
+            lines = operator_env_file.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+        for line in lines:
+            key, separator, raw_value = line.strip().partition("=")
+            if not separator or key not in (
+                *OMNIGENT_RELEASE_INPUT_KEYS,
+                *OMNIGENT_RELEASE_ENV_KEYS,
+            ):
+                continue
+            value = raw_value.strip().strip('"\'').strip()
+            if value:
+                inputs[key] = value
+            else:
+                inputs.pop(key, None)
+    # The old template copied an OpenCode vendor-version tag into .env. That
+    # mutable tag was a default channel, not an immutable operator image pin.
+    # Promote it to the current publication channel during an ordinary update;
+    # explicit digest refs in the operator file retain their authority.
+    for prefix in ("OMNIGENT_OPENCODE_HOST", "OMNIGENT_SHARED_HOST"):
+        if (
+            inputs.get(f"{prefix}_IMAGE_TAG") == "1.18.11"
+            and inputs.get(f"{prefix}_IMAGE")
+            == "ghcr.io/moonladderstudios/omnigent-host-moonmind"
+            and not inputs.get(f"{prefix}_IMAGE_REF")
+        ):
+            inputs[f"{prefix}_IMAGE_TAG"] = "latest"
+    return inputs
 
 
 async def _default_resolve_candidates(
@@ -826,8 +858,16 @@ def production_drivers(
         return await _default_cut_policy_versions(target, actor=actor)
 
     base = _default_drivers()
+    operator_project = getattr(runner, "local_project_dir", None) or getattr(
+        runner, "project_dir", None
+    )
+
+    async def deployment_inputs() -> Mapping[str, str]:
+        operator_env = Path(operator_project) / ".env" if operator_project else None
+        return await _default_deployment_inputs(operator_env)
+
     return OmnigentReleaseDrivers(
-        deployment_inputs=base.deployment_inputs,
+        deployment_inputs=deployment_inputs,
         resolve_candidates=base.resolve_candidates,
         read_live_refs=base.read_live_refs,
         restart_server=restart_server,
