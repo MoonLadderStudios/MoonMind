@@ -115,6 +115,14 @@ def test_vendor_version_range_is_exclusive_upper():
     assert not is_vendor_version_supported(codex, "0.200.0")
 
 
+def test_pinned_claude_runtime_supports_opus_5_5():
+    from packaging.version import Version
+
+    claude = get_runtime_pack("claude-native-pack@1")
+    # Anthropic rejects Opus 5.5 requests from Claude Code older than 2.1.280.
+    assert Version(claude.vendorRuntime.pinnedVersion) >= Version("2.1.280")
+
+
 def test_re_registering_a_changed_pack_fails():
     original = get_runtime_pack("codex-native-pack@1")
     payload = original.model_dump(by_alias=True, mode="json")
