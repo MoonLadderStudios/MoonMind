@@ -4145,3 +4145,463 @@ async def test_manager_state_reports_a_wedge_recovery_refused(monkeypatch):
     assert result["inspection_succeeded"] is False
     assert result["recovery_refusal"] == manager_recovery.MANAGER_HELD_LEASE_PRESENT
     assert "unreleased lease row" in result["recovery_detail"]
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3882: one shared accounting and bounded
+# throttle-recovery path
+# ---------------------------------------------------------------------------
+
+
+def _shared_ownership_moment(now: datetime):
+    """Patch the Temporal workflow module with every patch marker enabled.
+
+    Returns ``(patcher, mock_workflow)`` so tests can advance the clock.
+    """
+
+    patcher = patch(
+        "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+    )
+    mock_wf = patcher.start()
+    mock_wf.patched.side_effect = lambda _patch_id: True
+    mock_wf.now.return_value = now
+    return patcher, mock_wf
+
+
+def _holding_profile(
+    wf,
+    pid: str,
+    *,
+    scope_ref: str,
+    max_runs: int,
+    lease_ids: list[str],
+    now: datetime,
+) -> None:
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        ProfileSlotState,
+    )
+
+    wf._profiles[pid] = ProfileSlotState(
+        profile_id=pid,
+        max_parallel_runs=max_runs,
+        cooldown_after_429_seconds=300,
+        rate_limit_policy="backoff",
+        enabled=True,
+        capacity_scope_ref=scope_ref,
+        effective_limit=max_runs,
+        purpose_aware_capacity=True,
+    )
+    for lease_id in lease_ids:
+        wf._profiles[pid].current_leases.append(lease_id)
+        wf._profiles[pid].lease_granted_at[lease_id] = now.isoformat()
+        wf._profiles[pid].lease_metadata[lease_id] = {
+            "leaseId": lease_id,
+            "ownerId": lease_id,
+            "purpose": "execution_direct",
+            "capacityScopeRef": scope_ref,
+            "scopeGeneration": 1,
+            "fencingGeneration": 1,
+        }
+    wf._rebuild_lease_indexes()
+
+
+class TestSharedThrottleOwnership3882:
+    def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
+        wf = MoonMindProviderProfileManagerWorkflow()
+        wf._runtime_id = "opencode"
+        return wf
+
+    def test_profile_scope_reassignment_deferred_while_leases_active(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["scope-a"] = CapacityScopeState(
+            scope_ref="scope-a", configured_limit=10, effective_limit=10
+        )
+        wf._scopes["scope-b"] = CapacityScopeState(
+            scope_ref="scope-b", configured_limit=10, effective_limit=10
+        )
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf._apply_profile_sync(
+                [
+                    {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 8,
+                        "capacity_scope_ref": "scope-b",
+                        "enabled": True,
+                    }
+                ]
+            )
+        finally:
+            patcher.stop()
+        # Running units stay attributed to the scope admitted with the lease.
+        assert wf._profiles["p1"].capacity_scope_ref == "scope-a"
+        assert wf._profiles["p1"].current_leases == ["wf-1"]
+        assert wf._scope_active_units("scope-a") == 1
+        assert wf._scope_active_units("scope-b") == 0
+
+    def test_profile_scope_reassignment_applies_once_leases_drain(self):
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            assert wf._profiles["p1"].release("wf-1") is True
+            wf._apply_profile_sync(
+                [
+                    {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 8,
+                        "capacity_scope_ref": "scope-b",
+                        "enabled": True,
+                    }
+                ]
+            )
+        finally:
+            patcher.stop()
+        assert wf._profiles["p1"].capacity_scope_ref == "scope-b"
+
+    def test_scope_sync_ignores_stale_generation(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["s"] = CapacityScopeState(
+            scope_ref="s",
+            configured_limit=10,
+            effective_limit=10,
+            generation=5,
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf._apply_scope_sync(
+                [{"scope_ref": "s", "generation": 3, "configured_limit": 4}]
+            )
+        finally:
+            patcher.stop()
+        assert wf._scopes["s"].configured_limit == 10
+        assert wf._scopes["s"].generation == 5
+
+    def test_scope_sync_never_clears_disabled_state(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["s"] = CapacityScopeState(
+            scope_ref="s",
+            configured_limit=10,
+            effective_limit=10,
+            generation=2,
+            backpressure_state="disabled",
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf._apply_scope_sync(
+                [{"scope_ref": "s", "generation": 2, "configured_limit": 10}]
+            )
+        finally:
+            patcher.stop()
+        assert wf._scopes["s"].backpressure_state == "disabled"
+
+    def test_scope_sync_authorized_reenable_with_newer_generation(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["s"] = CapacityScopeState(
+            scope_ref="s",
+            configured_limit=10,
+            effective_limit=10,
+            generation=2,
+            backpressure_state="disabled",
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf._apply_scope_sync(
+                [
+                    {
+                        "scope_ref": "s",
+                        "generation": 3,
+                        "configured_limit": 10,
+                        "backpressure_state": "healthy",
+                    }
+                ]
+            )
+        finally:
+            patcher.stop()
+        assert wf._scopes["s"].backpressure_state == "healthy"
+        assert wf._scopes["s"].generation == 3
+
+    def test_report_cooldown_duplicate_report_id_is_fully_idempotent(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["scope-a"] = CapacityScopeState(
+            scope_ref="scope-a", configured_limit=10, effective_limit=10
+        )
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        payload = {
+            "profile_id": "p1",
+            "requester_workflow_id": "wf-1",
+            "capacity_scope_ref": "scope-a",
+            "scope_generation": 1,
+            "cooldown_seconds": 100,
+            "retry_after_seconds": 100,
+            "report_id": "r1",
+        }
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf.report_cooldown(dict(payload))
+            assert wf._scopes["scope-a"].effective_limit == 5
+            first_cooldown = wf._scopes["scope-a"].cooldown_until
+            assert first_cooldown is not None
+            # The scope owns the episode: no duplicate per-profile halving.
+            assert wf._profiles["p1"].effective_limit == 8
+            assert wf._profiles["p1"].cooldown_until is None
+            wf.report_cooldown(dict(payload))
+            assert wf._scopes["scope-a"].effective_limit == 5
+            assert wf._scopes["scope-a"].cooldown_until == first_cooldown
+            assert wf._profiles["p1"].effective_limit == 8
+            assert wf._profiles["p1"].cooldown_until is None
+        finally:
+            patcher.stop()
+
+    def test_report_cooldown_wrong_scope_report_ignored(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["scope-a"] = CapacityScopeState(
+            scope_ref="scope-a", configured_limit=10, effective_limit=10
+        )
+        wf._scopes["scope-b"] = CapacityScopeState(
+            scope_ref="scope-b", configured_limit=8, effective_limit=8
+        )
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf.report_cooldown(
+                {
+                    "profile_id": "p1",
+                    "requester_workflow_id": "wf-1",
+                    "capacity_scope_ref": "scope-b",
+                    "cooldown_seconds": 100,
+                    "retry_after_seconds": 100,
+                    "report_id": "wrong-scope",
+                }
+            )
+        finally:
+            patcher.stop()
+        assert wf._scopes["scope-a"].effective_limit == 10
+        assert wf._scopes["scope-b"].effective_limit == 8
+        assert wf._profiles["p1"].effective_limit == 8
+
+    def test_report_cooldown_superseded_generation_ignored(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["scope-a"] = CapacityScopeState(
+            scope_ref="scope-a",
+            configured_limit=10,
+            effective_limit=10,
+            generation=4,
+        )
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf.report_cooldown(
+                {
+                    "profile_id": "p1",
+                    "requester_workflow_id": "wf-1",
+                    "capacity_scope_ref": "scope-a",
+                    "scope_generation": 2,
+                    "cooldown_seconds": 100,
+                    "retry_after_seconds": 100,
+                    "report_id": "stale-gen",
+                }
+            )
+        finally:
+            patcher.stop()
+        assert wf._scopes["scope-a"].effective_limit == 10
+        assert wf._scopes["scope-a"].cooldown_until is None
+
+    def test_report_cooldown_unknown_attempt_ignored(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["scope-a"] = CapacityScopeState(
+            scope_ref="scope-a", configured_limit=10, effective_limit=10
+        )
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf.report_cooldown(
+                {
+                    "profile_id": "p1",
+                    "requester_workflow_id": "ghost-attempt",
+                    "capacity_scope_ref": "scope-a",
+                    "cooldown_seconds": 100,
+                    "retry_after_seconds": 100,
+                    "report_id": "unknown-attempt",
+                }
+            )
+        finally:
+            patcher.stop()
+        assert wf._scopes["scope-a"].effective_limit == 10
+        assert wf._scopes["scope-a"].cooldown_until is None
+        assert wf._profiles["p1"].effective_limit == 8
+
+    def test_report_cooldown_second_report_in_episode_does_not_rehalve(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["scope-a"] = CapacityScopeState(
+            scope_ref="scope-a", configured_limit=10, effective_limit=10
+        )
+        _holding_profile(
+            wf, "p1", scope_ref="scope-a", max_runs=8, lease_ids=["wf-1"], now=now
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf.report_cooldown(
+                {
+                    "profile_id": "p1",
+                    "requester_workflow_id": "wf-1",
+                    "capacity_scope_ref": "scope-a",
+                    "cooldown_seconds": 100,
+                    "retry_after_seconds": 100,
+                    "report_id": "episode-1",
+                }
+            )
+            assert wf._scopes["scope-a"].effective_limit == 5
+            first_cooldown = wf._scopes["scope-a"].cooldown_until
+            later = now + timedelta(seconds=10)
+            _mock_wf.now.return_value = later
+            wf.report_cooldown(
+                {
+                    "profile_id": "p1",
+                    "requester_workflow_id": "wf-1",
+                    "capacity_scope_ref": "scope-a",
+                    "cooldown_seconds": 500,
+                    "retry_after_seconds": 500,
+                    "report_id": "episode-2",
+                }
+            )
+            # A conflicting report in the same episode cannot halve again,
+            # but a valid later provider deadline is still honored.
+            assert wf._scopes["scope-a"].effective_limit == 5
+            assert wf._scopes["scope-a"].cooldown_until is not None
+            assert wf._scopes["scope-a"].cooldown_until >= first_cooldown
+        finally:
+            patcher.stop()
+
+    def test_disabled_scope_never_recovers_on_timer(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["s"] = CapacityScopeState(
+            scope_ref="s",
+            configured_limit=10,
+            effective_limit=5,
+            generation=2,
+            backpressure_state="disabled",
+            cooldown_until=(now - timedelta(seconds=10)).isoformat(),
+            healthy_since=None,
+            last_decrease_at=(now - timedelta(hours=1)).isoformat(),
+        )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            wf._clear_expired_cooldowns()
+            wf._recover_scope_capacity(now)
+        finally:
+            patcher.stop()
+        assert wf._scopes["s"].backpressure_state == "disabled"
+        assert wf._scopes["s"].effective_limit == 5
+
+    def test_two_profiles_cap8_shared10_admit_at_most_10(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["shared-10"] = CapacityScopeState(
+            scope_ref="shared-10", configured_limit=10, effective_limit=10
+        )
+        for pid in ("a", "b"):
+            _holding_profile(
+                wf, pid, scope_ref="shared-10", max_runs=8, lease_ids=[], now=now
+            )
+        patcher, _mock_wf = _shared_ownership_moment(now)
+        try:
+            admitted = 0
+            for i in range(16):
+                target = wf._profiles["a" if i % 2 == 0 else "b"]
+                if wf._profile_admitted_by_capacity(target):
+                    target.current_leases.append(f"wf-{i}")
+                    admitted += 1
+        finally:
+            patcher.stop()
+        assert admitted == 10
+        assert wf._scope_active_units("shared-10") == 10
+
+    def test_get_state_projects_same_scope_allowance_admission_uses(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["shared-10"] = CapacityScopeState(
+            scope_ref="shared-10", configured_limit=10, effective_limit=10
+        )
+        _holding_profile(
+            wf, "a", scope_ref="shared-10", max_runs=8, lease_ids=["wf-0"], now=now
+        )
+        state = wf.get_state()
+        scopes = {entry["scope_ref"]: entry for entry in state["scopes"]}
+        assert scopes["shared-10"]["configured_limit"] == 10
+        assert scopes["shared-10"]["effective_limit"] == 10
+        assert scopes["shared-10"]["backpressure_state"] == "healthy"
+        assert wf._scope_active_units("shared-10") == 1
+        assert "wf-0" in state["profiles"]["a"]["current_leases"]
