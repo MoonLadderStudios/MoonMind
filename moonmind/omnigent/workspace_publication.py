@@ -42,6 +42,84 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class BranchPublishModeError(ValueError):
+    """Fail-closed publication-spelling error raised before any mutation."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+_BRANCH_PUBLISH_CANONICAL_MODES = ("none", "branch", "pull_request")
+_BRANCH_PUBLISH_ALIASES = {
+    "pr": "pull_request",
+    "pull-request": "pull_request",
+    "pullrequest": "pull_request",
+}
+_BRANCH_PUBLISH_DESTINATION_MODES = {
+    "none": "none",
+    "branch": "branch",
+    "pull_request": "pr",
+}
+
+
+def compile_branch_publish_mode(value: Any) -> str:
+    """Compile one stored branch publish intent to its canonical mode.
+
+    This is the shared spelling owner for checkpoint-branch publication: the
+    branch API persists ``none``/``branch``/``pull_request`` while older rows
+    and adjacent surfaces may carry historical spellings (``pr``,
+    ``pull-request``). Unknown spellings fail closed so an unrecognized intent
+    can never become a publication grant.
+
+    A work branch is not a new publication grant: skill/managed-owned ``auto``
+    intent resolves to the read-only ``none`` default because the branch path
+    has no downstream auto-resolution evidence to decide from, and compare
+    stays read-only.
+    """
+
+    if value is None:
+        return "none"
+    if not isinstance(value, str):
+        raise BranchPublishModeError(
+            "publish_intent_unsupported",
+            f"stored publish intent {value!r} is unsupported",
+        )
+    normalized = value.strip().lower()
+    if normalized in {"", "none"}:
+        return "none"
+    if normalized == "branch":
+        return "branch"
+    if normalized in _BRANCH_PUBLISH_ALIASES:
+        return _BRANCH_PUBLISH_ALIASES[normalized]
+    if normalized == "pull_request":
+        return "pull_request"
+    if normalized == "auto":
+        return "none"
+    raise BranchPublishModeError(
+        "publish_intent_unsupported",
+        f"stored publish intent {value!r} is unsupported",
+    )
+
+
+def branch_publish_mode_for_destination(canonical: str) -> str:
+    """Translate one canonical branch mode to the shared publisher spelling.
+
+    The shared workspace publisher acts on ``{"branch", "pr"}``. Translating
+    at this handoff keeps an authorized ``pull_request`` branch intent from
+    being silently skipped downstream, without changing the branch-canonical
+    spelling persisted in runtime selection, manifests, or API projections.
+    """
+
+    try:
+        return _BRANCH_PUBLISH_DESTINATION_MODES[canonical]
+    except KeyError as exc:
+        raise BranchPublishModeError(
+            "publish_intent_unsupported",
+            f"stored publish intent {canonical!r} is unsupported",
+        ) from exc
 _REMOTE_READ_ATTEMPTS = 4
 # Git collapses libcurl errors into exit 128 and exposes no typed transport
 # status. Classify only its anchored pre-connection diagnostic at this CLI
@@ -684,4 +762,9 @@ class OmnigentWorkspacePublicationService:
         )
 
 
-__all__ = ["OmnigentWorkspacePublicationService"]
+__all__ = [
+    "BranchPublishModeError",
+    "OmnigentWorkspacePublicationService",
+    "branch_publish_mode_for_destination",
+    "compile_branch_publish_mode",
+]
