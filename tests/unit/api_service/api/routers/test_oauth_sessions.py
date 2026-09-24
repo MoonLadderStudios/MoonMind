@@ -1455,7 +1455,7 @@ async def test_finalize_oauth_session_returns_projection_after_verifying_and_reg
     payload = response.json()
     assert payload["session_id"] == session_id
     assert payload["profile_id"] == profile_id
-    assert payload["status"] == OAuthSessionStatus.REGISTERING_PROFILE.value
+    assert payload["status"] == OAuthSessionStatus.SUCCEEDED.value
     assert payload["profile_summary"] == {
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
@@ -1481,9 +1481,6 @@ async def test_finalize_oauth_session_returns_projection_after_verifying_and_reg
         assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
         assert profile.first_authenticated_at is not None
         assert profile.last_validated_at is not None
-        pending_session = await session.get(ManagedAgentOAuthSession, session_id)
-        assert pending_session is not None
-        assert pending_session.completed_at is None
 
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_is_idempotent_for_succeeded_session(
@@ -1542,15 +1539,11 @@ async def test_finalize_oauth_session_is_idempotent_for_succeeded_session(
     assert payload["profile_summary"]["profile_id"] == profile_id
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("signal_unavailable", [False, True])
 async def test_finalize_oauth_session_is_idempotent_for_registering_profile_session(
-    client_app: AsyncClient,
-    _module_db,
-    monkeypatch: pytest.MonkeyPatch,
-    signal_unavailable: bool,
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session_id = f"oas_finalizeregistering{int(signal_unavailable)}"
-    profile_id = f"codex-cli-finalize-registering-{int(signal_unavailable)}"
+    session_id = "oas_finalizeregistering1"
+    profile_id = "codex-cli-finalize-registering"
 
     async with db_base.async_session_maker() as session:
         session.add(
@@ -1581,13 +1574,7 @@ async def test_finalize_oauth_session_is_idempotent_for_registering_profile_sess
     async def _noop_stop(_session_obj):
         return None
 
-    signal_attempts = 0
-
-    async def _complete(_session_id):
-        nonlocal signal_attempts
-        signal_attempts += 1
-        if signal_unavailable and signal_attempts == 1:
-            raise RuntimeError("Temporal unavailable")
+    async def _noop_complete(_session_id):
         return None
 
     monkeypatch.setattr(
@@ -1603,20 +1590,16 @@ async def test_finalize_oauth_session_is_idempotent_for_registering_profile_sess
         _noop_stop,
     )
     monkeypatch.setattr(
-        "api_service.services.oauth_session_service.complete_oauth_session_workflow",
-        _complete,
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _noop_complete,
     )
 
     async with client_app as client:
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
-        if signal_unavailable:
-            assert response.status_code == 503
-            assert "Retry Finalize" in response.json()["detail"]
-            response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == OAuthSessionStatus.REGISTERING_PROFILE.value
+    assert payload["status"] == OAuthSessionStatus.SUCCEEDED.value
     assert payload["profile_summary"]["profile_id"] == profile_id
 
     async with db_base.async_session_maker() as session:
@@ -1628,7 +1611,6 @@ async def test_finalize_oauth_session_is_idempotent_for_registering_profile_sess
             )
         ).scalars().all()
         assert len(profiles) == 1
-    assert signal_attempts == (2 if signal_unavailable else 1)
 
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_rejects_expired_and_superseded_without_profile_mutation(
@@ -1779,7 +1761,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
 
     assert response.status_code == 200
-    assert response.json()["status"] == OAuthSessionStatus.REGISTERING_PROFILE.value
+    assert response.json()["status"] == OAuthSessionStatus.SUCCEEDED.value
     assert response.json()["profile_summary"]["profile_id"] == profile_id
     assert verify_seen_existing_profile is None
 
@@ -1787,7 +1769,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         row = await session.get(ManagedAgentOAuthSession, session_id)
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
         assert row is not None
-        assert row.status == OAuthSessionStatus.REGISTERING_PROFILE
+        assert row.status == OAuthSessionStatus.SUCCEEDED
         assert profile is not None
         assert profile.runtime_id == "claude_code"
         assert profile.provider_id == "anthropic"

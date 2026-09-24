@@ -282,8 +282,8 @@ actor:
   verification/finalization
 - call `POST /api/v1/oauth-sessions/{session_id}/finalize` from that button
 - show `verifying` while the finalize endpoint validates durable auth material
-  and `registering_profile` while MoonMind registers or updates the Provider
-  Profile and checks the saved credentials on the bound host
+  and `registering_profile` while that same endpoint registers or updates the
+  Provider Profile
 - show the safe registered provider-profile summary on success, with a return to
   Settings or manage-profile action as a convenience rather than a required
   step
@@ -297,11 +297,7 @@ page and Settings page should call the same finalize endpoint and observe the
 same session state transitions. The finalize operation owns the transition from
 an eligible post-login state into `verifying`, then into `registering_profile`,
 then into `succeeded` or `failed`; callers only request finalization and render
-the projected session status. A successful finalize API response can still say
-`registering_profile`. Both pages keep polling until the bound-host credential
-check finishes, and only then report success or failure. If workflow signaling
-is unavailable after profile registration, Finalize can be retried without
-registering a second profile.
+the projected session status.
 
 The terminal-page finalize button must be duplicate-click and race safe. A
 second finalize request for a session already in `verifying`,
@@ -319,10 +315,10 @@ Profile instead of inventing a parallel auth store.
 
 Finalization may be initiated either from Settings or from the launched provider
 terminal page. In both cases the same OAuth session metadata is used, and the
-finalize operation verifies the durable auth volume and registers or updates
-the selected Provider Profile before the workflow checks the bound host. The
-provider terminal page is a completion surface for the existing session, not a
-separate profile editor or a parallel credential store.
+finalize operation only verifies the durable auth volume and registers or
+updates the selected Provider Profile. The provider terminal page is a
+completion surface for the existing session, not a separate profile editor or a
+parallel credential store.
 
 For Codex OAuth, the resulting profile should preserve:
 
