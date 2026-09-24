@@ -37,6 +37,48 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 logger = logging.getLogger(__name__)
 
 
+async def _create_oauth_validation_binding(repository: Any, profile_id: str) -> Any:
+    """Resolve the persisted default launch before a profile's first host use."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import ManagedAgentProviderProfile
+    from api_service.services.omnigent_policies import OmnigentPolicyService
+    from moonmind.omnigent.execution_profiles import PROFILES
+    from moonmind.omnigent.profile_bound_execution import (
+        _compile_persisted_effective_launch,
+    )
+
+    async with async_session_maker() as db:
+        profile = await db.get(ManagedAgentProviderProfile, profile_id)
+        if profile is None:
+            raise ValueError("OAuth Provider Profile no longer exists")
+        execution_profile_ref = {
+            "codex_cli": "omnigent-codex@1",
+            "claude_code": "omnigent-claude@1",
+        }.get(profile.runtime_id)
+        if execution_profile_ref is None:
+            raise ValueError("OAuth Provider Profile runtime is unsupported")
+        execution_profile = PROFILES[execution_profile_ref]
+        policy_ref = execution_profile.default_policy_ref
+        policy_snapshot = await OmnigentPolicyService(db).resolve_runtime_snapshot(
+            policy_ref
+        )
+        effective_launch = _compile_persisted_effective_launch(
+            policy_snapshot, provider_profile_id=profile_id
+        )
+
+    return await repository.create_or_update_static_binding(
+        profile_id=profile_id,
+        endpoint_ref=execution_profile.endpoint_ref,
+        host_launch_profile_ref=(
+            policy_ref if effective_launch["hostMode"] == "on_demand_docker" else None
+        ),
+        execution_profile_ref=execution_profile_ref,
+        launch_policy_ref=policy_ref,
+        effective_launch_snapshot=effective_launch,
+    )
+
+
 @activity.defn(name="oauth_session.prepare_credential_maintenance")
 async def oauth_session_prepare_credential_maintenance(
     request: Mapping[str, Any],
@@ -132,7 +174,20 @@ async def oauth_session_revalidate_bound_host(
     repository = OmnigentOAuthHostRepository(async_session_maker)
     binding = await repository.refresh_binding_generation(profile_id)
     if binding is None:
-        return {"profile_id": profile_id, "status": "no_binding"}
+        try:
+            binding = await _create_oauth_validation_binding(repository, profile_id)
+        except Exception as exc:
+            logger.warning(
+                "OAuth host binding unavailable before credential validation: "
+                "profile_id=%s error_type=%s",
+                profile_id,
+                type(exc).__name__,
+            )
+            return {
+                "profile_id": profile_id,
+                "status": "validation_unavailable",
+                "validation_mode": "credential_only",
+            }
     lease = await repository.create_or_get_host_lease(
         binding=binding,
         provider_lease_id=provider_lease_id,

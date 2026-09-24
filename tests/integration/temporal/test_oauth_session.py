@@ -8,11 +8,16 @@ from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
-from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
+from api_service.services.oauth_session_service import validate_oauth_profile_on_host
+from moonmind.workflows.temporal.activity_catalog import (
+    WORKFLOW_TASK_QUEUE,
+    get_workflow_task_queue,
+)
 from moonmind.workflows.temporal.workflows.oauth_session import (
-    MoonMindOAuthSessionWorkflow,
     ACTIVITY_TASK_QUEUE,
     RUNNER_ACTIVITY_TASK_QUEUE,
+    MoonMindOAuthCredentialValidationWorkflow,
+    MoonMindOAuthSessionWorkflow,
 )
 
 # NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
@@ -243,6 +248,52 @@ async def test_oauth_maintenance_lease_uses_acknowledged_activity_boundary() -> 
     ]
 
 
+async def test_saved_oauth_validation_runs_credential_probe_on_runtime_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict] = []
+
+    @activity.defn(name="oauth_session.revalidate_bound_host")
+    async def host_probe(request: dict) -> dict:
+        requests.append(request)
+        return {"profile_id": request["profile_id"], "status": "credential_invalid"}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        class Adapter:
+            async def get_client(self):
+                return env.client
+
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.client.TemporalClientAdapter", Adapter
+        )
+        async with Worker(
+            env.client,
+            task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
+            activities=[host_probe],
+        ), Worker(
+            env.client,
+            task_queue=get_workflow_task_queue(),
+            workflows=[MoonMindOAuthCredentialValidationWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await validate_oauth_profile_on_host(
+                profile_id="codex_openai_oauth",
+                provider_lease_id="lease-saved-profile-validation",
+            )
+
+    assert result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "credential_invalid",
+    }
+    assert requests == [
+        {
+            "session_id": "lease-saved-profile-validation",
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "lease-saved-profile-validation",
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("validation_status", "expected_status"),
     [("ready", "succeeded"), ("credential_invalid", "failed")],
@@ -251,6 +302,7 @@ async def test_api_finalized_oauth_session_reports_result_after_host_check(
     validation_status: str, expected_status: str
 ) -> None:
     events: list[str] = []
+    status_attempts: list[str] = []
 
     @activity.defn(name="provider_profile.acquire_credential_maintenance_lease")
     async def acquire_lease(request: dict) -> dict:
@@ -265,13 +317,21 @@ async def test_api_finalized_oauth_session_reports_result_after_host_check(
 
     @activity.defn(name="oauth_session.update_status")
     async def record_status(request: dict) -> dict:
+        if request["status"] == "succeeded":
+            status_attempts.append(request["status"])
+            if len(status_attempts) < 5:
+                raise RuntimeError("temporary database outage")
         events.append(request["status"])
         return request
 
     @activity.defn(name="oauth_session.revalidate_bound_host")
     async def host_check(request: dict) -> dict:
         events.append("host_check")
-        return {"profile_id": request["profile_id"], "status": validation_status}
+        return {
+            "profile_id": request["profile_id"],
+            "status": validation_status,
+            "validation_mode": "credential_only",
+        }
 
     @activity.defn(name="oauth_session.mark_failed")
     async def record_failure(request: dict) -> dict:
@@ -314,6 +374,8 @@ async def test_api_finalized_oauth_session_reports_result_after_host_check(
     assert result["status"] == expected_status
     assert events.index("host_check") < events.index(expected_status)
     assert ("succeeded" in events) is (expected_status == "succeeded")
+    if expected_status == "succeeded":
+        assert len(status_attempts) == 5
     assert release["fencing_generation"] == 4
 
 
@@ -322,6 +384,7 @@ async def test_api_finalized_oauth_session_reports_result_after_host_check(
     [
         ("credential_invalid", "Bound host OAuth credential validation failed"),
         ("validation_unavailable", "Bound host credential preflight unavailable"),
+        ("no_binding", "Bound host credential preflight unavailable"),
     ],
 )
 async def test_failed_oauth_host_check_releases_lease_after_verified_cleanup(
