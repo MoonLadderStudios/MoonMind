@@ -489,3 +489,143 @@ async def test_pool_exhaustion_returns_actionable_failure() -> None:
     )
     with pytest.raises(OmnigentClientError, match="pool exhausted"):
         await client.list_agents()
+
+
+def _refusing_then_serving(refusals: int, *, served: list[str]):
+    """Replay an Omnigent restart: connections are refused, then served."""
+
+    attempts = {"value": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        attempts["value"] += 1
+        if attempts["value"] <= refusals:
+            raise httpx.ConnectError("All connection attempts failed", request=request)
+        served.append(request.url.path)
+        if request.url.path.endswith("/stream"):
+            return httpx.Response(
+                200,
+                content=b'data: {"type": "session.heartbeat"}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json={"id": "sess_1", "status": "idle"})
+
+    return handler, attempts
+
+
+@pytest.mark.asyncio
+async def test_connect_outage_grace_waits_for_restarting_server(monkeypatch) -> None:
+    """resolver:pr:4554 reattached while Omnigent was restarting after a Docker
+    engine restart. Refused connections never reached the server, so the
+    execution client waits out the bounded outage instead of failing."""
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client._CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.0,
+    )
+    served: list[str] = []
+    handler, attempts = _refusing_then_serving(3, served=served)
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        connect_outage_grace_seconds=30.0,
+    )
+
+    assert (await client.get_session("sess_1"))["status"] == "idle"
+    assert attempts["value"] == 4
+    assert served == ["/v1/sessions/sess_1"]
+
+
+@pytest.mark.asyncio
+async def test_connect_outage_grace_reopens_refused_stream(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client._CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.0,
+    )
+    served: list[str] = []
+    handler, _attempts = _refusing_then_serving(2, served=served)
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        connect_outage_grace_seconds=30.0,
+    )
+
+    events = [event async for event in client.stream_events("sess_1")]
+
+    assert events == [{"type": "session.heartbeat"}]
+    assert served == ["/v1/sessions/sess_1/stream"]
+
+
+@pytest.mark.asyncio
+async def test_connect_outage_grace_is_one_bounded_window_per_client(
+    monkeypatch,
+) -> None:
+    """A server that stays down fails after one window; later calls on the same
+    client fail at once instead of spending another window each."""
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client._CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.01,
+    )
+    attempts = {"value": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        attempts["value"] += 1
+        raise httpx.ConnectError("All connection attempts failed", request=request)
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        connect_outage_grace_seconds=0.05,
+    )
+
+    with pytest.raises(OmnigentClientError, match="All connection attempts failed"):
+        await client.get_session("sess_1")
+    first_window_attempts = attempts["value"]
+    assert first_window_attempts > 1
+
+    with pytest.raises(OmnigentClientError, match="All connection attempts failed"):
+        await client.list_agents()
+    assert attempts["value"] == first_window_attempts + 1
+
+
+@pytest.mark.asyncio
+async def test_connect_failures_fail_fast_without_outage_grace() -> None:
+    """Interactive and health callers keep immediate failure by default."""
+
+    served: list[str] = []
+    handler, attempts = _refusing_then_serving(1, served=served)
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(OmnigentClientError, match="All connection attempts failed"):
+        await client.get_session("sess_1")
+    assert attempts["value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_connect_outage_grace_never_retries_after_the_server_answered(
+    monkeypatch,
+) -> None:
+    """A read failure may follow a delivered request, so it is not replayed."""
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client._CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.0,
+    )
+    attempts = {"value": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        attempts["value"] += 1
+        raise httpx.ReadError("connection reset", request=request)
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        connect_outage_grace_seconds=30.0,
+    )
+
+    with pytest.raises(OmnigentClientError, match="connection reset"):
+        await client.post_event("sess_1", {"type": "message"})
+    assert attempts["value"] == 1

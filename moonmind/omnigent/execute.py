@@ -112,6 +112,14 @@ _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
 # the provider dropped the turn; waiting the full no-progress budget only delays
 # an already-known failure.
 _MARKED_TURN_START_TIMEOUT_SECONDS = 300.0
+# A live host reconnects within seconds of an Omnigent server restart. A host
+# still projected offline and not resumable after this grace died with its
+# container, and the marked turn it was running can never finish.
+_SESSION_HOST_LOSS_GRACE_SECONDS = 180.0
+# The server itself can be down briefly while Docker restarts it (it exits when
+# Postgres is still starting). Execution requests that never connected are
+# re-sent for this long instead of failing the attempt on a refused connection.
+_OMNIGENT_SERVER_OUTAGE_GRACE_SECONDS = 120.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
 _MARKED_TURN_ACTIVITY_RETRY_RESERVE_SECONDS = 600.0
 _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -212,7 +220,29 @@ class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
         super().__init__(message, session_id=session_id, snapshot=snapshot)
 
 
-class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
+class OmnigentTurnUnrecoverableError(OmnigentSessionStillRunningError):
+    """Raised when the accepted marked turn can never produce provider work.
+
+    Unlike its ambiguous parent there is no live work left to reattach to, so
+    the execution boundary finalizes the decisive snapshot as terminal evidence
+    and reports the typed code, whose remediation is a new step execution.
+    """
+
+    fallback_summary = "Omnigent marked turn cannot make progress"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        snapshot: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, snapshot=snapshot)
+
+    def terminal_diagnostics(self) -> dict[str, Any]:
+        return {}
+
+
+class OmnigentTurnNotStartedError(OmnigentTurnUnrecoverableError):
     """Raised when the provider accepted the marked turn but never started it.
 
     The marked user item is projected, no ordered item follows it within the
@@ -223,6 +253,7 @@ class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
     """
 
     code = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    fallback_summary = "Omnigent accepted the marked turn but never started it"
 
     def __init__(
         self,
@@ -235,6 +266,58 @@ class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
         # The decisive inactive snapshot is the terminal evidence for this
         # failure; the execution boundary captures it before finalizing.
         self.waited_seconds = waited_seconds
+
+    def terminal_diagnostics(self) -> dict[str, Any]:
+        return {
+            "turnStartWaitSeconds": self.waited_seconds,
+            "turnStartTimeoutSeconds": _MARKED_TURN_START_TIMEOUT_SECONDS,
+        }
+
+
+class OmnigentSessionHostLostError(OmnigentTurnUnrecoverableError):
+    """Raised when the host running the marked turn is gone for good.
+
+    A Docker engine restart stops on-demand host containers without restarting
+    them. Omnigent then projects the session's runner and host offline and not
+    resumable, and the turn stays frozen, typically inside a tool call whose
+    output can never arrive. Its workspace survives in the saved checkpoint,
+    so the step is retried on a fresh host instead of waiting on the dead one.
+    """
+
+    code = "OMNIGENT_SESSION_HOST_LOST"
+    fallback_summary = "Omnigent session host was lost before the turn finished"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        snapshot: Mapping[str, Any] | None = None,
+        offline_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message, snapshot=snapshot)
+        self.offline_seconds = offline_seconds
+
+    def terminal_diagnostics(self) -> dict[str, Any]:
+        snapshot = self.snapshot or {}
+        return {
+            "hostId": snapshot.get("host_id"),
+            "hostOfflineSeconds": self.offline_seconds,
+            "hostLossGraceSeconds": _SESSION_HOST_LOSS_GRACE_SECONDS,
+        }
+
+
+def _snapshot_projects_lost_host(snapshot: Mapping[str, Any]) -> bool:
+    """Whether Omnigent reports the session's runner and host gone for good.
+
+    Only explicit ``False`` liveness counts: a snapshot without the fields
+    proves nothing, and a resumable host is expected to come back.
+    """
+
+    return (
+        snapshot.get("runner_online") is False
+        and snapshot.get("host_online") is False
+        and snapshot.get("host_resumable") is not True
+    )
 
 
 class _MarkedTurnStartWatchdog:
@@ -254,6 +337,12 @@ class _MarkedTurnStartWatchdog:
     ``running`` status alone is not correlated evidence for the marked turn.
     Only an observation *initiated* after the deadline can fire it, so a slow
     read that began before the deadline never releases live-work authority.
+
+    The same observations also bound an unfinished turn whose host is gone:
+    once every observation across ``host_loss_grace_seconds`` projects the
+    runner and host offline and not resumable, progress (or its absence) no
+    longer matters and :class:`OmnigentSessionHostLostError` is raised. Any
+    observation that does not project a lost host restarts that grace.
     """
 
     def __init__(
@@ -262,11 +351,21 @@ class _MarkedTurnStartWatchdog:
         loop: asyncio.AbstractEventLoop,
         timeout_seconds: float,
         started_at: float | None = None,
+        host_loss_grace_seconds: float | None = None,
     ):
         self._loop = loop
         self.started_at = loop.time() if started_at is None else float(started_at)
         self.timeout_seconds = max(0.0, float(timeout_seconds))
         self.deadline = self.started_at + self.timeout_seconds
+        self.host_loss_grace_seconds = max(
+            0.0,
+            float(
+                _SESSION_HOST_LOSS_GRACE_SECONDS
+                if host_loss_grace_seconds is None
+                else host_loss_grace_seconds
+            ),
+        )
+        self.host_offline_since: float | None = None
         self.ever_active = False
         self.currently_active = False
         self.active_response_known_terminal = False
@@ -330,6 +429,11 @@ class _MarkedTurnStartWatchdog:
             self.ever_active = True
         if bool(turn_state.get("progress")):
             self.progress = True
+        self._observe_host_liveness(
+            snapshot,
+            turn_state,
+            observation_started_at=observation_started_at,
+        )
         if not self.armed or turn_state.get("boundarySource") is None:
             return
         if observation_started_at < self.deadline:
@@ -348,6 +452,35 @@ class _MarkedTurnStartWatchdog:
             "exists, retry as a new step execution",
             snapshot=snapshot,
             waited_seconds=waited_seconds,
+        )
+
+    def _observe_host_liveness(
+        self,
+        snapshot: Mapping[str, Any],
+        turn_state: Mapping[str, Any],
+        *,
+        observation_started_at: float,
+    ) -> None:
+        if not _snapshot_projects_lost_host(snapshot) or turn_state.get(
+            "terminalAssistantAfterWork"
+        ):
+            # A finished turn no longer needs its host.
+            self.host_offline_since = None
+            return
+        if self.host_offline_since is None:
+            self.host_offline_since = observation_started_at
+            return
+        offline_seconds = round(observation_started_at - self.host_offline_since, 3)
+        if offline_seconds < self.host_loss_grace_seconds:
+            return
+        host_id = str(snapshot.get("host_id") or "unknown")
+        raise OmnigentSessionHostLostError(
+            f"Omnigent session host {host_id} has been offline and not resumable "
+            f"for {offline_seconds}s (host-loss grace "
+            f"{self.host_loss_grace_seconds:g}s) with the marked turn unfinished; "
+            "the turn cannot continue, retry as a new step execution",
+            snapshot=snapshot,
+            offline_seconds=offline_seconds,
         )
 
     def heartbeat_fields(self) -> dict[str, Any]:
@@ -2238,6 +2371,7 @@ async def run_omnigent_execution(
                 api_token=resolved_api_token(),
                 client=httpx_client,
                 upstream_header_allowlist=resolved_proxy_forward_headers(),
+                connect_outage_grace_seconds=_OMNIGENT_SERVER_OUTAGE_GRACE_SECONDS,
             )
 
             async def list_agents() -> list[dict[str, Any]]:
@@ -3787,9 +3921,10 @@ async def run_omnigent_execution(
                 **bundle.metadata_refs,
             },
         )
-    except OmnigentTurnNotStartedError as exc:
-        # The provider accepted the marked turn and dropped it. No live work
-        # exists to reattach to, so this attempt owns the terminal evidence:
+    except OmnigentTurnUnrecoverableError as exc:
+        # The provider dropped the accepted marked turn, or the host running it
+        # is gone. No live work exists to reattach to, so this attempt owns the
+        # terminal evidence:
         # capture the decisive inactive snapshot, finalize the durable bridge
         # row, and return the typed failure as the terminal result that every
         # execution shape (realizer, coordinator, unprofiled) consumes through
@@ -3817,8 +3952,7 @@ async def run_omnigent_execution(
                 "error": str(exc),
                 "failureClass": "integration_error",
                 "providerErrorCode": exc.code,
-                "turnStartWaitSeconds": exc.waited_seconds,
-                "turnStartTimeoutSeconds": _MARKED_TURN_START_TIMEOUT_SECONDS,
+                **exc.terminal_diagnostics(),
             },
             harvest_resources=False,
             external_state=external_state,
@@ -3850,10 +3984,7 @@ async def run_omnigent_execution(
             )
         return AgentRunResult(
             outputRefs=bundle.output_refs,
-            summary=_compact_summary(
-                exc,
-                fallback="Omnigent accepted the marked turn but never started it",
-            ),
+            summary=_compact_summary(exc, fallback=exc.fallback_summary),
             diagnosticsRef=bundle.diagnostics_ref,
             failureClass="integration_error",
             providerErrorCode=exc.code,
@@ -3978,7 +4109,9 @@ __all__ = [
     "OmnigentContractError",
     "OmnigentSessionStillRunningError",
     "OmnigentSameSessionContinuationRequired",
+    "OmnigentSessionHostLostError",
     "OmnigentTurnNotStartedError",
+    "OmnigentTurnUnrecoverableError",
     "normalize_omnigent_observation",
     "run_omnigent_execution",
 ]
