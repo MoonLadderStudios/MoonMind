@@ -206,3 +206,49 @@ def test_apply_passes_layered_env_files_to_compose(controller_path):
     for cmd, _ in runner.commands:
         env_flags = [cmd[i + 1] for i, part in enumerate(cmd) if part == "--env-file"]
         assert env_flags == ["/srv/moonmind/.env", "/state/image-overlays/op.env"]
+
+
+def test_observe_services_reports_only_running_selected_services(controller_path):
+    import json as _json
+
+    engine = load("engine")
+
+    class _PsRunner:
+        def __init__(self):
+            self.commands = []
+
+        def run(self, args, timeout_seconds):
+            self.commands.append(tuple(args))
+            assert "ps" in args
+            return {
+                "exit": 0,
+                "output": "\n".join(
+                    [
+                        _json.dumps({"Service": "api", "State": "running"}),
+                        _json.dumps({"Service": "worker", "State": "exited"}),
+                    ]
+                ),
+            }
+
+    runner = _PsRunner()
+    base = engine.compose_base(
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml",),
+    )
+    observed = engine.observe_services(runner, base, ("api", "worker"))
+    assert observed == {"services": {"api": True, "worker": False}}
+
+
+def test_observe_services_rejects_destructive_or_empty_observation(controller_path):
+    import pytest
+
+    engine = load("engine")
+    runner = FakeRunner()
+    base = engine.compose_base(
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml",),
+    )
+    with pytest.raises(ValueError):
+        engine.observe_services(runner, base, ())

@@ -172,3 +172,22 @@ def test_supersede_never_clears_a_confirmed_installation(
     kept = store.supersede(op["operationId"], reason="must not apply")
     assert kept["status"] == "succeeded"
     assert kept["installed"]["image"] == "ghcr.io/org/app@sha256:abc"
+
+
+def test_unsafe_operation_ids_never_reach_the_filesystem(
+    controller_path, tmp_path
+):
+    import pytest
+
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    for unsafe in ("", "../evil", "a/b", ".", "..", "x" * 200, "op id", "op;id"):
+        with pytest.raises(ValueError):
+            store.load(unsafe)
+    # Generated UUID ids keep working.
+    op = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    assert store.load(op["operationId"])["operationId"] == op["operationId"]

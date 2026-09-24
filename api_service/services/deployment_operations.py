@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
@@ -23,6 +27,235 @@ CurrentImageEvidence = Literal[
 _IMAGE_REFERENCE_PATTERN = re.compile(
     r"^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[A-Fa-f0-9]{64})$"
 )
+
+# Standalone controller cutover (issue #4500): the UI/API path submits and
+# observes the same controller operation as the host entrypoint instead of
+# depending on the API, Temporal, and the legacy deployment worker. The
+# legacy Temporal workflow remains the fallback only while no controller
+# writer owns the operation.
+CONTROLLER_DEFAULT_URL = "http://127.0.0.1:8472"
+CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
+CONTROLLER_STATUS_TIMEOUT_SECONDS = 10
+
+_CONTROLLER_OPEN_STATUSES = ("pending", "staged", "applying")
+
+
+def controller_base_url(explicit: str | None = None) -> str:
+    """Return the standalone controller endpoint (loopback only by default)."""
+    return (
+        explicit
+        or os.environ.get("MOONMIND_CONTROLLER_URL")
+        or CONTROLLER_DEFAULT_URL
+    ).rstrip("/")
+
+
+def controller_secret() -> str | None:
+    """Return the deployment-owned controller bearer secret, if configured."""
+    explicit = os.environ.get("MOONMIND_CONTROLLER_SECRET")
+    if explicit and explicit.strip():
+        return explicit.strip()
+    candidates = [
+        os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE") or "",
+        "deploy/state/controller/secrets/controller-bearer",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            value = Path(candidate).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if value:
+            return value
+    return None
+
+
+def _controller_request(
+    *,
+    method: str,
+    url: str,
+    secret: str,
+    payload: dict[str, Any] | None = None,
+    timeout: int,
+) -> tuple[int, dict[str, Any]]:
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8") or "{}"
+            return response.status, json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace") or "{}"
+            parsed = json.loads(detail)
+        except (OSError, ValueError):
+            parsed = {"error": "controller refused the request"}
+        return exc.code, parsed if isinstance(parsed, dict) else {"error": str(parsed)}
+
+
+def submit_controller_update(
+    *,
+    stack: str,
+    desired_image: str,
+    source_revision: str = "",
+    reason: str = "",
+    base_url: str | None = None,
+    secret: str | None = None,
+) -> dict[str, Any] | None:
+    """Submit the update to the standalone controller (same as host path).
+
+    Returns the controller operation on HTTP 202, ``None`` when no
+    controller writer is reachable (unconfigured secret, refused
+    connection, timeout, or unknown route: the legacy path stays safe),
+    and raises :class:`DeploymentOperationError` when the controller
+    answered with an ownership decision (refusal, conflict, or internal
+    error): the legacy updater must never fork a competing writer then.
+    """
+    resolved_secret = secret if secret is not None else controller_secret()
+    if not resolved_secret:
+        return None
+    url = f"{controller_base_url(base_url)}/v1/operations"
+    try:
+        status, parsed = _controller_request(
+            method="POST",
+            url=url,
+            secret=resolved_secret,
+            payload={
+                "stack": stack,
+                "desiredImage": desired_image,
+                "sourceRevision": source_revision,
+                "reason": reason,
+            },
+            timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+        )
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise _ControllerUnavailable(
+            f"standalone controller is unreachable ({exc})"
+        ) from exc
+    if status == 202:
+        return parsed
+    if status in (400, 404, 409, 500):
+        raise DeploymentOperationError(
+            "deployment_controller_owned",
+            f"Standalone controller answered HTTP {status}: "
+            f"{parsed.get('error', 'unknown controller decision')}; refusing "
+            "to fork the legacy updater while it may own the stack.",
+        )
+    raise DeploymentOperationError(
+        "deployment_controller_unexpected",
+        f"Standalone controller answered HTTP {status}; refusing to fork "
+        "the legacy updater on an uncertain outcome.",
+    )
+
+
+class _ControllerUnavailable(RuntimeError):
+    """No controller writer owns the operation; legacy fallback stays safe."""
+
+
+def observe_controller_operation(
+    *,
+    operation_id: str,
+    base_url: str | None = None,
+    secret: str | None = None,
+) -> dict[str, Any] | None:
+    """Observe the controller's record for one operation (read-only)."""
+    resolved_secret = secret if secret is not None else controller_secret()
+    if not resolved_secret or not operation_id:
+        return None
+    url = f"{controller_base_url(base_url)}/v1/operations/{operation_id}"
+    try:
+        status, parsed = _controller_request(
+            method="GET",
+            url=url,
+            secret=resolved_secret,
+            timeout=CONTROLLER_STATUS_TIMEOUT_SECONDS,
+        )
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+    if status != 200:
+        return None
+    return parsed
+
+
+def controller_action_status(controller_status: str) -> str:
+    """Map a controller operation status onto a recent-action status."""
+    if controller_status in ("succeeded", "partially_verified"):
+        return "SUCCEEDED" if controller_status == "succeeded" else "PARTIALLY_VERIFIED"
+    if controller_status == "failed":
+        return "FAILED"
+    return "QUEUED"
+
+
+def _controller_state_candidates() -> list[Path]:
+    """Locate the standalone controller's durable record, if co-located."""
+    candidates = []
+    explicit = os.environ.get("MOONMIND_CONTROLLER_STATE_DIR")
+    if explicit:
+        candidates.append(Path(explicit))
+    candidates.append(Path.cwd() / "deploy" / "state" / "controller")
+    candidates.append(Path("/var/lib/moonmind-controller"))
+    return candidates
+
+
+def controller_recent_actions(
+    stack: str, *, limit: int = 10
+) -> tuple["DeploymentRecentAction", ...]:
+    """Observe controller-backed updates from the durable operation record.
+
+    The API service is constructed per request, so in-memory submissions do
+    not survive across requests. The controller's own crash-safe record is
+    the durable index: when co-located, recent open and terminal operations
+    for the stack surface here as recent actions with live statuses.
+    """
+    operations_dir = None
+    for candidate in _controller_state_candidates():
+        if candidate.is_dir() and (candidate / "operations").is_dir():
+            operations_dir = candidate / "operations"
+            break
+    if operations_dir is None:
+        return ()
+    records = []
+    for path in sorted(operations_dir.glob("*.json"))[-200:]:
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(parsed, dict) or parsed.get("stack") != stack:
+            continue
+        records.append(parsed)
+    records.sort(key=lambda op: str(op.get("updatedAt") or ""))
+    actions = []
+    for parsed in records[-limit:]:
+        operation_id = str(parsed.get("operationId") or "")
+        desired = parsed.get("desired") or {}
+        installed = parsed.get("installed") or {}
+        actions.append(
+            DeploymentRecentAction(
+                id=f"ctl-{operation_id}",
+                kind="update",
+                status=controller_action_status(str(parsed.get("status") or "")),
+                requested_image=str(desired.get("image") or "") or None,
+                resolved_digest=str(installed.get("image") or "") or None,
+                reason=str((desired.get("reason") or "") or "") or None,
+                started_at=str(parsed.get("createdAt") or "") or None,
+                completed_at=str(installed.get("confirmedAt") or "") or None,
+                run_detail_url=None,
+                run_id=f"ctl_{operation_id}",
+            )
+        )
+    return tuple(reversed(actions))
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class DeploymentOperationError(ValueError):
@@ -228,7 +461,81 @@ class DeploymentOperationsService:
 
     def recent_actions(self, stack: str) -> tuple[DeploymentRecentAction, ...]:
         policy = self.get_policy(stack)
-        return self._recent_actions.get(policy.stack, ())
+        stored = self._recent_actions.get(policy.stack, ())
+        refreshed: list[DeploymentRecentAction] = []
+        changed = False
+        for action in stored:
+            if not str(getattr(action, "run_id", "") or "").startswith("ctl_"):
+                refreshed.append(action)
+                continue
+            operation_id = str(action.run_id or "")[len("ctl_") :]
+            observed = observe_controller_operation(operation_id=operation_id)
+            if observed is None:
+                refreshed.append(action)
+                continue
+            updated_status = controller_action_status(str(observed.get("status") or ""))
+            if updated_status == action.status:
+                refreshed.append(action)
+                continue
+            changed = True
+            refreshed.append(
+                DeploymentRecentAction(
+                    **{
+                        **action.__dict__,
+                        "status": updated_status,
+                        "completed_at": (
+                            action.completed_at
+                            if updated_status == "QUEUED"
+                            else _utc_now_iso()
+                        ),
+                    }
+                )
+            )
+        if changed:
+            self._recent_actions[policy.stack] = tuple(refreshed)
+        # Durable controller-backed updates survive per-request service
+        # instances through the controller's own record; merge them with
+        # same-process submissions, newest first, without duplicates.
+        durable = controller_recent_actions(policy.stack)
+        seen = {str(action.run_id) for action in refreshed if action.run_id}
+        merged = list(refreshed)
+        for action in durable:
+            if action.run_id in seen:
+                continue
+            seen.add(action.run_id)
+            merged.append(action)
+        return tuple(merged)
+
+    def _record_controller_action(
+        self,
+        *,
+        policy: DeploymentStackPolicy,
+        submission: DeploymentUpdateSubmission,
+        operation: dict[str, Any],
+    ) -> DeploymentRecentAction:
+        operation_id = str(operation.get("operationId") or "").strip()
+        action = DeploymentRecentAction(
+            id=f"ctl-{operation_id or uuid4().hex}",
+            kind="update",
+            status=controller_action_status(str(operation.get("status") or "")),
+            requested_image=f"{submission.repository}:{submission.reference}",
+            operator=(
+                str(submission.requested_by_user_id)
+                if submission.requested_by_user_id is not None
+                else None
+            ),
+            reason=submission.reason,
+            started_at=_utc_now_iso(),
+            # No separate controller UI route exists; status is observed
+            # from the controller record via recent_actions.
+            run_detail_url=None,
+            run_id=f"ctl_{operation_id}" if operation_id else None,
+        )
+        self._recent_actions[policy.stack] = (
+            action,
+            *self._recent_actions.get(policy.stack, ()),
+        )[:50]
+        return action
 
     async def queue_update(
         self,
@@ -237,6 +544,34 @@ class DeploymentOperationsService:
         policy: DeploymentStackPolicy,
         submission: DeploymentUpdateSubmission,
     ) -> dict[str, str]:
+        desired_image = f"{submission.repository}:{submission.reference}"
+        try:
+            controller_operation = await asyncio.to_thread(
+                submit_controller_update,
+                stack=policy.stack,
+                desired_image=desired_image,
+                source_revision="",
+                reason=submission.reason or "",
+            )
+        except _ControllerUnavailable:
+            controller_operation = None
+        if controller_operation is not None:
+            # The UI/API path submits the same controller operation as the
+            # host entrypoint: no Temporal workflow is created, so no second
+            # updater can own the stack. Status is observed from the
+            # controller record (see recent_actions).
+            action = self._record_controller_action(
+                policy=policy,
+                submission=submission,
+                operation=controller_operation,
+            )
+            operation_id = str(controller_operation.get("operationId") or "")
+            return {
+                "deploymentUpdateRunId": action.id,
+                "taskId": operation_id,
+                "workflowId": operation_id,
+                "status": "QUEUED",
+            }
         initial_parameters = self._build_initial_parameters(
             policy=policy,
             submission=submission,
