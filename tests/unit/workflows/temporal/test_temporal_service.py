@@ -9302,6 +9302,29 @@ async def test_failed_step_recovery_restores_without_secrets_and_selected_step_3
             "artifact://checkpoint/secret"
         )
 
+        # Selected-step contract: the earlier boundary carries no preserved
+        # accepted work, so the destination must rerun `prepare` instead of
+        # restoring post-`prepare` state. The whole-run checkpoint ref still
+        # identifies the audit payload (which retains full history), while
+        # the selected source itself preserves nothing.
+        assert "artifact://workspace/prepare-3510" not in selected_serialized
+        assert "artifact://workspace/review-3510" not in selected_serialized
+        assert checkpoint_payload["preservedSteps"][0][
+            "stateCheckpointRef"
+        ] == "artifact://workspace/prepare-3510"
+
+        # An unknown selected step is rejected instead of restoring.
+        with pytest.raises(TemporalExecutionRecoveryCheckpointError):
+            await service.create_failed_step_recovery_execution(
+                created,
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-selected-unknown-3510",
+                checkpoint_payload=checkpoint_payload,
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest-secret",
+                failed_run_recovery_manifest=manifest,
+                selected_start_step_id="unknown-step",
+            )
+
 
 def test_failed_step_recovery_endpoints_delegate_to_service_owner_3510() -> None:
     """MoonLadderStudios/MoonMind#3510 R1/R4: HTTP layer reuses the service.
@@ -9405,6 +9428,11 @@ async def test_failed_step_recovery_content_byte_identical_3510(
                 "stateCheckpointRef": "artifact://workspace/prepare-3510-b",
             }
         ]
+        checkpoint_payload["recoveryWorkspace"] = {
+            "branch": "feature",
+            "commit": "abc123",
+            "checkpointRef": "artifact://checkpoint/bytes",
+        }
         manifest = _valid_failed_run_recovery_manifest_payload(
             workflow_id=created.workflow_id,
             run_id=created.run_id,
@@ -9436,6 +9464,32 @@ async def test_failed_step_recovery_content_byte_identical_3510(
 
         # Exactly two launches (source + destination): prepare not re-executed.
         assert mock_client_adapter.start_workflow.await_count == 2
+
+        # Step-ledger proof: the destination reuses accepted `prepare`
+        # without scheduling it again (attempt/execution ordinal stay zero
+        # and only the failed step is ready).
+        from datetime import UTC as _UTC
+
+        from datetime import datetime as _datetime
+
+        from moonmind.workflows.temporal.workflows.run import (
+            MoonMindRunWorkflow as _RunWorkflow,
+        )
+
+        workflow = _RunWorkflow()
+        workflow._recovery_source = recovery_source
+        workflow._initialize_step_ledger(
+            ordered_nodes=[
+                {"id": "prepare", "title": "Prepare"},
+                {"id": "implement", "title": "Implement"},
+            ],
+            dependency_map={"prepare": [], "implement": ["prepare"]},
+            updated_at=_datetime.now(_UTC),
+        )
+        rows = {row["logicalStepId"]: row for row in workflow._step_ledger_rows}
+        assert rows["prepare"]["attempt"] == 0
+        assert rows["prepare"]["executionOrdinal"] == 0
+        assert rows["implement"]["status"] == "ready"
 
         # Source failure and input unchanged.
         assert created.state is MoonMindWorkflowState.FAILED
@@ -10630,9 +10684,17 @@ async def test_3510_recovery_router_execution_with_real_marker_and_host_removal(
 
         # Destination restores the accepted marker to its own copy before the
         # source host disappears (workspace restoration carries content).
+        # The destination bytes must originate from the source host file,
+        # not from test-authored constants, so copy through the source path.
         destination_dir = tmp_path / "destination-host-3510"
         destination_dir.mkdir(parents=True, exist_ok=True)
-        (destination_dir / "prepare-marker.bin").write_bytes(marker_bytes)
+        _shutil.copy2(
+            source_host_dir / "prepare-marker.bin",
+            destination_dir / "prepare-marker.bin",
+        )
+        assert _hashlib.sha256(
+            (destination_dir / "prepare-marker.bin").read_bytes()
+        ).hexdigest() == marker_digest
 
         # Real source-host removal: delete the directory from disk.
         _shutil.rmtree(source_host_dir)
@@ -10720,6 +10782,29 @@ async def test_3510_recovery_runtime_dispatch_executes_each_owner_at_call_site(
             payload, destination_workflow_id=payload["destination"]["workflowId"]
         )
         assert entry.execution_route == route
+        # The workflow entry consumes the compiled policy, not just the
+        # route label: publication/restoration targets are exclusive
+        # (no semantic work), while failed-step/control-stop resume
+        # semantic work through their phase owners.
+        if kind in ("publication", "restoration_failure"):
+            assert entry.run_semantic_work is False
+            assert (entry.publication_only or entry.restoration_only) is True
+        else:
+            assert entry.run_semantic_work is True
+            assert entry.publication_only is False
+            assert entry.restoration_only is False
+
+    # MoonMindRunWorkflow.run promotes the compiled policy and refuses to
+    # fall through to ordinary semantic work for exclusive routes.
+    import inspect as _inspect
+
+    from moonmind.workflows.temporal.workflows import run as _run_module
+
+    _run_source = _inspect.getsource(_run_module.MoonMindRunWorkflow.run)
+    assert "compile_recovery_entry_policy" in _run_source
+    assert "recoveryExecutionPolicy" in _run_source
+    assert "publication_only" in _run_source
+    assert "restoration_only" in _run_source
 
     # after-execution (gate-only) and after-gate (downstream) decision owners
     # execute with their exact phases at runtime.
