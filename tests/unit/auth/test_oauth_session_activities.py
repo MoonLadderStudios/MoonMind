@@ -476,12 +476,26 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
 
 
 @pytest.mark.asyncio
-async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
+@pytest.mark.parametrize(
+    ("legacy_binding", "host_mode"),
+    [(False, "on_demand_docker"), (True, "on_demand_docker"), (True, "static_compose")],
+)
+@pytest.mark.parametrize("policy_available", [True, False])
+async def test_revalidate_bound_host_resolves_missing_launch_metadata(
     monkeypatch: pytest.MonkeyPatch,
+    legacy_binding: bool,
+    host_mode: str,
+    policy_available: bool,
 ) -> None:
+    policy_ref = (
+        "codex-static@2"
+        if host_mode == "static_compose"
+        else "codex-on-demand@15" if legacy_binding else "codex-on-demand@1"
+    )
+    endpoint_ref = "chosen-endpoint" if legacy_binding else "default"
     launch = {
         "snapshotRef": "omnigent-launch:sha256:first-enrollment",
-        "hostMode": "on_demand_docker",
+        "hostMode": host_mode,
     }
     binding = SimpleNamespace(
         host_launch_profile_ref="codex-on-demand@1",
@@ -500,6 +514,17 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
             pass
 
         async def refresh_binding_generation(self, _profile_id: str):
+            if legacy_binding:
+                return SimpleNamespace(
+                    effective_launch_snapshot=None,
+                    execution_profile_ref="omnigent-codex@1",
+                    launch_policy_ref=policy_ref,
+                    host_launch_profile_ref="codex-on-demand@3",
+                    endpoint_ref=endpoint_ref,
+                    static_host_id=(
+                        "chosen-static-host" if host_mode == "static_compose" else None
+                    ),
+                )
             return None
 
         async def create_or_update_static_binding(self, **kwargs):
@@ -520,9 +545,11 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
         def __init__(self, _session) -> None:
             pass
 
-        async def resolve_runtime_snapshot(self, policy_ref: str):
-            assert policy_ref == "codex-on-demand@1"
-            return {"policyRef": policy_ref}
+        async def resolve_runtime_snapshot(self, selected_policy_ref: str):
+            assert selected_policy_ref == policy_ref
+            if not policy_available:
+                raise ValueError("policy unavailable")
+            return {"policyRef": selected_policy_ref}
 
     class Runtime:
         def __init__(self, **_kwargs) -> None:
@@ -530,6 +557,7 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
 
         async def validate_credential_mount(self, **kwargs):
             observed["probe"] = kwargs
+            assert kwargs["binding"].effective_launch_snapshot == launch
             return {"validationMode": "credential_only"}
 
         async def stop_host(self, **_kwargs):
@@ -556,9 +584,7 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
     monkeypatch.setattr(
         "moonmind.workflows.adapters.omnigent_client.OmnigentHttpClient", Client
     )
-    monkeypatch.setattr(
-        "api_service.db.base.async_session_maker", session_maker
-    )
+    monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
     monkeypatch.setattr(
         "api_service.services.omnigent_policies.OmnigentPolicyService", PolicyService
     )
@@ -584,13 +610,25 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
         }
     )
 
+    if not policy_available:
+        assert result["status"] == "validation_unavailable"
+        assert observed == {}
+        assert lease.status == "allocating"
+        return
     assert result["status"] == "ready"
     assert observed["binding"] == {
         "profile_id": "codex_openai_oauth",
-        "endpoint_ref": "default",
-        "host_launch_profile_ref": "codex-on-demand@1",
+        "endpoint_ref": endpoint_ref,
+        "static_host_id": (
+            "chosen-static-host"
+            if legacy_binding and host_mode == "static_compose"
+            else None
+        ),
+        "host_launch_profile_ref": (
+            policy_ref if host_mode == "on_demand_docker" else None
+        ),
         "execution_profile_ref": "omnigent-codex@1",
-        "launch_policy_ref": "codex-on-demand@1",
+        "launch_policy_ref": policy_ref,
         "effective_launch_snapshot": launch,
     }
     assert observed["probe"]["binding"] is binding
