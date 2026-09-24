@@ -84,9 +84,7 @@ def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) ->
     harness_raw = document.get("harness")
     if harness_raw:
         harness_id = canonical_harness_id(harness_raw)
-        expected = _expected_harness_for_runtime(
-            getattr(provider, "runtime_id", None)
-        )
+        expected = _expected_harness_for_runtime(getattr(provider, "runtime_id", None))
         if harness_id and expected and harness_id != expected:
             return False
     return True
@@ -147,10 +145,7 @@ async def load_execution_configurations(
         )
         .where(OmnigentAgentProfile.state == "active", or_(*selected_versions))
     )
-    return [
-        (row, version)
-        for row, version in (await session.execute(statement)).all()
-    ]
+    return [(row, version) for row, version in (await session.execute(statement)).all()]
 
 
 def select_execution_configuration(
@@ -185,6 +180,20 @@ def select_execution_configuration(
         ]
         if preferred:
             candidates = preferred
+        elif str(getattr(provider, "runtime_id", "")) == "claude_code":
+            from api_service.services.omnigent_agent_bootstrap_service import (
+                CLAUDE_BUILTIN_PROFILE_ID,
+            )
+
+            authored_candidates = [
+                (row, version)
+                for row, version in candidates
+                if row.profile_id != CLAUDE_BUILTIN_PROFILE_ID
+            ]
+            if authored_candidates:
+                # The managed stock configuration is a fallback, not a reason
+                # to make an existing operator configuration ambiguous.
+                candidates = authored_candidates
     if len(candidates) != 1:
         raise HTTPException(
             409,

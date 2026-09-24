@@ -23,6 +23,7 @@ This profile carries no credentials or host authority. Catalog readiness still
 checks the live bridge, provider OAuth profile, immutable launch policy, worker,
 and enforced network before it advertises the runtime as available.
 """
+
 from __future__ import annotations
 
 import copy
@@ -51,10 +52,13 @@ from api_service.services.omnigent_agent_profile_service import (
     projection_readiness,
     synchronize_upstream_inventory,
 )
+from moonmind.omnigent.settings import generic_claude_qualified
+from moonmind.omnigent.stock_agents import CLAUDE_STOCK_AGENT_NAME
 
 logger = logging.getLogger(__name__)
 
 BOOTSTRAP_PROFILE_ID = "omnigent-bootstrap-default"
+CLAUDE_BUILTIN_PROFILE_ID = "omnigent-claude-default"
 OPENCODE_BUILTIN_PROFILE_ID = "omnigent-opencode-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
 _BUILTIN_DEFAULT_AGENT_NAME = "codex-native-ui"
@@ -134,6 +138,10 @@ def build_bootstrap_document(
     *,
     upstream_version: str | None = None,
     launch_policy_ref: str = _BOOTSTRAP_LAUNCH_POLICY_REF,
+    execution_profile_ref: str = _BOOTSTRAP_EXECUTION_PROFILE_REF,
+    harness: str = _BOOTSTRAP_HARNESS,
+    provider_runtime_id: str = _BOOTSTRAP_PROVIDER_RUNTIME_ID,
+    provider_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build the normalized bootstrap profile document for a stable agent ID.
 
@@ -152,16 +160,16 @@ def build_bootstrap_document(
         "endpointRef": _BOOTSTRAP_ENDPOINT_REF,
         "execution": {
             "allowedLaunchPolicyRefs": [launch_policy_ref],
-            "defaultExecutionProfileRef": _BOOTSTRAP_EXECUTION_PROFILE_REF,
+            "defaultExecutionProfileRef": execution_profile_ref,
         },
-        "harness": _BOOTSTRAP_HARNESS,
+        "harness": harness,
         "model": {"settings": {}},
         "policyRef": launch_policy_ref,
         "providerRequirements": {
             "credentialSource": _BOOTSTRAP_PROVIDER_CREDENTIAL_SOURCE,
             "materializationMode": _BOOTSTRAP_PROVIDER_MATERIALIZATION_MODE,
-            "providerIds": [],
-            "runtimeId": _BOOTSTRAP_PROVIDER_RUNTIME_ID,
+            "providerIds": list(provider_ids),
+            "runtimeId": provider_runtime_id,
         },
         "publish": {"mode": "none"},
         "rag": {"followUp": {}, "initial": {}},
@@ -225,7 +233,9 @@ async def resolve_default_agent_selection(
         source = document.get("source", {}) if isinstance(document, dict) else {}
         bundle_import = (version.rollout_metadata or {}).get("bundleImport") or {}
         imported_agent = bundle_import.get("upstreamAgent") or {}
-        agent_id = _clean(source.get("upstreamId")) or _clean(imported_agent.get("id")) or None
+        agent_id = (
+            _clean(source.get("upstreamId")) or _clean(imported_agent.get("id")) or None
+        )
         if not agent_id:
             raise BootstrapDefaultConflictError(
                 f"default Omnigent agent profile '{default_profile.profile_id}' "
@@ -345,7 +355,9 @@ async def seed_bootstrap_agent_profile(
         },
         rollout_metadata={
             "origin": origin,
-            **({"envVar": _ENV_DEFAULT_AGENT_NAME} if origin == "env_bootstrap" else {}),
+            **(
+                {"envVar": _ENV_DEFAULT_AGENT_NAME} if origin == "env_bootstrap" else {}
+            ),
             "materializedAt": observed_at.isoformat(),
         },
     )
@@ -356,7 +368,9 @@ async def seed_bootstrap_agent_profile(
         actor_id=None,
         metadata_json={
             "origin": origin,
-            **({"envVar": _ENV_DEFAULT_AGENT_NAME} if origin == "env_bootstrap" else {}),
+            **(
+                {"envVar": _ENV_DEFAULT_AGENT_NAME} if origin == "env_bootstrap" else {}
+            ),
             "state": "active",
             "defaultForRuntime": True,
         },
@@ -612,12 +626,12 @@ async def default_agent_profile_ready(
     return await _agent_profile_launch_ready(session, profile, now=now)
 
 
-async def _active_bootstrap_launch_policy_ref(session: AsyncSession) -> str:
-    """Resolve the active built-in policy without embedding its version."""
+async def _active_policy_ref(session: AsyncSession, policy_id: str) -> str | None:
+    """Resolve an active built-in policy from persisted launch authority."""
 
-    policy = await session.get(OmnigentPolicy, "codex-on-demand")
+    policy = await session.get(OmnigentPolicy, policy_id)
     if policy is None or policy.default_version is None:
-        return _BOOTSTRAP_LAUNCH_POLICY_REF
+        return None
     version = await session.scalar(
         select(OmnigentPolicyVersion).where(
             OmnigentPolicyVersion.policy_id == policy.policy_id,
@@ -630,8 +644,170 @@ async def _active_bootstrap_launch_policy_ref(session: AsyncSession) -> str:
         or not version.validation_json
         or version.validation_json.get("valid") is not True
     ):
-        return _BOOTSTRAP_LAUNCH_POLICY_REF
+        return None
     return f"{policy.policy_id}@{version.version}"
+
+
+async def _active_bootstrap_launch_policy_ref(session: AsyncSession) -> str:
+    """Keep the Codex bootstrap fallback until durable policy is ready."""
+
+    return (
+        await _active_policy_ref(session, "codex-on-demand")
+        or _BOOTSTRAP_LAUNCH_POLICY_REF
+    )
+
+
+async def reconcile_builtin_claude_agent_profile(
+    session: AsyncSession,
+    *,
+    inventory: list[Mapping[str, Any]],
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Bind the observed stock Claude agent to its active managed policy."""
+
+    if not generic_claude_qualified(env=env):
+        return False
+    launch_policy_ref = await _active_policy_ref(session, "claude-on-demand")
+    if launch_policy_ref is None:
+        return False
+    stock = next(
+        (
+            item
+            for item in inventory
+            if _inventory_text(item, "name", "displayName") == CLAUDE_STOCK_AGENT_NAME
+            and _inventory_text(item, "harness", "harnessId") == "claude-native"
+        ),
+        None,
+    )
+    if stock is None:
+        return False
+    upstream_id = _inventory_text(stock, "id", "agentId", "agent_id")
+    upstream_version = _inventory_text(
+        stock, "version", "agentVersion", "agent_version"
+    )
+    if not upstream_id or not upstream_version:
+        return False
+    observed_at = now or datetime.now(timezone.utc)
+    projection = await session.get(
+        OmnigentUpstreamAgentProjection,
+        projection_identity(_BOOTSTRAP_ENDPOINT_REF, upstream_id, upstream_version),
+    )
+    if not projection_readiness(
+        projection,
+        now=observed_at,
+        bridge_mode=_BOOTSTRAP_BRIDGE_MODE,
+        harness="claude-native",
+        required_capabilities=_BOOTSTRAP_REQUIRED_CAPABILITIES,
+    )["ready"]:
+        return False
+    document = build_bootstrap_document(
+        upstream_id,
+        upstream_version=upstream_version,
+        launch_policy_ref=launch_policy_ref,
+        execution_profile_ref="omnigent-claude@1",
+        harness="claude-native",
+        provider_runtime_id="claude_code",
+        provider_ids=("anthropic",),
+    )
+    digest = _digest(document)
+    profile = await session.get(OmnigentAgentProfile, CLAUDE_BUILTIN_PROFILE_ID)
+    active = await _load_active_version(session, profile) if profile else None
+    if profile is not None and (
+        profile.state != "active"
+        or active is None
+        or active.created_by is not None
+        or (active.rollout_metadata or {}).get("managedBuiltin") != "claude"
+    ):
+        # An operator-owned edit or disablement cannot be silently replaced by
+        # the stock reconciliation loop.
+        return False
+    if active is not None and active.digest == digest:
+        return True
+
+    candidate = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.digest == digest,
+        )
+    )
+    if candidate is None:
+        latest = int(
+            await session.scalar(
+                select(func.max(OmnigentAgentProfileVersion.version)).where(
+                    OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID
+                )
+            )
+            or 0
+        )
+        candidate = OmnigentAgentProfileVersion(
+            profile_id=CLAUDE_BUILTIN_PROFILE_ID,
+            version=latest + 1,
+            digest=digest,
+            document=document,
+            parent_version=active.version if active else None,
+            upstream_snapshot=copy.deepcopy(projection.metadata_snapshot),
+            validation_result={
+                "schemaVersion": "moonmind.omnigent-agent-profile-validation.v1",
+                "ready": True,
+                "checks": [
+                    {
+                        "id": "portable_builtin_contract",
+                        "status": "ready",
+                        "message": (
+                            "The stock Claude profile is structurally ready; "
+                            "launch readiness is checked at admission."
+                        ),
+                    }
+                ],
+            },
+            rollout_metadata={
+                "origin": "builtin_claude",
+                "managedBuiltin": "claude",
+                "materializedAt": observed_at.isoformat(),
+                "launchPolicyRef": launch_policy_ref,
+            },
+            created_by=None,
+        )
+        session.add(candidate)
+    if profile is None:
+        profile = OmnigentAgentProfile(
+            profile_id=CLAUDE_BUILTIN_PROFILE_ID,
+            display_name="Claude Code via Omnigent",
+            description=(
+                "MoonMind-managed Claude Code configuration using the connected "
+                "Anthropic OAuth Provider Profile."
+            ),
+            owner_id=None,
+            visibility="workspace",
+            state="active",
+            active_version=candidate.version,
+            default_for_runtime=False,
+        )
+        session.add(profile)
+    else:
+        profile.active_version = candidate.version
+    session.add(
+        OmnigentAgentProfileAuditEvent(
+            profile_id=CLAUDE_BUILTIN_PROFILE_ID,
+            action="bootstrap_materialized" if active is None else "bootstrap_updated",
+            version=candidate.version,
+            actor_id=None,
+            metadata_json={
+                "origin": "builtin_claude",
+                "previousVersion": active.version if active else None,
+                "launchPolicyRef": launch_policy_ref,
+            },
+        )
+    )
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        current = await session.get(OmnigentAgentProfile, CLAUDE_BUILTIN_PROFILE_ID)
+        version = await _load_active_version(session, current) if current else None
+        return bool(version is not None and version.digest == digest)
+    return True
 
 
 async def _reconcile_bootstrap_profile_launch_policy(
@@ -643,11 +819,7 @@ async def _reconcile_bootstrap_profile_launch_policy(
     """Advance the managed profile when its immutable policy authority moves."""
 
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
-    if (
-        profile is None
-        or profile.state != "active"
-        or profile.active_version is None
-    ):
+    if profile is None or profile.state != "active" or profile.active_version is None:
         return False
     active = await _load_active_version(session, profile)
     if active is None or not isinstance(active.document, Mapping):
@@ -770,47 +942,53 @@ async def reconcile_bootstrap_agent_profile(
         ),
         None,
     )
-    if candidate is None:
-        return False
-    upstream_id = _inventory_text(candidate, "id", "agentId", "agent_id")
+    upstream_id = (
+        _inventory_text(candidate, "id", "agentId", "agent_id")
+        if candidate is not None
+        else ""
+    )
+    if upstream_id:
+        upstream_version = (
+            _inventory_text(candidate, "version", "agentVersion", "agent_version")
+            or None
+        )
+        launch_policy_ref = await _active_bootstrap_launch_policy_ref(session)
+        await seed_bootstrap_agent_profile(
+            session,
+            env=env,
+            now=observed_at,
+            upstream_id=upstream_id,
+            upstream_version=upstream_version,
+            launch_policy_ref=launch_policy_ref,
+        )
+        await _reconcile_bootstrap_profile_launch_policy(
+            session,
+            launch_policy_ref=launch_policy_ref,
+            now=observed_at,
+        )
+    await reconcile_builtin_claude_agent_profile(
+        session, inventory=inventory, env=env, now=observed_at
+    )
     if not upstream_id:
         return False
-    upstream_version = (
-        _inventory_text(candidate, "version", "agentVersion", "agent_version")
-        or None
-    )
-    launch_policy_ref = await _active_bootstrap_launch_policy_ref(session)
-    await seed_bootstrap_agent_profile(
-        session,
-        env=env,
-        now=observed_at,
-        upstream_id=upstream_id,
-        upstream_version=upstream_version,
-        launch_policy_ref=launch_policy_ref,
-    )
-    await _reconcile_bootstrap_profile_launch_policy(
-        session,
-        launch_policy_ref=launch_policy_ref,
-        now=observed_at,
-    )
     # The Codex bootstrap profile is only the fallback managed default. Settle
     # managed default authority here as well as after catalog synchronization so
     # an OpenCode built-in that is already launch ready is never displaced by a
     # later bootstrap pass.
-    await reconcile_managed_default_agent_profile(
-        session, env=env, now=observed_at
-    )
+    await reconcile_managed_default_agent_profile(session, env=env, now=observed_at)
     return await default_agent_profile_ready(session, now=observed_at)
 
 
 __all__ = [
     "BOOTSTRAP_PROFILE_ID",
+    "CLAUDE_BUILTIN_PROFILE_ID",
     "OPENCODE_BUILTIN_PROFILE_ID",
     "BootstrapDefaultConflictError",
     "DefaultAgentResolution",
     "build_bootstrap_document",
     "default_agent_profile_ready",
     "reconcile_bootstrap_agent_profile",
+    "reconcile_builtin_claude_agent_profile",
     "reconcile_managed_default_agent_profile",
     "resolve_default_agent_selection",
     "seed_bootstrap_agent_profile",

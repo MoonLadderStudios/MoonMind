@@ -41,8 +41,12 @@ class OmnigentExecutionProfile(BaseModel):
     # this admission boundary before effects. No live catalog is fetched.
     harness: str
     default_policy_ref: str = Field(alias="defaultPolicyRef")
-    provider_runtime: Literal["codex_cli", "claude_code", "opencode"] = Field(alias="providerRuntime")
-    provider_auth: Literal["oauth_volume", "secret_ref"] = Field("oauth_volume", alias="providerAuth")
+    provider_runtime: Literal["codex_cli", "claude_code", "opencode"] = Field(
+        alias="providerRuntime"
+    )
+    provider_auth: Literal["oauth_volume", "secret_ref"] = Field(
+        "oauth_volume", alias="providerAuth"
+    )
     capture_defaults: dict[str, Any] = Field(alias="captureDefaults")
     model: str | None = None
     reasoning: str | None = None
@@ -99,8 +103,12 @@ class OmnigentLaunchPolicy(BaseModel):
                 ("server", self.server_image_ref),
                 ("host", self.host_image_ref),
             ):
-                if not (_DIGEST_IMAGE.fullmatch(image) or image.startswith("bootstrap://")):
-                    raise ValueError(f"{label} image must use an immutable sha256 digest")
+                if not (
+                    _DIGEST_IMAGE.fullmatch(image) or image.startswith("bootstrap://")
+                ):
+                    raise ValueError(
+                        f"{label} image must use an immutable sha256 digest"
+                    )
                 if image.endswith(_PLACEHOLDER_DIGEST):
                     raise ValueError(f"{label} image digest must not be a placeholder")
         if not _SAFE_REF.fullmatch(self.network_ref) or self.network_ref.startswith(
@@ -137,7 +145,11 @@ class OmnigentLaunchPolicy(BaseModel):
             raise ValueError(
                 "mountClasses contains an unsupported class or omits oauth_home"
             )
-        if self.runtime_uid != 1000 or self.runtime_gid != 1000 or not self.read_only_root:
+        if (
+            self.runtime_uid != 1000
+            or self.runtime_gid != 1000
+            or not self.read_only_root
+        ):
             raise ValueError("Omnigent hosts require UID/GID 1000 and a read-only root")
         if not self.enforced_egress:
             raise ValueError("Omnigent launch policy must enforce egress")
@@ -296,6 +308,38 @@ def public_execution_catalog() -> dict[str, Any]:
     }
 
 
+def resolve_policy_image_refs(policy: OmnigentLaunchPolicy) -> tuple[str, str]:
+    """Resolve built-in policy images from explicit pins or deployment state."""
+
+    server_ref = policy.server_image_ref
+    host_ref = policy.host_image_ref
+    if server_ref.startswith("bootstrap://") or host_ref.startswith("bootstrap://"):
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+        resolved = load_resolved_state()
+        if server_ref.startswith("bootstrap://"):
+            server_ref = (
+                os.getenv("OMNIGENT_IMAGE_REF", "").strip()
+                or str(getattr(resolved, "server_image_ref", "") or "").strip()
+            )
+        if host_ref.startswith("bootstrap://"):
+            if policy.policy_id.startswith("claude-"):
+                configured_shared = os.getenv(
+                    "OMNIGENT_SHARED_HOST_IMAGE_REF", ""
+                ).strip()
+                resolved_shared = str(
+                    getattr(resolved, "shared_host_image_ref", "") or ""
+                ).strip()
+                host_ref = (
+                    configured_shared
+                    if _DIGEST_IMAGE.fullmatch(configured_shared)
+                    else resolved_shared or configured_shared
+                ) or os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
+            else:
+                host_ref = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
+    return server_ref, host_ref
+
+
 def compile_effective_launch(
     *, profile_ref: str, policy_ref: str | None, provider_profile_id: str
 ) -> dict[str, Any]:
@@ -326,14 +370,19 @@ def compile_effective_launch(
             code="OMNIGENT_LAUNCH_POLICY_PROVIDER_MISMATCH",
         )
     policy_payload = policy.model_dump(by_alias=True, mode="json")
-    for field, variable in (
-        ("serverImageRef", "OMNIGENT_IMAGE_REF"),
-        ("hostImageRef", "OMNIGENT_HOST_IMAGE_REF"),
+    server_image_ref, host_image_ref = resolve_policy_image_refs(policy)
+    host_image_variable = (
+        "OMNIGENT_SHARED_HOST_IMAGE_REF"
+        if policy.policy_id.startswith("claude-")
+        else "OMNIGENT_HOST_IMAGE_REF"
+    )
+    for field, variable, value in (
+        ("serverImageRef", "OMNIGENT_IMAGE_REF", server_image_ref),
+        ("hostImageRef", host_image_variable, host_image_ref),
     ):
-        value = policy_payload[field]
-        if str(value).startswith("bootstrap://"):
-            value = os.getenv(variable, "").strip()
-        if not _DIGEST_IMAGE.fullmatch(str(value)) or str(value).endswith(_PLACEHOLDER_DIGEST):
+        if not _DIGEST_IMAGE.fullmatch(str(value)) or str(value).endswith(
+            _PLACEHOLDER_DIGEST
+        ):
             raise OmnigentOAuthHostError(
                 f"{variable} must name a deployable immutable sha256 image",
                 code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
@@ -353,9 +402,9 @@ def compile_effective_launch(
         "capture": {**profile.capture_defaults, **policy.capture},
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    payload["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
-        canonical.encode()
-    ).hexdigest()
+    payload["snapshotRef"] = (
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    )
     return payload
 
 
@@ -365,17 +414,24 @@ def validate_effective_launch_snapshot(snapshot: Mapping[str, Any]) -> None:
     payload = dict(snapshot)
     supplied_ref = str(payload.pop("snapshotRef", ""))
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    expected_ref = "omnigent-launch:sha256:" + hashlib.sha256(
-        canonical.encode()
-    ).hexdigest()
+    expected_ref = (
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    )
     if supplied_ref != expected_ref:
         raise OmnigentOAuthHostError(
             "effective launch snapshot digest does not match its content",
             code="OMNIGENT_EFFECTIVE_LAUNCH_CONFLICT",
         )
     forbidden_authority_keys = {
-        "credential", "credentials", "password", "token", "secret",
-        "accesstoken", "authtoken", "refreshtoken", "secretbody",
+        "credential",
+        "credentials",
+        "password",
+        "token",
+        "secret",
+        "accesstoken",
+        "authtoken",
+        "refreshtoken",
+        "secretbody",
         "credentialbody",
     }
 
