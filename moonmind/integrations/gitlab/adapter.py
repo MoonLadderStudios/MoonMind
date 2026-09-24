@@ -264,6 +264,32 @@ class GitLabMRAdapter:
             }
         footer = note_footer_for(key)
         full_body = clean_body if footer in clean_body else f"{clean_body}\n\n{footer}"
+        if existing is None:
+            # Fresh adapter (or first use of this operation_id): the
+            # in-memory ledger cannot prove the note was never posted
+            # (worker restart / Activity retry / adapter recreation all
+            # clear it). Reconcile the footer before the first mutation so
+            # a retried operation_id never posts twice.
+            lookup = await self._lookup_note_by_footer(footer)
+            if lookup.get("found"):
+                self._remember(
+                    key,
+                    {
+                        "state": "completed",
+                        "note_id": lookup.get("note_id"),
+                        "reconciled": True,
+                    },
+                )
+                return {"note_id": lookup.get("note_id"), "reconciled": True}
+            if lookup.get("exhausted"):
+                self._remember(key, {"state": "exhausted", "body": clean_body})
+                return {
+                    "note_id": None,
+                    "reconciled": False,
+                    "automation_handoff": self._automation_handoff(
+                        operation_id=key, body=clean_body, reason="note_lookup_exhausted"
+                    ),
+                }
         if existing is not None and existing.get("state") == "uncertain":
             lookup = await self._lookup_note_by_footer(footer)
             if lookup.get("found"):
@@ -324,6 +350,10 @@ class GitLabMRAdapter:
         ]
         if len(matches) == 1:
             return {"found": True, "note_id": matches[0].get("id")}
+        if len(matches) == 0:
+            # Successful lookup with no footer present: safe for the caller
+            # to proceed to exactly one mutation.
+            return {"found": False, "exhausted": False}
         return {"found": False, "exhausted": True}
 
     def _automation_handoff(
