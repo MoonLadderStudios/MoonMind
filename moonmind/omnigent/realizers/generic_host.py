@@ -1477,7 +1477,20 @@ class GenericOmnigentHostRealizer:
         state: str,
         reason: str,
     ) -> None:
-        """Best-effort projection of Activity-owned lifecycle state."""
+        """Best-effort projection of Activity-owned lifecycle state.
+
+        MoonLadderStudios/MoonMind#1088: retained compatibility, not a
+        second progress mechanism. All three Activity emission sites in
+        this file funnel through this single notifier, which delegates to
+        the injected ``execution_state_notifier`` (production wires
+        ``notify_execution_state``). The sole consumer is the retained
+        ``MoonMindUserWorkflow.child_state_changed`` handler
+        (``moonmind/workflows/temporal/workflows/run.py``), kept for old
+        histories and mixed-worker rollout; convergence with the typed
+        ``agent_run_progress`` projection on new histories is proven by
+        ``test_mixed_worker_legacy_then_progress_converges``. No new
+        signal, store, or mutation API is introduced here.
+        """
 
         if self._execution_state_notifier is None:
             return

@@ -486,11 +486,163 @@ def test_no_direct_legacy_signal_bypass_outside_cutover_gate():
     assert source.count('"child_state_changed"') == 1
 
 
+def test_omnigent_activity_emissions_funnel_to_retained_consumer():
+    """Activity legacy emissions keep one funnel and one consumer (#1088 R3).
+
+    The Omnigent Activity-side ``awaiting_slot``/``launching``/``running``
+    emissions funnel through the single
+    ``GenericOmnigentHostRealizer._notify_execution_state`` notifier into
+    production ``notify_execution_state``, which signals only the
+    classified legacy ``child_state_changed`` name. That name's actual
+    consumer is the retained ``MoonMindUserWorkflow.child_state_changed``
+    handler (old histories + mixed-worker rollout, converging with the
+    typed projection per
+    ``test_mixed_worker_legacy_then_progress_converges``). This binds the
+    remaining compatibility to its consumer without a census or staged
+    removal program, and proves no second progress mechanism is added.
+    """
+
+    import pathlib
+    import re
+
+    here = pathlib.Path(__file__).resolve()
+    repo_root = next(
+        candidate
+        for candidate in (here.parent, *here.parents)
+        if (candidate / "moonmind" / "workflows").is_dir()
+    )
+    host_source = repo_root.joinpath(
+        "moonmind/omnigent/realizers/generic_host.py"
+    ).read_text()
+    production_source = repo_root.joinpath(
+        "moonmind/omnigent/production.py"
+    ).read_text()
+
+    # Every Activity emission funnels through the single notifier: the
+    # only ``_notify_execution_state`` references are its definition and
+    # its call sites, and the definition delegates to the injected
+    # ``_execution_state_notifier`` instead of signaling directly.
+    call_sites = re.findall(
+        r"await self\._notify_execution_state\(", host_source
+    )
+    assert len(call_sites) == 3
+    notifier = host_source.split(
+        "async def _notify_execution_state", 1
+    )[1].split("\n    def _bind_exact_host", 1)[0]
+    assert "self._execution_state_notifier" in notifier
+    assert ".signal(" not in notifier
+
+    # Production wiring signals only the retained classified legacy name.
+    notifier_block = production_source.split(
+        "async def notify_execution_state", 1
+    )[1].split("runtime_bindings", 1)[0]
+    assert '"child_state_changed"' in notifier_block
+    assert f'"{AGENT_RUN_PROGRESS_SIGNAL_NAME}"' not in notifier_block
+    assert "child_state_changed" in (
+        CLASSIFIED_CHILD_TO_PARENT_LIFECYCLE_SIGNALS
+    )
+
+    # The retained consumer exists on the parent workflow.
+    assert hasattr(MoonMindUserWorkflow, "child_state_changed")
+
+
 def test_patch_identity_frozen_for_replay():
     """Patch/signal identity is frozen: replay depends on stable names."""
 
     assert AGENT_RUN_PROGRESS_PATCH_ID == "agent-run-progress-projection-v1"
     assert AGENT_RUN_PROGRESS_SIGNAL_NAME == "agent_run_progress"
+
+
+# --- Workflow emitter failure injection ----------------------------------------
+
+@pytest.mark.asyncio
+async def test_emitter_delivery_failure_retries_same_revision(monkeypatch):
+    """Transient delivery failure recovers without repeating work (#1088 R7).
+
+    Failure injection at the real workflow boundary
+    (``MoonMindAgentRun._signal_parent_progress_projection``): the first
+    delivery raises, so the emitter keeps the same pending revision and
+    records no send marker; the retry delivers the same revision and the
+    parent reconciles redelivery as a duplicate. Terminal outcome and
+    agent compute are untouched: no recompute runs and no Step state
+    moves terminally.
+    """
+
+    from types import SimpleNamespace
+    import logging
+
+    parent = _install_parent(monkeypatch, NEW_HISTORY_PATCHES)
+    # Outside the workflow event loop the Temporal workflow logger is
+    # unavailable; the failure path under test only needs a sink.
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_get_logger",
+        lambda self: logging.getLogger(__name__),
+    )
+
+    child_info = SimpleNamespace(workflow_id=CHILD_WF, run_id="child-run-A")
+    parent_info = SimpleNamespace(
+        workflow_id=PARENT_WF, run_id=PARENT_RUN
+    )
+    monkeypatch.setattr(workflow, "info", lambda: child_info)
+
+    delivered: list[dict] = []
+    attempts: list[str] = []
+
+    class _FailOnceHandle:
+        async def signal(self, name, args=None):
+            assert name == AGENT_RUN_PROGRESS_SIGNAL_NAME
+            attempts.append(name)
+            if len(attempts) == 1:
+                raise RuntimeError("transient parent delivery failure")
+            delivered.append(dict(args[0]))
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda *args, **kwargs: _FailOnceHandle(),
+    )
+
+    child = MoonMindAgentRun()
+    child._progress_step_execution_id = STEP_EXEC
+    child._progress_attempt_index = 0
+    child._progress_generation = CHILD_WF
+
+    # First delivery fails: the same revision stays pending, no attempted
+    # send is recorded as receipt, and no agent work runs.
+    await child._signal_parent_progress_projection(
+        parent_info, "running", "Agent is running."
+    )
+    assert child._progress_next_revision == 1
+    assert child._progress_last_signature is None
+    assert delivered == []
+    assert child.final_result is None
+
+    # Retry reconciles: the same revision is delivered once.
+    await child._signal_parent_progress_projection(
+        parent_info, "running", "Agent is running."
+    )
+    assert child._progress_next_revision == 2
+    assert len(delivered) == 1
+    assert delivered[0]["projectionRevision"] == 1
+    assert child.final_result is None
+
+    # The parent accepts the first receipt and reconciles the redelivery
+    # as a duplicate: truthful state, no repeated work.
+    parent.agent_run_progress(delivered[0])
+    assert parent._state == STATE_EXECUTING
+    parent.agent_run_progress(dict(delivered[0]))
+    entry = parent._agent_run_progress_by_child[CHILD_WF]
+    assert entry["acceptedRevision"] == 1
+    assert entry["acceptedState"] == "running"
+    assert parent._state == STATE_EXECUTING
+
+    # After success the same observation coalesces: no second send.
+    await child._signal_parent_progress_projection(
+        parent_info, "running", "Agent is running."
+    )
+    assert len(delivered) == 1
+    assert child._progress_next_revision == 2
 
 
 # --- Parent Continue-As-New --------------------------------------------------
