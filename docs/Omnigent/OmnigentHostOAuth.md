@@ -261,6 +261,22 @@ forbidden ambient credentials: unselected OpenAI API-key selectors and other run
 
 The materializer does not copy the OAuth home into a run-owned volume. Authorized refreshes must persist to the Provider Profile-owned backing state.
 
+After OAuth registration, the selected host runs a credential-only login probe.
+A newly enrolled profile resolves the persisted default launch policy and
+creates its first durable host binding before this probe. Settings' **Validate
+OAuth** recovery action runs the same host probe for Codex before it can
+restore profile readiness.
+A failed probe marks the session failed. A confirmed login rejection disables
+the profile; an unavailable probe does not claim the credential is invalid.
+Once the temporary host has been stopped and its lease is recorded stopped,
+the workflow releases its credential-maintenance lease even when the probe
+failed, so a retry can acquire capacity. Incomplete host cleanup keeps the
+lease held for reconciliation. The OAuth session stays in
+`registering_profile` during this probe and reaches `succeeded` only after it
+returns successfully and the terminal session status is durably recorded.
+Settings and the provider terminal page poll the session through this
+transition.
+
 A read-only seed or copy-on-start design is valid only under a separate contract that owns atomic writeback, refresh conflicts, generation advancement, and crash reconciliation. Silent loss of refreshed state is forbidden.
 
 ## 9. Claude Code OAuth materializer
