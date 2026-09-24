@@ -219,6 +219,61 @@ def apply(
     return {"staged": staged["staged"], "recreated": applied["recreated"]}
 
 
+def observe_services(
+    runner: Runner,
+    base: Sequence[str],
+    services: Sequence[str],
+    *,
+    timeout_seconds: int = 60,
+) -> dict:
+    """Observe which selected services are running after an apply.
+
+    Read-only: runs ``docker compose ps`` and reports each selected service
+    as running only when Compose lists it in the ``running`` state. An
+    unparsable or failed observation raises :class:`CommandError` so the
+    caller records an explicit verification gap instead of success.
+    """
+    import json as _json
+
+    targets = [s for s in services if s]
+    if not targets:
+        raise ValueError("Refusing a service observation with no services.")
+    command = (*base, "ps", "--format", "json", *targets)
+    result = run_command(runner, command, timeout_seconds=timeout_seconds)
+    if int(result.get("exit", 0)) != 0:
+        raise CommandError(
+            "ps",
+            int(result.get("exit", 1)),
+            redact_text(tail_text(str(result.get("output", "")))),
+        )
+    raw = str(result.get("output", "") or "").strip()
+    records: list = []
+    if raw.startswith("["):
+        try:
+            parsed = _json.loads(raw)
+            records = list(parsed) if isinstance(parsed, list) else []
+        except ValueError:
+            records = []
+    else:
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = _json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(item, dict):
+                records.append(item)
+    observed = {name: False for name in targets}
+    for item in records:
+        service = str(item.get("Service") or "")
+        state = str(item.get("State") or "").lower()
+        if service in observed and state == "running":
+            observed[service] = True
+    return {"services": observed}
+
+
 def pre_apply_checks(
     *,
     config_valid: bool,
@@ -342,6 +397,7 @@ __all__ = [
     "apply_services",
     "assert_safe_command",
     "compose_base",
+    "observe_services",
     "post_apply_checks",
     "pre_apply_checks",
     "pull_command",

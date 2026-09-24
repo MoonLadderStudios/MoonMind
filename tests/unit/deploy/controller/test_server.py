@@ -473,3 +473,149 @@ def test_env_files_layer_deployment_env_under_the_overlay(
     assert server_mod._env_files_for_apply(
         {"projectDir": str(bare_dir)}, "/state/image-overlays/op.env"
     ) == ["/state/image-overlays/op.env"]
+
+
+def test_legacy_probe_ignores_the_always_on_service_container(controller_path):
+    server_mod = load("server")
+    # The steady-state service reports no one-off label: not an active writer.
+    assert (
+        server_mod.parse_legacy_mutation_ps(
+            "moonmind-temporal-worker-deployment-control-1\t\n"
+        )
+        is False
+    )
+    assert server_mod.parse_legacy_mutation_ps("") is False
+    # A running one-off updater container is an owned mutation in progress.
+    assert (
+        server_mod.parse_legacy_mutation_ps(
+            "moonmind-temporal-worker-deployment-control-1\t\n"
+            "moonmind-temporal-worker-deployment-control-run-9a8b\ttrue\n"
+        )
+        is True
+    )
+
+
+def _verification_runner(engine, ps_state="running"):
+    import json as _json
+
+    class _Runner:
+        def __init__(self):
+            self.commands = []
+
+        def run(self, args, timeout_seconds):
+            self.commands.append(tuple(args))
+            if "ps" in args:
+                return {
+                    "exit": 0,
+                    "output": _json.dumps({"Service": "api", "State": ps_state}),
+                }
+            return {"exit": 0, "output": "ok"}
+
+    return _Runner()
+
+
+def _begin_op(record, store, target):
+    return store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+        target=target,
+    )
+
+
+def test_production_apply_verifies_release_before_success(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    target = {
+        "project": "moonmind",
+        "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api"],
+    }
+    op = _begin_op(record, store, target)
+    monkeypatch.setattr(
+        server_mod.engine,
+        "subprocess_runner",
+        lambda: _verification_runner(server_mod.engine),
+    )
+    result = server_mod.production_apply(
+        store,
+        op,
+        dispatch_probe=lambda: True,
+        omnigent_migrator=lambda summary: {"status": "aligned"},
+    )
+    assert result["status"] == "succeeded", result
+    loaded = store.load(op["operationId"])
+    assert loaded["status"] == "succeeded"
+    names = {check["name"] for check in loaded["verification"]}
+    assert "service:api" in names
+    assert "dispatch" in names
+    assert "omnigent-migration" in names
+    assert all(check["status"] == "passed" for check in loaded["verification"])
+
+
+def test_production_apply_partially_verifies_failed_operator_access(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    target = {
+        "project": "moonmind",
+        "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api"],
+        # Nothing listens here: the access check must fail explicitly.
+        "operatorUrls": ["http://127.0.0.1:1"],
+    }
+    op = _begin_op(record, store, target)
+    monkeypatch.setattr(
+        server_mod.engine,
+        "subprocess_runner",
+        lambda: _verification_runner(server_mod.engine),
+    )
+    result = server_mod.production_apply(store, op)
+    assert result["status"] == "partially_verified", result
+    loaded = store.load(op["operationId"])
+    # Installation stays confirmed; missing mandatory verification cannot
+    # become silent success.
+    assert loaded["installed"]["image"] == "ghcr.io/org/app@sha256:abc"
+    assert loaded["status"] == "partially_verified"
+    access = [
+        check
+        for check in loaded["verification"]
+        if check["name"].startswith("operator-access:")
+    ]
+    assert access and access[0]["status"] == "failed"
+
+
+def test_production_apply_records_omnigent_gap_without_migrator(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    (tmp_path / ".env").write_text("OMNIGENT_IMAGE_TAG=v1\n", encoding="utf-8")
+    store = record.OperationStore(tmp_path / "state")
+    target = {
+        "project": "moonmind",
+        "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api"],
+    }
+    op = _begin_op(record, store, target)
+    monkeypatch.setattr(
+        server_mod.engine,
+        "subprocess_runner",
+        lambda: _verification_runner(server_mod.engine),
+    )
+    result = server_mod.production_apply(store, op)
+    assert result["status"] == "partially_verified", result
+    omnigent = [
+        check
+        for check in store.load(op["operationId"])["verification"]
+        if check["name"] == "omnigent-migration"
+    ]
+    assert omnigent and omnigent[0]["status"] == "unavailable"

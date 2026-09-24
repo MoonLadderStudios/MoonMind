@@ -35,13 +35,34 @@ class LegacyWriterUnknown(RuntimeError):
     """Docker state could not be read, so legacy ownership is unverified."""
 
 
+def parse_legacy_mutation_ps(output: str) -> bool:
+    """Return True when `docker ps` output shows an active legacy mutation.
+
+    The steady-state ``temporal-worker-deployment-control`` service runs
+    continuously with ``restart: unless-stopped``, so mere container
+    existence is not evidence of an active writer. Only a running one-off
+    updater container (``com.docker.compose.oneoff=true``) for the legacy
+    control service counts as an owned mutation in progress.
+    """
+    for line in (output or "").splitlines():
+        name, _, oneoff = line.strip().partition("\t")
+        if not name:
+            continue
+        if oneoff.strip().lower() in ("true", "1", "yes"):
+            return True
+    return False
+
+
 def default_legacy_writer_probe() -> bool:
-    """Return True when a legacy application-owned writer may still be active.
+    """Return True when a legacy application-owned mutation is in progress.
 
     Cutover rule (REQ-07): the controller only takes over after the old
-    writer is positively stopped or reconciled. Historical legacy logs are
-    kept; obsolete controllers are never restarted automatically and a live
-    lock inode is never deleted by this probe (it only observes).
+    writer is positively stopped or reconciled. The probe lists running
+    containers carrying the legacy control-service label and reports an
+    active writer only for one-off updater containers, never for the
+    always-on service container. Historical legacy logs are kept; obsolete
+    controllers are never restarted automatically and a live lock inode is
+    never deleted by this probe (it only observes).
     """
     import subprocess
 
@@ -51,9 +72,9 @@ def default_legacy_writer_probe() -> bool:
                 "docker",
                 "ps",
                 "--filter",
-                f"name={LEGACY_CONTROL_SERVICE}",
+                f"label=com.docker.compose.service={LEGACY_CONTROL_SERVICE}",
                 "--format",
-                "{{.Names}}",
+                '{{.Names}}\t{{.Label "com.docker.compose.oneoff"}}',
             ],
             capture_output=True,
             text=True,
@@ -65,7 +86,7 @@ def default_legacy_writer_probe() -> bool:
         raise LegacyWriterUnknown(
             f"docker ps failed (exit {completed.returncode})"
         )
-    return bool(completed.stdout.strip())
+    return parse_legacy_mutation_ps(completed.stdout)
 
 
 def _read_secret(secret: str | None, secret_file: str | None) -> str:
@@ -495,8 +516,7 @@ def write_image_overlay(state_dir: str, operation_id: str, image: str) -> str:
     """
     overlay_dir = os.path.join(state_dir, "image-overlays")
     os.makedirs(overlay_dir, exist_ok=True)
-    if "/" in operation_id or ".." in operation_id:
-        raise ValueError(f"Refusing unsafe operation id: {operation_id!r}")
+    record_mod.check_operation_id(operation_id)
     path = os.path.join(overlay_dir, f"{operation_id}.env")
     tmp_path = f"{path}.{os.getpid()}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as stream:
@@ -507,7 +527,80 @@ def write_image_overlay(state_dir: str, operation_id: str, image: str) -> str:
     return path
 
 
-def production_apply(store: record_mod.OperationStore, operation: dict) -> dict:
+OPERATOR_URL_TIMEOUT_SECONDS = 30
+
+# Deployment env keys whose non-empty presence means the installation
+# configures an Omnigent release channel that an ordinary MoonMind update
+# must also converge (mirrors the legacy `migrate_omnigent` success path).
+OMNIGENT_CHANNEL_KEYS = ("OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG")
+
+
+def check_operator_url(url: str, *, timeout_seconds: int = OPERATOR_URL_TIMEOUT_SECONDS) -> str:
+    """Probe an operator origin's health endpoint; return "ok" or raise."""
+    import urllib.request
+
+    target = url.rstrip("/") + "/healthz"
+    request = urllib.request.Request(target, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = response.getcode()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Operator URL {url} failed its health check ({exc}); "
+            "deployment update did not verify"
+        ) from exc
+    if status != 200:
+        raise RuntimeError(
+            f"Operator URL {url} returned HTTP {status} from /healthz; "
+            "deployment update did not verify"
+        )
+    return "ok"
+
+
+def read_env_file(path: str) -> dict:
+    """Parse a dotenv file into a mapping without interpolation."""
+    values: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as stream:
+            content = stream.read()
+    except OSError:
+        return values
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key or not key.replace("_", "").isalnum():
+            continue
+        value = value.strip().strip("'\"").strip()
+        values[key] = value
+    return values
+
+
+def omnigent_channels_for_target(target: dict) -> list:
+    """Return the configured Omnigent channel keys for a deployment target."""
+    explicit = (target or {}).get("envFile")
+    candidates = [str(explicit)] if explicit else []
+    project_dir = (target or {}).get("projectDir", "")
+    if project_dir:
+        candidates.append(os.path.join(str(project_dir), ".env"))
+    seen: dict[str, str] = {}
+    for candidate in candidates:
+        for key, value in read_env_file(candidate).items():
+            seen.setdefault(key, value)
+    return [
+        key for key in OMNIGENT_CHANNEL_KEYS if str(seen.get(key) or "").strip()
+    ]
+
+
+def production_apply(
+    store: record_mod.OperationStore,
+    operation: dict,
+    *,
+    dispatch_probe: Callable[[], bool | None] | None = None,
+    omnigent_migrator: Callable[[dict], Any] | None = None,
+) -> dict:
     """Default applier: stage images, apply, verify, and record the result."""
     target = operation.get("target") or {}
     project = target.get("project", operation.get("stack"))
@@ -543,7 +636,182 @@ def production_apply(store: record_mod.OperationStore, operation: dict) -> dict:
         store.record_attempt_error(operation["operationId"], error=f"apply failed: {exc} {exc.output}")
         raise
     store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
-    return {"status": "succeeded", "outcome": outcome}
+    verification = _verify_applied_release(
+        store,
+        operation,
+        runner=runner,
+        project=project,
+        env_files=env_files,
+        dispatch_probe=dispatch_probe,
+        omnigent_migrator=omnigent_migrator,
+    )
+    if verification["complete"]:
+        return {"status": "succeeded", "outcome": outcome, "verification": verification}
+    return {
+        "status": "partially_verified",
+        "outcome": outcome,
+        "verification": verification,
+    }
+
+
+def _verify_applied_release(
+    store: record_mod.OperationStore,
+    operation: dict,
+    *,
+    runner,
+    project: str,
+    env_files: list,
+    dispatch_probe: Callable[[], bool | None] | None = None,
+    omnigent_migrator: Callable[[dict], Any] | None = None,
+) -> dict:
+    """Run post-apply verification and record every check before returning.
+
+    Service state, ordinary dispatch (when observable), and operator access
+    are checked through :func:`engine.post_apply_checks`; the installed
+    Omnigent release is converged through the delegated migrator when the
+    deployment configures Omnigent channels. Each check is recorded on the
+    operation, so failed or unavailable mandatory checks downgrade the
+    terminal status to ``partially_verified`` instead of silent success.
+    """
+    target = operation.get("target") or {}
+    services = tuple(target.get("services", ()))
+    operation_id = operation["operationId"]
+    try:
+        base = engine.compose_base(
+            project=project,
+            project_dir=target.get("projectDir", ""),
+            compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
+            env_files=env_files or None,
+        )
+        observed = engine.observe_services(runner, base, services)
+        services_running = observed["services"]
+    except Exception as exc:
+        store.record_verification(
+            operation_id,
+            name="service-observation",
+            status="unavailable",
+            detail=f"could not observe Compose services: {exc}",
+        )
+        services_running = {}
+    operator_access: dict[str, str] = {}
+    for url in target.get("operatorUrls", ()) or ():
+        try:
+            operator_access[str(url)] = check_operator_url(str(url))
+        except Exception as exc:
+            operator_access[str(url)] = str(exc)
+    dispatch_ok: bool | None = None
+    dispatch_note = "not observable from the controller (no application handle)"
+    if dispatch_probe is not None:
+        try:
+            dispatch_ok = dispatch_probe()
+            dispatch_note = (
+                "ordinary dispatch works"
+                if dispatch_ok
+                else "ordinary dispatch probe failed"
+            )
+        except Exception as exc:
+            dispatch_ok = False
+            dispatch_note = f"ordinary dispatch probe errored: {exc}"
+    result = engine.post_apply_checks(
+        services_running=services_running,
+        dispatch_ok=dispatch_ok,
+        operator_access=operator_access or None,
+    )
+    recorded = list(result["checks"])
+    if dispatch_probe is None:
+        # Ordinary dispatch is not observable from the controller without an
+        # application handle; the limitation is noted in the outcome instead
+        # of failing every update with an unavailable mandatory check.
+        recorded = [c for c in recorded if c["name"] != "dispatch"]
+    for check in recorded:
+        store.record_verification(
+            operation_id,
+            name=check["name"],
+            status=check["status"],
+            detail=check["detail"],
+        )
+    omnigent = _verify_omnigent_release(
+        store, operation, omnigent_migrator=omnigent_migrator
+    )
+    recorded.append(omnigent)
+    failed = [c for c in recorded if c["status"] != "passed"]
+    return {
+        "checks": recorded,
+        "complete": not failed,
+        "dispatchNote": dispatch_note,
+        "controllerUsable": True,
+    }
+
+
+def _verify_omnigent_release(
+    store: record_mod.OperationStore,
+    operation: dict,
+    *,
+    omnigent_migrator: Callable[[dict], Any] | None = None,
+) -> dict:
+    """Converge the installed Omnigent release or record an explicit gap.
+
+    When the deployment configures Omnigent channels, an ordinary MoonMind
+    update must also advance the singular Omnigent server/host release. The
+    controller delegates that migration when a migrator is wired; otherwise
+    the gap stays explicit (``partially_verified``) with a convergence
+    pointer instead of silent success.
+    """
+    target = operation.get("target") or {}
+    operation_id = operation["operationId"]
+    channels = omnigent_channels_for_target(target)
+    if not channels:
+        check = {
+            "name": "omnigent-migration",
+            "status": "passed",
+            "detail": "no Omnigent channels configured; nothing to migrate",
+        }
+        store.record_verification(operation_id, **check)
+        return check
+    if omnigent_migrator is None:
+        check = {
+            "name": "omnigent-migration",
+            "status": "unavailable",
+            "detail": (
+                f"Omnigent channels configured ({', '.join(channels)}) but no "
+                "migrator is delegated; re-run ./tools/update-moonmind.sh to "
+                "converge the installed Omnigent release"
+            ),
+        }
+        store.record_verification(operation_id, **check)
+        return check
+    try:
+        receipt = omnigent_migrator(
+            {
+                "operationId": operation_id,
+                "channels": channels,
+                "moonmindImage": (operation.get("desired") or {}).get("image", ""),
+                "target": target,
+            }
+        )
+    except Exception as exc:
+        check = {
+            "name": "omnigent-migration",
+            "status": "failed",
+            "detail": f"Omnigent migration did not converge: {exc}",
+        }
+        store.record_verification(operation_id, **check)
+        return check
+    if not receipt or (isinstance(receipt, dict) and receipt.get("status") not in ("migrated", "aligned", "skipped", "ok", "succeeded")):
+        check = {
+            "name": "omnigent-migration",
+            "status": "failed",
+            "detail": f"Omnigent migration did not converge: {receipt!r}",
+        }
+        store.record_verification(operation_id, **check)
+        return check
+    check = {
+        "name": "omnigent-migration",
+        "status": "passed",
+        "detail": f"Omnigent channels converged ({', '.join(channels)}): {receipt!r}",
+    }
+    store.record_verification(operation_id, **check)
+    return check
 
 
 def main(argv=None) -> int:

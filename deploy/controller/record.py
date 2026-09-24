@@ -29,6 +29,29 @@ MAX_ATTEMPT_GROUPS = 5
 OPEN_STATUSES = ("pending", "staged", "applying")
 TERMINAL_STATUSES = ("succeeded", "partially_verified", "failed", "superseded")
 
+# Operation ids originate from caller-supplied URL paths, so they are treated
+# as untrusted input: only a bounded safe alphabet may reach the filesystem.
+# Generated ids are UUID hex with dashes, which this pattern accepts.
+_SAFE_OPERATION_ID_RE = None
+
+
+def _safe_operation_id_pattern():
+    global _SAFE_OPERATION_ID_RE
+    if _SAFE_OPERATION_ID_RE is None:
+        import re
+
+        _SAFE_OPERATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    return _SAFE_OPERATION_ID_RE
+
+
+def check_operation_id(operation_id: str) -> str:
+    """Validate a caller-supplied operation id before any filesystem use."""
+    if not isinstance(operation_id, str) or not _safe_operation_id_pattern().match(
+        operation_id
+    ):
+        raise ValueError(f"Refusing unsafe operation id: {operation_id!r}")
+    return operation_id
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -71,9 +94,7 @@ class OperationStore:
         self.operations_dir = self.state_dir / "operations"
 
     def _path(self, operation_id: str) -> Path:
-        if not operation_id or "/" in operation_id or ".." in operation_id:
-            raise ValueError(f"Refusing unsafe operation id: {operation_id!r}")
-        return self.operations_dir / f"{operation_id}.json"
+        return self.operations_dir / f"{check_operation_id(operation_id)}.json"
 
     def _write(self, operation: dict) -> dict:
         operation["updatedAt"] = _utc_now()
