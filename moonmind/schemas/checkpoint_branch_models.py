@@ -378,6 +378,124 @@ class CheckpointBranchCompareResponse(BaseModel):
     )
 
 
+class CheckpointBranchComparisonPreviewCandidate(BaseModel):
+    """One explicit comparison candidate for a generation preview.
+
+    A candidate either reuses an existing completed branch (``branchId``) or
+    describes a requested new run through ordinary admission bounds. The
+    preview never launches work itself (MoonLadderStudios/MoonMind#2215).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    candidate_id: str = Field(..., alias="candidateId", min_length=1, max_length=100)
+    branch_id: str | None = Field(None, alias="branchId", min_length=1, max_length=255)
+    source_intent_ref: str | None = Field(
+        None, alias="sourceIntentRef", min_length=1, max_length=512
+    )
+    max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
+    workspace_policy: CheckpointBranchWorkspacePolicy | None = Field(
+        None, alias="workspacePolicy"
+    )
+    runtime_context_policy: Literal["fresh_agent_run"] | None = Field(
+        None, alias="runtimeContextPolicy"
+    )
+    provider_profile_ref: str | None = Field(
+        None, alias="providerProfileRef", min_length=1, max_length=255
+    )
+    model: str | None = Field(None, min_length=1, max_length=255)
+    effort: str | None = Field(None, min_length=1, max_length=64)
+
+
+class CheckpointBranchComparisonPreviewRequest(BaseModel):
+    """Bounded preview for comparison-requested candidate generation.
+
+    Comparing saved results never authorizes new inference: with
+    ``allowNewRuns`` false every candidate must name its existing branch.
+    Requested runs reuse ordinary branch admission with explicit bounded
+    configurations and one shared source intent. Cartesian expansion across
+    model/provider/effort grids is rejected, not expanded
+    (MoonLadderStudios/MoonMind#2215).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    objective: str = Field(..., min_length=1, max_length=500)
+    rubric_id: str = Field(
+        "checkpoint-branch-gates", alias="rubricId", min_length=1, max_length=200
+    )
+    allow_new_runs: bool = Field(False, alias="allowNewRuns")
+    candidates: list[CheckpointBranchComparisonPreviewCandidate] = Field(
+        ..., min_length=2, max_length=4
+    )
+
+    @model_validator(mode="after")
+    def _requires_explicit_bounded_candidates(
+        self,
+    ) -> "CheckpointBranchComparisonPreviewRequest":
+        identities = [item.candidate_id.strip() for item in self.candidates]
+        if any(not identity for identity in identities):
+            raise ValueError("each candidate requires an explicit candidateId")
+        if len(set(identities)) != len(identities):
+            raise ValueError("candidateId values must be distinct")
+        if not self.allow_new_runs:
+            missing = [
+                item.candidate_id for item in self.candidates if not item.branch_id
+            ]
+            if missing:
+                raise ValueError(
+                    "comparing saved results authorizes no new inference; "
+                    f"candidates without branchId: {', '.join(sorted(missing))}"
+                )
+            return self
+        intents = {
+            str(item.source_intent_ref or "").strip()
+            for item in self.candidates
+            if not item.branch_id
+        }
+        intents.discard("")
+        if any(not item.branch_id and not item.source_intent_ref for item in self.candidates):
+            raise ValueError(
+                "requested runs require an explicit sourceIntentRef"
+            )
+        if len(intents) > 1:
+            raise ValueError(
+                "requested runs must share one source intent"
+            )
+        unbounded = [
+            item.candidate_id
+            for item in self.candidates
+            if not item.branch_id and item.max_budget_usd is None
+        ]
+        if unbounded:
+            raise ValueError(
+                "requested runs require an explicit maxBudgetUsd; "
+                f"unbounded candidates: {', '.join(sorted(unbounded))}"
+            )
+        return self
+
+
+class CheckpointBranchComparisonPreviewResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId")
+    objective: str = Field(..., alias="objective")
+    rubric_id: str = Field(..., alias="rubricId")
+    selected_run_count: int = Field(..., alias="selectedRunCount", ge=0)
+    reuse_existing_count: int = Field(..., alias="reuseExistingCount", ge=0)
+    will_launch_new_work: bool = Field(False, alias="willLaunchNewWork")
+    authorizes_new_inference: bool = Field(False, alias="authorizesNewInference")
+    no_cartesian_expansion: bool = Field(True, alias="noCartesianExpansion")
+    creation_path: list[str] = Field(default_factory=list, alias="creationPath")
+    cost_deltas: dict[str, Any] = Field(default_factory=dict, alias="costDeltas")
+    privacy_changes: list[str] = Field(default_factory=list, alias="privacyChanges")
+    authority_changes: list[str] = Field(
+        default_factory=list, alias="authorityChanges"
+    )
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    preview_digest: str = Field(..., alias="previewDigest")
+
+
 # Persistence/service contract models.
 def _optional_text(value: Any) -> str | None:
     if value is None:
