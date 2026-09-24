@@ -1779,7 +1779,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
 
     assert response.status_code == 200
-    assert response.json()["status"] == OAuthSessionStatus.SUCCEEDED.value
+    assert response.json()["status"] == OAuthSessionStatus.REGISTERING_PROFILE.value
     assert response.json()["profile_summary"]["profile_id"] == profile_id
     assert verify_seen_existing_profile is None
 
@@ -1787,7 +1787,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         row = await session.get(ManagedAgentOAuthSession, session_id)
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
         assert row is not None
-        assert row.status == OAuthSessionStatus.SUCCEEDED
+        assert row.status == OAuthSessionStatus.REGISTERING_PROFILE
         assert profile is not None
         assert profile.runtime_id == "claude_code"
         assert profile.provider_id == "anthropic"
