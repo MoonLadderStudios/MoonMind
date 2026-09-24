@@ -11059,12 +11059,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
     const effectivePublishSkillDetailForSubmit =
       skillsQuery.data?.detailsById[effectivePublishSkillId.trim()] || null;
+    const skillOwnsAutoPublishForSubmit = isSelfManagedPublishSkill(
+      effectivePublishSkillId,
+      effectivePublishSkillDetailForSubmit,
+    );
     if (
       requestedPublishMode === "auto" &&
-      !isSelfManagedPublishSkill(
-        effectivePublishSkillId,
-        effectivePublishSkillDetailForSubmit,
-      )
+      !skillOwnsAutoPublishForSubmit
     ) {
       setSubmitMessage(
         "Publish mode Auto requires an auto-publish-capable skill.",
@@ -11072,11 +11073,44 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
-    const effectivePublishMode =
-      isSelfManagedPublishSkill(
+    // MoonLadderStudios/MoonMind#2619: an explicitly chosen publish mode keeps
+    // one owner. The Skill/compiler contract owns managed publication, so an
+    // explicit choice that contradicts it is a pre-effect conflict with a
+    // correction, never a silent substitution at submit. Untouched controls
+    // keep the derivation below (declared default / Skill-owned Auto).
+    if (publishModeTouched && skillOwnsAutoPublishForSubmit) {
+      if (requestedPublishMode === "none") {
+        setSubmitMessage(
+          `Publish mode conflict: '${effectivePublishSkillId.trim()}' manages its own publication (Auto), but Publish Mode is explicitly None. Explicit None stays None and never authorizes publication — choose Auto to let the skill publish, or choose a skill without managed publication.`,
+        );
+        clearSubmitBusy();
+        return;
+      }
+      if (requestedPublishMode === "branch" || requestedPublishMode === "pr") {
+        setSubmitMessage(
+          `Publish mode conflict: '${effectivePublishSkillId.trim()}' manages its own publication (Auto), but Publish Mode is explicitly '${requestedPublishMode}'. Managed publication keeps one owner — choose Auto, or choose a skill without managed publication.`,
+        );
+        clearSubmitBusy();
+        return;
+      }
+    }
+    if (
+      publishModeTouched &&
+      (requestedPublishMode === "branch" || requestedPublishMode === "pr") &&
+      !skillOwnsAutoPublishForSubmit &&
+      isRepositoryPublishDisabledSkill(
         effectivePublishSkillId,
         effectivePublishSkillDetailForSubmit,
       )
+    ) {
+      setSubmitMessage(
+        `Publish mode conflict: '${effectivePublishSkillId.trim()}' performs non-repository side effects, but Publish Mode is explicitly '${requestedPublishMode}'. Choose None, or choose a repository-publishing skill.`,
+      );
+      clearSubmitBusy();
+      return;
+    }
+    const effectivePublishMode =
+      skillOwnsAutoPublishForSubmit
         ? "auto"
         : isRepositoryPublishDisabledSkill(
             effectivePublishSkillId,
