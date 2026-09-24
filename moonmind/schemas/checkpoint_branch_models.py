@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -393,7 +394,7 @@ class CheckpointBranchComparisonPreviewCandidate(BaseModel):
     source_intent_ref: str | None = Field(
         None, alias="sourceIntentRef", min_length=1, max_length=512
     )
-    max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
+    max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", gt=0)
     workspace_policy: CheckpointBranchWorkspacePolicy | None = Field(
         None, alias="workspacePolicy"
     )
@@ -405,6 +406,20 @@ class CheckpointBranchComparisonPreviewCandidate(BaseModel):
     )
     model: str | None = Field(None, min_length=1, max_length=255)
     effort: str | None = Field(None, min_length=1, max_length=64)
+
+    @field_validator("max_budget_usd")
+    @classmethod
+    def _preview_budget_must_be_positive_finite(
+        cls, value: float | None
+    ) -> float | None:
+        # MoonLadderStudios/MoonMind#2215: requested runs reuse ordinary
+        # admission bounds, where a zero budget is budget_exhausted and an
+        # overflowing value cannot survive JSON serialization.
+        if value is None:
+            return None
+        if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+            raise ValueError("maxBudgetUsd must be a positive finite budget")
+        return value
 
 
 class CheckpointBranchComparisonPreviewRequest(BaseModel):
@@ -429,6 +444,18 @@ class CheckpointBranchComparisonPreviewRequest(BaseModel):
         ..., min_length=2, max_length=4
     )
 
+    @field_validator("rubric_id")
+    @classmethod
+    def _preview_rubric_must_be_supported(cls, value: str) -> str:
+        # MoonLadderStudios/MoonMind#2215: the report only applies the gate
+        # verdict rules, so only that rubric may be claimed as provenance.
+        normalized = str(value or "").strip()
+        if normalized != "checkpoint-branch-gates":
+            raise ValueError(
+                "rubricId must be the supported checkpoint-branch-gates rubric"
+            )
+        return normalized
+
     @model_validator(mode="after")
     def _requires_explicit_bounded_candidates(
         self,
@@ -438,6 +465,34 @@ class CheckpointBranchComparisonPreviewRequest(BaseModel):
             raise ValueError("each candidate requires an explicit candidateId")
         if len(set(identities)) != len(identities):
             raise ValueError("candidateId values must be distinct")
+        resolved_branches = [
+            item.branch_id for item in self.candidates if item.branch_id
+        ]
+        if len(set(resolved_branches)) != len(resolved_branches):
+            raise ValueError(
+                "branchId values must be distinct; comparing a saved "
+                "branch with itself is not a two-candidate comparison"
+            )
+        mixed = sorted(
+            item.candidate_id
+            for item in self.candidates
+            if item.branch_id is not None
+            and (
+                item.source_intent_ref is not None
+                or item.max_budget_usd is not None
+                or item.workspace_policy is not None
+                or item.runtime_context_policy is not None
+                or item.provider_profile_ref is not None
+                or item.model is not None
+                or item.effort is not None
+            )
+        )
+        if mixed:
+            raise ValueError(
+                "candidates that name branchId reuse that saved branch and "
+                "must not carry new-run settings; "
+                f"mixed candidates: {', '.join(mixed)}"
+            )
         if not self.allow_new_runs:
             missing = [
                 item.candidate_id for item in self.candidates if not item.branch_id
@@ -454,7 +509,10 @@ class CheckpointBranchComparisonPreviewRequest(BaseModel):
             if not item.branch_id
         }
         intents.discard("")
-        if any(not item.branch_id and not item.source_intent_ref for item in self.candidates):
+        if any(
+            not item.branch_id and not str(item.source_intent_ref or "").strip()
+            for item in self.candidates
+        ):
             raise ValueError(
                 "requested runs require an explicit sourceIntentRef"
             )
