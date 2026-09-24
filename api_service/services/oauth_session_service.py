@@ -128,6 +128,7 @@ async def complete_oauth_session_workflow(session_id: str) -> None:
         logger.exception(
             "Failed to mark OAuth session workflow %s complete", session_id
         )
+        raise
 
 
 async def fail_oauth_session_workflow(session_id: str, reason: str) -> None:

@@ -265,11 +265,21 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
             host_lease,
             effective_launch,
         ):
+            observed["validation_attempts"] = (
+                int(observed.get("validation_attempts", 0)) + 1
+            )
             observed["validate_credential_mount"] = {
                 "binding": binding,
                 "host_lease": host_lease,
                 "effective_launch": effective_launch,
             }
+            if int(observed.get("fail_validation_times", 0)) >= int(
+                observed["validation_attempts"]
+            ):
+                raise OmnigentOAuthHostError(
+                    "transient credential preflight failure",
+                    code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                )
             if observed.get("fail_validation") == "credential":
                 raise OmnigentOAuthHostError(
                     "credential preflight failed",
@@ -334,6 +344,23 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
     assert lease.status == "stopped"
 
+    observed["fail_validation_times"] = 2
+    observed["validation_attempts"] = 0
+    lease.status = "allocating"
+    recovered_result = (
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+    )
+    assert recovered_result["status"] == "ready"
+    assert observed["validation_attempts"] == 3
+    assert lease.status == "stopped"
+    observed.pop("fail_validation_times")
+
     @asynccontextmanager
     async def profile_mutation_forbidden():
         raise AssertionError(
@@ -349,14 +376,20 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     observed["fail_validation"] = True
     lease.status = "allocating"
 
-    with pytest.raises(RuntimeError, match="credential preflight failed"):
-        await oauth_session_activities.oauth_session_revalidate_bound_host(
-            {
-                "session_id": session_id,
-                "profile_id": "codex_openai_oauth",
-                "provider_lease_id": "provider-lease-revalidate",
-            }
-        )
+    unavailable_result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": session_id,
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "provider-lease-revalidate",
+        }
+    )
+    assert unavailable_result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "validation_unavailable",
+        "credential_generation": 7,
+        "validation_mode": "credential_only",
+    }
+    assert lease.status == "stopped"
 
     assert lease.status == "stopped"
     assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
@@ -401,15 +434,20 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     observed["fail_validation"] = "credential"
     lease.status = "allocating"
 
-    with pytest.raises(OmnigentOAuthHostError, match="credential preflight failed"):
-        await oauth_session_activities.oauth_session_revalidate_bound_host(
-            {
-                "session_id": session_id,
-                "profile_id": "codex_openai_oauth",
-                "provider_lease_id": "provider-lease-revalidate",
-            }
-        )
+    invalid_result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": session_id,
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "provider-lease-revalidate",
+        }
+    )
 
+    assert invalid_result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "credential_invalid",
+        "credential_generation": 7,
+        "validation_mode": "credential_only",
+    }
     assert commits == 1
     assert profile.enabled is False
     assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
