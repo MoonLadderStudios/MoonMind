@@ -28,6 +28,7 @@ from temporalio import workflow
 
 from moonmind.schemas.agent_run_progress import (
     AGENT_RUN_PROGRESS_PATCH_ID,
+    AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID,
     AGENT_RUN_PROGRESS_SIGNAL_NAME,
     CLASSIFIED_CHILD_TO_PARENT_LIFECYCLE_SIGNALS,
     RolloverSnapshot,
@@ -145,6 +146,7 @@ def test_old_history_terminal_legacy_still_releases_slot(monkeypatch):
 NEW_HISTORY_PATCHES = frozenset(
     {
         AGENT_RUN_PROGRESS_PATCH_ID,
+        AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID,
         RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH,
         RUN_REAL_STARTED_AT_PATCH,
     }
@@ -284,6 +286,42 @@ def test_wait_resume_sequence_keeps_truthful_step_state(monkeypatch):
     row = parent._step_ledger_row_for("step-1")
     assert row["waitingReason"] is None
     assert row["summary"] == "Agent is running."
+    assert parent._state == STATE_EXECUTING
+
+
+def test_pre_resume_patch_history_rejects_capacity_requeue(monkeypatch):
+    """Histories without the resume-edges patch keep the prior reducer.
+
+    ``launching -> awaiting_slot`` stays stale (no ``_set_state``
+    memo/search-attribute upsert) so replay matches the recorded history.
+    """
+
+    pre_resume_patches = frozenset(
+        {
+            AGENT_RUN_PROGRESS_PATCH_ID,
+            RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH,
+            RUN_REAL_STARTED_AT_PATCH,
+        }
+    )
+    parent = _install_parent(monkeypatch, pre_resume_patches)
+    parent.agent_run_progress(
+        _projection_payload(
+            projection_revision=1, state="launching", reason_code="launching"
+        )
+    )
+    assert parent._state == STATE_EXECUTING
+
+    parent.agent_run_progress(
+        _projection_payload(
+            projection_revision=2,
+            state="awaiting_slot",
+            reason_code="awaiting_provider_capacity",
+            wait_code="provider_capacity",
+        )
+    )
+    entry = parent._agent_run_progress_by_child[CHILD_WF]
+    assert entry["acceptedRevision"] == 1
+    assert entry["acceptedState"] == "launching"
     assert parent._state == STATE_EXECUTING
 
 
@@ -450,7 +488,9 @@ def test_emitter_routes_to_matching_parent_signal():
     source = repo_root.joinpath(
         "moonmind/workflows/temporal/workflows/agent_run.py"
     ).read_text()
-    gate = source.split("_signal_parent_child_state_changed", 1)[1]
+    # The legacy literal lives in the old-history fallback the cutover
+    # gate delegates to; anchor before it so the gate spans both.
+    gate = source.split("_signal_parent_legacy_child_state_changed", 1)[1]
     # New histories route to the typed projection; old histories retain
     # the legacy signal. Both names must stay classified.
     assert AGENT_RUN_PROGRESS_SIGNAL_NAME in gate
@@ -484,6 +524,46 @@ def test_no_direct_legacy_signal_bypass_outside_cutover_gate():
         "moonmind/workflows/temporal/workflows/agent_run.py"
     ).read_text()
     assert source.count('"child_state_changed"') == 1
+
+
+def test_slot_acquired_routing_versioned_by_fresh_patch():
+    """Slot-acquired emission keeps replay compatibility via a fresh patch.
+
+    In-flight histories that recorded ``AGENT_RUN_PROGRESS_PATCH_ID``
+    during the preceding ``awaiting_slot`` emission recorded a direct
+    legacy ``child_state_changed`` signal at slot acquisition (the routing
+    cutover came later). Replaying such a history through the new routed
+    helper would emit ``agent_run_progress`` instead and Temporal would
+    reject the workflow task as nondeterministic. The slot-acquisition
+    site must therefore select the routed helper only behind a fresh
+    patch marker and retain the recorded legacy command otherwise.
+    """
+
+    import pathlib
+
+    from moonmind.workflows.temporal.workflows.agent_run import (
+        AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID,
+    )
+
+    assert (
+        AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID
+        == "agent-run-slot-acquired-progress-v1"
+    )
+
+    here = pathlib.Path(__file__).resolve()
+    repo_root = next(
+        candidate
+        for candidate in (here.parent, *here.parents)
+        if (candidate / "moonmind" / "workflows").is_dir()
+    )
+    source = repo_root.joinpath(
+        "moonmind/workflows/temporal/workflows/agent_run.py"
+    ).read_text()
+    anchor = source.index("Slot acquired for")
+    slot_block = source[max(0, anchor - 2000) : anchor + 800]
+    assert "AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID" in slot_block
+    assert "_signal_parent_child_state_changed" in slot_block
+    assert "_signal_parent_legacy_child_state_changed" in slot_block
 
 
 def test_omnigent_activity_emissions_funnel_to_retained_consumer():

@@ -460,6 +460,76 @@ def test_true_regression_still_rejected_after_resume_rules():
     )
 
 
+def test_launching_requeue_rejected_without_resume_edges_patch():
+    """Old histories retain the prior reducer for replay compatibility.
+
+    The ``launching -> awaiting_slot`` capacity-requeue edge (and the other
+    resume edges) was added after the progress cutover. Histories recorded
+    while the reducer rejected that edge must keep rejecting it: accepting
+    it on replay would emit memo/search-attribute upsert commands absent
+    from the recorded history and wedge the workflow nondeterministically.
+    New histories opt in through
+    ``AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID``.
+    """
+
+    from moonmind.schemas.agent_run_progress import (
+        AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID,
+    )
+
+    assert (
+        AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID
+        == "agent-run-progress-resume-edges-v1"
+    )
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="launching", reasonCode="launching"
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="awaiting_slot",
+                reasonCode="awaiting_provider_capacity",
+                waitCode="provider_capacity",
+            ),
+            enable_resume_edges=False,
+        ).disposition
+        == "stale"
+    )
+
+
+def test_wait_resume_rejected_without_resume_edges_patch():
+    """Old histories reject wait -> running resume edges as before."""
+
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="awaiting_feedback",
+                reasonCode="awaiting_feedback", waitCode="feedback",
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="running", reasonCode="running"
+            ),
+            enable_resume_edges=False,
+        ).disposition
+        == "stale"
+    )
+
+
 # --- REQ-A3: retries, replacement, Continue-As-New, delayed old runs ------
 
 def test_bounded_pending_observation_before_run_identity_established():
@@ -569,6 +639,7 @@ def test_emitter_retry_reconciles_as_duplicate_without_repeating_work():
         agent_run_run_id="child-run-A",
     )
     first = emitter.build(state="running", reason_code="running")
+    assert first["projectionRevision"] == 1
     emitter.mark_delivered()
     changed = emitter.build(
         state="awaiting_feedback", reason_code="awaiting_feedback",
