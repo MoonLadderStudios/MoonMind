@@ -627,32 +627,40 @@ GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against=
 
 Return artifact-backed comparison, provider diff refs, gate/diagnostic summaries,
 and bounded explanation, not an inferred merge or promotion. The record applies
-one explicit rubric (default `checkpoint-branch-gates`) against one explicit
-objective, preserves both candidate identities, and carries source differences,
-missing-evidence flags, measurement limits, observed-versus-estimated costs,
-input/rubric/cost provenance, an explicit winner-or-none outcome, and a
-no-side-effect attestation (no launched work, default change, deployment,
-promotion, publication, or authorized inference). A partial, failed, or
-evidence-poor sample reports `winner.candidate: none` without a universal
-quality or security claim; incompatible lineage fails closed with
-`incompatible_checkpoint_lineage`. Repeat reads with the same objective resume
-the same ledgered report without rerunning candidates.
+the single supported rubric (`checkpoint-branch-gates`; any other `rubricId` is
+rejected) against one explicit objective, preserves both candidate identities,
+and carries source differences, missing-evidence flags, measurement limits,
+observed-versus-estimated costs, input/rubric/cost provenance, an explicit
+winner-or-none outcome, and a no-side-effect attestation (no launched work,
+default change, deployment, promotion, publication, or authorized inference).
+Gate verdicts fall back to the persisted verifier result
+(`latest_verification_verdict`) when promotion gate evidence is absent, and
+budgets fall back to the canonical `diagnostics.runtimeSelection` bound. A
+partial, failed, or evidence-poor sample reports `winner.candidate: none`
+without a universal quality or security claim; incompatible lineage fails
+closed with `incompatible_checkpoint_lineage`. Repeat reads with the same
+objective resume the same ledgered report without rerunning candidates; new
+diagnostics evidence invalidates the cached report.
 
 ```http
 POST /api/executions/{workflowId}/checkpoint-branches/comparison-preview
 ```
 
 Preview comparison-requested candidate generation without side effects. With
-`allowNewRuns: false` every candidate must name its existing branch and the
-preview authorizes no new inference. With `allowNewRuns: true` each requested
-candidate needs an explicit bounded configuration (shared `sourceIntentRef`,
-explicit `maxBudgetUsd`, isolated workspace, fresh agent run) under the
-existing provider/resource budgets; creation itself stays on the ordinary
-create/continue/fork admission path. Candidate sets are small and explicit
-(2-4); Cartesian expansion fields are rejected, not expanded. The response
-reports the selected run count plus material cost/privacy/authority changes and
-a stable preview digest, so duplicate or interrupted previews cannot duplicate
-completed compute.
+`allowNewRuns: false` every candidate must name a distinct existing branch that
+already has a completed head result, and the preview authorizes no new
+inference. With `allowNewRuns: true` each requested candidate needs an explicit
+bounded configuration (shared non-blank `sourceIntentRef`, positive finite
+`maxBudgetUsd`, explicit workspace policy, fresh agent run) under the existing
+provider/resource budgets; reuse candidates must not carry new-run settings,
+and creation itself stays on the ordinary create/continue/fork admission path.
+Workspace isolation is attested only when every requested run names an
+isolating policy; otherwise the preview reports the non-isolated policy
+honestly. Candidate sets are small and explicit (2-4); Cartesian expansion
+fields are rejected, not expanded. Only the `checkpoint-branch-gates` rubric
+is supported. The response reports the selected run count plus material
+cost/privacy/authority changes and a stable preview digest, so duplicate or
+interrupted previews cannot duplicate completed compute.
 
 ### 8.7 Promote branch
 
