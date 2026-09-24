@@ -34,7 +34,6 @@ from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_FEATURE_GENERATION,
 )
 
-
 # The deployment-managed OpenCode Agent Profile allows both the generic and
 # the harness-shaped launch policy; admission always selects the first.
 _OPENCODE_ALLOWED_LAUNCH_POLICIES = [
@@ -58,12 +57,22 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str
         import os
 
         host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
-        if not host_ref:
+        shared_ref = os.environ.get("OMNIGENT_SHARED_HOST_IMAGE_REF", "")
+        if not host_ref and not shared_ref:
             return None
         return SimpleNamespace(
             server_image_ref=os.environ.get("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF),
             opencode_host_image_ref=host_ref,
+            shared_host_image_ref=shared_ref,
             details={
+                "hostImageProvenance": {
+                    image_ref: {
+                        "buildDigest": provenance["hostBuildDigest"],
+                        "version": provenance["hostVersion"],
+                    }
+                    for image_ref in (host_ref, shared_ref)
+                    if image_ref
+                },
                 "opencodeHostCompatibility": {
                     "status": "ready",
                     "failureCode": None,
@@ -72,7 +81,7 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str
                     ),
                     "hostImageRef": host_ref,
                     **provenance,
-                }
+                },
             },
         )
 
@@ -277,6 +286,17 @@ def test_skill_admission_rejects_excluded_selected_skill(payload_key: str) -> No
 
 
 def _snapshot(*, harness: str, policy: str, provider_id: str) -> dict:
+    oauth_harness = harness in {"codex-native", "claude-native"}
+    provider_runtime = {
+        "codex-native": "codex_cli",
+        "claude-native": "claude_code",
+        "opencode-native": "opencode",
+    }[harness]
+    provider_name = {
+        "codex-native": "openai",
+        "claude-native": "anthropic",
+        "opencode-native": "openai",
+    }[harness]
     return {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": f"profile-{harness}",
@@ -305,13 +325,11 @@ def _snapshot(*, harness: str, policy: str, provider_id: str) -> dict:
                 "allowedLaunchPolicyRefs": [policy],
             },
             "providerRequirements": {
-                "runtimeId": ("codex_cli" if harness == "codex-native" else "opencode"),
-                "providerIds": ["openai"],
-                "credentialSource": (
-                    "oauth_volume" if harness == "codex-native" else "secret_ref"
-                ),
+                "runtimeId": provider_runtime,
+                "providerIds": [provider_name],
+                "credentialSource": "oauth_volume" if oauth_harness else "secret_ref",
                 "materializationMode": (
-                    "oauth_home" if harness == "codex-native" else "generated_file"
+                    "oauth_home" if oauth_harness else "generated_file"
                 ),
             },
             "model": {"model": "example/model", "settings": {}},
@@ -344,10 +362,18 @@ def _policy_snapshot(
     ).model_dump(mode="json", by_alias=True)
     document["execution"]["harness"] = harness
     document["execution"]["agentIdentities"] = [
-        "opencode" if harness == "opencode-native" else "codex"
+        {
+            "codex-native": "codex-native-ui",
+            "claude-native": "claude-native-ui",
+            "opencode-native": "opencode",
+        }[harness]
     ]
     document["providerProfile"]["compatibleProviders"] = [
-        "opencode" if harness == "opencode-native" else "codex"
+        {
+            "codex-native": "codex",
+            "claude-native": "anthropic",
+            "opencode-native": "opencode",
+        }[harness]
     ]
     if architecture is not None:
         document["host"]["architectures"] = [architecture]
@@ -394,6 +420,7 @@ def _protected_support_evidence(plan_payload) -> dict[str, object]:
     ("harness", "policy", "realizer"),
     [
         ("codex-native", "codex-on-demand@1", "codex-profile-bound@1"),
+        ("claude-native", "claude-on-demand@1", "generic-omnigent-host@1"),
         ("opencode-native", "opencode-on-demand@1", "generic-omnigent-host@1"),
         ("opencode-native", "opencode-on-demand@2", "generic-omnigent-host@1"),
     ],
@@ -419,6 +446,12 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
         return _policy_snapshot(harness=harness, policy=policy)
 
     monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    if harness == "claude-native":
+        monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+        monkeypatch.setenv(
+            "OMNIGENT_SHARED_HOST_IMAGE_REF",
+            "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+        )
     if harness == "opencode-native":
         monkeypatch.setenv(
             "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
@@ -436,8 +469,16 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
         ),
         provider_profile=SimpleNamespace(
             profile_id=provider_id,
-            runtime_id=("opencode" if harness == "opencode-native" else "codex_cli"),
-            provider_id=("opencode-go" if harness == "opencode-native" else "openai"),
+            runtime_id={
+                "codex-native": "codex_cli",
+                "claude-native": "claude_code",
+                "opencode-native": "opencode",
+            }[harness],
+            provider_id={
+                "codex-native": "openai",
+                "claude-native": "anthropic",
+                "opencode-native": "opencode-go",
+            }[harness],
         ),
         initial_parameters={
             "model": "example/model",
@@ -559,10 +600,10 @@ async def test_product_boundary_uses_exact_arm64_architecture_for_support_identi
     assert result.envelope.payload.supportIdentity is not None
     assert result.envelope.payload.supportIdentity.architecture == "linux/arm64"
 
+    from moonmind.omnigent import deployment_identity
     from moonmind.workflows.temporal.activities.omnigent_session_activities import (
         _validate_plan_support_authority,
     )
-    from moonmind.omnigent import deployment_identity
 
     monkeypatch.setattr(
         deployment_identity,
@@ -749,13 +790,18 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
             "publishMode": "none",
             "workflow": {"instructions": "Read the repository."},
             "omnigentExecutionPlan": result.binding.model_dump(
-                mode="json", by_alias=True,
+                mode="json",
+                by_alias=True,
             ),
         }
         target = {"initialParameters": parameters, "agentProfileSnapshot": snapshot}
         definition = RecurringWorkflowDefinition(
-            name="Catalog authority replay", cron="0 * * * *", timezone="UTC",
-            owner_user_id=None, version=1, target=target,
+            name="Catalog authority replay",
+            cron="0 * * * *",
+            timezone="UTC",
+            owner_user_id=None,
+            version=1,
+            target=target,
         )
         db_session.add(definition)
         await db_session.flush()
@@ -950,8 +996,7 @@ async def test_catalog_authority_failure_cannot_select_fixture_or_latest(
             db_session=session if access == "session" else None,
         )
     assert (
-        error.value.code
-        == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
+        error.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
     )
     latest.assert_not_awaited()
 
@@ -1080,12 +1125,13 @@ async def test_authored_step_capabilities_reach_mounted_tool_authority(
     monkeypatch,
     contract_kind,
 ) -> None:
+    from unittest.mock import AsyncMock
+
     from api_service.api.routers.executions import _merge_workflow_required_capabilities
     from moonmind.omnigent.host_services.github_credentials import (
         OmnigentGithubCredentialService,
     )
     from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
-    from unittest.mock import AsyncMock
 
     requirements = _merge_workflow_required_capabilities(
         [],
@@ -1124,8 +1170,8 @@ async def test_workflow_cannot_self_attest_an_unknown_capability(
 ) -> None:
     """Authored requirements are requests, never bridge support evidence."""
 
-    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from api_service.api.routers.executions import _merge_workflow_required_capabilities
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
     requirements = _merge_workflow_required_capabilities(
         ["custom-capability"] if source == "workflow" else [],
@@ -1150,10 +1196,11 @@ async def test_workflow_cannot_self_attest_an_unknown_capability(
 @pytest.mark.asyncio
 async def test_docker_only_plan_materializes_the_projected_container_cli(monkeypatch):
     from unittest.mock import AsyncMock
-    from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
+
     from moonmind.omnigent.host_services.github_credentials import (
         OmnigentGithubCredentialService,
     )
+    from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
 
     monkeypatch.setattr(
         service,
@@ -1210,11 +1257,7 @@ async def test_resolved_fanout_is_admitted_as_platform_owned_capability(
     async def resolve_skills(**_kwargs):
         return (
             SimpleNamespace(
-                skills=[
-                    SimpleNamespace(
-                        required_capabilities=["execution.fanout"]
-                    )
-                ]
+                skills=[SimpleNamespace(required_capabilities=["execution.fanout"])]
             ),
             "art_skill_manifest",
             "sha256:" + "5" * 64,
@@ -1538,7 +1581,9 @@ async def test_untrusted_evidence_values_are_redacted_from_admission_errors(
 
 
 @pytest.mark.asyncio
-async def test_create_plan_reports_bootstrap_quarantine_instead_of_invalid_digest(monkeypatch):
+async def test_create_plan_reports_bootstrap_quarantine_instead_of_invalid_digest(
+    monkeypatch,
+):
     """A pinned pre-cache image must expose its real rejection at Create."""
     from moonmind.omnigent.bootstrap import store
     from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
@@ -1547,18 +1592,24 @@ async def test_create_plan_reports_bootstrap_quarantine_instead_of_invalid_diges
     state = SimpleNamespace(
         server_image_ref=_SERVER_IMAGE_REF,
         opencode_host_image_ref=host_ref,
-        details={"opencodeHostCompatibility": {
-            "status": "blocked",
-            "failureCode": "omnigent_host_bootstrap_contract_missing",
-            "serverImageRef": _SERVER_IMAGE_REF,
-            "hostImageRef": host_ref,
-        }},
+        details={
+            "opencodeHostCompatibility": {
+                "status": "blocked",
+                "failureCode": "omnigent_host_bootstrap_contract_missing",
+                "serverImageRef": _SERVER_IMAGE_REF,
+                "hostImageRef": host_ref,
+            }
+        },
     )
     monkeypatch.setattr(store, "load_resolved_state", lambda: state)
-    with pytest.raises(HarnessPlatformError, match="omnigent_host_bootstrap_contract_missing"):
+    with pytest.raises(
+        HarnessPlatformError, match="omnigent_host_bootstrap_contract_missing"
+    ):
         await _compile_opencode_plan(
-            monkeypatch, artifacts=_ArtifactService(),
-            launch_policy_ref="opencode-on-demand@1", plan_store=_PlanStore(object()),
+            monkeypatch,
+            artifacts=_ArtifactService(),
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
         )
 
 
@@ -1597,9 +1648,12 @@ def test_build_v2_profile_keeps_stable_agent_source_across_model_only_bump() -> 
         }
 
     def _snapshot(doc: dict, version: int) -> dict:
-        digest = "sha256:" + hashlib.sha256(
-            json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        digest = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+        )
         return {
             "document": doc,
             "digest": digest,
