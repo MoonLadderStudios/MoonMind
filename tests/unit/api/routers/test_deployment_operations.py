@@ -16,10 +16,12 @@ from api_service.api.routers.deployment_operations import (
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.services.deployment_operations import (
+    DeploymentOperationError,
     DeploymentOperationsService,
     DeploymentRecentAction,
     RollbackEligibilityDecision,
     RollbackImageTarget,
+    _ControllerUnavailable,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_tools import (
@@ -639,11 +641,8 @@ def test_update_prefers_standalone_controller_over_legacy_workflow(
     admin_client: tuple[TestClient, _FakeExecutionService],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import api_service.services.deployment_operations as operations
-
     monkeypatch.setattr(
-        operations,
-        "submit_controller_update",
+        "api_service.services.deployment_operations.submit_controller_update",
         lambda **kwargs: {"operationId": "op-1", "status": "staged"},
     )
     client, execution_service = admin_client
@@ -667,16 +666,13 @@ def test_controller_unavailable_falls_back_to_legacy_workflow(
 ) -> None:
     import asyncio
 
-    import api_service.services.deployment_operations as operations
-
     monkeypatch.setattr(
-        operations,
-        "submit_controller_update",
+        "api_service.services.deployment_operations.submit_controller_update",
         lambda **kwargs: (_ for _ in ()).throw(
-            operations._ControllerUnavailable("down")
+            _ControllerUnavailable("down")
         ),
     )
-    service = operations.DeploymentOperationsService()
+    service = DeploymentOperationsService()
     policy = service.get_policy("moonmind")
     execution_service = _FakeExecutionService()
     queued = asyncio.run(
@@ -695,18 +691,18 @@ def test_controller_ownership_never_forks_legacy_workflow(
 ) -> None:
     import asyncio
 
-    import api_service.services.deployment_operations as operations
-
     def _owned(**kwargs: object) -> dict[str, object]:
-        raise operations.DeploymentOperationError(
+        raise DeploymentOperationError(
             "deployment_controller_owned", "controller owns the stack"
         )
 
-    monkeypatch.setattr(operations, "submit_controller_update", _owned)
-    service = operations.DeploymentOperationsService()
+    monkeypatch.setattr(
+        "api_service.services.deployment_operations.submit_controller_update", _owned
+    )
+    service = DeploymentOperationsService()
     policy = service.get_policy("moonmind")
     execution_service = _FakeExecutionService()
-    with pytest.raises(operations.DeploymentOperationError):
+    with pytest.raises(DeploymentOperationError):
         asyncio.run(
             service.queue_update(
                 execution_service=execution_service,
@@ -722,19 +718,15 @@ def test_recent_actions_observe_the_same_controller_operation(
 ) -> None:
     import asyncio
 
-    import api_service.services.deployment_operations as operations
-
     monkeypatch.setattr(
-        operations,
-        "submit_controller_update",
+        "api_service.services.deployment_operations.submit_controller_update",
         lambda **kwargs: {"operationId": "op-9", "status": "applying"},
     )
     monkeypatch.setattr(
-        operations,
-        "observe_controller_operation",
+        "api_service.services.deployment_operations.observe_controller_operation",
         lambda **kwargs: {"operationId": "op-9", "status": "succeeded"},
     )
-    service = operations.DeploymentOperationsService()
+    service = DeploymentOperationsService()
     policy = service.get_policy("moonmind")
     asyncio.run(
         service.queue_update(
@@ -756,8 +748,6 @@ def test_stack_state_surfaces_durable_controller_operations(
 ) -> None:
     import json as _json
 
-    import api_service.services.deployment_operations as operations
-
     operations_dir = tmp_path / "operations"
     operations_dir.mkdir()
     (operations_dir / "op-7.json").write_text(
@@ -774,7 +764,7 @@ def test_stack_state_surfaces_durable_controller_operations(
         )
     )
     monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(tmp_path))
-    service = operations.DeploymentOperationsService()
+    service = DeploymentOperationsService()
     actions = service.recent_actions("moonmind")
     assert [(action.run_id, action.status) for action in actions] == [
         ("ctl_op-7", "SUCCEEDED")
