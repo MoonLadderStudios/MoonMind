@@ -7344,14 +7344,16 @@ class MoonMindAgentRun:
                     overall_start = workflow.now()
 
                     self.run_status = RunStatus.launching
-                    if parent_info:
-                        parent_handle = workflow.get_external_workflow_handle(
-                            parent_info.workflow_id, run_id=parent_info.run_id
-                        )
-                        await parent_handle.signal(
-                            "child_state_changed",
-                            args=["launching", f"Slot acquired for {runtime_id}"]
-                        )
+                    # MoonLadderStudios/MoonMind#1088: route through the
+                    # single cutover gate so new histories emit the typed
+                    # projection and old histories retain the legacy
+                    # signal; a direct legacy signal here would bypass the
+                    # single new-write path.
+                    await self._signal_parent_child_state_changed(
+                        parent_info,
+                        "launching",
+                        f"Slot acquired for {runtime_id}",
+                    )
                     request.execution_profile_ref = self._assigned_profile_id
                     if workflow.patched(
                         AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID
