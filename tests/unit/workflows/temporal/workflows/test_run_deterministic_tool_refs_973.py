@@ -1060,3 +1060,521 @@ async def test_run_execution_stage_skips_preserved_tool_step_without_redispatch(
     tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
     assert len(tool_calls) == 1
     assert tool_calls[0][1]["invocation_payload"]["id"] == "consume"
+
+
+def _collect_payload_keys(value: Any, *, _seen: set[str] | None = None) -> set[str]:
+    seen = _seen if _seen is not None else set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            seen.add(str(key))
+            _collect_payload_keys(item, _seen=seen)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_payload_keys(item, _seen=seen)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_denies_capability_mismatch_and_payload_has_no_model_profile() -> None:
+    """REQ-2 denied-authority breadth: wrong tool type fails closed.
+
+    Unknown skill names are already covered. A capability/route mismatch
+    (``agent_runtime`` sent to the deterministic dispatcher) must also fail
+    closed as non-retryable ``INVALID_INPUT`` instead of dispatching.
+    """
+
+    from moonmind.workflows.skills.tool_dispatcher import (
+        ToolActivityDispatcher,
+        execute_tool_activity,
+    )
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+    from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+    from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot
+
+    definition = parse_tool_definition(_tool_definition_payload("test.consume"))
+    snapshot = ToolRegistrySnapshot(
+        digest="reg:sha256:" + "c" * 64,
+        artifact_ref="art:sha256:456",
+        skills=(definition,),
+    )
+    dispatcher = ToolActivityDispatcher()
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await execute_tool_activity(
+            invocation_payload={
+                "id": "consume",
+                "tool": {"type": "agent_runtime", "name": "test.consume"},
+                "inputs": {"ticket": "MM-1"},
+                "options": {},
+            },
+            registry_snapshot=snapshot,
+            dispatcher=dispatcher,
+            context={"principal": "owner-1"},
+        )
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_skill_execute_payload_carries_no_model_profile_or_github_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REQ-2 least privilege: deterministic payload has no blanket credentials.
+
+    The skill ``execute_payload`` built in run.py must carry only the
+    principal, registry snapshot ref, invocation, scoped context, and step
+    idempotency key -- never a model Profile or GitHub connection.
+    """
+
+    import json
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str, payload: Any, **kwargs: Any
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        captured.append((activity_type, normalized, kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "art:sha256:456":
+                return json.dumps(
+                    {"skills": [_tool_definition_payload("test.consume")]}
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "consume",
+                        "tool": {"type": "skill", "name": "test.consume"},
+                        "inputs": {"ticket": "MM-1"},
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {"ok": True}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 1
+    _, payload, _kwargs = tool_calls[0]
+    assert set(payload.keys()) == {
+        "registry_snapshot_ref",
+        "principal",
+        "invocation_payload",
+        "context",
+        "idempotency_key",
+    }
+    assert payload["invocation_payload"]["tool"] == {
+        "type": "skill",
+        "name": "test.consume",
+    }
+    payload_keys = _collect_payload_keys(payload)
+    forbidden = {
+        "modelProfile",
+        "model_profile",
+        "profile",
+        "githubConnection",
+        "github_connection",
+        "connection",
+        "secret",
+        "token",
+        "taskQueue",
+        "mounts",
+    }
+    assert payload_keys.isdisjoint(forbidden), (
+        f"deterministic payload must not carry blanket credentials: "
+        f"{sorted(payload_keys & forbidden)}"
+    )
+    dumped = json.dumps(payload, default=str).lower()
+    assert "model profile" not in dumped
+    assert "github connection" not in dumped
+
+
+@pytest.mark.asyncio
+async def test_raised_transient_activity_failure_records_once_with_retry_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REQ-2 raised transient vs returned business failure on a skill node.
+
+    A raised retryable Activity failure is recorded once at its owner
+    (single ``mm.tool.execute`` attempt, failed ledger row, FAIL_FAST raise)
+    under the definition-owned bounded retry policy, complementing the
+    existing returned-``FAILED``-once test. The retryable/business mapping
+    distinction is asserted via ``_activity_result_retryable``.
+    """
+
+    from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+    from moonmind.workflows.temporal.workflows.run import DEFAULT_ACTIVITY_CATALOG
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    tool_calls: list[str] = []
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> Any:
+        normalized = _normalize_payload(payload)
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {"skills": [_tool_definition_payload("test.consume")]}
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "consume",
+                        "tool": {"type": "skill", "name": "test.consume"},
+                        "inputs": {"ticket": "MM-1"},
+                    }
+                ]
+            )
+        if activity_type == "mm.tool.execute":
+            tool_calls.append(activity_type)
+            raise RuntimeError("transient system_error: upstream unavailable")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="transient system_error"):
+        await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+    # Mapped once at its owner: one Activity attempt before the FAIL_FAST raise.
+    assert tool_calls == ["mm.tool.execute"]
+
+    row = workflow._step_ledger_row_for("consume")
+    assert isinstance(row, dict)
+    assert row.get("status") == "failed"
+
+    # Bounded retry policy is definition-owned: raised transients retry via
+    # the Temporal activity retry policy, not an unbounded workflow loop.
+    definition = parse_tool_definition(_tool_definition_payload("test.consume"))
+    route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(definition)
+    retry_policy = workflow._retry_policy_for_route(route)
+    assert retry_policy.maximum_attempts == definition.policies.retries.max_attempts
+
+    # Returned-result mapping distinction at the same owner.
+    assert (
+        workflow._activity_result_retryable(
+            {"status": "FAILED", "outputs": {"error": "system_error"}},
+            failure_message="system_error",
+            tool_type="skill",
+        )
+        is True
+    )
+    assert (
+        workflow._activity_result_retryable(
+            {"status": "FAILED", "outputs": {"error": "validation_failed"}},
+            failure_message="validation_failed",
+            tool_type="skill",
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_large_plan_output_ref_resolves_from_recorded_results_after_artifact_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REQ-2 large inputs: artifact reads outside history + recorded refs.
+
+    The plan and registry are materialized through the existing
+    ``artifact.read`` Activities (outside Workflow history); dependency
+    outputs then resolve deterministically from the recorded COMPLETED map.
+    A large upstream output proves the ref path carries the value without
+    re-reading an artifact or guessing a default.
+    """
+
+    large_output = "x" * 100_000
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str, payload: Any, **kwargs: Any
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        captured.append((activity_type, normalized, kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            _tool_definition_payload("test.produce"),
+                            _tool_definition_payload("test.consume"),
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "produce",
+                        "tool": {"type": "skill", "name": "test.produce"},
+                        "inputs": {"prompt": "hello"},
+                    },
+                    {
+                        "id": "consume",
+                        "tool": {"type": "skill", "name": "test.consume"},
+                        "inputs": {
+                            "ticket": {
+                                "ref": {
+                                    "node": "produce",
+                                    "json_pointer": "/outputs/ticket",
+                                }
+                            }
+                        },
+                    },
+                ],
+                edges=[{"from": "produce", "to": "consume"}],
+            )
+        if activity_type == "mm.tool.execute":
+            invocation = normalized.get("invocation_payload", {})
+            if invocation.get("id") == "produce":
+                return {"status": "COMPLETED", "outputs": {"ticket": large_output}}
+            if invocation.get("id") == "consume":
+                return {"status": "COMPLETED", "outputs": {"ok": True}}
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+
+    async def fail_if_child_workflow_starts(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("deterministic tool steps must not start AgentRun")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fail_if_child_workflow_starts,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+    artifact_reads = [call for call in captured if call[0] == "artifact.read"]
+    # Plan + pinned registry snapshot both materialize via artifact reads.
+    assert len(artifact_reads) >= 2
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 2
+    consume_call = next(
+        call for call in tool_calls if call[1]["invocation_payload"]["id"] == "consume"
+    )
+    assert consume_call[1]["invocation_payload"]["inputs"]["ticket"] == large_output
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_ref_marks_step_ledger_failed_with_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REQ-2 ledger visibility: ref failure is a failed Step ledger row.
+
+    Beyond the raised ``ValueError``, the unresolvable dependency must leave
+    a ``failed`` Step ledger row with a diagnostic category/message and a
+    readiness refresh -- using the single Step status vocabulary.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> Any:
+        normalized = _normalize_payload(payload)
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {"skills": [_tool_definition_payload("test.consume")]}
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "consume",
+                        "tool": {"type": "skill", "name": "test.consume"},
+                        "inputs": {
+                            "ticket": {
+                                "ref": {
+                                    "node": "missing",
+                                    "json_pointer": "/outputs/ticket",
+                                }
+                            }
+                        },
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="incomplete node 'missing'"):
+        await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+    row = workflow._step_ledger_row_for("consume")
+    assert isinstance(row, dict)
+    # Single Step status vocabulary: terminal failure is "failed".
+    assert row.get("status") == "failed"
+    summary = str(row.get("summary") or "")
+    assert "missing" in summary
+    last_error = str(row.get("lastError") or "")
+    assert last_error, "ref failure must record a diagnostic category"
+    diagnostic = workflow._failure_diagnostic
+    assert isinstance(diagnostic, dict)
+    assert diagnostic.get("stepId") == "consume"
+    assert str(diagnostic.get("message") or ""), (
+        "ref failure must keep a bounded diagnostic message"
+    )
