@@ -458,6 +458,8 @@ async def test_inline_and_merge_are_unavailable_without_blocking_reads_or_notes(
     def _handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
             return httpx.Response(201, json={"id": 11, "body": "note"})
+        if request.url.path.endswith("/notes"):
+            return httpx.Response(200, json=[])
         if request.url.path.endswith("/approvals"):
             return httpx.Response(200, json={"approved": True})
         if request.url.path.endswith("/pipelines"):
@@ -504,3 +506,173 @@ async def test_github_only_resolver_rejects_gitlab_input_before_paid_execution()
         ensure_github_only_selector("https://github.com/o/r/pull/123")
         == "https://github.com/o/r/pull/123"
     )
+
+
+# ---------------------------------------------------------------------------
+# P1 review findings for #4548: bound credential, safe retry, fresh reconcile
+# ---------------------------------------------------------------------------
+
+
+def _bound_acquired(*, endpoint: str, operations: tuple[str, ...]):
+    from types import SimpleNamespace
+
+    class _Cred:
+        def use_now(self, fn):
+            return fn(b"glpat-bound-token")
+
+    return SimpleNamespace(
+        binding=SimpleNamespace(endpoint=endpoint, operations=operations),
+        credential=_Cred(),
+    )
+
+
+async def test_bound_credential_rejects_endpoint_mismatch() -> None:
+    from moonmind.integrations.gitlab.client import connection_from_bound_credential
+
+    acquired = _bound_acquired(
+        endpoint="https://gitlab.example.com", operations=("read", "write")
+    )
+    with pytest.raises(GitLabIdentityError):
+        connection_from_bound_credential(
+            acquired,
+            endpoint="https://gitlab-other.example.com",
+            admitted_endpoints=(
+                "https://gitlab.example.com",
+                "https://gitlab-other.example.com",
+            ),
+            action="read_mr",
+        )
+    # Matching endpoint still builds.
+    connection = connection_from_bound_credential(
+        acquired,
+        endpoint="https://gitlab.example.com/",
+        admitted_endpoints=ADMITTED,
+        action="read_mr",
+    )
+    assert connection.base_url.startswith("https://gitlab.example.com")
+
+
+async def test_bound_credential_enforces_write_permission() -> None:
+    from moonmind.integrations.gitlab.client import connection_from_bound_credential
+
+    read_only = _bound_acquired(
+        endpoint="https://gitlab.example.com", operations=("read",)
+    )
+    with pytest.raises(GitLabIdentityError):
+        connection_from_bound_credential(
+            read_only,
+            endpoint="https://gitlab.example.com",
+            admitted_endpoints=ADMITTED,
+            action="post_note",
+        )
+    # Read-only acquisition still authorizes reads.
+    connection = connection_from_bound_credential(
+        read_only,
+        endpoint="https://gitlab.example.com",
+        admitted_endpoints=ADMITTED,
+        action="read_mr",
+    )
+    assert connection.base_url.startswith("https://gitlab.example.com")
+
+
+async def test_mutation_transient_status_does_not_auto_repeat() -> None:
+    posts: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            return httpx.Response(502, json={"message": "bad gateway"})
+        return httpx.Response(200, json=[])
+
+    connection, injected = _connection(_handler, retry_attempts=3)
+    client = GitLabClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(GitLabToolError):
+            await client.request_json(
+                method="POST",
+                path="/projects/99/merge_requests/7/notes",
+                action="post_note",
+                json_body={"body": "x"},
+            )
+    finally:
+        await injected.aclose()
+    assert len(posts) == 1
+
+
+async def test_safe_read_transient_status_still_retries() -> None:
+    calls: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(503, json={"message": "busy"})
+        return httpx.Response(200, json={"ok": True})
+
+    connection, injected = _connection(_handler, retry_attempts=3)
+    client = GitLabClient(connection=connection, client=injected)
+    try:
+        result = await client.request_json(
+            method="GET", path="/projects/99", action="read_mr"
+        )
+    finally:
+        await injected.aclose()
+    assert result == {"ok": True}
+    assert len(calls) == 2
+
+
+async def test_fresh_adapter_reconciles_footer_before_first_post() -> None:
+    calls: list[tuple[str, str]] = []
+    footer_body = "hello\n\n<!-- moonmind:gitlab-note operation:op:fresh -->"
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(
+                200, json=[{"id": 4242, "body": footer_body}]
+            )
+        return httpx.Response(201, json={"id": 9999, "body": "duplicate"})
+
+    connection, injected = _connection(_handler)
+    client = GitLabClient(connection=connection, client=injected)
+    try:
+        ref = resolve_gitlab_identity(
+            endpoint="https://gitlab.example.com",
+            project="99",
+            mr_iid=MR_IID,
+            admitted_endpoints=ADMITTED,
+        )
+        adapter = GitLabMRAdapter(client=client, identity=ref)
+        result = await adapter.post_note(body="hello", operation_id="op:fresh")
+    finally:
+        await injected.aclose()
+    assert result["note_id"] == 4242
+    assert result["reconciled"] is True
+    assert all(method == "GET" for method, _ in calls)
+
+
+async def test_fresh_adapter_posts_after_empty_footer_lookup() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        return httpx.Response(201, json={"id": 31337, "body": "new"})
+
+    connection, injected = _connection(_handler)
+    client = GitLabClient(connection=connection, client=injected)
+    try:
+        ref = resolve_gitlab_identity(
+            endpoint="https://gitlab.example.com",
+            project="99",
+            mr_iid=MR_IID,
+            admitted_endpoints=ADMITTED,
+        )
+        adapter = GitLabMRAdapter(client=client, identity=ref)
+        result = await adapter.post_note(body="new note", operation_id="op:new")
+    finally:
+        await injected.aclose()
+    assert result["note_id"] == 31337
+    assert result["reconciled"] is False
+    assert ("GET", f"/api/v4/projects/99/merge_requests/{MR_IID}/notes") in calls
+    assert ("POST", f"/api/v4/projects/99/merge_requests/{MR_IID}/notes") in calls
