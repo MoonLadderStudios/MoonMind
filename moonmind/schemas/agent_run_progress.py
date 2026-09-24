@@ -54,6 +54,14 @@ AGENT_RUN_PROGRESS_SCHEMA_VERSION = "agent-run-progress/v1"
 #: behavior (``child_state_changed``).
 AGENT_RUN_PROGRESS_PATCH_ID = "agent-run-progress-projection-v1"
 
+#: Named patch gating the owner-allowed resume edges in
+#: :data:`PROGRESS_LEGITIMATE_RESUME_EDGES` (capacity requeue and
+#: wait-resume paths). Histories recorded while the reducer rejected those
+#: backward moves must keep rejecting them on replay: accepting them would
+#: emit memo/search-attribute upsert commands absent from the recorded
+#: history and wedge the workflow nondeterministically.
+AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID = "agent-run-progress-resume-edges-v1"
+
 #: Canonical Temporal signal name for the projection.
 AGENT_RUN_PROGRESS_SIGNAL_NAME = "agent_run_progress"
 
@@ -788,12 +796,19 @@ def apply_agent_run_progress(
     payload: Mapping[str, Any],
     *,
     terminal_sealed: bool | None = None,
+    enable_resume_edges: bool = True,
 ) -> ProgressApplyOutcome:
     """Apply one projection payload through the single parent reducer.
 
     Never raises on invalid input: validation failures return bounded safe
     diagnostics so a malformed signal cannot poison the workflow task with
     repeated unhandled failures.
+
+    ``enable_resume_edges`` gates :data:`PROGRESS_LEGITIMATE_RESUME_EDGES`.
+    The parent workflow passes the ``workflow.patched`` marker for
+    :data:`AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID` so histories recorded
+    while the reducer rejected those backward moves keep rejecting them on
+    replay. Direct (non-workflow) callers default to the new semantics.
     """
 
     sealed = (
@@ -937,10 +952,11 @@ def apply_agent_run_progress(
                 disposition="stale",
                 diagnostics="accepted terminal progress cannot regress",
             )
-        if next_rank < previous_rank and (
+        resume_allowed = enable_resume_edges and (
             str(previous_state),
             str(projection.state),
-        ) not in PROGRESS_LEGITIMATE_RESUME_EDGES:
+        ) in PROGRESS_LEGITIMATE_RESUME_EDGES
+        if next_rank < previous_rank and not resume_allowed:
             return ProgressApplyOutcome(
                 disposition="stale",
                 diagnostics=(
@@ -1173,6 +1189,7 @@ class RolloverSnapshot:
 
 __all__ = [
     "AGENT_RUN_PROGRESS_PATCH_ID",
+    "AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID",
     "AGENT_RUN_PROGRESS_RETIREMENT_INVENTORY",
     "AGENT_RUN_PROGRESS_SCHEMA_VERSION",
     "AGENT_RUN_PROGRESS_SIGNAL_NAME",

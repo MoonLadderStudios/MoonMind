@@ -37,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_skill_models import ResolvedSkillSet, SkillSelector
     from moonmind.schemas.agent_run_progress import (
         AGENT_RUN_PROGRESS_PATCH_ID,
+        AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID,
         STEP_WAITING_REASONS,
         TERMINAL_PROGRESS_STATES,
         apply_agent_run_progress,
@@ -24784,6 +24785,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             state,
             payload,
             terminal_sealed=self._state == STATE_COMPLETED,
+            # Histories recorded while the reducer rejected the resume
+            # edges must keep rejecting them on replay; only histories
+            # carrying the fresh patch marker apply the new transitions.
+            enable_resume_edges=bool(
+                workflow.patched(
+                    AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID
+                )
+            ),
         )
         if outcome.disposition != "accepted" or outcome.accepted_state is None:
             self._get_logger().debug(
