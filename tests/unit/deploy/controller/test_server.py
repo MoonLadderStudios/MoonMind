@@ -666,3 +666,36 @@ def test_conflict_bodies_never_expose_error_detail(
     finally:
         httpd.shutdown()
         thread.join(timeout=10)
+
+
+def test_restart_orders_tied_timestamps_by_record_mtime(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    frozen = "2026-09-24T00:00:00.000+00:00"
+    monkeypatch.setattr(record, "_utc_now", lambda: frozen)
+    monkeypatch.setattr(server_mod.record_mod, "_utc_now", lambda: frozen)
+    store = record.OperationStore(tmp_path / "state")
+    stale = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:aaa",
+        source_revision="aaa",
+    )
+    current = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:bbb",
+        source_revision="bbb",
+    )
+    assert stale["createdAt"] == current["createdAt"]
+    applied = []
+
+    def applier(operation):
+        applied.append(operation["operationId"])
+        store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    result = server_mod.converge_on_restart(store, applier=applier)
+    assert applied == [current["operationId"]]
+    assert result["superseded"] == [stale["operationId"]]

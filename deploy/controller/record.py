@@ -54,7 +54,10 @@ def check_operation_id(operation_id: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    # Millisecond resolution keeps rapid successive operations (restart
+    # recovery, double-submit) distinctly ordered; second resolution ties
+    # and makes "newest open" selection nondeterministic.
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -93,17 +96,41 @@ class OperationStore:
         self.state_dir = Path(state_dir)
         self.operations_dir = self.state_dir / "operations"
 
-    def _path(self, operation_id: str) -> Path:
-        # Defense in depth: the caller-supplied id must match the safe
-        # alphabet, and only its basename may reach the filesystem, so a
-        # path escape is impossible even if validation regresses.
-        name = check_operation_id(operation_id)
-        return self.operations_dir / os.path.basename(f"{name}.json")
+    def _locate(self, operation_id: str) -> Path:
+        """Return the record file for a caller-supplied id, or raise KeyError.
+
+        The id is validated against the safe alphabet first, then resolved
+        strictly by enumerating the operations directory and matching the
+        filename. No caller-controlled string ever reaches path
+        construction, so a path escape is structurally impossible.
+        """
+        filename = check_operation_id(operation_id) + ".json"
+        if self.operations_dir.is_dir():
+            for candidate in sorted(self.operations_dir.iterdir()):
+                if candidate.is_file() and candidate.name == filename:
+                    return candidate
+        raise KeyError(f"Unknown operation: {operation_id}")
+
+    def record_mtime_ns(self, operation_id: str) -> int:
+        """Filesystem mtime of one record (creation-order tie-break).
+
+        Rapid successive submissions can share a timestamp quantum; the
+        record file's nanosecond mtime orders them deterministically where
+        ``createdAt`` ties. Missing/unreadable records sort first (0).
+        """
+        try:
+            return self._locate(operation_id).stat().st_mtime_ns
+        except (OSError, KeyError, ValueError):
+            return 0
+
+    def _save(self, path: Path, operation: dict) -> dict:
+        operation["updatedAt"] = _utc_now()
+        _atomic_write_json(path, operation)
+        return operation
 
     def _write(self, operation: dict) -> dict:
-        operation["updatedAt"] = _utc_now()
-        _atomic_write_json(self._path(operation["operationId"]), operation)
-        return operation
+        # Writes always target the located record, never a caller-built path.
+        return self._save(self._locate(operation["operationId"]), operation)
 
     def begin(
         self,
@@ -150,13 +177,15 @@ class OperationStore:
             "createdAt": _utc_now(),
             "updatedAt": _utc_now(),
         }
-        return self._write(operation)
+        # Creation is the one path that builds a filename, and its id is
+        # generated in-process (never caller-supplied), so no tainted
+        # string reaches path construction here either.
+        return self._save(
+            self.operations_dir / f"{operation['operationId']}.json", operation
+        )
 
     def load(self, operation_id: str) -> dict:
-        path = self._path(operation_id)
-        if not path.exists():
-            raise KeyError(f"Unknown operation: {operation_id}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(self._locate(operation_id).read_text(encoding="utf-8"))
 
     def list_open(self, *, stack: str | None = None) -> list:
         operations = []

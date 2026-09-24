@@ -219,7 +219,11 @@ def _reconcile_open_operations(
     superseded: list[dict] = []
     for stack_name in sorted(by_stack):
         candidates = sorted(
-            by_stack[stack_name], key=lambda op: str(op.get("createdAt") or "")
+            by_stack[stack_name],
+            key=lambda op: (
+                str(op.get("createdAt") or ""),
+                store.record_mtime_ns(op["operationId"]),
+            ),
         )
         # Only the newest open operation per stack keeps restart intent;
         # older opens are obsolete even before comparing with installations.
