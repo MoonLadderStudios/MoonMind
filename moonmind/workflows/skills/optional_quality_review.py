@@ -9,8 +9,10 @@ universal risk taxonomy, policy engine, or separate candidate ledger.
 Workflow-sandbox safe: stdlib only, no I/O, no network, no client init.
 Actual model inference, when requested, travels through the already-admitted
 ``ConfiguredStepReviewer`` route / AgentRun admission with the selected
-Profile, model/cost/privacy, context-access, and budget constraints; this
-module only builds the bounded prompt and parses the bounded report.
+Profile, model/cost/privacy, context-access, and budget constraints; the
+caller injects that reviewer into ``execute_optional_review`` and this
+module only builds the bounded prompt, makes the single admitted call,
+and parses the bounded report.
 """
 
 from __future__ import annotations
@@ -437,6 +439,88 @@ def parse_optional_review_response(
     return report
 
 
+@dataclass(frozen=True, slots=True)
+class OptionalReviewExecution:
+    """Result of one bounded execution through the admitted reviewer route."""
+
+    report: OptionalReviewReport
+    route: Mapping[str, Any]
+    reused: bool
+    stored_ref: str | None = None
+
+
+async def execute_optional_review(
+    request: OptionalReviewRequest,
+    *,
+    reviewer: Any,
+    evidence_contents: Mapping[str, str] | None = None,
+    existing: Sequence[OptionalReviewReport] = (),
+    store: Any | None = None,
+) -> OptionalReviewExecution:
+    """Run one bounded optional review through the injected admitted reviewer.
+
+    The reviewer is the existing ``ConfiguredStepReviewer`` (or its test
+    double) supplied by the caller: credentials, provider selection, and
+    budget enforcement stay in that admitted route. This function makes
+    exactly one ``review`` call when no matching assessment exists, never
+    falls back to another provider or credential, and preserves the
+    completed candidate as an honest unavailable report when the review,
+    parse, or report phase fails.
+    """
+    reused = find_reusable_assessment(request, existing or ())
+    if reused is not None:
+        stored_ref: str | None = None
+        if store is not None:
+            try:
+                stored_ref = store.put_json(reused.to_payload()).artifact_ref
+            except Exception:
+                stored_ref = None
+        return OptionalReviewExecution(
+            report=reused,
+            route={"provider": "existing-assessment", "model": request.reviewer_model},
+            reused=True,
+            stored_ref=stored_ref,
+        )
+    prompt = build_optional_review_prompt(request, evidence_contents)
+    describe = getattr(reviewer, "describe_route", None)
+    route: Mapping[str, Any] = (
+        dict(describe(request.reviewer_model)) if callable(describe) else {}
+    )
+    try:
+        text = await reviewer.review(
+            prompt=prompt,
+            model=request.reviewer_model,
+            timeout=request.timeout_seconds,
+        )
+    except Exception as exc:
+        reason = str(exc).strip() or type(exc).__name__
+        return OptionalReviewExecution(
+            report=unavailable_report(request, reason=reason),
+            route=dict(route),
+            reused=False,
+            stored_ref=None,
+        )
+    try:
+        report = parse_optional_review_response(text, request=request)
+    except Exception as exc:
+        reason = str(exc).strip() or type(exc).__name__
+        return OptionalReviewExecution(
+            report=unavailable_report(request, reason=reason),
+            route=dict(route),
+            reused=False,
+            stored_ref=None,
+        )
+    stored: str | None = None
+    if store is not None:
+        try:
+            stored = store.put_json(report.to_payload()).artifact_ref
+        except Exception:
+            stored = None
+    return OptionalReviewExecution(
+        report=report, route=dict(route), reused=False, stored_ref=stored
+    )
+
+
 def advisory_only(report: OptionalReviewReport) -> bool:
     """Optional review never carries execution authority."""
     return bool(report.advisory_only and report.grants_no_authority)
@@ -547,8 +631,10 @@ __all__ = [
     "PROMPT_BUDGET_BYTES",
     "OptionalReviewReport",
     "OptionalReviewRequest",
+    "OptionalReviewExecution",
     "advisory_only",
     "build_optional_review_prompt",
+    "execute_optional_review",
     "find_reusable_assessment",
     "handle_interrupted_reporting",
     "is_mandatory_review_gate",
