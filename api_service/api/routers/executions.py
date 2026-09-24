@@ -322,7 +322,6 @@ from moonmind.workflows.executions.execution_contract import (
     allows_repository_publish_for_skill_context,
     build_authoritative_workflow_input_snapshot,
     is_non_repository_side_effect_skill,
-    is_self_managed_publish_skill,
     reject_removed_follow_up_fields,
     reject_retired_vector_fields,
     reject_workflow_capability_identity_versions,
@@ -9624,11 +9623,10 @@ def _resolve_workflow_publish_payload(
         and not allow_repository_publish
     ):
         requested_mode = None
-    if (
-        requested_mode is None
-        or (isinstance(requested_mode, str) and not requested_mode.strip())
-    ) and is_self_managed_publish_skill(skill_id):
-        requested_mode = "none"
+    # Omission for self-managed (auto-capable) skills stays omitted so the
+    # resolver applies the admitted Skill default (auto). It must never be
+    # rewritten to an explicit "none": explicit None is never promoted to
+    # Auto (PUBLISH-004) and would fail before mutation.
     try:
         publish_mode = resolve_publish_mode_for_skill(
             skill_id,
