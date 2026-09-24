@@ -37,8 +37,10 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 logger = logging.getLogger(__name__)
 
 
-async def _create_oauth_validation_binding(repository: Any, profile_id: str) -> Any:
-    """Resolve the persisted default launch before a profile's first host use."""
+async def _create_oauth_validation_binding(
+    repository: Any, profile_id: str, binding: Any = None
+) -> Any:
+    """Resolve missing launch metadata from persisted policy, preserving choices."""
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import ManagedAgentProviderProfile
@@ -52,14 +54,22 @@ async def _create_oauth_validation_binding(repository: Any, profile_id: str) -> 
         profile = await db.get(ManagedAgentProviderProfile, profile_id)
         if profile is None:
             raise ValueError("OAuth Provider Profile no longer exists")
-        execution_profile_ref = {
+        execution_profile_ref = (
+            binding.execution_profile_ref if binding else None
+        ) or {
             "codex_cli": "omnigent-codex@1",
             "claude_code": "omnigent-claude@1",
-        }.get(profile.runtime_id)
+        }.get(
+            profile.runtime_id
+        )
         if execution_profile_ref is None:
             raise ValueError("OAuth Provider Profile runtime is unsupported")
         execution_profile = PROFILES[execution_profile_ref]
-        policy_ref = execution_profile.default_policy_ref
+        policy_ref = (
+            (binding.launch_policy_ref or binding.host_launch_profile_ref)
+            if binding
+            else None
+        ) or execution_profile.default_policy_ref
         policy_snapshot = await OmnigentPolicyService(db).resolve_runtime_snapshot(
             policy_ref
         )
@@ -69,7 +79,14 @@ async def _create_oauth_validation_binding(repository: Any, profile_id: str) -> 
 
     return await repository.create_or_update_static_binding(
         profile_id=profile_id,
-        endpoint_ref=execution_profile.endpoint_ref,
+        endpoint_ref=(
+            binding.endpoint_ref if binding else execution_profile.endpoint_ref
+        ),
+        static_host_id=(
+            binding.static_host_id
+            if binding and effective_launch["hostMode"] == "static_compose"
+            else None
+        ),
         host_launch_profile_ref=(
             policy_ref if effective_launch["hostMode"] == "on_demand_docker" else None
         ),
@@ -173,9 +190,11 @@ async def oauth_session_revalidate_bound_host(
         raise ValueError("profile_id, provider_lease_id, and session_id are required")
     repository = OmnigentOAuthHostRepository(async_session_maker)
     binding = await repository.refresh_binding_generation(profile_id)
-    if binding is None:
+    if binding is None or not binding.effective_launch_snapshot:
         try:
-            binding = await _create_oauth_validation_binding(repository, profile_id)
+            binding = await _create_oauth_validation_binding(
+                repository, profile_id, binding
+            )
         except Exception as exc:
             logger.warning(
                 "OAuth host binding unavailable before credential validation: "
@@ -232,6 +251,18 @@ async def oauth_session_revalidate_bound_host(
                     break
                 except (Exception, asyncio.CancelledError) as exc:
                     preflight_error = exc
+                    logger.warning(
+                        "OAuth credential preflight unavailable: profile_id=%s "
+                        "attempt=%s error_type=%s failure_code=%s",
+                        profile_id,
+                        attempt + 1,
+                        type(exc).__name__,
+                        (
+                            exc.code
+                            if isinstance(exc, OmnigentOAuthHostError)
+                            else "unclassified"
+                        ),
+                    )
                     retryable = isinstance(
                         exc, OmnigentOAuthHostError
                     ) and exc.code in {
