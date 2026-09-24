@@ -16472,6 +16472,45 @@ describe("Task Create MM-641 authoring validation", () => {
     });
   });
 
+  it("reports a conflict instead of silently changing explicit None for a self-managed skill", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const step = (await screen.findByText("Step 1")).closest("section");
+    expect(step).not.toBeNull();
+    fireEvent.change(
+      within(step as HTMLElement).getByRole("combobox", { name: /skill/i }),
+      {
+        target: { value: "pr-resolver" },
+      },
+    );
+    const publishModeSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(publishModeSelect.value).toBe("auto");
+    });
+    fireEvent.change(
+      within(step as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Resolve the current branch PR." },
+      },
+    );
+    fireEvent.change(publishModeSelect, {
+      target: { value: "none" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(/manages its own publication/),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
 });
 
 describe("Task Create submit arrow animation", () => {
