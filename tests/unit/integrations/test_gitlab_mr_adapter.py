@@ -549,7 +549,7 @@ async def test_bound_credential_rejects_endpoint_mismatch() -> None:
         admitted_endpoints=ADMITTED,
         action="read_mr",
     )
-    assert connection.base_url.startswith("https://gitlab.example.com")
+    assert connection.base_url == "https://gitlab.example.com/api/v4"
 
 
 async def test_bound_credential_enforces_write_permission() -> None:
@@ -572,7 +572,7 @@ async def test_bound_credential_enforces_write_permission() -> None:
         admitted_endpoints=ADMITTED,
         action="read_mr",
     )
-    assert connection.base_url.startswith("https://gitlab.example.com")
+    assert connection.base_url == "https://gitlab.example.com/api/v4"
 
 
 async def test_mutation_transient_status_does_not_auto_repeat() -> None:
