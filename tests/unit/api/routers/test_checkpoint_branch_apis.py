@@ -2575,6 +2575,7 @@ async def test_checkpoint_branch_comparison_preview_requires_bounded_configs_for
     assert preview["costDeltas"]["totalMaxBudgetUsd"] == 5.0
     assert preview["privacyChanges"]
     assert preview["authorityChanges"]
+    assert await _count_branches(checkpoint_branch_client) == branches_before
 
 
 @pytest.mark.asyncio
