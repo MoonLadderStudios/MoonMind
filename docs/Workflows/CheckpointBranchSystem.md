@@ -622,11 +622,37 @@ using only the digest of the unchanged terminal payload.
 ### 8.6 Compare branches
 
 ```http
-GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against={otherBranchId}
+GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against={otherBranchId}&objective={text}&rubricId={rubric}
 ```
 
 Return artifact-backed comparison, provider diff refs, gate/diagnostic summaries,
-and bounded explanation, not an inferred merge or promotion.
+and bounded explanation, not an inferred merge or promotion. The record applies
+one explicit rubric (default `checkpoint-branch-gates`) against one explicit
+objective, preserves both candidate identities, and carries source differences,
+missing-evidence flags, measurement limits, observed-versus-estimated costs,
+input/rubric/cost provenance, an explicit winner-or-none outcome, and a
+no-side-effect attestation (no launched work, default change, deployment,
+promotion, publication, or authorized inference). A partial, failed, or
+evidence-poor sample reports `winner.candidate: none` without a universal
+quality or security claim; incompatible lineage fails closed with
+`incompatible_checkpoint_lineage`. Repeat reads with the same objective resume
+the same ledgered report without rerunning candidates.
+
+```http
+POST /api/executions/{workflowId}/checkpoint-branches/comparison-preview
+```
+
+Preview comparison-requested candidate generation without side effects. With
+`allowNewRuns: false` every candidate must name its existing branch and the
+preview authorizes no new inference. With `allowNewRuns: true` each requested
+candidate needs an explicit bounded configuration (shared `sourceIntentRef`,
+explicit `maxBudgetUsd`, isolated workspace, fresh agent run) under the
+existing provider/resource budgets; creation itself stays on the ordinary
+create/continue/fork admission path. Candidate sets are small and explicit
+(2-4); Cartesian expansion fields are rejected, not expanded. The response
+reports the selected run count plus material cost/privacy/authority changes and
+a stable preview digest, so duplicate or interrupted previews cannot duplicate
+completed compute.
 
 ### 8.7 Promote branch
 
@@ -919,9 +945,17 @@ admitted scope, including the explicit None prohibition.
 
 Comparison artifacts identify left/right candidates, common source checkpoint,
 provider range/diff refs, gate/verdict summaries, and a bounded narrative ref.
-Large differences remain artifact-backed. A failed source's saved content is a
+The comparison record additionally carries the explicit objective and rubric,
+preserved candidate identities, source differences, missing-evidence flags,
+measurement limits, observed-versus-estimated costs with provenance, an explicit
+winner-or-none outcome, and a no-side-effect attestation. Large differences
+remain artifact-backed. A failed source's saved content is a
 valid comparison input; its failed objective and remote/save verification remain
-visible separately. Comparison neither merges candidates nor grants promotion.
+visible separately, and a partial, incomparable, or failed sample yields no
+winner and no universal claim. Comparison neither merges candidates nor grants
+promotion. Comparison-requested generation is previewed without side effects
+and created only through ordinary admission; comparing saved results never
+authorizes new inference.
 
 ---
 
