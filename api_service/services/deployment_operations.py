@@ -37,8 +37,6 @@ CONTROLLER_DEFAULT_URL = "http://127.0.0.1:8472"
 CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
 CONTROLLER_STATUS_TIMEOUT_SECONDS = 10
 
-_CONTROLLER_OPEN_STATUSES = ("pending", "staged", "applying")
-
 
 def controller_base_url(explicit: str | None = None) -> str:
     """Return the standalone controller endpoint (loopback only by default)."""
