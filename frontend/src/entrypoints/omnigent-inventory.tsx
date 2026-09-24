@@ -452,7 +452,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       {result.data && rows.length === 0 ? <p>{filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
       {transition.isError ? <p role="alert">{transition.error.message}</p> : null}
-      {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th>{kind === 'policies' ? <th>Actions</th> : null}</tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}{row.version ? `@${row.version}` : ''}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td>{kind === 'policies' ? <td><button type="button" onClick={() => { setSelected(row); setSelectedVersion(null); }}>Inspect</button>{row.version ? <button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button> : null}</td> : null}</tr>)}</tbody></table></div> : null}
+      {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th>{kind === 'policies' ? <th>Actions</th> : null}</tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td data-label="Identity"><strong>{row.name}</strong><small>{row.id}{row.version ? `@${row.version}` : ''}</small></td><td data-label="Status">{row.status}</td><td data-label="Summary">{row.summary}</td><td data-label="Freshness">{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td>{kind === 'policies' ? <td data-label="Actions"><button type="button" onClick={() => { setSelected(row); setSelectedVersion(null); }}>Inspect</button>{row.version ? <button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button> : null}</td> : null}</tr>)}</tbody></table></div> : null}
       {kind === 'policies' ? <p>Creating, cloning, and editing always produces an immutable new version through the policy editor API; active historical versions are never changed.</p> : null}
       {selected ? <section className="omnigent-policy-detail" aria-label="Immutable policy version">
         <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => { setSelected(null); setSelectedVersion(null); }}>Close</button></div>
@@ -567,11 +567,11 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           const latest = profile.versions[0];
           const ready = latest?.validationResult?.ready === true;
           return <tr key={profile.profileId}>
-            <td><strong>{profile.displayName}</strong><small>{profile.profileId}</small>{profile.description ? <small>{profile.description}</small> : null}</td>
-            <td>{profile.state}{profile.defaultForRuntime ? ' · Deployment default' : ''}</td>
-            <td>{latest ? <><span>Version {latest.version}</span><small title={latest.digest}>{latest.digest.slice(0, 18)}…</small><small>{profile.versions.length} immutable version{profile.versions.length === 1 ? '' : 's'}</small></> : 'No versions'}</td>
-            <td>{ready ? 'Ready' : 'Validation required'}</td>
-            <td>
+            <td data-label="Profile"><strong>{profile.displayName}</strong><small>{profile.profileId}</small>{profile.description ? <small>{profile.description}</small> : null}</td>
+            <td data-label="Lifecycle">{profile.state}{profile.defaultForRuntime ? ' · Deployment default' : ''}</td>
+            <td data-label="Version history">{latest ? <><span>Version {latest.version}</span><small title={latest.digest}>{latest.digest.slice(0, 18)}…</small><small>{profile.versions.length} immutable version{profile.versions.length === 1 ? '' : 's'}</small></> : 'No versions'}</td>
+            <td data-label="Readiness">{ready ? 'Ready' : 'Validation required'}</td>
+            <td data-label="Actions">
               <button type="button" onClick={() => setSelectedProfile(profile)}>View details, history, diff, audit, and usage</button>
               <button type="button" onClick={() => setAgentEditor({ mode: 'clone', source: profile, id: `${profile.profileId}-clone`, name: `${profile.displayName} clone`, description: profile.description || '', document: '{}' })}>Clone {profile.displayName}</button>
               {latest?.document ? <button type="button" onClick={() => setAgentEditor({ mode: 'version', source: profile, id: profile.profileId, name: profile.displayName, description: profile.description || '', document: JSON.stringify(latest.document, null, 2) })}>Edit {profile.displayName} as new version</button> : null}

@@ -758,4 +758,5 @@ The design is correctly implemented when:
 - Enabled state follows credential activation and policy instead of a default-true creation checkbox.
 - Backend presets and omission replace global frontend guesses.
 - Save actions explain whether creation continues into connection. Backend responses alone establish the outcome.
+- The single create/edit form shares the dashboard responsive contract (MoonMind#4559): shrinkable grid/flex owners with the fieldset intrinsic-minimum reset, full-width mobile fields with labels above, a 16px mobile form-text baseline, stacked tier rows, and viewport-bounded enrollment/confirmation dialogs. Presentation changes never alter draft, tier, authentication, or save semantics.
 - Advanced summaries distinguish recommended, custom, and uncertain state while keeping readiness separate.

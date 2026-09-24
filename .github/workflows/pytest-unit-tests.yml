@@ -1387,8 +1387,13 @@ jobs:
       HOME: /root
     strategy:
       fail-fast: false
+      # MoonMind#4559: the matrix keeps the Chromium/Firefox coverage and adds
+      # a targeted WebKit regression leg for the reported form, fieldset, and
+      # overlay cases. The Playwright container image provisions all three
+      # engines; WebKit automation is useful coverage, not a claim of testing
+      # physical iOS Safari.
       matrix:
-        engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox"]' || '["chromium"]') }}
+        engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox","webkit"]' || '["chromium","webkit"]') }}
     steps:
     - name: Check out code
       uses: actions/checkout@v7
@@ -1436,6 +1441,7 @@ jobs:
           echo "| Static | $static_selected | $static_result |"
           echo "| Chromium | $browser_selected | $browser_result |"
           echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
+          echo "| WebKit (targeted form/fieldset/overlay leg, MoonMind#4559) | $browser_selected | $browser_result |"
         } >> "$GITHUB_STEP_SUMMARY"
 
         if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
