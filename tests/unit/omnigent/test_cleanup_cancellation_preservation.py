@@ -23,7 +23,7 @@ from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
     RuntimeBindingState,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 def _request(*, idempotency_key: str) -> AgentExecutionRequest:
