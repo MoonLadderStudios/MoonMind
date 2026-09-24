@@ -70,9 +70,7 @@ async def refresh_upstream_inventory(*, endpoint_ref: str = "default") -> None:
     except Exception as exc:
         # Provider exception strings can contain URLs or credentials. Retain a
         # bounded, non-sensitive failure classification, never their raw text.
-        reason = (
-            f"upstream inventory refresh failed ({type(exc).__name__}); retry submission"
-        )
+        reason = f"upstream inventory refresh failed ({type(exc).__name__}); retry submission"
         try:
             async with asyncio.timeout(5):
                 async with async_session_maker() as session:
@@ -97,12 +95,12 @@ async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
     )
     from moonmind.omnigent.execution_profiles import PROFILES
     from moonmind.omnigent.harness_platform.catalog import HarnessCatalogSnapshot
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from moonmind.omnigent.harness_platform.host_classes import (
         DEFAULT_HOST_CLASS_TEMPLATES,
         OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
         get_opencode_host_image_ref,
     )
-    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from moonmind.omnigent.settings import (
         generic_host_enabled,
         opencode_support_enabled,
@@ -416,9 +414,7 @@ async def record_upstream_sync_failure(
 
 
 def _synthetic_opencode_implementation() -> Any:
-    from moonmind.omnigent.harness_platform.catalog import (
-        HarnessImplementationIdentity,
-    )
+    from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
 
     # Stable placeholder identity for the local OpenCode overlay on stock
     # Omnigent servers that do not natively advertise the harness. It must
@@ -451,19 +447,67 @@ def _synthetic_opencode_harness_row() -> dict[str, Any]:
     }
 
 
-def _overlay_synthetic_opencode(result: Any) -> Any:
-    """Merge the local OpenCode overlay into one authenticated observation.
+def _observed_claude_native_harness_row(result: Any) -> dict[str, Any] | None:
+    """Describe the native wrapper only when its stock agent was observed."""
 
-    Stock Omnigent endpoints do not advertise ``opencode-native``. When OpenCode
-    support is enabled, each observation carries the stable overlay harness.
-    Agent identity remains exclusively owned by authenticated ``/v1/agents``
-    inventory; inventing an agent row here would defer a missing deployment
-    prerequisite until session creation.
+    from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
+    from moonmind.omnigent.stock_agents import CLAUDE_STOCK_AGENT_NAME
+
+    stock = next(
+        (
+            row
+            for row in result.diagnostics.get("agents", [])
+            if isinstance(row, Mapping)
+            and row.get("name") == CLAUDE_STOCK_AGENT_NAME
+            and row.get("harness") == "claude-native"
+            and str(row.get("id") or "").strip()
+            and str(row.get("version") or "").strip()
+        ),
+        None,
+    )
+    if stock is None:
+        return None
+    identity = {
+        "omnigentBuildDigest": result.snapshot.omnigentBuildDigest,
+        "harnessId": "claude-native",
+        "runtimePackRef": "claude-native-pack@1",
+    }
+    implementation = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": result.snapshot.omnigentVersion,
+            "digest": "sha256:"
+            + hashlib.sha256(
+                json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            "pluginEntryPoint": None,
+        }
+    )
+    return {
+        "id": "claude-native",
+        "label": "Claude Code",
+        "aliases": [],
+        "implementation": implementation.model_dump(mode="json", by_alias=True),
+        "capabilities": {
+            "integrationMode": "native-server",
+            "authModel": "oauth_volume",
+        },
+        "setupSteps": [],
+        "runtimeRequirements": {"runtimePackRef": "claude-native-pack@1"},
+    }
+
+
+def _overlay_native_harnesses(result: Any) -> Any:
+    """Merge deployment-owned native harnesses into one observation.
+
+    The upstream picker catalog omits native wrappers. OpenCode has an
+    installed local runtime; Claude additionally requires its observed stock
+    agent. Agent identity remains owned by authenticated ``/v1/agents``.
     """
 
-    import hashlib
-
     from moonmind.omnigent.harness_platform.catalog import (
+        HarnessImplementationIdentity,
         TrustState,
         classify_harness_trust,
         create_catalog_snapshot,
@@ -471,18 +515,26 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
     from moonmind.omnigent.harness_platform.catalog_service import (
         HarnessCatalogSyncResult,
     )
-    from moonmind.omnigent.settings import opencode_support_enabled
+    from moonmind.omnigent.settings import (
+        generic_claude_qualified,
+        opencode_support_enabled,
+    )
 
-    if not opencode_support_enabled() or any(
-        harness.id == "opencode-native" for harness in result.snapshot.harnesses
-    ):
+    existing = {harness.id for harness in result.snapshot.harnesses}
+    overlays: list[dict[str, Any]] = []
+    if opencode_support_enabled() and "opencode-native" not in existing:
+        overlays.append(_synthetic_opencode_harness_row())
+    if generic_claude_qualified() and "claude-native" not in existing:
+        claude = _observed_claude_native_harness_row(result)
+        if claude is not None:
+            overlays.append(claude)
+    if not overlays:
         return result
     harness_rows = [
         harness.model_dump(by_alias=True, mode="json")
         for harness in result.snapshot.harnesses
     ]
-    synthetic_harness_row = _synthetic_opencode_harness_row()
-    harness_rows.append(synthetic_harness_row)
+    harness_rows.extend(overlays)
     # The overlay is applied before the observation is persisted, so it is the
     # only row published for this synchronization and needs no timestamp offset
     # to win ``latest()``.
@@ -494,8 +546,7 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
     merged_source = json.dumps(
         {
             "prior": result.snapshot.sourceDigest,
-            "overlay": True,
-            "syntheticHarness": synthetic_harness_row,
+            "overlays": overlays,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -509,31 +560,17 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
         observedAt=observed_at,
         pluginLoadErrors=list(result.snapshot.pluginLoadErrors),
     )
-    trust_records = tuple(
+    trust_records = tuple(result.trust_records) + tuple(
         classify_harness_trust(
             harnessId=harness["id"],
-            implementation=(
-                _synthetic_opencode_implementation()
-                if harness["id"] == "opencode-native"
-                else next(
-                    record.implementation
-                    for record in result.trust_records
-                    if record.harnessId == harness["id"]
-                )
+            implementation=HarnessImplementationIdentity.model_validate(
+                harness["implementation"]
             ),
-            trustState=(
-                TrustState.core_trusted
-                if harness["id"] == "opencode-native"
-                else next(
-                    record.trustState
-                    for record in result.trust_records
-                    if record.harnessId == harness["id"]
-                )
-            ),
+            trustState=TrustState.core_trusted,
             decidedBy="catalog-sync",
             decidedAt=snapshot.observedAt,
         )
-        for harness in harness_rows
+        for harness in overlays
     )
     return HarnessCatalogSyncResult(
         snapshot=snapshot,
@@ -545,7 +582,16 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
                 for item in result.diagnostics.get("agents", [])
                 if isinstance(item, dict)
             ],
-            "syntheticOpencodeOverlay": True,
+            **(
+                {"syntheticOpencodeOverlay": True}
+                if any(row["id"] == "opencode-native" for row in overlays)
+                else {}
+            ),
+            **(
+                {"observedClaudeNativeOverlay": True}
+                if any(row["id"] == "claude-native" for row in overlays)
+                else {}
+            ),
         },
     )
 
@@ -572,7 +618,7 @@ async def synchronize_omnigent_harness_catalog(session: AsyncSession) -> dict[st
     # reject an otherwise valid launch.
     services = build_generic_omnigent_execution_services(
         session_factory=async_session_maker,
-        catalog_observation_overlay=_overlay_synthetic_opencode,
+        catalog_observation_overlay=_overlay_native_harnesses,
     )
     overlaid = await services.catalog_service.synchronize()
     await synchronize_upstream_inventory(

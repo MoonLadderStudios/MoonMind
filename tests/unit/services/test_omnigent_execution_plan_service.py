@@ -946,6 +946,76 @@ async def test_real_harness_config_fails_closed_when_freshness_read_errors(
 
 
 @pytest.mark.asyncio
+async def test_qualified_claude_catalog_admits_pinned_native_harness(
+    monkeypatch,
+) -> None:
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+    )
+    from moonmind.omnigent.harness_platform import catalog_service
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    observed = HarnessCatalogSyncResult(
+        snapshot=create_catalog_snapshot(
+            endpointRef="default",
+            omnigentVersion="1.0.0",
+            omnigentBuildDigest="sha256:" + "b" * 64,
+            sourceDigest="sha256:" + "d" * 64,
+            observedAt=datetime.now(UTC),
+            harnesses=[],
+        ),
+        trust_records=(),
+        diagnostics={
+            "agents": [
+                {
+                    "id": "ag_claude",
+                    "name": "claude-native-ui",
+                    "version": "2",
+                    "harness": "claude-native",
+                }
+            ]
+        },
+    )
+    catalog = _overlay_native_harnesses(observed)
+
+    class Repository:
+        def __init__(self, _session_factory):
+            pass
+
+        async def load(self, catalog_ref):
+            assert catalog_ref == catalog.snapshot.catalogRef
+            return catalog
+
+        async def latest(self, endpoint_ref):
+            assert endpoint_ref == "default"
+            return catalog
+
+    monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
+    authority = await service._try_load_real_harness_config(
+        harness_id="claude-native",
+        agent_profile_snapshot={
+            "document": {
+                "endpointRef": "default",
+                "harness": {
+                    "id": "claude-native",
+                    "catalogRef": catalog.snapshot.catalogRef,
+                },
+            }
+        },
+        session_factory=lambda: None,
+    )
+
+    assert authority is not None
+    assert authority["authModel"] == "oauth_volume"
+    assert authority["integrationMode"] == "native-server"
+    assert authority["_harnessRecord"].id == "claude-native"
+    assert authority["_freshnessTrustRecord"].trustState == TrustState.core_trusted
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["factory", "session"])
 @pytest.mark.parametrize("failure", ["missing", "database_error"])
 async def test_catalog_authority_failure_cannot_select_fixture_or_latest(

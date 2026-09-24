@@ -1,4 +1,5 @@
 """Stable identity and compatibility rules for Omnigent inventory sync."""
+
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -124,17 +125,22 @@ def test_projection_readiness_enforces_requested_contract():
     )
 
     assert mismatch["ready"] is False
-    assert mismatch["reason"] == "upstream metadata does not satisfy the requested profile contract"
+    assert (
+        mismatch["reason"]
+        == "upstream metadata does not satisfy the requested profile contract"
+    )
 
 
 def test_upstream_metadata_is_allowlisted_and_bounded():
-    result = _bounded_metadata({
-        "id": "agent-1",
-        "name": "n" * 1000,
-        "capabilities": ["tools", "session.start"],
-        "apiToken": "must-not-persist",
-        "nested": {"arbitrary": "payload"},
-    })
+    result = _bounded_metadata(
+        {
+            "id": "agent-1",
+            "name": "n" * 1000,
+            "capabilities": ["tools", "session.start"],
+            "apiToken": "must-not-persist",
+            "nested": {"arbitrary": "payload"},
+        }
+    )
 
     assert result["id"] == "agent-1"
     assert len(result["name"]) == 512
@@ -144,9 +150,7 @@ def test_upstream_metadata_is_allowlisted_and_bounded():
 
 
 def test_builtin_opencode_agent_requires_real_catalog_name_and_uses_live_id():
-    from api_service.api.routers.omnigent_agent_profiles import (
-        _builtin_opencode_agent,
-    )
+    from api_service.api.routers.omnigent_agent_profiles import _builtin_opencode_agent
 
     assert _builtin_opencode_agent(
         [
@@ -158,15 +162,18 @@ def test_builtin_opencode_agent_requires_real_catalog_name_and_uses_live_id():
             }
         ]
     ) == ("ag_live123", "4")
-    assert _builtin_opencode_agent(
-        [
-            {
-                "id": "opencode-native-ui",
-                "version": 1,
-                "harness": "opencode-native",
-            }
-        ]
-    ) is None
+    assert (
+        _builtin_opencode_agent(
+            [
+                {
+                    "id": "opencode-native-ui",
+                    "version": 1,
+                    "harness": "opencode-native",
+                }
+            ]
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -230,7 +237,9 @@ async def test_synchronize_omnigent_harness_catalog_is_one_canonical_path(
         sentinel_factory,
         raising=False,
     )
-    monkeypatch.setattr(service_module, "synchronize_upstream_inventory", fake_inventory)
+    monkeypatch.setattr(
+        service_module, "synchronize_upstream_inventory", fake_inventory
+    )
 
     summary = await service_module.synchronize_omnigent_harness_catalog(
         session=object()
@@ -241,7 +250,7 @@ async def test_synchronize_omnigent_harness_catalog_is_one_canonical_path(
     # published once, already overlaid.
     assert (
         built_with["catalog_observation_overlay"]
-        is service_module._overlay_synthetic_opencode
+        is service_module._overlay_native_harnesses
     )
     assert summary == {
         "catalogRef": "cat-1",
@@ -269,9 +278,7 @@ async def test_synchronize_omnigent_harness_catalog_propagates_endpoint_failure(
 
     monkeypatch.setattr(
         "moonmind.omnigent.production.build_generic_omnigent_execution_services",
-        lambda **kwargs: SimpleNamespace(
-            catalog_service=_FailingCatalogService()
-        ),
+        lambda **kwargs: SimpleNamespace(catalog_service=_FailingCatalogService()),
     )
 
     with pytest.raises(RuntimeError, match="endpoint unreachable"):
@@ -281,17 +288,16 @@ async def test_synchronize_omnigent_harness_catalog_propagates_endpoint_failure(
 def test_overlay_adds_harness_but_never_invents_upstream_agent_identity():
     from datetime import UTC, datetime
 
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+        _synthetic_opencode_implementation,
+    )
     from moonmind.omnigent.harness_platform.catalog import (
-        create_catalog_snapshot,
         compute_catalog_ref,
+        create_catalog_snapshot,
     )
     from moonmind.omnigent.harness_platform.catalog_service import (
         HarnessCatalogSyncResult,
-    )
-
-    from api_service.services.omnigent_agent_profile_service import (
-        _overlay_synthetic_opencode,
-        _synthetic_opencode_implementation,
     )
 
     observed = datetime(2026, 8, 23, tzinfo=UTC)
@@ -310,13 +316,11 @@ def test_overlay_adds_harness_but_never_invents_upstream_agent_identity():
         diagnostics={"agents": [], "agentCount": 0},
     )
 
-    merged = _overlay_synthetic_opencode(real)
+    merged = _overlay_native_harnesses(real)
 
     assert merged is not real
     assert [h.id for h in merged.snapshot.harnesses] == ["opencode-native"]
-    implementation_ref = (
-        _synthetic_opencode_implementation().implementation_ref()
-    )
+    implementation_ref = _synthetic_opencode_implementation().implementation_ref()
     assert any(
         record.implementationRef == implementation_ref
         and record.trustState.value == "core_trusted"
@@ -329,9 +333,74 @@ def test_overlay_adds_harness_but_never_invents_upstream_agent_identity():
 
     # Deterministic content: a later observation of unchanged inventory
     # produces the same source digest so profile versions stay stable.
-    again = _overlay_synthetic_opencode(real)
+    again = _overlay_native_harnesses(real)
     assert again.snapshot.sourceDigest == merged.snapshot.sourceDigest
     assert again.snapshot.observedAt == merged.snapshot.observedAt
+
+
+def test_qualified_claude_catalog_requires_observed_native_agent(monkeypatch):
+    import hashlib
+    import json
+    from datetime import UTC, datetime
+
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+    )
+    from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+
+    def observed(agents):
+        return HarnessCatalogSyncResult(
+            snapshot=create_catalog_snapshot(
+                endpointRef="default",
+                omnigentVersion="1.0.0",
+                omnigentBuildDigest="sha256:" + "c" * 64,
+                sourceDigest="sha256:"
+                + hashlib.sha256(json.dumps(agents).encode()).hexdigest(),
+                harnesses=[],
+                observedAt=datetime(2026, 9, 23, tzinfo=UTC),
+            ),
+            trust_records=(),
+            diagnostics={"agents": agents},
+        )
+
+    empty = _overlay_native_harnesses(observed([]))
+    assert "claude-native" not in {row.id for row in empty.snapshot.harnesses}
+
+    stock = {
+        "id": "ag_claude",
+        "name": "claude-native-ui",
+        "version": "2",
+        "harness": "claude-native",
+    }
+    current = _overlay_native_harnesses(observed([stock]))
+    claude = next(
+        row for row in current.snapshot.harnesses if row.id == "claude-native"
+    )
+    assert claude.capabilities.authModel == "oauth_volume"
+    assert claude.capabilities.integrationMode == "native-server"
+    assert any(
+        trust.harnessId == "claude-native"
+        and trust.implementationRef == claude.implementation.implementation_ref()
+        and trust.trustState.value == "core_trusted"
+        for trust in current.trust_records
+    )
+    assert current.snapshot.sourceDigest != empty.snapshot.sourceDigest
+    updated = _overlay_native_harnesses(observed([{**stock, "version": "3"}]))
+    assert updated.snapshot.sourceDigest != current.snapshot.sourceDigest
+    assert (
+        next(
+            row for row in updated.snapshot.harnesses if row.id == "claude-native"
+        ).implementation.digest
+        == claude.implementation.digest
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "false")
+    unqualified = _overlay_native_harnesses(observed([stock]))
+    assert "claude-native" not in {row.id for row in unqualified.snapshot.harnesses}
 
 
 def test_overlay_skips_when_harness_present_or_support_disabled(
@@ -339,15 +408,12 @@ def test_overlay_skips_when_harness_present_or_support_disabled(
 ):
     from datetime import UTC, datetime
 
-    from moonmind.omnigent.harness_platform.catalog import (
-        create_catalog_snapshot,
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
     )
+    from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
     from moonmind.omnigent.harness_platform.catalog_service import (
         HarnessCatalogSyncResult,
-    )
-
-    from api_service.services.omnigent_agent_profile_service import (
-        _overlay_synthetic_opencode,
     )
 
     def _result_with(harness_rows):
@@ -376,15 +442,13 @@ def test_overlay_skips_when_harness_present_or_support_disabled(
         },
         "capabilities": {"integrationMode": "native-server"},
     }
-    assert (
-        _overlay_synthetic_opencode(_result_with([native_row])) is not None
-    )
+    assert _overlay_native_harnesses(_result_with([native_row])) is not None
     result = _result_with([native_row])
-    assert _overlay_synthetic_opencode(result) is result
+    assert _overlay_native_harnesses(result) is result
 
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "false")
     empty = _result_with([])
-    assert _overlay_synthetic_opencode(empty) is empty
+    assert _overlay_native_harnesses(empty) is empty
 
 
 def test_overlay_digest_tracks_synthetic_harness_authority(
@@ -394,12 +458,11 @@ def test_overlay_digest_tracks_synthetic_harness_authority(
 
     from datetime import UTC, datetime
 
+    from api_service.services import omnigent_agent_profile_service as service_module
     from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
     from moonmind.omnigent.harness_platform.catalog_service import (
         HarnessCatalogSyncResult,
     )
-
-    from api_service.services import omnigent_agent_profile_service as service_module
 
     real = HarnessCatalogSyncResult(
         snapshot=create_catalog_snapshot(
@@ -414,7 +477,7 @@ def test_overlay_digest_tracks_synthetic_harness_authority(
         diagnostics={"agents": []},
     )
 
-    baseline = service_module._overlay_synthetic_opencode(real)
+    baseline = service_module._overlay_native_harnesses(real)
 
     original_row = service_module._synthetic_opencode_harness_row
 
@@ -429,7 +492,7 @@ def test_overlay_digest_tracks_synthetic_harness_authority(
     monkeypatch.setattr(
         service_module, "_synthetic_opencode_harness_row", _relabelled_row
     )
-    changed_harness = service_module._overlay_synthetic_opencode(real)
+    changed_harness = service_module._overlay_native_harnesses(real)
     assert changed_harness.snapshot.sourceDigest != baseline.snapshot.sourceDigest
 
 
@@ -437,16 +500,19 @@ def test_overlay_digest_tracks_synthetic_harness_authority(
 async def test_catalog_sync_publishes_only_the_overlaid_observation(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Readers must never see an overlay-free intermediate observation."""
+    """Authenticated stock Claude appears in the only persisted observation."""
 
     from datetime import UTC, datetime
 
-    from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+    )
     from moonmind.omnigent.harness_platform.catalog_service import (
         HarnessCatalogSyncResult,
         OmnigentHarnessCatalogService,
     )
 
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
     persisted: list[HarnessCatalogSyncResult] = []
 
     class _Repository:
@@ -468,24 +534,17 @@ async def test_catalog_sync_publishes_only_the_overlaid_observation(
             return []
 
         async def list_agents(self):
-            return []
+            return [
+                {
+                    "id": "ag_claude",
+                    "name": "claude-native-ui",
+                    "version": "2",
+                    "harness": "claude-native",
+                }
+            ]
 
         async def list_hosts(self):
             return []
-
-    def _overlay(result):
-        return HarnessCatalogSyncResult(
-            snapshot=create_catalog_snapshot(
-                endpointRef=result.snapshot.endpointRef,
-                omnigentVersion=result.snapshot.omnigentVersion,
-                omnigentBuildDigest=result.snapshot.omnigentBuildDigest,
-                sourceDigest="sha256:" + "f" * 64,
-                harnesses=[],
-                observedAt=result.snapshot.observedAt,
-            ),
-            trust_records=(),
-            diagnostics={**dict(result.diagnostics), "syntheticOpencodeOverlay": True},
-        )
 
     service = OmnigentHarnessCatalogService(
         client=_Client(),
@@ -493,12 +552,17 @@ async def test_catalog_sync_publishes_only_the_overlaid_observation(
         endpoint_ref="default",
         omnigent_build_digest="sha256:" + "c" * 64,
         clock=lambda: datetime(2026, 8, 23, tzinfo=UTC),
-        observation_overlay=_overlay,
+        observation_overlay=_overlay_native_harnesses,
     )
 
     returned = await service.synchronize()
 
     assert len(persisted) == 1
     assert persisted[0] is returned
-    assert returned.diagnostics["syntheticOpencodeOverlay"] is True
-    assert returned.snapshot.sourceDigest == "sha256:" + "f" * 64
+    assert returned.diagnostics["observedClaudeNativeOverlay"] is True
+    assert "claude-native" in {row.id for row in returned.snapshot.harnesses}
+    assert any(
+        record.harnessId == "claude-native"
+        and record.trustState.value == "core_trusted"
+        for record in returned.trust_records
+    )
