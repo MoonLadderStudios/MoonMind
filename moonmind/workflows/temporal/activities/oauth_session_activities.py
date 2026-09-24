@@ -17,7 +17,6 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
-from uuid import UUID
 
 from temporalio import activity, exceptions
 
@@ -152,6 +151,7 @@ async def oauth_session_revalidate_bound_host(
             new_status="starting",
         )
     credential_validation_failed = False
+    cleanup_proven = False
     try:
         async with pooled_http_client() as http_client:
             client = OmnigentHttpClient(
@@ -163,21 +163,38 @@ async def oauth_session_revalidate_bound_host(
             runtime = OmnigentOAuthHostRuntime(client=client)
             preflight_error: BaseException | None = None
             preflight: dict[str, Any] | None = None
-            try:
-                preflight = await runtime.validate_credential_mount(
-                    binding=binding,
-                    host_lease=lease,
-                    effective_launch=(
-                        lease.effective_launch_snapshot
-                        or binding.effective_launch_snapshot
-                    ),
-                )
-            except (Exception, asyncio.CancelledError) as exc:
-                preflight_error = exc
-                credential_validation_failed = (
-                    isinstance(exc, OmnigentOAuthHostError)
-                    and exc.code == HostPreflightFailure.LOGIN_STATUS_FAILED.value
-                )
+            for attempt in range(3):
+                try:
+                    preflight = await runtime.validate_credential_mount(
+                        binding=binding,
+                        host_lease=lease,
+                        effective_launch=(
+                            lease.effective_launch_snapshot
+                            or binding.effective_launch_snapshot
+                        ),
+                    )
+                    preflight_error = None
+                    break
+                except (Exception, asyncio.CancelledError) as exc:
+                    preflight_error = exc
+                    retryable = isinstance(
+                        exc, OmnigentOAuthHostError
+                    ) and exc.code in {
+                        HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                        HostPreflightFailure.VALIDATION_UNAVAILABLE.value,
+                    }
+                    if not retryable or attempt == 2:
+                        break
+                    try:
+                        await asyncio.sleep(2**attempt)
+                    except asyncio.CancelledError as cancelled:
+                        preflight_error = cancelled
+                        break
+            credential_validation_failed = (
+                isinstance(preflight_error, OmnigentOAuthHostError)
+                and preflight_error.code
+                == HostPreflightFailure.LOGIN_STATUS_FAILED.value
+            )
 
             cleanup_error: BaseException | None = None
             try:
@@ -197,6 +214,7 @@ async def oauth_session_revalidate_bound_host(
                     raise cleanup_error from preflight_error
                 raise cleanup_error
             await repository.mark_host_lease_stopped(lease.lease_id)
+            cleanup_proven = True
             if preflight_error is not None:
                 raise preflight_error
     except (Exception, asyncio.CancelledError):
@@ -240,6 +258,17 @@ async def oauth_session_revalidate_bound_host(
                     await sync_provider_profile_manager(
                         session=db, runtime_id=profile.runtime_id
                     )
+        if cleanup_proven:
+            return {
+                "profile_id": profile_id,
+                "status": (
+                    "credential_invalid"
+                    if credential_validation_failed
+                    else "validation_unavailable"
+                ),
+                "credential_generation": lease.credential_generation,
+                "validation_mode": "credential_only",
+            }
         raise
     if preflight is None:
         raise RuntimeError("OAuth credential preflight produced no result")

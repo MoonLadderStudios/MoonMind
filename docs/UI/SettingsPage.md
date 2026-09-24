@@ -311,6 +311,15 @@ This page contains:
 
 The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
 
+An OAuth-backed Codex profile with a saved volume exposes **Validate OAuth**
+alongside **OAuth**. Validation checks the saved credentials again and, on
+success, reconnects and enables the profile. A failed host credential check
+remains visible with a recovery hint; the general **Enable** action stays
+unavailable until validation succeeds. After Finalize saves an OAuth profile,
+Settings shows `registering_profile` while the bound host checks the
+credentials. It reports success and applies a remembered default choice only
+when the session reaches `succeeded`.
+
 A page-local runtime filter may narrow the visible Provider Profile collection. It must not narrow global readiness counts unless the summary is explicitly labeled as filtered.
 
 #### 7.1.1 Provider Profile creation

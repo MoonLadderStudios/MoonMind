@@ -5190,7 +5190,9 @@ async def test_first_party_oauth_lifecycle_generalized_across_runtimes(
         profile.volume_ref = volume_ref
         profile.volume_mount_path = mount_path
         profile.home_path_overrides = {"CUSTOM_HOME": "/custom/home"}
-        profile.enabled = True
+        profile.enabled = False
+        profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+        profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
         await session.commit()
 
     async with client_app as client:

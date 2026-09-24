@@ -290,10 +290,46 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const refreshSessionFromResponse = (nextSession: OAuthSessionResponse) => {
     setSession(nextSession);
     setStatus(oauthStatusLabel(nextSession.status));
-    if (nextSession.status === 'succeeded') {
+    if (nextSession.status === 'succeeded' || nextSession.status === 'failed') {
       notifyProviderProfileRefresh(nextSession);
     }
   };
+
+  useEffect(() => {
+    if (!sessionId || session?.status !== 'registering_profile') {
+      return undefined;
+    }
+    let closed = false;
+    let inFlight = false;
+    const pollFinalStatus = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const response = await fetch(`/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) {
+          throw new Error(`Session lookup failed: ${response.status}`);
+        }
+        const nextSession = (await response.json()) as OAuthSessionResponse;
+        if (!closed) {
+          setActionError(null);
+          refreshSessionFromResponse(nextSession);
+        }
+      } catch {
+        if (!closed) {
+          setActionError('Could not check OAuth validation status. Retrying.');
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const intervalId = window.setInterval(() => void pollFinalStatus(), TERMINAL_READY_POLL_MS);
+    return () => {
+      closed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [sessionId, session?.status]);
 
   const runSessionAction = async (
     action: 'finalize' | 'cancel' | 'reconnect',
