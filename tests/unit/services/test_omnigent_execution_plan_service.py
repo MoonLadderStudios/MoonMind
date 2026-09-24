@@ -363,17 +363,15 @@ def _policy_snapshot(
     document["execution"]["harness"] = harness
     document["execution"]["agentIdentities"] = [
         {
-            "codex-native": "codex-native-ui",
             "claude-native": "claude-native-ui",
             "opencode-native": "opencode",
-        }[harness]
+        }.get(harness, "codex")
     ]
     document["providerProfile"]["compatibleProviders"] = [
         {
-            "codex-native": "codex",
             "claude-native": "anthropic",
             "opencode-native": "opencode",
-        }[harness]
+        }.get(harness, "codex")
     ]
     if architecture is not None:
         document["host"]["architectures"] = [architecture]
