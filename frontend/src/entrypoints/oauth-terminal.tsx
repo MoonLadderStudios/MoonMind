@@ -324,6 +324,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         inFlight = false;
       }
     };
+    void pollFinalStatus();
     const intervalId = window.setInterval(() => void pollFinalStatus(), TERMINAL_READY_POLL_MS);
     return () => {
       closed = true;
