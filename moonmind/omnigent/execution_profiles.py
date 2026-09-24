@@ -14,6 +14,10 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.host_classes import (
+    resolve_shared_host_image_ref,
+)
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.stock_agents import (
     CLAUDE_STOCK_AGENT_NAME,
@@ -324,17 +328,10 @@ def resolve_policy_image_refs(policy: OmnigentLaunchPolicy) -> tuple[str, str]:
             )
         if host_ref.startswith("bootstrap://"):
             if policy.policy_id.startswith("claude-"):
-                configured_shared = os.getenv(
-                    "OMNIGENT_SHARED_HOST_IMAGE_REF", ""
-                ).strip()
-                resolved_shared = str(
-                    getattr(resolved, "shared_host_image_ref", "") or ""
-                ).strip()
-                host_ref = (
-                    configured_shared
-                    if _DIGEST_IMAGE.fullmatch(configured_shared)
-                    else resolved_shared or configured_shared
-                ) or os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
+                try:
+                    host_ref = resolve_shared_host_image_ref()
+                except HarnessPlatformError:
+                    host_ref = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
             else:
                 host_ref = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
     return server_ref, host_ref

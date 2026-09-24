@@ -30,6 +30,10 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
     resolve_container_backend_settings,
 )
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.host_classes import (
+    resolve_shared_host_image_ref,
+)
 from moonmind.omnigent.oauth_hosts import ACTIVE_HOST_STATES
 from moonmind.omnigent.policies import (
     PolicyDocument,
@@ -1110,15 +1114,10 @@ def resolved_shared_bootstrap_image_ref(
 ) -> str | None:
     """Read the shared host digest resolved by the deployment image owner."""
 
-    source = os.environ if env is None else env
-    configured = str(source.get("OMNIGENT_SHARED_HOST_IMAGE_REF") or "").strip()
-    if _DIGEST_IMAGE.fullmatch(configured):
-        return configured
-    from moonmind.omnigent.bootstrap.store import load_resolved_state
-
-    state = load_resolved_state()
-    resolved = str(getattr(state, "shared_host_image_ref", "") or "").strip()
-    return resolved or configured or None
+    try:
+        return resolve_shared_host_image_ref(env)
+    except HarnessPlatformError:
+        return None
 
 
 # Stock bootstrap policies always carry fixed explicit resource limits.
