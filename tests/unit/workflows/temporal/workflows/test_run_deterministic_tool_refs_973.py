@@ -334,3 +334,343 @@ async def test_run_execution_stage_rejects_unresolvable_tool_ref_explicitly(
 
     with pytest.raises(ValueError, match="incomplete node 'missing'"):
         await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+
+def test_resolve_plan_ref_inputs_resolves_mixed_tool_to_agent_consumer() -> None:
+    """Mixed tool/agent plan: a skill producer output feeds an agent consumer.
+
+    Resolution in run.py happens before the tool_type dispatch branch, so the
+    same recorded COMPLETED map serves both deterministic tool and
+    agent_runtime nodes without an AgentRun for the tool step.
+    """
+
+    results = {
+        "produce": {
+            "status": "COMPLETED",
+            "outputs": {"ticket": "MM-1"},
+            "progress": {},
+        }
+    }
+    agent_inputs = {
+        "ticket": {"ref": {"node": "produce", "json_pointer": "/outputs/ticket"}},
+        "prompt": "summarize",
+    }
+    resolved = _resolve_plan_ref_inputs(
+        agent_inputs, results_by_node=results, current_node_id="agent-consume"
+    )
+    assert resolved == {"ticket": "MM-1", "prompt": "summarize"}
+
+
+def test_activity_result_retryable_skill_business_vs_system_error() -> None:
+    """Tool path: returned business FAILED is not retryable; system_error is."""
+
+    workflow = MoonMindRunWorkflow()
+    business = {"status": "FAILED", "outputs": {"error": "validation_failed"}}
+    assert (
+        workflow._activity_result_retryable(
+            business, failure_message="validation_failed", tool_type="skill"
+        )
+        is False
+    )
+    system = {"status": "FAILED", "outputs": {"error": "system_error"}}
+    assert (
+        workflow._activity_result_retryable(
+            system, failure_message="system_error", tool_type="skill"
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skill_business_failure_maps_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A returned business FAILED maps once at its owner: one call, terminal."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    tool_calls: list[str] = []
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> Any:
+        normalized = _normalize_payload(payload)
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {"skills": [_tool_definition_payload("test.consume")]}
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "consume",
+                        "tool": {"type": "skill", "name": "test.consume"},
+                        "inputs": {"ticket": "MM-1"},
+                    }
+                ]
+            )
+        if activity_type == "mm.tool.execute":
+            tool_calls.append(activity_type)
+            return {
+                "status": "FAILED",
+                "outputs": {"error": "validation_failed", "summary": "bad ticket"},
+            }
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="bad ticket|validation_failed"):
+        await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+    assert tool_calls == ["mm.tool.execute"]
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skill_route_ignores_caller_chosen_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Least privilege: caller inputs cannot select activity/queue/mounts."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str, payload: Any, **kwargs: Any
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        captured.append((activity_type, normalized, kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {"skills": [_tool_definition_payload("test.consume")]}
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "consume",
+                        "tool": {"type": "skill", "name": "test.consume"},
+                        "inputs": {
+                            "ticket": "MM-1",
+                            "activity_type": "host.shell",
+                            "taskQueue": "caller-chosen-queue",
+                            "mounts": ["/etc/secrets"],
+                            "queues": ["caller-chosen-queue"],
+                        },
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {"ok": True}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 1
+    _, payload, kwargs = tool_calls[0]
+    assert kwargs.get("task_queue") != "caller-chosen-queue"
+    assert payload["invocation_payload"]["tool"] == {
+        "type": "skill",
+        "name": "test.consume",
+    }
+
+
+def test_preserved_step_predicate_and_sparse_seed_shape() -> None:
+    """Restart: preserved COMPLETED tool work is skipped, never re-dispatched.
+
+    The predicate is the skip mechanism; the sparse seed (artifact refs only)
+    is the recorded identity reused for ref resolution without rebuilding.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "produce",
+            "preservedFrom": {"workflowId": "wf-0", "runId": "run-0"},
+            "artifacts": {"outputSummary": "art:summary", "outputPrimary": "art:primary"},
+        }
+    ]
+    workflow._rebuild_step_ledger_index()
+    assert workflow._is_preserved_step("produce") is True
+    assert workflow._is_preserved_step("consume") is False
+    seeded = workflow._preserved_step_outputs("produce")
+    assert seeded["outputSummaryRef"] == "art:summary"
+    assert seeded["outputPrimaryRef"] == "art:primary"
+    completed: dict[str, Any] = {
+        "produce": {"status": "COMPLETED", "outputs": dict(seeded), "progress": {}}
+    }
+    resolved = _resolve_plan_ref_inputs(
+        {"summary": {"ref": {"node": "produce", "json_pointer": "/outputs/outputSummaryRef"}}},
+        results_by_node=completed,
+        current_node_id="consume",
+    )
+    assert resolved == {"summary": "art:summary"}
+
+
+def test_step_execution_idempotency_key_is_stable_for_lost_ack() -> None:
+    """Lost acknowledgment: the same step/execution/operation reuses one key."""
+
+    from moonmind.workflows.temporal.step_executions import (
+        step_execution_operation_idempotency_key,
+    )
+
+    first = step_execution_operation_idempotency_key(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="consume",
+        execution_ordinal=1,
+        operation="execute",
+    )
+    second = step_execution_operation_idempotency_key(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="consume",
+        execution_ordinal=1,
+        operation="execute",
+    )
+    assert first == second
+    assert "consume" in first and first.endswith(":execute")
+
+
+@pytest.mark.asyncio
+async def test_execute_container_job_tool_cancellation_is_request_not_stop_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation requests container_job.cancel; CANCELLED is not stop proof."""
+
+    from datetime import datetime, timezone
+
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    calls: list[str] = []
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> Any:
+        calls.append(activity_type)
+        if activity_type == "container_job.submit":
+            return {"jobId": "container-job:0123456789abcdef0123456789abcdef"}
+        if activity_type == "container_job.cancel":
+            return {"jobId": "container-job:0123456789abcdef0123456789abcdef"}
+        raise AssertionError(f"status must not be polled after cancel: {activity_type}")
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._cancel_requested = True
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "info",
+        type(
+            "WorkflowInfo",
+            (),
+            {
+                "namespace": "default",
+                "workflow_id": "wf-973",
+                "run_id": "run-1",
+                "search_attributes": {},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        run_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+
+    result = await workflow._execute_container_job_tool(
+        node_inputs={
+            "idempotencyKey": "wf-973:cancel-step:1",
+            "spec": {
+                "image": "docker.io/library/qualification-fixture:1.0.0",
+                "command": ["sh", "-lc", "probe"],
+                "workspaceRef": {"kind": "sandbox", "workspaceId": "run"},
+                "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+            },
+        },
+        node_id="cancel-step",
+        execution_ordinal=1,
+    )
+
+    assert calls[0] == "container_job.submit"
+    assert "container_job.cancel" in calls
+    assert "container_job.status" not in calls
+    assert result["status"] == "CANCELLED"
+    assert result["outputs"]["state"] == "canceling"
