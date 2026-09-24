@@ -619,3 +619,50 @@ def test_production_apply_records_omnigent_gap_without_migrator(
         if check["name"] == "omnigent-migration"
     ]
     assert omnigent and omnigent[0]["status"] == "unavailable"
+
+
+def test_conflict_bodies_never_expose_error_detail(
+    controller_path, tmp_path
+):
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    app = server_mod.build_app(
+        store=store,
+        secret="test-secret",
+        applier=lambda operation: None,
+        legacy_writer_probe=lambda: True,
+    )
+    from wsgiref.simple_server import make_server
+
+    httpd = make_server("127.0.0.1", 0, app)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        import urllib.error
+
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/operations",
+            data=json.dumps(
+                {"stack": "moonmind", "desiredImage": "img", "sourceRevision": "r"}
+            ).encode(),
+            method="POST",
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10):
+                raise AssertionError("expected a 409 for the legacy writer")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409
+            body = json.loads(exc.read().decode() or "{}")
+            assert body == {
+                "error": (
+                    "legacy application-owned writer may still be active; "
+                    "stop or reconcile it before the controller takes over "
+                    "(REQ-07)"
+                )
+            }
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=10)

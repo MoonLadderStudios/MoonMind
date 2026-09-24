@@ -94,7 +94,11 @@ class OperationStore:
         self.operations_dir = self.state_dir / "operations"
 
     def _path(self, operation_id: str) -> Path:
-        return self.operations_dir / f"{check_operation_id(operation_id)}.json"
+        # Defense in depth: the caller-supplied id must match the safe
+        # alphabet, and only its basename may reach the filesystem, so a
+        # path escape is impossible even if validation regresses.
+        name = check_operation_id(operation_id)
+        return self.operations_dir / os.path.basename(f"{name}.json")
 
     def _write(self, operation: dict) -> dict:
         operation["updatedAt"] = _utc_now()
