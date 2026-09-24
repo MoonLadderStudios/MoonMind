@@ -22730,7 +22730,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         request = ContainerJobSubmitRequest.model_validate(
             {
                 "contractVersion": node_inputs.get("contractVersion", "v1"),
-                "idempotencyKey": node_inputs.get("idempotencyKey"),
+                # MoonLadderStudios/MoonMind#973: a normal admitted plan carries
+                # only the operation's spec. Derive the stable step-execution
+                # identity when the plan omits an explicit key so a lost
+                # acknowledgment retries under the same key and the
+                # container-job backend reconciles (exact replay) instead of
+                # mutating twice. An explicit plan key is preserved.
+                "idempotencyKey": (
+                    str(node_inputs.get("idempotencyKey") or "").strip()
+                    or step_execution_operation_idempotency_key(
+                        workflow_id=info.workflow_id,
+                        run_id=info.run_id,
+                        logical_step_id=node_id,
+                        execution_ordinal=execution_ordinal,
+                        operation="execute",
+                    )
+                ),
                 "source": {
                     "source": "workflow",
                     "callerRequestId": node_inputs.get("callerRequestId"),

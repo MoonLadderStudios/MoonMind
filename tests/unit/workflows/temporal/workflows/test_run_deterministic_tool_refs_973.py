@@ -826,3 +826,237 @@ async def test_lost_ack_idempotency_key_reaches_real_dispatcher_context() -> Non
         )
         assert result.status == "COMPLETED"
     assert [ctx.get("idempotency_key") for ctx in seen_contexts] == [key, key]
+
+
+@pytest.mark.asyncio
+async def test_container_job_derives_stable_key_and_reconciles_lost_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REQ-2 lost-ack reconciliation: omitted plan key retries under one identity.
+
+    A normal admitted ``container.run_job`` plan carries only ``spec``. The
+    workflow derives the stable step-execution key, so a retried acknowledgment
+    resubmits the same ``idempotencyKey`` and the backend replays the same
+    ``jobId`` (reconciliation) instead of creating a second job (remutation).
+    """
+
+    from moonmind.workflows.temporal.step_executions import (
+        step_execution_operation_idempotency_key,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    submitted_keys: list[str] = []
+    jobs_by_key: dict[str, str] = {}
+    job_id = "container-job:" + "ab" * 16
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> Any:
+        normalized = _normalize_payload(payload)
+        if activity_type == "container_job.submit":
+            request = normalized.get("request", {})
+            key = str(request.get("idempotencyKey") or "")
+            assert key, "submit must carry a stable idempotencyKey"
+            submitted_keys.append(key)
+            # Backend exact-replay semantics: same key returns the same job.
+            jobs_by_key.setdefault(key, job_id)
+            return {"jobId": jobs_by_key[key], "state": "queued"}
+        if activity_type == "container_job.status":
+            return {"jobId": job_id, "state": "succeeded", "terminal": {"exitCode": 0}}
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "info",
+        type(
+            "WorkflowInfo",
+            (),
+            {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1",
+             "search_attributes": {}},
+        ),
+    )
+    monkeypatch.setattr(
+        run_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+
+    node_inputs = {
+        "spec": {
+            "image": "docker.io/library/qualification-fixture:1.0.0",
+            "command": ["sh", "-lc", "probe"],
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "run"},
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+    }
+    expected_key = step_execution_operation_idempotency_key(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="workload-step",
+        execution_ordinal=1,
+        operation="execute",
+    )
+    first = await workflow._execute_container_job_tool(
+        node_inputs=dict(node_inputs), node_id="workload-step", execution_ordinal=1
+    )
+    # Lost acknowledgment: retry the same step/execution without a new mutation.
+    second = await workflow._execute_container_job_tool(
+        node_inputs=dict(node_inputs), node_id="workload-step", execution_ordinal=1
+    )
+
+    assert first["status"] == "COMPLETED"
+    assert second["status"] == "COMPLETED"
+    assert first["outputs"]["jobId"] == job_id
+    assert second["outputs"]["jobId"] == job_id
+    assert submitted_keys == [expected_key, expected_key]
+    assert list(jobs_by_key.keys()) == [expected_key]
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skips_preserved_tool_step_without_redispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REQ-2 restart: a preserved COMPLETED tool node is skipped end-to-end.
+
+    Exercises the real ``_is_preserved_step`` branch inside
+    ``_run_execution_stage`` (not just the predicate unit test): ``produce``
+    is seeded as preserved with artifact refs, ``consume`` references the
+    preserved output via ``ref.node``, and only ``consume`` reaches
+    ``mm.tool.execute`` without an AgentRun.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str, payload: Any, **kwargs: Any
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        captured.append((activity_type, normalized, kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            _tool_definition_payload("test.produce"),
+                            _tool_definition_payload("test.consume"),
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "produce",
+                        "tool": {"type": "skill", "name": "test.produce"},
+                        "inputs": {"prompt": "hello"},
+                    },
+                    {
+                        "id": "consume",
+                        "tool": {"type": "skill", "name": "test.consume"},
+                        "inputs": {
+                            "summary": {
+                                "ref": {
+                                    "node": "produce",
+                                    "json_pointer": "/outputs/outputSummaryRef",
+                                }
+                            }
+                        },
+                    },
+                ],
+                edges=[{"from": "produce", "to": "consume"}],
+            )
+        if activity_type == "mm.tool.execute":
+            invocation = normalized.get("invocation_payload", {})
+            assert invocation.get("id") == "consume"
+            assert invocation["inputs"]["summary"] == "art:summary"
+            return {"status": "COMPLETED", "outputs": {"ok": True}}
+        return {"status": "COMPLETED", "outputs": {}}
+
+    # Seed the preserved COMPLETED tool result after the ledger initializes,
+    # exercising the workflow's preserved-step short-circuit on restart.
+    # Mirror production materialization: preserved produce is completed, then
+    # readiness refresh unblocks the dependent consume (pending -> ready).
+    original_initialize = MoonMindRunWorkflow._initialize_step_ledger
+
+    def _initialize_with_preserved(self, *, ordered_nodes, dependency_map, updated_at):
+        original_initialize(
+            self,
+            ordered_nodes=ordered_nodes,
+            dependency_map=dependency_map,
+            updated_at=updated_at,
+        )
+        self._step_ledger_rows = [
+            {
+                "logicalStepId": "produce",
+                "status": "completed",
+                "preservedFrom": {"workflowId": "wf-0", "runId": "run-0"},
+                "artifacts": {
+                    "outputSummary": "art:summary",
+                    "outputPrimary": "art:primary",
+                },
+            }
+        ] + [
+            row
+            for row in self._step_ledger_rows
+            if row.get("logicalStepId") != "produce"
+        ]
+        self._rebuild_step_ledger_index()
+        self._refresh_step_readiness(updated_at=updated_at)
+
+    monkeypatch.setattr(
+        MoonMindRunWorkflow, "_initialize_step_ledger", _initialize_with_preserved
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+
+    async def fail_if_child_workflow_starts(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("restart must not start AgentRun for tool steps")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fail_if_child_workflow_starts,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1",
+         "search_attributes": {}},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0][1]["invocation_payload"]["id"] == "consume"
