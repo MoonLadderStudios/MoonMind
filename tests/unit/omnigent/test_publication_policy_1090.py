@@ -109,15 +109,17 @@ def test_auto_capable_skill_omission_uses_default_without_silent_rewrite() -> No
     )
     # Explicit None for an auto-capable skill is never promoted to Auto
     # (docs/Workflows/WorkflowPublishing.md PUBLISH-004). The operator's
-    # read-only selection fails before mutation instead of granting push or
-    # merge effects.
-    with pytest.raises(WorkflowContractError):
+    # read-only selection is preserved instead of granting push or merge
+    # effects.
+    assert (
         resolve_publish_mode_for_skill(
             "some-skill",
             "none",
             publish_metadata=AUTO_AGENT_METADATA,
             diagnostics=[],
         )
+        == "none"
+    )
     # Skill-owned Auto is not permission for the parent to push again.
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(

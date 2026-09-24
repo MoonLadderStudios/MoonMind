@@ -1084,11 +1084,10 @@ def resolve_publish_mode_for_skill(
         if publish_mode == "auto":
             return "auto"
         if publish_mode == "none":
-            raise WorkflowContractError(
-                "task.publish.mode must be 'auto' when using auto-publish-capable "
-                f"skill '{normalized_skill_id}'; explicit 'none' is never "
-                "promoted to 'auto'"
-            )
+            # Explicit new "none" is never promoted to Auto (PUBLISH-004):
+            # preserve the operator's read-only selection instead of
+            # granting push or merge effects.
+            return "none"
         if publish_mode in {"branch", "pr"} and allow_repository_publish:
             return publish_mode
         if publish_mode in {"branch", "pr"}:

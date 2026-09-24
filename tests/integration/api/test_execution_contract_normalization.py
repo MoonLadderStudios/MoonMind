@@ -92,18 +92,19 @@ def test_auto_publish_capable_skill_explicit_auto_is_preserved() -> None:
     assert result["workflow"]["publish"]["mode"] == "auto"
 
 
-def test_auto_publish_capable_skill_explicit_none_is_rejected() -> None:
+def test_auto_publish_capable_skill_explicit_none_is_preserved() -> None:
     # PUBLISH-004: explicit new "none" is never promoted to Auto.
-    with pytest.raises(WorkflowContractError, match="explicit 'none'"):
-        build_canonical_workflow_view(
-            job_type="task",
-            payload=_workflow_payload(
-                {
-                    "skill": {"name": "fix-comments"},
-                    "publish": {"mode": "none"},
-                }
-            ),
-        )
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload(
+            {
+                "skill": {"name": "fix-comments"},
+                "publish": {"mode": "none"},
+            }
+        ),
+    )
+
+    assert result["workflow"]["publish"]["mode"] == "none"
 
 
 def test_non_capable_skill_rejects_auto_publish_mode() -> None:

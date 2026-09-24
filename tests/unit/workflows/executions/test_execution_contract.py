@@ -1477,10 +1477,9 @@ def test_auto_publish_capable_skills_resolve_to_auto(skill_id: str) -> None:
     assert "auto" in SUPPORTED_PUBLISH_MODES
     assert resolve_publish_mode_for_skill(skill_id, None) == "auto"
     assert resolve_publish_mode_for_skill(skill_id, "auto") == "auto"
-    # Explicit new "none" is never promoted to Auto (PUBLISH-004). The
-    # unsupported combination fails before mutation.
-    with pytest.raises(WorkflowContractError, match="explicit 'none'"):
-        resolve_publish_mode_for_skill(skill_id, "none", diagnostics=[])
+    # Explicit new "none" is never promoted to Auto (PUBLISH-004): the
+    # operator's read-only selection is preserved.
+    assert resolve_publish_mode_for_skill(skill_id, "none", diagnostics=[]) == "none"
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(skill_id, "pr")
 
