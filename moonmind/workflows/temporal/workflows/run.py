@@ -1054,6 +1054,114 @@ def _normalize_git_branch_ref(value: Any) -> str:
             return normalized
 
 
+def _resolve_plan_json_pointer(document: Any, pointer: str) -> Any:
+    """Resolve an RFC 6901 JSON pointer deterministically (workflow-safe)."""
+
+    if pointer == "":
+        return document
+    if not pointer.startswith("/"):
+        raise ValueError(f"json_pointer must start with '/': {pointer}")
+    current = document
+    for token in pointer.split("/")[1:]:
+        decoded = token.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, Mapping):
+            if decoded not in current:
+                raise ValueError(
+                    f"json_pointer segment '{decoded}' not found in mapping"
+                )
+            current = current[decoded]
+            continue
+        if isinstance(current, list):
+            if not decoded.isdigit():
+                raise ValueError(
+                    f"json_pointer segment '{decoded}' is not a list index"
+                )
+            index = int(decoded)
+            if index >= len(current):
+                raise ValueError(
+                    f"json_pointer list index out of range: {index}"
+                )
+            current = current[index]
+            continue
+        raise ValueError(
+            f"json_pointer segment '{decoded}' cannot be applied to scalar value"
+        )
+    return current
+
+
+def _is_plan_output_ref(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value.keys()) == {"ref"}
+        and isinstance(value.get("ref"), Mapping)
+    )
+
+
+def _resolve_plan_ref_inputs(
+    value: Any,
+    *,
+    results_by_node: Mapping[str, Any],
+    current_node_id: str,
+) -> Any:
+    """Resolve admitted ``{"ref": {"node", "json_pointer"}}`` inputs.
+
+    Pure and deterministic: reads only already-recorded step results, performs
+    no I/O, and raises explicit ``ValueError`` for missing nodes, incomplete
+    predecessors, or invalid pointers instead of returning empty success.
+    """
+
+    if _is_plan_output_ref(value):
+        ref = value["ref"]
+        assert isinstance(ref, Mapping)
+        ref_node = str(ref.get("node") or "").strip()
+        pointer = str(ref.get("json_pointer") or "").strip()
+        if not ref_node:
+            raise ValueError(
+                f"Reference at {current_node_id} is missing ref.node"
+            )
+        if not pointer:
+            raise ValueError(
+                f"Reference at {current_node_id} is missing ref.json_pointer"
+            )
+        if ref_node not in results_by_node:
+            raise ValueError(
+                f"Reference at {current_node_id} points to "
+                f"incomplete node '{ref_node}'"
+            )
+        payload = results_by_node[ref_node]
+        if not isinstance(payload, Mapping):
+            raise ValueError(
+                f"Reference at {current_node_id} points to "
+                f"invalid result for node '{ref_node}'"
+            )
+        try:
+            return _resolve_plan_json_pointer(payload, pointer)
+        except ValueError as exc:
+            raise ValueError(
+                f"Reference at {current_node_id} points to invalid output "
+                f"path '{pointer}' on node '{ref_node}': {exc}"
+            ) from exc
+    if isinstance(value, Mapping):
+        return {
+            key: _resolve_plan_ref_inputs(
+                item,
+                results_by_node=results_by_node,
+                current_node_id=current_node_id,
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _resolve_plan_ref_inputs(
+                item,
+                results_by_node=results_by_node,
+                current_node_id=current_node_id,
+            )
+            for item in value
+        ]
+    return value
+
+
 @dataclasses.dataclass(frozen=True)
 class MoonSpecRemediationSuccessor:
     """One exact, plan-authored remediation destination."""
@@ -1094,6 +1202,14 @@ RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH = (
 )
 RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH = "run-empty-agent-skillset-snapshot-v1"
 RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution-v1"
+# MoonLadderStudios/MoonMind#973: resolve admitted ``ref.node``/``json_pointer``
+# dependency outputs deterministically from recorded step results before
+# dispatching skill/agent nodes through the normal plan path. Replay-gated so
+# histories that already recorded dispatch with unresolved refs keep replaying
+# their recorded command sequence.
+RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
+    "run-deterministic-tool-ref-resolution-v1"
+)
 
 
 def _worker_capability_unavailable_error(
@@ -12288,6 +12404,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
+        # MoonLadderStudios/MoonMind#973: recorded COMPLETED results by node
+        # for deterministic ``ref.node`` resolution. Seeded from preserved
+        # steps and extended as each node completes; never rerun to rebuild.
+        completed_step_results: dict[str, Any] = {}
+        ref_resolution_enabled = workflow.patched(
+            RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH
+        )
         for index, node in enumerate(ordered_nodes, start=1):
             await self._wait_if_paused_at_safe_boundary()
             if self._cancel_requested:
@@ -12309,6 +12432,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 preserved_outputs = self._preserved_step_outputs(node_id)
                 if preserved_outputs:
                     previous_step_outputs = preserved_outputs
+                    if ref_resolution_enabled:
+                        completed_step_results[node_id] = {
+                            "status": "COMPLETED",
+                            "outputs": dict(preserved_outputs),
+                            "progress": {},
+                        }
                 continue
             current_step_row = self._step_ledger_row_for(node_id)
             if (
@@ -12474,6 +12603,43 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 if current_previous_outputs:
                     node_inputs["previousOutputs"] = dict(current_previous_outputs)
+                if ref_resolution_enabled:
+                    try:
+                        node_inputs = dict(
+                            _resolve_plan_ref_inputs(
+                                node_inputs,
+                                results_by_node=completed_step_results,
+                                current_node_id=node_id,
+                            )
+                        )
+                    except ValueError as exc:
+                        diagnostic = self._record_step_execution_exception(
+                            exc,
+                            logical_step_id=node_id,
+                            tool_name=tool_name,
+                            source="workflow",
+                            updated_at=workflow.now(),
+                        )
+                        self._mark_step_terminal(
+                            node_id,
+                            status="failed",
+                            updated_at=workflow.now(),
+                            summary=diagnostic.get("message"),
+                            last_error=diagnostic.get("category"),
+                        )
+                        self._refresh_step_readiness(updated_at=workflow.now())
+                        self._update_memo()
+                        if failure_mode == "FAIL_FAST":
+                            raise
+                        execution_result = {
+                            "status": "FAILED",
+                            "outputs": {
+                                "error": diagnostic.get("category"),
+                                "summary": diagnostic.get("message"),
+                            },
+                        }
+                        result_status = "FAILED"
+                        break
                 self._record_step_dependency_inputs(node_id)
 
                 self._step_count = index
@@ -14661,6 +14827,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 extra={"error": str(exc)},
                             )
                 previous_step_outputs = outputs_for_story_output
+                if ref_resolution_enabled and result_status == "COMPLETED":
+                    progress_payload = self._get_from_result(
+                        execution_result, "progress"
+                    )
+                    normalized_completed: dict[str, Any] = {
+                        "status": "COMPLETED",
+                        "outputs": dict(outputs_for_story_output),
+                        "progress": (
+                            dict(progress_payload)
+                            if isinstance(progress_payload, Mapping)
+                            else {}
+                        ),
+                    }
+                    artifacts_payload = self._get_from_result(
+                        execution_result, "output_artifacts"
+                    )
+                    if artifacts_payload is None:
+                        artifacts_payload = self._get_from_result(
+                            execution_result, "outputArtifacts"
+                        )
+                    if artifacts_payload is not None:
+                        normalized_completed["output_artifacts"] = artifacts_payload
+                    completed_step_results[node_id] = normalized_completed
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
                     story_output_status = str(
