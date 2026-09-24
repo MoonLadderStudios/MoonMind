@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -39,6 +40,27 @@ _DIGEST_PREFIX = "sha256:"
 _HEX64 = frozenset("0123456789abcdefABCDEF")
 _CONFIDENCES = frozenset({"low", "medium", "high"})
 _STATUSES = frozenset({"complete", "partial", "unavailable"})
+
+# Secret-shaped evidence is redacted before provider send, mirroring the
+# production `step.review` control. Evidence bodies are free text, so the
+# pattern masks key=value assignments and standalone bearer/token formats
+# rather than structured mapping keys.
+_SECRET_KEY_VALUE_PATTERN = re.compile(
+    r"(?i)(api[_-]?key|apikey|token|secret|password|passwd|authorization"
+    r"|cookie|session|x-goog-api-key)\s*[:=]\s*(\"[^\"]*\"|'[^']*'|\S+)",
+)
+_SECRET_TOKEN_PATTERN = re.compile(
+    r"(?i)Bearer\s+\S+|\bghp_[A-Za-z0-9]+\b|\bgithub_pat_[A-Za-z0-9_]+\b"
+    r"|\bxox[baprs]-[A-Za-z0-9-]+\b",
+)
+
+
+def _redact_secret_text(text: str) -> str:
+    """Mask secret-shaped values in free-text evidence before provider send."""
+    redacted = _SECRET_KEY_VALUE_PATTERN.sub(
+        lambda match: f"{match.group(1)}=[redacted]", text
+    )
+    return _SECRET_TOKEN_PATTERN.sub("[redacted]", redacted)
 
 
 def _non_blank(value: Any, *, field_name: str, max_chars: int | None = None) -> str:
@@ -323,13 +345,18 @@ def build_optional_review_prompt(
     request: OptionalReviewRequest,
     evidence_contents: Mapping[str, str] | None = None,
 ) -> str:
-    """Build the bounded reviewer prompt. Candidate text is untrusted data."""
+    """Build the bounded reviewer prompt. Candidate text is untrusted data.
+
+    Secret-shaped evidence values are redacted before provider send, mirroring
+    the production `step.review` control; the admitted reviewer route still
+    owns credentials, provider selection, and budget enforcement.
+    """
     sections: list[str] = []
     total = 0
     for ref in request.evidence_refs:
         body = ""
         if evidence_contents is not None and ref in evidence_contents:
-            body = str(evidence_contents[ref] or "")
+            body = _redact_secret_text(str(evidence_contents[ref] or ""))
         encoded = len(body.encode("utf-8"))
         if encoded > EVIDENCE_SECTION_MAX_BYTES:
             raise ValueError(

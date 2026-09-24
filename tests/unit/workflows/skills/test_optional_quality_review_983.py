@@ -114,6 +114,20 @@ class TestPromptAuthority:
                 request, evidence_contents={request.evidence_refs[0]: "x" * 65_000}
             )
 
+    def test_secret_shaped_evidence_redacted_before_provider_send(self):
+        request = _request()
+        prompt = build_optional_review_prompt(
+            request,
+            evidence_contents={
+                request.evidence_refs[0]: (
+                    'api_key = "sk-secret-value"\nnormal line'
+                )
+            },
+        )
+        assert "sk-secret-value" not in prompt
+        assert "[redacted]" in prompt
+        assert "normal line" in prompt
+
     def test_timeout_over_budget_rejected(self):
         with pytest.raises(ValueError, match="timeout"):
             _request(timeout_seconds=999)
