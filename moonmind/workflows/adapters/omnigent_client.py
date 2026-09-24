@@ -33,6 +33,10 @@ _DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 # releases the on-demand host.
 _DEFAULT_EVENT_TIMEOUT_SECONDS = 150.0
 _MAX_SSE_LINE_BYTES = 1_000_000
+# A refused or timed-out connect never delivered the request, so a client
+# opted into an outage grace re-sends it on this interval until the grace ends.
+_CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS = 2.0
+_CONNECT_OUTAGE_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout)
 
 
 def _bounded_int(env_key: str, default: int, minimum: int, maximum: int) -> int:
@@ -339,8 +343,20 @@ class OmnigentHttpClient:
         limits: httpx.Limits | None = None,
         forward_headers: Mapping[str, Any] | None = None,
         upstream_header_allowlist: Iterable[str] | None = None,
+        connect_outage_grace_seconds: float = 0.0,
     ) -> None:
+        """``connect_outage_grace_seconds`` lets a durable caller ride out a
+        server restart: requests whose connection could not be established are
+        re-sent until the grace ends. The grace is one window per client, so a
+        server that stays down costs a single wait rather than one per call.
+        The default of zero keeps interactive and health callers fail-fast.
+        """
+
         self._base = str(base_url).rstrip("/")
+        self._connect_outage_grace_seconds = max(
+            0.0, float(connect_outage_grace_seconds)
+        )
+        self._connect_outage_deadline: float | None = None
         self._api_token = api_token
         self._timeout = httpx.Timeout(timeout_seconds)
         self._event_timeout = httpx.Timeout(event_timeout_seconds)
@@ -582,6 +598,21 @@ class OmnigentHttpClient:
     async def _stream_events_inner(
         self, session_id: str
     ) -> AsyncIterator[dict[str, Any]]:
+        while True:
+            try:
+                async for event in self._stream_events_once(session_id):
+                    self._connect_outage_deadline = None
+                    yield event
+            except OmnigentClientError as exc:
+                if await self._await_connect_outage_retry(exc):
+                    continue
+                raise
+            self._connect_outage_deadline = None
+            return
+
+    async def _stream_events_once(
+        self, session_id: str
+    ) -> AsyncIterator[dict[str, Any]]:
         path = f"/v1/sessions/{quote(session_id, safe='')}/stream"
         if self._client is not None:
             try:
@@ -794,6 +825,26 @@ class OmnigentHttpClient:
         request_timeout: httpx.Timeout | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        while True:
+            try:
+                result = await self._request_once(
+                    method, path, request_timeout=request_timeout, **kwargs
+                )
+            except OmnigentClientError as exc:
+                if await self._await_connect_outage_retry(exc):
+                    continue
+                raise
+            self._connect_outage_deadline = None
+            return result
+
+    async def _request_once(
+        self,
+        method: str,
+        path: str,
+        *,
+        request_timeout: httpx.Timeout | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         timeout = request_timeout or self._timeout
         if self._client is not None:
             try:
@@ -885,6 +936,17 @@ class OmnigentHttpClient:
         return {"body": redact_sensitive_payload(parsed)}
 
     async def _request_bytes(self, method: str, path: str) -> bytes:
+        while True:
+            try:
+                content = await self._request_bytes_once(method, path)
+            except OmnigentClientError as exc:
+                if await self._await_connect_outage_retry(exc):
+                    continue
+                raise
+            self._connect_outage_deadline = None
+            return content
+
+    async def _request_bytes_once(self, method: str, path: str) -> bytes:
         if self._client is not None:
             try:
                 response = await self._client.request(
@@ -983,6 +1045,28 @@ class OmnigentHttpClient:
 
     def _redact(self, value: str) -> str:
         return redact_sensitive_text(self._redactor.scrub(value))
+
+    async def _await_connect_outage_retry(self, exc: OmnigentClientError) -> bool:
+        """Wait before re-sending a request the server never received.
+
+        Only a failed connect proves the request was not delivered; any answer,
+        including an HTTP error or a broken read, ends the outage and is never
+        replayed here.
+        """
+
+        if not isinstance(exc.__cause__, _CONNECT_OUTAGE_ERRORS):
+            self._connect_outage_deadline = None
+            return False
+        if self._connect_outage_grace_seconds <= 0:
+            return False
+        now = time.monotonic()
+        if self._connect_outage_deadline is None:
+            self._connect_outage_deadline = now + self._connect_outage_grace_seconds
+        remaining = self._connect_outage_deadline - now
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(_CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS, remaining))
+        return True
 
     def _transport_error_message(self, exc: httpx.HTTPError) -> str:
         """Return a useful redacted message even for empty httpx timeout text."""
