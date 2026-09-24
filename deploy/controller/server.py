@@ -265,7 +265,11 @@ def _reconcile_open_operations(
 def check_legacy_cutover(
     legacy_writer_probe: Callable[[], bool] | None,
 ) -> str | None:
-    """Return a deferral reason when the legacy writer still owns the stack."""
+    """Return a deferral reason when the legacy writer still owns the stack.
+
+    The reason is a constant string: Docker inspection failures never reach
+    the HTTP response, so error detail cannot leak through this 409 body.
+    """
     if legacy_writer_probe is None:
         return None
     try:
@@ -274,8 +278,11 @@ def check_legacy_cutover(
                 "legacy application-owned writer may still be active; stop or "
                 "reconcile it before the controller takes over (REQ-07)"
             )
-    except LegacyWriterUnknown as exc:
-        return str(exc)
+    except LegacyWriterUnknown:
+        return (
+            "legacy writer ownership is unverified; reconcile Docker state "
+            "before the controller takes over (REQ-07)"
+        )
     return None
 
 
@@ -435,8 +442,9 @@ def build_app(
                     operation = _apply_with_bounded_retries(
                         store, operation["operationId"], run_apply
                     )
-        except lock_mod.LockBusyError as exc:
-            return _json_response(start_response, "409 Conflict", {"error": str(exc)})
+        except lock_mod.LockBusyError:
+            # Never expose lock-owner internals: a constant conflict body.
+            return _json_response(start_response, "409 Conflict", {"error": "stack is owned by another writer"})
         except Exception:  # noqa: BLE001 - never expose exception detail
             return _json_response(start_response, "500 Internal Server Error", {"error": "internal error"})
         return _json_response(start_response, "202 Accepted", _public_operation(operation))
@@ -452,16 +460,17 @@ def build_app(
             operation = store.begin_retry(operation_id)
         except KeyError:
             return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
-        except RuntimeError as exc:
-            return _json_response(start_response, "409 Conflict", {"error": str(exc)})
+        except RuntimeError:
+            # Constant body: retry-budget internals never reach the response.
+            return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
         try:
             candidate = lock_mod.StackLock(store.state_dir, operation["stack"])
             with candidate.acquire():
                 operation = _apply_with_bounded_retries(
                     store, operation_id, run_apply
                 )
-        except lock_mod.LockBusyError as exc:
-            return _json_response(start_response, "409 Conflict", {"error": str(exc)})
+        except lock_mod.LockBusyError:
+            return _json_response(start_response, "409 Conflict", {"error": "stack is owned by another writer"})
         except Exception:  # noqa: BLE001 - never expose exception detail
             return _json_response(start_response, "500 Internal Server Error", {"error": "internal error"})
         return _json_response(start_response, "202 Accepted", _public_operation(operation))
