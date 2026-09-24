@@ -339,9 +339,14 @@ separate profile editor or a parallel credential store.
 Before post-registration credential validation, MoonMind resolves missing launch
 metadata for a new or existing host binding from the persisted launch policy.
 Existing policy, execution-profile, endpoint, and applicable static-host choices
-are preserved. A complete launch snapshot is reused; credential-generation,
+are preserved. Bindings predating saved policy references select the persisted
+default policy for their existing runtime and static/on-demand host mode; a
+legacy substrate reference is not interpreted as a policy reference. Conflicting
+policy host modes fail before binding updates. A complete launch snapshot is reused; credential-generation,
 lease, login-status, and cleanup checks still apply. Validation errors record
 the exception type and failure code without exposing credential material.
+Binding-repair failures also retain a bounded, redacted reason and the saved
+policy/profile references so missing or inactive policies remain diagnosable.
 
 For Codex OAuth, the resulting profile should preserve:
 

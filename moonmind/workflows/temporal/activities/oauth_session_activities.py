@@ -29,6 +29,7 @@ from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_r
 from moonmind.provider_profiles.oauth_policy import (
     effective_oauth_capacity_for_finalization,
 )
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider_bootstrap_command,
     get_provider_default,
@@ -54,28 +55,43 @@ async def _create_oauth_validation_binding(
         profile = await db.get(ManagedAgentProviderProfile, profile_id)
         if profile is None:
             raise ValueError("OAuth Provider Profile no longer exists")
-        execution_profile_ref = (
-            binding.execution_profile_ref if binding else None
-        ) or {
-            "codex_cli": "omnigent-codex@1",
-            "claude_code": "omnigent-claude@1",
-        }.get(
+        provider_slug = {"codex_cli": "codex", "claude_code": "claude"}.get(
             profile.runtime_id
         )
-        if execution_profile_ref is None:
+        if provider_slug is None:
             raise ValueError("OAuth Provider Profile runtime is unsupported")
+        execution_profile_ref = (
+            binding.execution_profile_ref if binding else None
+        ) or f"omnigent-{provider_slug}@1"
         execution_profile = PROFILES[execution_profile_ref]
-        policy_ref = (
-            (binding.launch_policy_ref or binding.host_launch_profile_ref)
-            if binding
-            else None
-        ) or execution_profile.default_policy_ref
-        policy_snapshot = await OmnigentPolicyService(db).resolve_runtime_snapshot(
-            policy_ref
-        )
+        policies = OmnigentPolicyService(db)
+        if binding and binding.launch_policy_ref:
+            policy_snapshot = await policies.resolve_runtime_snapshot(
+                binding.launch_policy_ref
+            )
+        else:
+            # Pre-snapshot bindings used host_launch_profile_ref as a substrate
+            # selector, not a policy ref. Only its presence determines host mode.
+            if binding:
+                mode = "on-demand" if binding.host_launch_profile_ref else "static"
+                policy_id = f"{provider_slug}-{mode}"
+            else:
+                policy_id = execution_profile.default_policy_ref.rsplit("@", 1)[0]
+            policy_snapshot = await policies.resolve_default_runtime_snapshot(policy_id)
+        policy_ref = policy_snapshot["policyRef"]
         effective_launch = _compile_persisted_effective_launch(
             policy_snapshot, provider_profile_id=profile_id
         )
+        if binding:
+            expected_mode = (
+                "on_demand_docker"
+                if binding.host_launch_profile_ref
+                else "static_compose"
+            )
+            if effective_launch["hostMode"] != expected_mode:
+                raise ValueError(
+                    f"OAuth policy {policy_ref} conflicts with bound host mode {expected_mode}"
+                )
 
     return await repository.create_or_update_static_binding(
         profile_id=profile_id,
@@ -198,9 +214,15 @@ async def oauth_session_revalidate_bound_host(
         except Exception as exc:
             logger.warning(
                 "OAuth host binding unavailable before credential validation: "
-                "profile_id=%s error_type=%s",
+                "profile_id=%s execution_profile_ref=%s launch_policy_ref=%s "
+                "error_type=%s detail=%s",
                 profile_id,
+                getattr(binding, "execution_profile_ref", None),
+                getattr(binding, "launch_policy_ref", None),
                 type(exc).__name__,
+                redact_sensitive_text(SecretRedactor.from_environ().scrub(str(exc)))[
+                    :500
+                ],
             )
             return {
                 "profile_id": profile_id,
