@@ -58,6 +58,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
+    RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH,
     RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH,
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
@@ -3979,6 +3980,35 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
                 "brief_artifact_path": "artifacts/brief.json",
             },
         )
+
+    def test_suppresses_brief_path_once_loader_brief_is_durable(self) -> None:
+        # Single owner: the trusted loader owns the brief. Once its
+        # briefArtifactRef exists, agent consumers use refs/attachments and
+        # must not declare a new brief output that publish would require.
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context["briefArtifactRef"] = "art_brief_1"
+        parameters: dict[str, Any] = {}
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: patch_id
+            in {
+                RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH,
+                RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH,
+            },
+        ):
+            wf._ensure_assessment_parameters(
+                parameters=parameters,
+                node_inputs={
+                    "assessment_artifact_path": "artifacts/assessment.json",
+                    "brief_artifact_path": "artifacts/brief.json",
+                },
+            )
+
+        self.assertEqual(
+            parameters,
+            {"assessment_artifact_path": "artifacts/assessment.json"},
+        )
+        self.assertNotIn("brief_artifact_path", parameters)
 
     def test_preserves_assessment_ref_across_intervening_outputs(self) -> None:
         wf = MoonMindRunWorkflow()

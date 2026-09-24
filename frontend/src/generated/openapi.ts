@@ -1428,6 +1428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/github/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive Github Event
+         * @description Receive one GitHub webhook delivery for the opt-in event path.
+         */
+        post: operations["receive_github_event_api_v1_github_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/catalog": {
         parameters: {
             query?: never;
@@ -2030,6 +2050,33 @@ export interface paths {
         put?: never;
         /** Fork Checkpoint Branch */
         post: operations["fork_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__fork_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/comparison-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Candidate Comparison
+         * @description Preview comparison-requested candidate generation without side effects.
+         *
+         *     MoonLadderStudios/MoonMind#2215: a request to compare saved results never
+         *     authorizes new inference, and requested runs reuse ordinary branch
+         *     admission with explicit bounded configurations, one shared source intent,
+         *     and the existing provider/resource budgets. The preview performs no
+         *     writes, launches no work, and expands no candidate matrix, so duplicate or
+         *     interrupted previews cannot duplicate completed compute.
+         */
+        post: operations["preview_candidate_comparison_api_executions__workflow_id__checkpoint_branches_comparison_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6174,6 +6221,105 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * CheckpointBranchComparisonPreviewCandidate
+         * @description One explicit comparison candidate for a generation preview.
+         *
+         *     A candidate either reuses an existing completed branch (``branchId``) or
+         *     describes a requested new run through ordinary admission bounds. The
+         *     preview never launches work itself (MoonLadderStudios/MoonMind#2215).
+         */
+        CheckpointBranchComparisonPreviewCandidate: {
+            /** Candidateid */
+            candidateId: string;
+            /** Branchid */
+            branchId?: string | null;
+            /** Sourceintentref */
+            sourceIntentRef?: string | null;
+            /** Maxbudgetusd */
+            maxBudgetUsd?: number | null;
+            /** Workspacepolicy */
+            workspacePolicy?: ("continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source") | null;
+            /** Runtimecontextpolicy */
+            runtimeContextPolicy?: "fresh_agent_run" | null;
+            /** Providerprofileref */
+            providerProfileRef?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
+        };
+        /**
+         * CheckpointBranchComparisonPreviewRequest
+         * @description Bounded preview for comparison-requested candidate generation.
+         *
+         *     Comparing saved results never authorizes new inference: with
+         *     ``allowNewRuns`` false every candidate must name its existing branch.
+         *     Requested runs reuse ordinary branch admission with explicit bounded
+         *     configurations and one shared source intent. Cartesian expansion across
+         *     model/provider/effort grids is rejected, not expanded
+         *     (MoonLadderStudios/MoonMind#2215).
+         */
+        CheckpointBranchComparisonPreviewRequest: {
+            /** Objective */
+            objective: string;
+            /**
+             * Rubricid
+             * @default checkpoint-branch-gates
+             */
+            rubricId: string;
+            /**
+             * Allownewruns
+             * @default false
+             */
+            allowNewRuns: boolean;
+            /** Candidates */
+            candidates: components["schemas"]["CheckpointBranchComparisonPreviewCandidate"][];
+        };
+        /** CheckpointBranchComparisonPreviewResponse */
+        CheckpointBranchComparisonPreviewResponse: {
+            /** Workflowid */
+            workflowId: string;
+            /** Objective */
+            objective: string;
+            /** Rubricid */
+            rubricId: string;
+            /** Selectedruncount */
+            selectedRunCount: number;
+            /** Reuseexistingcount */
+            reuseExistingCount: number;
+            /**
+             * Willlaunchnewwork
+             * @default false
+             */
+            willLaunchNewWork: boolean;
+            /**
+             * Authorizesnewinference
+             * @default false
+             */
+            authorizesNewInference: boolean;
+            /**
+             * Nocartesianexpansion
+             * @default true
+             */
+            noCartesianExpansion: boolean;
+            /** Creationpath */
+            creationPath?: string[];
+            /** Costdeltas */
+            costDeltas?: {
+                [key: string]: unknown;
+            };
+            /** Privacychanges */
+            privacyChanges?: string[];
+            /** Authoritychanges */
+            authorityChanges?: string[];
+            /** Candidates */
+            candidates?: {
+                [key: string]: unknown;
+            }[];
+            /** Previewdigest */
+            previewDigest: string;
+        };
         /** CheckpointBranchContinueRequest */
         CheckpointBranchContinueRequest: {
             /** Label */
@@ -10219,11 +10365,10 @@ export interface components {
             /**
              * Harness
              * @default codex-native
-             * @constant
              */
-            harness: "codex-native";
+            harness: string;
             /** Harnesses */
-            harnesses?: ("codex-native" | "claude-native")[];
+            harnesses?: string[];
             /** Available */
             available: boolean;
             /** Defaultexecutionprofileref */
@@ -17132,6 +17277,26 @@ export interface operations {
             };
         };
     };
+    receive_github_event_api_v1_github_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_settings_catalog_api_v1_settings_catalog_get: {
         parameters: {
             query?: {
@@ -18591,10 +18756,47 @@ export interface operations {
             };
         };
     };
+    preview_candidate_comparison_api_executions__workflow_id__checkpoint_branches_comparison_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchComparisonPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchComparisonPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     compare_checkpoint_branches_api_executions__workflow_id__checkpoint_branches__branch_id__compare_get: {
         parameters: {
             query: {
                 against: string;
+                objective?: string;
+                rubricId?: string;
             };
             header?: never;
             path: {

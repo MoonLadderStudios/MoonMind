@@ -20595,13 +20595,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ``assessment_artifact_path`` in its workspace. Surfacing that path in the
         agent parameters lets ``agent_runtime.publish_artifacts`` publish the JSON
         as a durable MoonMind artifact and hand downstream steps an
-        ``assessmentArtifactRef`` â€” a bridge-compatible verdict channel that does
+        ``assessmentArtifactRef`` — a bridge-compatible verdict channel that does
         not depend on a shared filesystem (the assessment may run on an Omnigent
         host whose workspace the deterministic Jira tools cannot mount).
 
         Once the workflow has accepted a durable assessment, later steps consume
         that controlling input. Their local path arguments do not declare a new
         output or grant authority to replace the assessment.
+
+        The trusted issue loader owns the durable issue brief. Once its
+        ``briefArtifactRef`` exists, agent steps consume it via attachments and
+        carried refs; their local ``brief_artifact_path`` arguments do not
+        declare a new output or grant authority to replace the loader's brief.
         """
         if self._patched_or_false_outside_workflow(
             RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH
@@ -20627,6 +20632,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ) and self._patched_or_false_outside_workflow(
             RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
         ):
+            if self._patched_or_false_outside_workflow(
+                RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+            ) and self._coerce_text(
+                self._assessment_context.get("briefArtifactRef")
+                or self._assessment_context.get("brief_artifact_ref"),
+                max_chars=400,
+            ):
+                return
             for source in (node_inputs, skill_inputs):
                 for key in ("brief_artifact_path", "briefArtifactPath"):
                     value = source.get(key)
@@ -22945,9 +22958,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._waiting_reason = None
         self._attention_required = False
         self._update_search_attributes()
-
-        if self._external_status == "failed":
-            raise ValueError("Integration failed during plan execution.")
 
         if self._external_status == "failed":
             raise ValueError("Integration failed during plan execution.")

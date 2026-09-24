@@ -1,10 +1,9 @@
-"""Qualified host-image drift recovery (major.minor, not SHA).
+"""Qualified host-image drift recovery using observed deployment provenance.
 
 Plans pin an exact digest-pinned host image as immutable launch authority.
-Rebuilt images change patch tags and SHA digests while keeping the same
-major.minor release series (and often the same exact versions). Requiring the
-exact SHA to be present locally fails every app update even when a locally
-available image from the same repository is functionally identical.
+Rebuilt images change versions and SHA digests. Requiring the exact SHA to be
+present locally fails every app update even when a locally available image
+from the same repository is functionally identical.
 
 This module names the deployment's current trusted image for the same
 repository so callers can reuse a compatible local image instead of pulling a
@@ -14,13 +13,12 @@ stale 7GB digest or failing. A fallback is returned only when it is qualified:
   unadmitted tag cannot become a credential writer or bearer launcher);
 - deployment authority: observed in bootstrap resolved-state provenance (the
   trusted boundary probed its Omnigent binary) or an explicit operator pin;
-- series-compatible with the admitted plan when the caller supplies the
-  expected Omnigent version (same major.minor; patch and SHA may evolve).
+- a parseable Omnigent version when the caller supplies an expected version.
 
 Same-repository is an additional bound, never the whole qualification:
 repository equality alone does not prove compatibility. Downstream gates
-(deployment identity, host selection, exact-host attestation with live version
-probes) re-verify the series before any session starts.
+(deployment identity, host selection, exact-host attestation with live probes)
+re-verify the selected image and required behavior before any session starts.
 """
 
 from __future__ import annotations
@@ -161,11 +159,10 @@ def compatible_deployed_fallback(
     """Return a qualified same-repository image to reuse instead of ``requested``.
 
     The fallback is digest-pinned, deployment-owned (bootstrap-observed or
-    operator-pinned), from the same repository, and series-compatible with
-    ``expected_omnigent_version`` when both the expectation and the
-    candidate's observed version are known. Returns None when nothing
-    qualifies, when the only match is the requested ref itself, or when the
-    requested ref is not digest-pinned (mutable tags keep their existing
+    operator-pinned), from the same repository, and carrying parseable
+    version evidence when ``expected_omnigent_version`` is supplied. Returns
+    None when nothing qualifies, when only the requested ref matches, or when
+    that ref is not digest-pinned (mutable tags keep their existing
     behavior). Callers must still verify local presence (``docker image
     inspect``) before use.
     """
@@ -213,7 +210,7 @@ def is_compatible_image_drift(
 
     Same-repository is the bound: patch tags and SHA digests may evolve, but a
     different repository (different image family) is never compatible drift.
-    Major.minor release compatibility is enforced downstream by deployment
+    Image and capability authority is enforced downstream by deployment
     identity, host selection, and attestation; this predicate only excuses the
     SHA-level mismatch so those gates can judge versions instead of failing on
     digests.

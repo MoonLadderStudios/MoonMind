@@ -7,7 +7,7 @@ ARG CODEX_CLI_VERSION=latest
 # which does not exist). npm then omits the unresolvable optional dependency and
 # the launcher aborts with "claude native binary not installed", breaking every
 # image build until upstream catches up. Bump this deliberately.
-ARG CLAUDE_CLI_VERSION=2.1.257
+ARG CLAUDE_CLI_VERSION=2.1.281
 # Build the shared runtime image with Codex/Claude CLIs by default so the API
 # and Temporal workers can run from the same image tag. Disable selectively in
 # test-only or constrained builds.
@@ -249,6 +249,10 @@ FROM runtime-dependencies AS runtime-base
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
+# The deployment handoff imports the standalone controller client in the
+# deployed worker/API runtimes; without this copy every submission raises
+# ImportError and silently stays on the legacy updater.
+COPY moonmind_controller /app/moonmind_controller/
 COPY docker/sandbox-egress-proxy /app/docker/sandbox-egress-proxy/
 # The enforcer's own policy is image-owned and lives in its own source
 # directory. It must never be copied out of the deployment-mounted directory:

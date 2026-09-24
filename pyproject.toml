@@ -9,7 +9,7 @@ description = "MoonMind workflow automation and supporting tools."
 readme = "README.md"
 license = "Apache-2.0"
 authors = ["MoonMind Contributors <opensource@moonmind.ai>"]
-packages = [{ include = "moonmind" }, { include = "pr_resolver_core" }]
+packages = [{ include = "moonmind" }, { include = "pr_resolver_core" }, { include = "moonmind_controller" }]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"

@@ -238,6 +238,28 @@ def make_catalog():
     )
 
 
+def test_live_boolean_harness_capabilities_remain_boolean():
+    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+
+    record = _normalize_harness(
+        {
+            "id": "opencode-native",
+            "capabilities": {
+                "steering": True,
+                "liveQueue": False,
+                "images": True,
+                "compaction": True,
+            },
+        },
+        omnigent_version="0.15.0",
+        omnigent_build_digest="sha256:" + "a" * 64,
+    )
+    assert record.capabilities.steering is True
+    assert record.capabilities.liveQueue is False
+    assert record.capabilities.images is True
+    assert record.capabilities.compaction is True
+
+
 def make_agent_profile_upstream():
     return OmnigentAgentProfileV2.model_validate(
         {
@@ -1550,6 +1572,7 @@ def test_fresh_catalog_attests_immutable_profile_authority() -> None:
                 "id": "opencode-native",
                 "label": "OpenCode",
                 "implementation": implementation,
+                "capabilities": {"streaming": True},
             }
         ],
         observedAt=datetime.now(UTC) - timedelta(hours=2),
@@ -1564,6 +1587,7 @@ def test_fresh_catalog_attests_immutable_profile_authority() -> None:
                 "id": "opencode-native",
                 "label": "OpenCode",
                 "implementation": implementation,
+                "capabilities": {"streaming": True},
             }
         ],
         observedAt=datetime.now(UTC),
@@ -1592,6 +1616,35 @@ def test_fresh_catalog_attests_immutable_profile_authority() -> None:
                     "version": "1.0.1",
                     "digest": "sha256:" + "2" * 64,
                 },
+                "capabilities": {"streaming": True},
+            }
+        ],
+        observedAt=datetime.now(UTC),
+    )
+    assert_catalog_refresh_attests(
+        authority=stale_authority,
+        observation=changed_build,
+        harness_id="opencode-native",
+        implementation_ref=stale_authority.harnesses[
+            0
+        ].implementation.implementation_ref(),
+    )
+
+    changed_contract = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.1.0",
+        omnigentBuildDigest="sha256:" + "f" * 64,
+        sourceDigest="sha256:" + "3" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": {
+                    **implementation,
+                    "version": "1.0.1",
+                    "digest": "sha256:" + "2" * 64,
+                },
+                "capabilities": {"streaming": False},
             }
         ],
         observedAt=datetime.now(UTC),
@@ -1599,13 +1652,68 @@ def test_fresh_catalog_attests_immutable_profile_authority() -> None:
     with pytest.raises(HarnessPlatformError) as mismatch:
         assert_catalog_refresh_attests(
             authority=stale_authority,
-            observation=changed_build,
+            observation=changed_contract,
             harness_id="opencode-native",
             implementation_ref=stale_authority.harnesses[
                 0
             ].implementation.implementation_ref(),
         )
     assert mismatch.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
+
+
+def test_catalog_refresh_accepts_additive_capability_metadata():
+    implementation = {
+        "sourceKind": "core",
+        "package": "omnigent",
+        "version": "0.14.0",
+        "digest": "sha256:" + "d" * 64,
+    }
+    common = dict(
+        endpointRef="default",
+        sourceDigest="sha256:" + "c" * 64,
+        observedAt=datetime.now(UTC),
+    )
+    authority = create_catalog_snapshot(
+        **common,
+        omnigentVersion="0.14.0",
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": implementation,
+                "capabilities": {"streaming": True, "steering": "supported"},
+            }
+        ],
+    )
+    observation = create_catalog_snapshot(
+        **common,
+        omnigentVersion="0.15.0",
+        omnigentBuildDigest="sha256:" + "b" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": {
+                    **implementation,
+                    "version": "0.15.0",
+                    "digest": "sha256:" + "e" * 64,
+                },
+                "capabilities": {
+                    "streaming": True,
+                    "steering": True,
+                    "newOptionalFeature": True,
+                },
+                "newCatalogMetadata": "available",
+            }
+        ],
+    )
+    assert_catalog_refresh_attests(
+        authority=authority,
+        observation=observation,
+        harness_id="opencode-native",
+        implementation_ref=authority.harnesses[0].implementation.implementation_ref(),
+    )
 
 
 # Model config digest uniqueness per normalized options
@@ -2211,3 +2319,38 @@ def test_accepted_digests_fall_back_to_the_version_digest() -> None:
         _VERSION,
     )
     assert accepted_imported_content_digests({}, _VERSION) == (_VERSION,)
+
+
+def test_normalize_harness_accepts_bool_behavior_capabilities() -> None:
+    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+
+    row = {
+        "id": "devin-native",
+        "label": "Devin",
+        "capabilities": {
+            "integration_mode": "native-tui",
+            "steering": True,
+            "live_queue": True,
+            "images": True,
+            "compaction": True,
+        },
+        "setup_steps": [],
+    }
+    record = _normalize_harness(
+        row,
+        omnigent_version="0.15.0",
+        omnigent_build_digest="sha256:" + "a" * 64,
+    )
+    assert record.capabilities.steering is True
+    assert record.capabilities.liveQueue is True
+    assert record.capabilities.images is True
+    assert record.capabilities.compaction is True
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.15.0",
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        sourceDigest="sha256:" + "b" * 64,
+        harnesses=[record.model_dump()],
+        observedAt=datetime.now(UTC),
+    )
+    assert snapshot.harnesses[0].capabilities.steering is True

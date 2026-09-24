@@ -31,10 +31,7 @@ One portable controller implements updates for the host entrypoint and the Setti
 
 The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery. Temporal and the UI may request or observe an update, but neither is required for the controller to keep making progress. An observer must not become a second update algorithm.
 
-Use existing Docker/Compose, local job files, and process ownership. The one
-separate minimal controller lifecycle below is the replacement owner, not a
-second deployment mode: do not add a parallel supervisor, promotion state
-machine, or mandatory approval workflow.
+Use existing Docker/Compose, local job files, and process ownership. The controller is one small separate release service in its own Compose project (see section 11.2) and is the replacement owner, not a second deployment mode: do not add a parallel supervisor, promotion state machine, or mandatory approval workflow.
 
 ## 3. Terminology
 
@@ -42,15 +39,7 @@ machine, or mandatory approval workflow.
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector. Resolve and record the concrete image that will run.
 
-**Controller:** The standalone minimal controller in its own Compose project
-(`moonmind-controller`), separate from the MoonMind stack. It owns its
-durable state, restart policy, direct Docker socket mount, and one small
-authenticated local endpoint guarded by a deployment-owned secret. Its Docker
-transport and command endpoint survive target-project shutdown. The host CLI
-(`deploy/controller/bootstrap.py`) installs, starts, updates, and restores
-the controller; the controller never replaces itself, and controller updates
-are serialized against active deployment mutation. No agents receive sockets
-or unrestricted controller access.
+**Controller:** The standalone deployment controller in its own Compose project (`deploy/moonmind-controller`), separate from the MoonMind stack. It owns its durable state, restart policy, direct Docker socket mount, and one small authenticated local endpoint guarded by a deployment-owned secret, and is capable of outliving the worker or API that submitted work to it. Its Docker transport and command endpoint survive target-project shutdown. The host CLI installs, starts, updates, and restores the controller; the controller never replaces itself, and controller updates are serialized against active deployment mutation. Its privileged execution boundary is deployment-owned, not selectable by an agent. No agents receive sockets or unrestricted controller access; its lifecycle is host-owned.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -182,7 +171,21 @@ An unavailable optional integration is reported separately. Missing mandatory ve
 
 ### 10.8 Migrate the singular Omnigent release
 
-Coordinate the installed Omnigent server and required host images in this same update. Reconcile uncertain recreations before repeating them. Future launches follow the installed runtime while preserving explicit harness/provider choices.
+An ordinary MoonMind update also checks the deployment-configured Omnigent
+server and required host image channels (image/tag inputs present in the operator `.env` or worker environment) for newly published artifacts. Resolve
+mutable tags to concrete digests, assess the required runtime behavior, and
+advance the installed release when a suitable new image is available for a configured channel; channels without configured inputs retain their recorded refs. Record
+the selected digests in deployment-owned state before restarting consumers and refresh their running
+consumers through the same Compose owner. This includes the server, API and
+agent runtime worker; already-running static host profiles follow a changed
+shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
+with no suitable new Omnigent image for a configured channel leaves the installed release in place.
+An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
+
+Reconcile uncertain recreations before repeating them. Future launches follow
+the installed runtime while preserving explicit harness/provider choices and
+the actual image identity of attempts already in progress. A version-number
+difference by itself does not block an otherwise compatible release.
 
 Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
 
@@ -208,16 +211,7 @@ The existing deployment-control worker is a submission/observation adapter where
 
 ### 11.2 Standalone controller project
 
-The controller runs as one service in its own Compose project with a
-configured restart policy, a durable host state directory, and a direct
-Docker socket mount (a proxy is acceptable only if controller-owned in that
-separate project). Local durable ownership, selected target, progress,
-deadline, and attempt budget survive restarts of MoonMind and of the
-controller itself: on restart the controller inspects Docker and converges
-only unfinished work toward the same target. A caller timing out reattaches
-to that operation rather than duplicating mutation. The legacy ephemeral
-application-owned updater container is retired through the cutover in §11.4;
-it is not a second supported owner.
+The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner.
 
 ### 11.3 Runner image policy
 
@@ -309,7 +303,7 @@ Use existing operation status plus a small progress message and log reference. K
 
 ## 20. Locked decisions
 
-One controller serves host and UI requests. Normal updates pull and recreate changed services without routine teardown. Recovery works independently of the application being repaired. Local state and original errors survive interruption. Deployment integrity, operator access, and saved work remain protected.
+One controller serves host and UI requests from its own Compose project. Normal updates pull and recreate changed services without routine teardown. Recovery works independently of the application being repaired. Local state and original errors survive interruption. Deployment integrity, operator access, and saved work remain protected.
 
 Permanent candidate/retained fleets, promotion qualification, and independent schedule/profile image pins are not part of the desired default. Transitional support has real consumers and an explicit removal condition. Do not preserve it solely because an older issue or test checklist described it.
 

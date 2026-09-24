@@ -11,8 +11,8 @@
 # Required build args:
 #   OMNIGENT_HOST_BASE_IMAGE - pinned Omnigent host base, e.g.
 #                              ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
-#   OMNIGENT_BUILD_DIGEST    - exact sha256 build identity shared with the
-#                              Omnigent server for this release pairing
+#   OMNIGENT_BUILD_DIGEST    - exact sha256 digest of the upstream host base
+#                              used to build this image
 #
 # Vendor pins: each CLI is installed at build time only; the workflow launcher
 # must never install runtimes. The pinned versions below mirror the trusted
@@ -28,7 +28,7 @@ ARG OMNIGENT_BUILD_DIGEST
 ARG CODEX_CLI_VERSION=0.104.0
 ARG CODEX_MIN_VERSION=0.100.0
 ARG CODEX_MAX_VERSION=0.200.0
-ARG CLAUDE_CLI_VERSION=2.1.257
+ARG CLAUDE_CLI_VERSION=2.1.281
 ARG CLAUDE_MIN_VERSION=2.0.0
 ARG CLAUDE_MAX_VERSION=3.0.0
 ARG OPENCODE_VERSION=1.18.11

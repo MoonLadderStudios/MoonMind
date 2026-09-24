@@ -3,7 +3,7 @@
 **Status:** Shared image, runtime packs, Codex/Claude Host Classes, OAuth-home materializers, and rollout mechanisms implemented; exact qualification, deployment promotion, and retirement remain evidence-gated
 **Document Class:** System / Operator Guide
 **Owners:** MoonMind Platform
-**Last updated:** 2026-09-06
+**Last updated:** 2026-09-23
 **Authority:** Shared host image contract and runtime-pack descriptor authority for the Omnigent primary-runtime program
 
 ## Related documents
@@ -20,11 +20,11 @@
 
 ## Server compatibility and deployment readiness
 
-Omnigent server/host interoperability uses equal major.minor release series;
-patch versions and build digests may differ. This rule also applies to `0.x`
-releases. Required capabilities, credential boundaries, runtime-pack checks,
-and the exact selected host image remain enforced. Server digests record
-observed deployment provenance; host build labels record the selected host's
+Omnigent server and host versions are observed, but a version difference alone
+does not establish incompatibility. The exact selected host image must pass its
+bootstrap probe, and actual launch checks enforce required capabilities,
+credential boundaries, and runtime-pack behavior. Server digests record
+deployment provenance; host build labels record the selected host's
 provenance independently. Bootstrap records build and executable-version
 observations keyed by each selected immutable host image, including independently
 built shared and Pi images. Host selection consumes that image's observation;
@@ -35,18 +35,19 @@ image digest, and publication does not overwrite it with a discovered digest.
 Execution plans obtain version evidence from the immutable `harnessCatalogRef`
 already in the v1 contract. New plans omit the redundant top-level
 `omnigentVersion`, even when null, so retained readers do not need to match the
-writer's MoonMind release. A compatible server patch update
+writer's MoonMind release. A server update with intact catalog and host behavior
 can serve the unchanged plan and its original immutable host image. Rehydration
 verifies the recorded launch artifact and uses the admitted host image, build,
 architecture, and runtime settings even when current default-host discovery is
-missing or has moved to a different release series. Partial recorded host
+missing or has moved to a different release. Partial recorded host
 authority and mismatched launch artifacts remain rejected. Persisted plans
 that contain inline version evidence preserve that field and their canonical
 bytes. Catalog evidence is read by its admitted ref and checked against the
 recorded endpoint and build; missing evidence is retryable and a conflicting
 catalog cannot authorize launch. An unknown version is never guessed. Core catalog
-refreshes may attest a patch update only when the declared harness contract is
-unchanged. Plugin implementation identities remain exact.
+refreshes may attest a version update when previously required capabilities and
+runtime requirements remain available; additive catalog metadata is allowed.
+Plugin implementation identities remain exact.
 
 Compose infrastructure discovery starts after the Omnigent server container.
 Incomplete discovery is reported as pending readiness. The API bootstrap
@@ -81,9 +82,12 @@ The image derives from the digest-pinned stock Omnigent host base and installs a
 
 ```text
 @openai/codex@0.104.0
-@anthropic-ai/claude-code@2.1.257
+@anthropic-ai/claude-code@2.1.281
 opencode-ai@1.18.11
 ```
+
+The Claude Code 2.1.281 pin supports Opus 5.5, which rejects clients older
+than 2.1.280.
 
 Workflow launches never install runtimes. Every installed vendor version must sit inside its runtime-pack supported range (inclusive lower, exclusive upper); a drifted runtime fails the image build instead of becoming launch authority.
 
@@ -96,18 +100,28 @@ Workflow launches never install runtimes. Every installed vendor version must si
 ```text
 OMNIGENT_SHARED_HOST_IMAGE_REF=""        # digest-pinned ref; leave empty to resolve
 OMNIGENT_SHARED_HOST_IMAGE="ghcr.io/moonladderstudios/omnigent-host-moonmind"
-OMNIGENT_SHARED_HOST_IMAGE_TAG="1.18.11"
+OMNIGENT_SHARED_HOST_IMAGE_TAG="latest"
 ```
 
 Mutable tags never become launch authority. Startup resolution (`moonmind/omnigent/bootstrap/image_resolution.py`) resolves the tag to its immutable digest once, persists it in the resolved deployment state (`sharedHostImageRef`), exports it to `OMNIGENT_SHARED_HOST_IMAGE_REF`, and every selector (`get_shared_host_image_ref()`) reads that digest. A missing, mutable, or placeholder digest fails closed.
 
-The publish workflow tracks `omnigent-server:latest`, so a republished tag may
-carry a host built for a newer server than a deployment is running. When the
-shared coordinates resolve to the same image the OpenCode path judged against
-the running server, the shared ref follows the admitted OpenCode digest and the
-newer image waits as `pendingHost` until the operator updates the `omnigent`
-Compose service (see [`OpenCodeHost.md`](./OpenCodeHost.md) §13). An explicit
-`OMNIGENT_SHARED_HOST_IMAGE_REF` pin is never replaced.
+The scheduled publication tracks the upstream `omnigent-host` base digest,
+independently of `omnigent-server` releases. It rebuilds and republishes the
+mutable host tags when that base changes; the build label records the base
+digest. A server release does not need an equal host version or a redundant
+host rebuild. MoonMind resolves each tag to an immutable digest, checks the
+selected host's functional startup contract, and retains the admitted host if
+a new image fails that check. An ordinary MoonMind update uses the
+deployment controller to record server and host digests and refresh their
+consumers together. An explicit
+`OMNIGENT_SHARED_HOST_IMAGE_REF` pin remains authoritative.
+Active static Codex and Claude host profile services are recreated through
+Compose with their dependencies and health checks when the shared ref advances;
+inactive profiles remain inactive. Compose shell image overrides take precedence
+over values copied into `.env`.
+The former template default `1.18.11` for the default host repository is
+treated as the old mutable channel during an update and advanced to `latest`;
+an operator digest pin continues to select its exact image.
 
 ## 2. Runtime packs (`moonmind.omnigent-harness-runtime-pack.v1`)
 
@@ -116,7 +130,7 @@ A runtime pack is trusted deployment data, never workflow-authored. The registry
 | Pack | Harness | Vendor runtime | Credential home |
 | --- | --- | --- | --- |
 | `codex-native-pack@1` | `codex-native` | `codex >=0.100.0,<0.200.0` (pin `0.104.0`) | `/home/app/.codex` |
-| `claude-native-pack@1` | `claude-native` | `claude >=2.0.0,<3.0.0` (pin `2.1.257`) | `/home/app/.claude` |
+| `claude-native-pack@1` | `claude-native` | `claude >=2.0.0,<3.0.0` (pin `2.1.281`) | `/home/app/.claude` |
 | `opencode-native-pack@1` | `opencode-native` | `opencode >=1.17.7,<1.19.0` (pin `1.18.11`) | `/home/app/.local/share/opencode` |
 
 Each pack declares the vendor version command, the supported range, the credential-home layout (target path, writability, uid/gid ownership), the bounded environment the generic startup may shape, the ambient environment keys the row must reject, and the exact-host readiness probe kind.

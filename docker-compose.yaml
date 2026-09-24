@@ -51,7 +51,7 @@
 # `docker compose up` that bypasses that prelaunch admission launches the
 # mutable fallback below and is not a qualified static launch.
 x-omnigent-static-host:
-  image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
+  image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
   user: "1000:1000"
   working_dir: /home/app
   read_only: true
@@ -74,6 +74,7 @@ services:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     restart: unless-stopped
+    stop_grace_period: 60s
     ports:
       # Explicit local-mode exposure (#4120 req 5): the operator-facing
       # publish host is validated at startup by validate_publish_binding.
@@ -149,11 +150,11 @@ services:
       - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
-      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-latest}
       - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE_REF=${OMNIGENT_SHARED_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
-      - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}
       - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
       # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
       # are admitted against an aggregate host count and a separately bounded
@@ -181,8 +182,8 @@ services:
       - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
       - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
       - MOONMIND_OMNIGENT_TOOLS_VOLUME_REF=${MOONMIND_OMNIGENT_TOOLS_VOLUME_REF:-moonmind-omnigent-tools-gh-2.76.2}
-      - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
-      - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
+      # MoonLadderStudios/MoonMind#3931: retired phase switches removed; new work
+      # uses the one shared selection boundary.
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
       - MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF=${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-/workspace/cutover/remediation-release.json}
       # Release-support evidence the catalog reads for the deployed commit
@@ -821,11 +822,11 @@ services:
       - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
-      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-latest}
       - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE_REF=${OMNIGENT_SHARED_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
-      - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}
       - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
       # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
       # are admitted against an aggregate host count and a separately bounded
@@ -1140,11 +1141,11 @@ services:
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
       - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
-      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-latest}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE_REF=${OMNIGENT_SHARED_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
-      - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}
       - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
     volumes:
@@ -1213,7 +1214,7 @@ services:
     profiles: ["omnigent-host-claude"]
     # Shared host image (MoonLadderStudios/MoonMind#3834): must stay identical
     # to `x-omnigent-static-host` image and to `omnigent-host-codex` image.
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
     hostname: omnigent-host-claude
     user: "1000:1000"
     working_dir: /home/app
@@ -1299,7 +1300,7 @@ services:
     restart: unless-stopped
   omnigent-host-claude-init:
     profiles: ["omnigent-host-claude"]
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
     user: "0:0"
     network_mode: none
     cap_drop:
@@ -1329,7 +1330,7 @@ services:
 
   omnigent-host-codex-init:
     profiles: ["omnigent-host-codex"]
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
     user: "0:0"
     network_mode: none
     cap_drop:
@@ -1361,7 +1362,7 @@ services:
     profiles: ["omnigent-host-codex"]
     # Shared host image (MoonLadderStudios/MoonMind#3834): must stay identical
     # to `x-omnigent-static-host` image and to `omnigent-host-claude` image.
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
     hostname: omnigent-host-codex
     user: "1000:1000"
     working_dir: /home/app

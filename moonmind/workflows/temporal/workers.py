@@ -329,6 +329,33 @@ def normalize_worker_fleet(fleet: str) -> str:
     return normalized
 
 
+def require_fleet_capability_allowed(fleet: str, capability: str) -> str:
+    """Deny one capability on one fleet, failing closed.
+
+    This is the executed process-boundary check behind
+    ``_FLEET_FORBIDDEN_CAPABILITIES``: the workflow fleet refuses the
+    ``artifacts`` capability through the catalog binding path, so new
+    artifact writes cannot be bound there. The three checkpoint persistence
+    handlers stay reachable on the workflow fleet only through the explicit
+    replay/in-flight compat registration in
+    ``workflow_registry.workflow_fleet_activity_handlers``
+    (MoonLadderStudios/MoonMind#3949), never through a new catalog binding.
+    """
+
+    normalized_fleet = normalize_worker_fleet(fleet)
+    normalized_capability = str(capability or "").strip().lower()
+    if not normalized_capability:
+        raise TemporalWorkerBootstrapError(
+            f"Fleet '{normalized_fleet}' cannot serve an empty capability"
+        )
+    if normalized_capability in _FLEET_FORBIDDEN_CAPABILITIES[normalized_fleet]:
+        raise TemporalWorkerBootstrapError(
+            f"Fleet '{normalized_fleet}' forbids capability "
+            f"'{normalized_capability}'; bind it on its owning fleet instead"
+        )
+    return normalized_capability
+
+
 def _artifact_secrets(app_settings: AppSettings) -> tuple[str, ...]:
     if app_settings.workflow.temporal_artifact_backend == "s3":
         return (
@@ -465,6 +492,10 @@ def build_worker_activity_bindings(
         return ()
 
     resolved_catalog = catalog or build_default_activity_catalog()
+    for definition in resolved_catalog.activities:
+        if definition.fleet != normalized:
+            continue
+        require_fleet_capability_allowed(normalized, definition.capability_class)
     return build_activity_bindings(
         resolved_catalog,
         artifact_activities=artifact_activities,
@@ -549,4 +580,5 @@ __all__ = [
     "describe_configured_worker",
     "main",
     "normalize_worker_fleet",
+    "require_fleet_capability_allowed",
 ]

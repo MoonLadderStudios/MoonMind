@@ -5,6 +5,7 @@
 #
 # Build args:
 #   OMNIGENT_HOST_BASE_IMAGE - pinned base, e.g. ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
+#   OMNIGENT_BUILD_DIGEST - exact digest of that upstream host base
 #   OPENCODE_VERSION - exact pinned version within MoonMind's supported range
 #
 # See docs/Omnigent/OpenCodeHost.md for compatibility policy.

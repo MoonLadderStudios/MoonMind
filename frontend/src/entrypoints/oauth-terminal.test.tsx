@@ -168,6 +168,11 @@ afterEach(() => {
 describe('OAuthTerminalPage clipboard behavior', () => {
   it('renders the session projection and finalizes through the shared OAuth endpoint', async () => {
     const storageSetItem = vi.spyOn(window.localStorage.__proto__, 'setItem');
+    let finalized = false;
+    let releaseFinalStatus!: () => void;
+    const finalStatusGate = new Promise<void>((resolve) => {
+      releaseFinalStatus = resolve;
+    });
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -187,12 +192,13 @@ describe('OAuthTerminalPage clipboard behavior', () => {
         if (href.endsWith('/finalize')) {
           expect(init?.method).toBe('POST');
           expect(init?.body).toBeUndefined();
+          finalized = true;
           return new Response(
             JSON.stringify({
               session_id: 'session-1',
               runtime_id: 'codex_cli',
               profile_id: 'codex-oauth',
-              status: 'succeeded',
+              status: 'registering_profile',
               profile_summary: {
                 profile_id: 'codex-oauth',
                 runtime_id: 'codex_cli',
@@ -209,12 +215,15 @@ describe('OAuthTerminalPage clipboard behavior', () => {
             { status: 200, headers: { 'Content-Type': 'application/json' } },
           );
         }
+        if (finalized) {
+          await finalStatusGate;
+        }
         return new Response(
           JSON.stringify({
             session_id: 'session-1',
             runtime_id: 'codex_cli',
             profile_id: 'codex-oauth',
-            status: 'awaiting_user',
+            status: finalized ? 'succeeded' : 'awaiting_user',
             expires_at: '2026-05-05T22:00:00Z',
             terminal_session_id: 'terminal-1',
             terminal_bridge_id: 'bridge-1',
@@ -242,6 +251,8 @@ describe('OAuthTerminalPage clipboard behavior', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Finalize' }));
 
+    expect((await screen.findAllByText('Registering Profile')).length).toBeGreaterThan(0);
+    releaseFinalStatus();
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Provider profile registered successfully.')).toBeTruthy();
     expect(storageSetItem).toHaveBeenCalledWith(

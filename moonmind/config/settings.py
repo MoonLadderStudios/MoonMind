@@ -14,6 +14,7 @@ from moonmind.claude.runtime import (
 )
 from moonmind.config.jules_settings import JulesSettings
 from moonmind.config.paths import ENV_FILE
+from moonmind.runtime_identity import normalize_runtime_id
 from moonmind.jules.runtime import (
     JULES_RUNTIME_DISABLED_MESSAGE,
 )
@@ -1180,14 +1181,14 @@ class WorkflowSettings(BaseSettings):
     def _normalize_default_runtime(cls, value: object) -> str:
         """Normalize queue runtime fallback and reject unknown values.
 
-        Accepts both canonical IDs (codex_cli, claude_code) and legacy aliases
-        (codex, claude) and normalizes them to canonical form so internal state
-        is consistent with the runtime_defaults canonical-first direction.
+        Legacy aliases migrate through the shared
+        ``moonmind.runtime_identity`` map (MoonLadderStudios/MoonMind#3934),
+        so settings ingress can never diverge from submission admission.
+        Unknown explicit input is rejected with a precise correction, never
+        replaced by another runtime; omitted values keep the documented
+        ``omnigent`` default.
         """
-        normalized = str(value or "").strip().lower() or "omnigent"
-        # Map legacy aliases to canonical before validation.
-        _aliases = {"codex": "codex_cli", "claude": "claude_code"}
-        normalized = _aliases.get(normalized, normalized)
+        normalized = normalize_runtime_id(value)
         allowed = {"omnigent", "codex_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
@@ -2479,12 +2480,16 @@ class AppSettings(BaseSettings):
     # Default providers and models
     default_chat_provider: str = Field("google", alias="DEFAULT_CHAT_PROVIDER")
 
-    # Model cache settings
-    model_cache_refresh_interval: int = Field(
-        3600, alias="MODEL_CACHE_REFRESH_INTERVAL"
-    )
+    # Model cache settings (MoonLadderStudios/MoonMind#3941: the unit-less
+    # MODEL_CACHE_REFRESH_INTERVAL name is a legacy alias honored once through
+    # this owner. MODEL_CACHE_REFRESH_INTERVAL_SECONDS is canonical and wins
+    # when both are set; a blank value behaves like an omitted one.)
     model_cache_refresh_interval_seconds: int = Field(
-        3600, alias="MODEL_CACHE_REFRESH_INTERVAL_SECONDS"
+        3600,
+        validation_alias=AliasChoices(
+            "MODEL_CACHE_REFRESH_INTERVAL_SECONDS",
+            "MODEL_CACHE_REFRESH_INTERVAL",
+        ),
     )
     # Other settings
     fastapi_reload: bool = Field(False, alias="FASTAPI_RELOAD")
@@ -2494,6 +2499,25 @@ class AppSettings(BaseSettings):
     # ------------------------------------------------------------------
     # Validators
     # ------------------------------------------------------------------
+
+    @field_validator("model_cache_refresh_interval_seconds", mode="before")
+    @classmethod
+    def _blank_model_cache_interval_to_default(cls, v):
+        """Ensure a blank interval behaves like an omitted one.
+
+        An empty string must resolve to the documented default instead of
+        failing startup, while an explicit ``0`` stays ``0``. Because
+        ``AliasChoices`` selects the blank canonical value before this
+        validator runs, a blank canonical input falls through to the legacy
+        ``MODEL_CACHE_REFRESH_INTERVAL`` override when one is set.
+        """
+
+        if v is None or (isinstance(v, str) and not v.strip()):
+            legacy = os.environ.get("MODEL_CACHE_REFRESH_INTERVAL", "")
+            if isinstance(legacy, str) and legacy.strip():
+                return legacy
+            return 3600
+        return v
 
     @field_validator("fastapi_reload", mode="before")
     @classmethod

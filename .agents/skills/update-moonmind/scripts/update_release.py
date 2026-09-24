@@ -372,6 +372,12 @@ def main(argv=None):
         f"Release submission: {submission_id} (resume with --resume {submission_id})",
         flush=True,
     )
+    # Replacement owner first: the canonical client handoff when configured,
+    # then this PR's direct controller path; the legacy application-owned
+    # updater remains the final fallback.
+    controller_rc = _try_controller_handoff(record=record)
+    if controller_rc is not None:
+        return controller_rc
     if args.legacy_direct:
         return _submit_legacy_direct(record, repo)
     return _submit_via_controller(
@@ -651,6 +657,58 @@ def _submit_legacy_direct(record, repo):
                 },
             check=False,
         ).returncode
+
+
+def _try_controller_handoff(*, record):
+    """Submit trusted release data to the standalone controller if configured.
+
+    Returns the controller exit code on a handled submission, else None to
+    fall through to the legacy application-owned path. A controller failure
+    falls back with an explicit diagnostic; the installation is unchanged.
+    """
+    try:
+        from moonmind_controller import client
+    except ImportError:
+        return None
+    if not client.is_controller_configured():
+        return None
+    trusted_inputs = dict((record.get("inputs") or {}) if isinstance(record.get("inputs"), dict) else {})
+
+    def _optional_mapping(value) -> dict | None:
+        return dict(value) if isinstance(value, dict) else None
+
+    payload = client.build_operation_payload(
+        operation_id=str(
+            record["context"].get("idempotency_key") or f"host-update:{record['image']}"
+        ),
+        target_image=record["image"],
+        stack=record.get("project"),
+        authorization=_optional_mapping(trusted_inputs.get("authorization")),
+        storage=_optional_mapping(trusted_inputs.get("storage")),
+        access_settings=_optional_mapping(
+            trusted_inputs.get("accessSettings") or trusted_inputs.get("access_settings")
+        ),
+    )
+    try:
+        receipt = client.submit_operation(payload, wait_for_terminal=True)
+    except client.ControllerUnavailableError as exc:
+        # No controller writer owns this operation (down or absent record):
+        # falling back to the legacy application-owned updater is safe.
+        print(
+            f"Standalone controller unavailable ({exc}); falling back to the "
+            "legacy application-owned updater until cutover completes.",
+            flush=True,
+        )
+        return None
+    except Exception as exc:
+        # The controller owns (or may own) this operation: never fork the
+        # legacy updater while it may still be applying the same stack.
+        # The durable record stays observable via controller status, and a
+        # retry reuses the same submission ID idempotently.
+        print(f"Standalone controller did not complete the operation ({exc})", flush=True)
+        return 1
+    print(f"Controller operation: {receipt} (standalone replacement owner)", flush=True)
+    return 0
 
 
 def _compose_ps_state(*, repo, project):

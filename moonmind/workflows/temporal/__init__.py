@@ -115,6 +115,7 @@ from moonmind.workflows.temporal.workers import (
     build_worker_topology,
     describe_configured_worker,
     normalize_worker_fleet,
+    require_fleet_capability_allowed,
 )
 
 __all__ = [
@@ -217,5 +218,6 @@ __all__ = [
     "describe_configured_worker",
     "generate_artifact_id",
                     "normalize_worker_fleet",
+                    "require_fleet_capability_allowed",
                                             "skill_policy_as_route",
 ]
