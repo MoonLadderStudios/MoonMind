@@ -761,3 +761,4 @@ substitute for the per-page unit tests, which remain in
 - Account label remains visible.
 - Enabled state follows successful credential activation and policy.
 - Existing managers can be reused, but the old local section state and switcher are removed.
+- Settings pages share the dashboard responsive contract (MoonMind#4559): one modest phone gutter, restrained section padding, stacked record presentation with full-width details/actions on phones, shrinkable single-column grids, and viewport-bounded overlays. Saved Provider records keep one data/action owner; the responsive presentation is CSS on the same table, not a second list.

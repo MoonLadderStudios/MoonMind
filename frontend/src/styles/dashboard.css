@@ -3121,18 +3121,20 @@ tbody tr:hover {
   }
 
   .provider-profiles-table td {
-    display: grid;
-    grid-template-columns: minmax(6.5rem, 34%) minmax(0, 1fr);
-    gap: 0.75rem;
-    align-items: start;
+    display: block;
     border-bottom: 1px solid rgb(var(--mm-border) / 0.58);
     padding: 0.78rem 0.85rem;
     min-width: 0;
     overflow-wrap: anywhere;
   }
 
+  /* MoonMind#4559: the record label sits above its value so Status, profile
+   * metadata, and actions use the full record width instead of competing
+   * with a wide label column. */
   .provider-profiles-table td::before {
     content: attr(data-label);
+    display: block;
+    margin-bottom: 0.3rem;
     color: rgb(var(--mm-muted));
     font-family: inherit;
     font-size: 0.72rem;
@@ -10152,15 +10154,35 @@ button.workflow-workspace-sidebar-row:active {
   background: rgb(var(--mm-panel) / 0.86);
 }
 
+/* MoonMind#4559: stacked rows put each value below its label so narrow
+ * cards never squeeze content beside a permanent label column. */
 .data-table-card__row {
   display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
+  min-width: 0;
 }
 
 .data-table-card__label {
   color: rgb(var(--mm-muted));
-  font-size: 0.78rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.data-table-card__value {
+  min-width: 0;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.data-table-card--state {
+  align-items: center;
+  text-align: center;
+  color: rgb(var(--mm-muted));
 }
 
 @media (max-width: 720px) {
@@ -10465,5 +10487,247 @@ button.workflow-workspace-sidebar-row:active {
   .wf-native-chat__spinner {
     border-color: CanvasText;
     border-top-color: Highlight;
+  }
+}
+
+/* Shared responsive layout contract (MoonLadderStudios/MoonMind#4559).
+ *
+ * One maintainable implementation for the Agents/Policies inventory, the
+ * Provider profiles records, the Provider create/edit form with its
+ * model/effort tier editor, and the affected settings/overlay surfaces.
+ * The rules below fix the owning sizing chain (shrinkable grid/flex
+ * children, fieldset intrinsic minimums, bounded controls) rather than
+ * adding per-screenshot exceptions. Workflow list/detail/chat, collection
+ * rails, sidebars, and native chat composition are intentionally untouched.
+ */
+
+/* Fieldsets default to `min-inline-size: min-content`, which lets a single
+ * long identifier or control force a whole form section past the viewport
+ * even when every input is `width: 100%`. */
+.dashboard-root fieldset {
+  min-inline-size: 0;
+}
+
+.omnigent-inventory,
+.omnigent-inventory__toolbar,
+.omnigent-inventory__table-wrap,
+.omnigent-inventory form,
+.omnigent-inventory fieldset,
+.provider-profiles,
+.provider-profile-form,
+.provider-profile-fieldset,
+.provider-profile-identity-grid,
+.provider-tier-list,
+.provider-tier-card,
+.provider-tier-fieldset,
+.provider-profile-actions,
+.tier-card__actions,
+.data-table-slab,
+.data-table-card {
+  min-width: 0;
+  min-inline-size: 0;
+}
+
+.provider-profile-form input,
+.provider-profile-form select,
+.provider-profile-form textarea,
+.omnigent-inventory input,
+.omnigent-inventory select,
+.omnigent-inventory textarea {
+  max-width: 100%;
+  min-inline-size: 0;
+}
+
+/* Long machine identifiers wrap instead of dictating page width; human
+ * prose wraps naturally. */
+.omnigent-inventory td strong,
+.omnigent-inventory td small,
+.provider-profile-actions > button,
+.data-table-card__value {
+  overflow-wrap: anywhere;
+}
+
+/* Provider record actions share a full-width wrapping area so long labels
+ * wrap at word boundaries in comfortably wide buttons. */
+.provider-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.provider-profile-actions > button {
+  white-space: normal;
+}
+
+/* Tier editor: one accessible list, visible numbers, restrained nesting.
+ * The inner fieldset is an unstyled grouping — the card carries the border
+ * so nesting levels do not each consume reading width. */
+.provider-tier-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.provider-tier-card {
+  max-width: 100%;
+}
+
+.provider-tier-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.provider-tier-legend {
+  padding: 0;
+}
+
+/* Tier Duplicate/Remove live in their own wrapping action area, not inside
+ * the legend competing with the tier name and default badge. */
+.tier-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin-block: 0.5rem 0.25rem;
+}
+
+/* Enrollment, confirmation, and tier dialogs stay viewport-bounded with
+ * reachable content and footer actions at narrow/short viewports. */
+.provider-profiles [role="dialog"] {
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+@media (max-width: 720px) {
+  /* One modest page gutter and restrained section padding on phones. */
+  .omnigent-inventory {
+    padding: 0.75rem;
+    gap: 0.875rem;
+  }
+
+  .omnigent-inventory__toolbar {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .omnigent-inventory__toolbar > * {
+    min-width: 0;
+  }
+
+  /* The inventory table becomes readable stacked records: a clear
+   * identity/status summary with full-width supporting content. Desktop
+   * keeps the compact comparison table with its bounded local scroll. */
+  .omnigent-inventory__table-wrap {
+    overflow: visible;
+    margin-top: 0.75rem;
+  }
+
+  .omnigent-inventory__table-wrap > table {
+    display: block;
+    min-width: 0;
+  }
+
+  .omnigent-inventory__table-wrap thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .omnigent-inventory__table-wrap tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .omnigent-inventory__table-wrap tbody tr {
+    display: block;
+    border: 1px solid rgb(var(--mm-border) / 0.8);
+    border-radius: 0.6rem;
+    background: rgb(var(--mm-panel) / 0.78);
+    padding: 0.7rem 0.8rem;
+    min-width: 0;
+  }
+
+  .omnigent-inventory__table-wrap td {
+    display: block;
+    border: 0;
+    padding: 0.3rem 0;
+  }
+
+  .omnigent-inventory__table-wrap td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.15rem;
+    color: rgb(var(--mm-muted));
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1.35;
+    text-transform: uppercase;
+  }
+
+  /* Genuinely two-dimensional content (policy JSON, diffs) wraps instead
+   * of expanding the page or trapping keyboard users in a scroll region. */
+  .omnigent-inventory pre,
+  .omnigent-policy-detail pre {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* 16px mobile form-text baseline so phones do not auto-zoom on focus. */
+  .provider-profile-form input,
+  .provider-profile-form select,
+  .provider-profile-form textarea,
+  .omnigent-inventory input[type="search"] {
+    font-size: 1rem;
+  }
+
+  /* Restrained nesting: one card level keeps its border, inner groups do
+   * not each repeat padding that consumes reading width. */
+  .provider-profiles [class~="p-6"] {
+    padding: 1rem;
+  }
+
+  .provider-profile-fieldset {
+    padding: 0.875rem;
+  }
+
+  .provider-tier-card {
+    padding: 0.875rem;
+  }
+
+  .provider-profile-actions > button {
+    flex: 1 1 10rem;
+    min-height: 2.75rem;
+  }
+
+  /* Shared settings cards use the same modest gutter. */
+  .settings-page [class~="p-6"] {
+    padding: 1rem;
+  }
+
+  .settings-page [class~="px-4"] {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  /* Single-column settings grids stay shrinkable so long identifiers,
+   * digests, and paths in Instance/Operations sections cannot force the
+   * page wider. Desktop multi-column tracks already use minmax(0, ...). */
+  .settings-page [class*="grid"] > * {
+    min-width: 0;
+    min-inline-size: 0;
   }
 }

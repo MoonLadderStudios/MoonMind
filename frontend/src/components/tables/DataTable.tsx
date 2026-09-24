@@ -230,8 +230,42 @@ export function DataTable<T>({
     ));
   };
 
+  const renderStateCard = () => {
+    // MoonMind#4559: the responsive breakpoint hides the table, so a
+    // loading/error/empty state rendered only as a table row would vanish on
+    // mobile. Mirror the state into the card fallback; CSS `display: none`
+    // keeps exactly one representation exposed per breakpoint.
+    if (isLoading) {
+      return (
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state" aria-busy="true">
+            {loadingMessage}
+          </li>
+        </ul>
+      );
+    }
+    if (isError) {
+      return (
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state data-table-error" role="alert">
+            {errorMessage}
+          </li>
+        </ul>
+      );
+    }
+    if (!hasRows) {
+      return (
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state">{emptyMessage}</li>
+        </ul>
+      );
+    }
+    return null;
+  };
+
   const renderCards = () => {
-    if (isLoading || isError || !hasRows) return null;
+    const stateCard = renderStateCard();
+    if (stateCard) return stateCard;
     // Intentionally not aria-hidden: when the responsive breakpoint hides the
     // table (`display: none`), the table is removed from the accessibility tree
     // and these cards become the only representation of the rows for assistive

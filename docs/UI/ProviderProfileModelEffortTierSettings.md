@@ -469,10 +469,16 @@ Rules:
 Each card exposes:
 
 - `Remove tier`,
-- `Duplicate as new last tier`, in a secondary action menu or button, and
+- `Duplicate tier` (accessible name `Duplicate Tier N as new last tier`), in a secondary action area or button, and
 - optional `Reset model and effort to runtime defaults`.
 
 Duplicate behavior copies label, model, effort, parameters, and annotations, appends the copy, and does not make it the default. The copied label may gain `copy` in draft state to reduce ambiguity.
+
+Duplicate and Remove live in their own wrapping action area below the tier
+heading (MoonMind#4559), not inside the legend competing with the tier name
+and default badge. The legend names the group only. On phones the tier list
+uses restrained nesting (one card border, unstyled inner fieldset) with
+stacked label/model/effort fields.
 
 ---
 
