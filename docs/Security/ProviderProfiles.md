@@ -526,6 +526,8 @@ This is the runtime-default counterpart of `disabled_reason = user_disabled` for
 
 This field protects user intent. Background repair, migration, or passive validation must not convert `user_disabled` to enabled. A direct user-initiated Settings action such as **Connect OAuth**, **Reconnect OAuth**, or **Add API key** may enable the profile by default because that action expresses setup intent.
 
+**Validate OAuth** is also a user-initiated recovery action for a saved OAuth volume. Successful validation changes `auth_invalid` to `connected` and enables the profile; failed validation leaves diagnostics and the profile disabled.
+
 #### `secret_refs`
 
 Maps secret roles to `SecretRef` values.
@@ -1019,6 +1021,11 @@ request (Cancel validation) or hitting the client timeout only stops the
 browser from waiting: the server may still commit the credential, so the
 drawer reports the outcome as uncertain and the retry reuses the same key
 to reattach to the same operation rather than starting a conflicting one.
+The API waits for its fenced validation-lease release when a background
+revalidation task is cancelled during shutdown. Validation grants record their
+purpose-specific maximum lifetime so a missing release reaches cleanup at the
+validation bound rather than the longer execution bound. Expiry still requests
+verified cleanup; it does not free a credential slot on its own.
 
 ### 9.4 Recommended first-party API-key mappings
 

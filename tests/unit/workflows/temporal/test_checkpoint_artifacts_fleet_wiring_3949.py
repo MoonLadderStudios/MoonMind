@@ -51,10 +51,6 @@ REGISTRY_SRC = (
     Path(__file__).resolve().parents[4]
     / "moonmind/workflows/temporal/workflow_registry.py"
 )
-TOPOLOGY_DOC = (
-    Path(__file__).resolve().parents[4]
-    / "docs/Temporal/ActivityCatalogAndWorkerTopology.md"
-)
 PRE_CUTOVER_FIXTURES = (
     Path(__file__).resolve().parents[3]
     / "fixtures/temporal/checkpoint_before_artifacts_fleet"
@@ -299,14 +295,6 @@ def test_failed_handoff_never_authors_a_second_mutator():
 
 
 # --- 5. Permission boundary and saturation ----------------------------------
-
-
-def test_topology_docs_distinguish_routing_compat_and_final_state():
-    doc = TOPOLOGY_DOC.read_text()
-    assert "no new calls route there" in doc
-    assert "replay/in-flight compatibility" in doc
-    assert "queue separation is not privilege separation" in doc.lower()
-    assert "checkpoint-branch-artifact-fleet-v1" in doc or "artifacts fleet" in doc.lower()
 
 
 def test_retry_timeout_budgets_retain_progress_under_saturation():

@@ -427,7 +427,7 @@ def classify_effective_static_host_image(
     if name or tag:
         return (
             f"{name or 'ghcr.io/moonladderstudios/omnigent-host-moonmind'}:"
-            f"{tag or '1.18.11'}",
+            f"{tag or 'latest'}",
             False,
             "mutable image:tag construction is a development/bootstrap input "
             "only; resolve it to a digest-pinned "

@@ -49,9 +49,11 @@ def test_migration_graph_keeps_single_head_at_new_revision() -> None:
     config.set_main_option("script_location", "api_service/migrations")
     script = ScriptDirectory.from_config(config)
     # PR #4461 merged the two 386 branches (machine-capacity drain and the
-    # single-user conversion ledger) into 387_merge_386_heads_4461, which is
-    # now the single head; both 386 branches remain valid parents.
-    assert tuple(script.get_heads()) == ("387_merge_386_heads_4461",)
+    # single-user conversion ledger) into 387_merge_386_heads_4461; the GitHub
+    # event delivery receipts migration (#3967) extended that chain, and the
+    # OpenCode validation repair (#4526) now extends it further as the
+    # single head.
+    assert tuple(script.get_heads()) == ("389_opencode_validation_repair",)
 
 
 def test_upgrade_drops_only_retired_table_and_keeps_unrelated_rows(

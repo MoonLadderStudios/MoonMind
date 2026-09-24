@@ -21,6 +21,20 @@ Main controls per run: one Provider Profile (runtime, credential reference, mode
 
 Important limitations up front: suspending or closing the laptop that hosts the MoonMind stack suspends execution with it — Temporal resumes the workflow when the infrastructure returns, it does not keep running while the host sleeps. High-security outbound secret scanning is opt-in (default off); see the [Secrets System](docs/Security/SecretsSystem.md). A binary or image being present does not make an exact runtime combination supported; support is per exact combination in the [Runtime-Provider Rollout Policy](docs/Omnigent/RuntimeProviderRollout.md). Each load-bearing claim below links its owner, evidence, and limits; the editorial checklist is in [README claim/evidence checklist](docs/READMEClaimEvidence.md).
 
+## Dashboard preview
+
+The dashboard lists workflows at `/workflows` and shows outputs and artifacts for one run on the Workflow Detail page (`/workflows/{workflowId}`).
+
+![Workflow list showing four synthetic example rows with scheduled, executing, completed, and failed statuses](docs/assets/workflow-list.png)
+
+*Workflow list (`/workflows`) with deterministic synthetic fixture rows. It demonstrates presentation only, not a live provider run.*
+
+![Workflow Detail Overview for a completed synthetic example workflow, showing summary, skill provenance, runtime, and source context](docs/assets/workflow-detail.png)
+
+*Workflow Detail Overview (`/workflows/{workflowId}/overview`) for the completed synthetic example. It demonstrates presentation only, not a live provider run.*
+
+Capture recipe: real Vite-built dashboard shell (`npm run ui:build`, boot payload `{"page":"dashboard","apiBase":"/api"}` per `api_service/templates/react_dashboard.html`) served through the normal `/workflows` and `/workflows/{workflowId}` routes with deterministic synthetic `/api/executions` list/detail/steps fixtures shaped like `frontend/src/entrypoints/workflow-list.test.tsx`; viewport 1280x800, default light theme; screenshots cropped to content and PNG-optimized. Refresh these images when the pictured flow materially changes. The full recipe lives in [Workflow Console Architecture](docs/UI/WorkflowConsoleArchitecture.md).
+
 ## Runtime direction
 
 **Omnigent is to become MoonMind's primary runtime provider over time.** Codex, Claude Code, OpenCode, and future approved harnesses should converge on one generic Omnigent execution plane rather than accumulating separate MoonMind runtime architectures.
@@ -128,10 +142,18 @@ the desired state, recreates the installed fleet in place, and verifies every
 service against that release. There is one fleet at one version: no candidate
 or retained cohort is started, and recreation has a bounded downtime window.
 
+The same update checks the deployment-configured Omnigent server and host image channels (image/tag inputs present in the operator `.env` or worker environment).
+When a newer published image for a configured channel passes the required runtime checks, the updater
+records its immutable digest and refreshes the Omnigent server, API, agent
+runtime worker, and already-running static host profiles that consume it.
+Inactive host profiles stay inactive. Channels without configured image/tag inputs retain their previously recorded refs instead of resolving `latest`, so the default `latest` channels advance only when configured; an explicit `OMNIGENT_*_IMAGE_REF`
+digest pin persisted in the operator `.env` remains fixed until the operator changes it (shell-only `*_IMAGE_REF` values are not read as pins). New upstream releases
+do not require editing Profile or schedule image versions by hand. See the
+[deployment update contract](docs/Steps/DockerComposeUpdateSystem.md) and
+[shared host image rules](docs/Omnigent/SharedHostImage.md).
+
 Use this updater for upgrades, including after a direct Compose replacement.
-Workers register their own version at startup, so if the outgoing fleet is
-still draining the new one retries the promotion in the background until
-routing moves. Resume an interrupted submission with the updater's
+Resume an interrupted submission with the updater's
 `--resume <submission-id>` option; an interrupted release is not resumed
 automatically, so re-running the script is the ordinary recovery.
 

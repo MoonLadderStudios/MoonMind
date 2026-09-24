@@ -468,11 +468,9 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         configured_image = str(container.get("Config", {}).get("Image") or "")
-        # SHA/patch drift: rebuilt images change digests while keeping
-        # major.minor. Exact equality is required when possible, but a
-        # same-repository image is acceptable drift -- downstream version gates
-        # (omnigent major.minor, vendor major.minor) still enforce release
-        # compatibility. Different repositories are never compatible drift.
+        # Rebuilt images may change digests and versions. A same-repository
+        # image may be recovered only after its observed build provenance and
+        # required runtime capabilities are attested below.
         if configured_image != host_class.imageRef:
             try:
                 from moonmind.omnigent.host_image_drift import (
@@ -504,11 +502,9 @@ class DockerOmnigentHostAttestor:
         )
         image_rows = json.loads(image_json)
         image = image_rows[0] if isinstance(image_rows, list) and image_rows else {}
-        # Probe the executable omnigent version before judging build identity:
-        # rebuilt images change SHA/patch while keeping major.minor, and
-        # independently built hosts share a release series. Exact build match
-        # remains required when versions differ; same-series drift with no
-        # operator pin is acceptable (bootstrap judges the same way).
+        # Probe the executable version before judging build identity. A
+        # release-number difference alone does not reject a selected host;
+        # immutable image provenance and the live host checks remain required.
         _code, omnigent_version, _err = await self._backend.run(
             [
                 "docker",
@@ -539,11 +535,10 @@ class DockerOmnigentHostAttestor:
         try:
             _assert_exact_omnigent_build(image, host_class.omnigentBuildDigest)
         except HarnessPlatformError:
-            # Same-series rebuilds may carry a different build digest while
-            # reporting a compatible major.minor (proven by the live probe
-            # above). Accept that only when the launched image actually
-            # drifted from the selected Host Class image within the same
-            # repository: an unchanged image with a different build label is
+            # Rebuilds may carry a different build digest. Accept that only
+            # when the launched image drifted from the selected Host Class
+            # image within the same repository. An unchanged image with a
+            # different build label is
             # tampering, not a rebuild. Selection-time pin authority stays in
             # host_class.omnigentBuildDigest and both digests are recorded in
             # evidence below; worker-environment pins are never consulted here
@@ -594,8 +589,7 @@ class DockerOmnigentHostAttestor:
                 f"host architecture {architecture} is not admitted",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-        # omnigent_version was probed above (before the tolerant build check)
-        # so build drift can be judged against the same major.minor series.
+        # omnigent_version was probed above before the build-provenance check.
         runtime_versions: dict[str, str] = {}
         selected_entry = next(
             item

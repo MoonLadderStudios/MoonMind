@@ -1477,27 +1477,9 @@ def test_auto_publish_capable_skills_resolve_to_auto(skill_id: str) -> None:
     assert "auto" in SUPPORTED_PUBLISH_MODES
     assert resolve_publish_mode_for_skill(skill_id, None) == "auto"
     assert resolve_publish_mode_for_skill(skill_id, "auto") == "auto"
-    diagnostics: list[dict[str, object]] = []
-    assert (
-        resolve_publish_mode_for_skill(
-            skill_id,
-            "none",
-            diagnostics=diagnostics,
-        )
-        == "auto"
-    )
-    assert diagnostics == [
-        {
-            "code": "legacy_auto_publish_none_normalized",
-            "skillId": skill_id,
-            "requestedMode": "none",
-            "resolvedMode": "auto",
-            "message": (
-                f"Legacy publish.mode='none' for auto-publish-capable skill "
-                f"'{skill_id}' was normalized to 'auto'."
-            ),
-        }
-    ]
+    # Explicit new "none" is never promoted to Auto (PUBLISH-004): the
+    # operator's read-only selection is preserved.
+    assert resolve_publish_mode_for_skill(skill_id, "none", diagnostics=[]) == "none"
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(skill_id, "pr")
 
@@ -2697,3 +2679,71 @@ def test_nested_write_authority_still_admits_managed_publish() -> None:
             {"id": "step-2", "tool": {"inputs": {"repositoryOperation": "write"}}},
         ],
     )
+
+
+def test_runtime_aliases_canonicalize_at_admission_boundary() -> None:
+    """MoonLadderStudios/MoonMind#3934: admission writes one canonical contract.
+
+    Legacy spellings migrate at ingress instead of persisting as distinct
+    runtime values. Unknown explicit input is rejected with a precise
+    correction before resource effects, never silently replaced.
+    """
+
+    spec = WorkflowExecutionSpec.model_validate(
+        {"instructions": "Run.", "runtime": {"mode": "codex"}}
+    )
+    assert spec.runtime.mode == "codex_cli"
+
+    spec = WorkflowExecutionSpec.model_validate(
+        {
+            "instructions": "Run.",
+            "runtime": {"mode": "claude"},
+            "steps": [{"id": "s1", "instructions": "Do it."}],
+        }
+    )
+    assert spec.runtime.mode == "claude_code"
+
+    canonical = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "jules_api",
+            "workflow": {"instructions": "Run."},
+        },
+    )
+    assert canonical["targetRuntime"] == "jules"
+    assert canonical["workflow"]["runtime"]["mode"] == "jules"
+
+    with pytest.raises(WorkflowContractError, match="must be one of"):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload={
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "bogus_runtime",
+                "workflow": {"instructions": "Run."},
+            },
+        )
+
+    with pytest.raises(ValidationError, match="must be one of"):
+        WorkflowExecutionSpec.model_validate(
+            {"instructions": "Run.", "runtime": {"mode": "bogus_runtime"}}
+        )
+
+
+def test_runtime_aliases_do_not_shadow_harness_identities() -> None:
+    """MoonLadderStudios/MoonMind#3934: runtime and harness ids differ.
+
+    ``codex`` as a runtime normalizes to the ``codex_cli`` product runtime,
+    while ``codex`` as a harness still resolves to the ``codex-native``
+    harness registration. No word blacklist may break the harness domain.
+    """
+
+    from moonmind.omnigent.harness_platform.harness_registry import (
+        canonical_harness_id,
+    )
+    from moonmind.runtime_identity import normalize_runtime_id
+
+    assert normalize_runtime_id("codex") == "codex_cli"
+    assert canonical_harness_id("codex") == "codex-native"
+    assert normalize_runtime_id("claude") == "claude_code"
+    assert canonical_harness_id("claude") == "claude-native"

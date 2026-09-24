@@ -1134,6 +1134,85 @@ async def run_job(request_file):
 
 
 async def submit(payload):
+    # Replacement-owner handoff first: trusted release data goes to the
+    # standalone controller endpoint (MoonLadderStudios/MoonMind#4500) without
+    # importing the target application's Python bootstrap. The legacy
+    # application-worker path below is retained only until the old writer is
+    # positively stopped/reconciled.
+    try:
+        from moonmind.workflows.skills.deployment_controller_handoff import (
+            build_controller_payload,
+            controller_available,
+            submit_to_controller,
+        )
+        from moonmind_controller.client import (
+            ControllerError,
+            ControllerUnavailableError,
+        )
+
+        if controller_available():
+            inputs = dict(payload.get("inputs") or {})
+            image = dict(inputs.get("image") or {})
+            repository = str(image.get("repository") or "")
+            reference = str(
+                image.get("resolvedDigest") or image.get("reference") or ""
+            )
+            target = f"{repository}@{reference}" if repository and reference else ""
+            context = dict(payload.get("context") or {})
+            operation_id = str(context.get("idempotency_key") or "").strip()
+            if target and operation_id:
+                authorization = inputs.get("authorization")
+                storage = inputs.get("storage")
+                access_settings = inputs.get("accessSettings", inputs.get("access_settings"))
+                try:
+                    receipt = submit_to_controller(
+                        build_controller_payload(
+                            submission_id=operation_id.removeprefix("host-update:"),
+                            image=target,
+                            authorization=dict(authorization)
+                            if isinstance(authorization, dict)
+                            else None,
+                            storage=dict(storage)
+                            if isinstance(storage, dict)
+                            else None,
+                            access_settings=dict(access_settings)
+                            if isinstance(access_settings, dict)
+                            else None,
+                        )
+                    )
+                except ControllerUnavailableError as exc:
+                    # No controller writer owns this operation: fall through
+                    # to the legacy path with the handoff diagnostic
+                    # preserved; the installation is unchanged.
+                    print(
+                        json.dumps(
+                            {"controllerHandoff": f"unavailable: {type(exc).__name__}"}
+                        ),
+                        flush=True,
+                    )
+                except ControllerError as exc:
+                    # The controller owns (or may own) this operation: never
+                    # fork the legacy updater while it may still be applying.
+                    print(
+                        json.dumps({"controllerHandoff": f"owned: {exc}"}, sort_keys=True),
+                        flush=True,
+                    )
+                    return 1
+                else:
+                    print(
+                        json.dumps({"controllerReceipt": receipt}, sort_keys=True),
+                        flush=True,
+                    )
+                    return 0
+    except Exception as exc:
+        # Fall through to the legacy path with the handoff diagnostic
+        # preserved; the installation is unchanged by a failed submission.
+        print(
+            json.dumps(
+                {"controllerHandoff": f"unavailable: {type(exc).__name__}"}
+            ),
+            flush=True,
+        )
     from moonmind.workflows.temporal.worker_runtime import (
         _build_deployment_update_executor,
     )

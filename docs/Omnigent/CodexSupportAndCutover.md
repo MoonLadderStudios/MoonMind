@@ -22,6 +22,21 @@ phases, and operator remediation matrix. The versioned rollout mechanism that
 promotes every combination (states, canary, rollback, migration status) is
 owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 
+> MoonLadderStudios/MoonMind#3931: ordinary new work (Workflow Create,
+> schedule create) resolves through the one shared runtime-target selection
+> boundary (`moonmind.workflows.executions.new_work_runtime`), not through
+> `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` /
+> `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` or `effective_phase()` /
+> `select_runtime()`. The surviving rollback controls for future admission are
+> the bounded direct-retirement cutoff `MOONMIND_CODEX_DIRECT_RETIRED_AT`
+> (`moonmind.omnigent.codex_cutover_drain`), the code-owned retirement class
+> (`moonmind.omnigent.cutover.assert_runtime_new_admission`), and the
+> deployment-owned rollback list
+> `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK`. Lowering a retired phase value
+> no longer rolls back new-work defaults; use the surviving controls. Phase
+> prose below remains as historical reader context for replay and retained
+> history.
+
 ## Compatibility inventory
 
 | Direct Codex surface | Classification | Owner and supported behavior | Evidence contract / control | Removal condition | Rollback implication |
@@ -110,10 +125,17 @@ changes only future default selection and never rewrites existing run evidence.
 Catalog `gateReasons` are operational launch blockers. Protected acceptance
 matrix gaps are published separately as `supportGateReasons`: they qualify
 release support and default promotion, but do not deny an otherwise safe local
-launch. The canonical Compose path enables the bridge and internal endpoint by
-default, seeds an active portable `codex` agent profile, resolves stock image
-tags to immutable policy digests, and uses the on-demand policy unless an
-operator explicitly selects static hosting. The API synchronizes the stable
+launch. A first ordinary launch does not require prior session observations or
+the protected browser acceptance, exact-artifact, and live-health files; those
+signals remain visible in `admissionReadiness.capabilities` and
+`supportGateReasons`. Runtime registration, schema, WebSocket, worker/backend,
+janitor, profile, and policy checks still gate admission. The workflow
+supervisor reports readiness and registration for its child workers;
+worker build identities are recorded independently and do not have to match for
+new admission. The canonical Compose path enables the bridge and internal
+endpoint by default, seeds an active portable `codex` agent profile, resolves
+stock image tags to immutable policy digests, and uses the on-demand policy
+unless an operator explicitly selects static hosting. The API synchronizes the stable
 upstream agent identity before activating that profile, keeps its projection
 fresh, and retries transient image, bridge, or inventory startup failures with
 capped backoff; no service restart is required for recovery.

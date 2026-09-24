@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Awaitable, Protocol
 
@@ -42,6 +45,74 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 )
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+
+_LOGGER = logging.getLogger(__name__)
+
+# Bounded recovery for transient git transport failures during the initial
+# sandbox clone (e.g. mm:68d074f1-...-2026-09-22T00:00:00Z failed with
+# ``Could not resolve host: github.com``). Same pre-connection classification
+# as the publication path in ``workspace_publication.py``: only DNS/connect
+# failures retry. Authentication, not-found, TLS, and repository errors fail
+# closed without retry, per docs/Temporal/ErrorTaxonomy.md.
+_CLONE_MAX_ATTEMPTS = 4
+_CLONE_TRANSIENT_FAILURE = re.compile(
+    r"Could not resolve (?:host|proxy): |Failed to connect to ",
+    re.IGNORECASE,
+)
+
+
+def _is_transient_clone_failure(stderr: str) -> bool:
+    """Return True when git stderr shows a pre-connection transport failure."""
+    return _CLONE_TRANSIENT_FAILURE.search(stderr or "") is not None
+
+
+def _is_complete_checkout(path: Path) -> bool:
+    """Return True when path looks like another invocation's success.
+
+    A failed ``git clone`` leaves an empty directory or a partial ``.git``
+    without ``HEAD``. Only a directory carrying ``.git/HEAD`` is treated as
+    a checkout another overlapping materialization may have just completed;
+    that checkout must never be deleted by this attempt's cleanup.
+    """
+    try:
+        head = path / ".git" / "HEAD"
+        return path.is_dir() and not path.is_symlink() and head.is_file()
+    except OSError:
+        # Unreadable state is not proof of success; treat it as partial.
+        return False
+
+
+def _remove_partial_clone_sync(path: Path) -> bool:
+    """Remove a failed clone target; return True when the target is gone.
+
+    A completed checkout owned by an overlapping materialization is never
+    removed: the caller reuses it instead. Anything else is best-effort;
+    a concurrent writer or read-only mount leaves the target in place.
+    """
+    try:
+        if _is_complete_checkout(path):
+            return False
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.is_symlink() or path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                # Best effort: a concurrent writer or read-only mount
+                # leaves the target for the next sweep.
+                pass
+    except OSError:
+        # Best effort: same as above.
+        pass
+    try:
+        return not path.exists()
+    except OSError:
+        return False
+
+
+async def _remove_partial_clone(path: Path) -> bool:
+    """Remove a failed clone target off the async event loop."""
+    return await asyncio.to_thread(_remove_partial_clone_sync, path)
 
 
 class DaemonCommandRunner(Protocol):
@@ -678,9 +749,65 @@ class OmnigentWorkspaceMaterializer:
         # The commit identity does persist there: it is deployment
         # configuration rather than a secret, and a skill that owns its own
         # publication has nowhere else to read one from.
-        code, _stdout, stderr = await self._runner(argv, token.encode("utf-8"))
-        if code != 0:
-            detail = (stderr or "").strip()[-300:]
+        # Transient pre-connection failures (DNS, connect) retry in place
+        # with exponential backoff; anything else fails closed immediately.
+        # Cleanup never deletes another overlapping materialization's
+        # completed checkout: that checkout is reused instead.
+        last_stderr = ""
+        target = self._root / rel
+        for attempt in range(1, _CLONE_MAX_ATTEMPTS + 1):
+            code, _stdout, stderr = await self._runner(argv, token.encode("utf-8"))
+            last_stderr = stderr or ""
+            if code == 0:
+                break
+            if _is_complete_checkout(target):
+                _LOGGER.warning(
+                    "Sandbox workspace clone found a completed checkout; "
+                    "reusing it instead of retrying",
+                )
+                break
+            if (
+                not _is_transient_clone_failure(last_stderr)
+                or attempt == _CLONE_MAX_ATTEMPTS
+            ):
+                # Leave no partial checkout behind: a retry reuses the same
+                # attempt workspace, and a leftover directory would skip the
+                # clone and treat the broken partial as complete.
+                await _remove_partial_clone(target)
+                detail = last_stderr.strip()[-300:]
+                raise HarnessPlatformError(
+                    "sandbox workspace clone failed for the requested branch"
+                    + (f": {detail}" if detail else ""),
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                )
+            removed = await _remove_partial_clone(target)
+            if not removed:
+                if _is_complete_checkout(target):
+                    _LOGGER.warning(
+                        "Sandbox workspace clone found a completed checkout; "
+                        "reusing it instead of retrying",
+                    )
+                    break
+                # Cleanup failed on a partial checkout: retrying would fail
+                # deterministically with "already exists" and mask the
+                # original transport diagnostic, so fail with that diagnostic.
+                detail = last_stderr.strip()[-300:]
+                raise HarnessPlatformError(
+                    "sandbox workspace clone failed for the requested branch"
+                    + (f": {detail}" if detail else ""),
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                )
+            delay = 2**attempt
+            _LOGGER.warning(
+                "Sandbox workspace clone transport failure; "
+                "retrying attempt %s/%s in %ss",
+                attempt + 1,
+                _CLONE_MAX_ATTEMPTS,
+                delay,
+            )
+            await asyncio.sleep(delay)
+        else:  # pragma: no cover - loop always breaks or raises
+            detail = last_stderr.strip()[-300:]
             raise HarnessPlatformError(
                 "sandbox workspace clone failed for the requested branch"
                 + (f": {detail}" if detail else ""),

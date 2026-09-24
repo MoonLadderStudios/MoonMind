@@ -1,10 +1,10 @@
 """Thin authenticated workflow CLI client for MoonMind executions.
 
-MoonLadderStudios/MoonMind#3939: ordinary authenticated ``run``/``status``/``logs``
-commands against the same ``/api/executions`` contract the dashboard uses.
-Presets, defaults, model/profile selection, and publication normalization stay
-server-owned; this module only builds canonical inputs and parses bounded,
-secret-safe output.
+MoonLadderStudios/MoonMind#3939: ordinary authenticated ``run``/``status``/
+``logs``/``download`` commands against the same ``/api/executions`` contract
+the dashboard uses. Presets, defaults, model/profile selection, and
+publication normalization stay server-owned; this module only builds canonical
+inputs and parses bounded, secret-safe output.
 
 Design rules (from the issue brief):
 
@@ -30,7 +30,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import httpx
@@ -49,8 +49,15 @@ EXIT_STILL_RUNNING = 3  # bounded wait expired while work is still running
 
 _MAX_OUTPUT_CHARS = 8000
 _MAX_LOG_LINES = 200
+# Bound for one CLI evidence download. Larger saved artifacts stay reachable
+# through the Workflow Detail page; the CLI fails actionably instead of
+# buffering unbounded bytes into the terminal host.
+_MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-Z]")
+_FILENAME_PATTERN = re.compile(
+    r"filename\*?\s*=\s*(?:\"([^\"]{1,255})\"|([^;,\s]{1,255}))", re.IGNORECASE
+)
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _RETIRED_PARAM_KEYS = frozenset(
     {
@@ -166,6 +173,74 @@ def sanitize_terminal_text(value: str, *, max_chars: int = _MAX_OUTPUT_CHARS) ->
     if len(redacted) > max_chars:
         return redacted[:max_chars] + "\n…[truncated]"
     return redacted
+
+
+def evidence_download_filename(
+    ref: str, content_disposition: str | None = None
+) -> str:
+    """Derive a browser-safe download filename for one evidence ref.
+
+    Prefers the server's ``content-disposition`` filename when present (the
+    same name the Workflow Detail download would save as), otherwise derives
+    the trailing segment of the artifact ref the way the server does. The
+    result is always a bare filename: directory components, control
+    characters, and blank values fall back to ``captured-evidence`` so a
+    hostile ref can never steer the CLI write outside ``--out``.
+    """
+    candidate = ""
+    if content_disposition:
+        match = _FILENAME_PATTERN.search(content_disposition)
+        if match:
+            candidate = (match.group(1) or match.group(2) or "").strip()
+            if candidate.lower().startswith("utf-8''"):
+                candidate = candidate[7:]
+            try:
+                candidate = unquote(candidate)
+            except ValueError:
+                # Keep the raw candidate: unquote only fails on malformed
+                # %-escapes, and the sanitization below still yields a safe
+                # bare filename.
+                pass
+    if not candidate:
+        candidate = (
+            (ref or "").rstrip("/").rsplit("/", 1)[-1].removeprefix("artifact://").strip()
+        )
+    candidate = candidate.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    candidate = _CONTROL_CHAR_PATTERN.sub("", candidate).strip().strip(".")
+    if not candidate:
+        return "captured-evidence"
+    return candidate[:255]
+
+
+def save_evidence_download(
+    path: str | Path, content: bytes, *, overwrite: bool = False
+) -> Path:
+    """Save downloaded evidence bytes to an explicit destination file.
+
+    An existing file is never silently replaced: without ``overwrite`` the
+    call fails actionably so accepted saved work survives a repeated
+    download. Missing parent directories are created.
+    """
+    target = Path(os.path.expanduser(str(path)))
+    if not str(target).strip():
+        raise WorkflowCliError("an --out file path is required.")
+    if target.exists() and not overwrite:
+        raise WorkflowCliError(
+            f"refusing to overwrite existing file {redact_sensitive_text(str(target))}; "
+            "pass --overwrite or choose another --out path. Saved work is never "
+            "silently replaced."
+        )
+    try:
+        parent = target.parent
+        if str(parent) and not parent.exists():
+            parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(bytes(content))
+    except OSError as exc:
+        raise WorkflowCliError(
+            f"could not write download to {redact_sensitive_text(str(target))}: "
+            f"{exc.strerror or type(exc).__name__}"
+        ) from exc
+    return target
 
 
 def validate_repository(value: str | None) -> str | None:
@@ -367,6 +442,15 @@ def summarize_execution(payload: Mapping[str, Any]) -> ExecutionSummary:
 
 
 @dataclass(slots=True)
+class EvidenceDownload:
+    """One downloaded captured-evidence artifact: filename plus raw bytes."""
+
+    filename: str
+    content: bytes
+    content_type: str | None = None
+
+
+@dataclass(slots=True)
 class WorkflowApiClient:
     """Small synchronous client for the public executions API."""
 
@@ -452,6 +536,14 @@ class WorkflowApiClient:
                 "The credential is valid but this owner may not access the workflow."
             )
         if response.status_code == 404:
+            if action == "evidence download":
+                raise WorkflowCliError(
+                    f"evidence download found no such captured evidence (HTTP 404)"
+                    f"{f': ' + redacted_detail if redacted_detail else ''}. "
+                    "Check the workflow ID and pick an authorized artifact ref "
+                    "from the captured-evidence read "
+                    "(`moonmind workflow logs --json <workflow-id>`)."
+                )
             raise WorkflowCliError(
                 f"{action} found no such workflow (HTTP 404)"
                 f"{f': ' + redacted_detail if redacted_detail else ''}."
@@ -591,6 +683,55 @@ class WorkflowApiClient:
         except ValueError as exc:
             raise WorkflowCliError("step read returned invalid JSON.") from exc
         return dict(body) if isinstance(body, Mapping) else None
+
+    def download_captured_evidence(self, workflow_id: str, ref: str) -> EvidenceDownload:
+        """Download one saved captured-evidence artifact's bytes.
+
+        MoonLadderStudios/MoonMind#3926: the CLI shares the Workflow Detail
+        page's download contract
+        (``GET /api/executions/{workflowId}/captured-evidence/download?ref=``)
+        so the default installation-to-session-to-download journey is
+        completable from either surface. The server authorizes the caller
+        against the Workflow and confirms the ref is one of that Workflow's
+        authorized evidence refs; an unknown workflow or unauthorized ref is
+        a 404, never workflow failure.
+        """
+        workflow_id = workflow_id.strip()
+        if not workflow_id:
+            raise WorkflowCliError("a workflow ID is required.")
+        clean_ref = (ref or "").strip()
+        if not clean_ref:
+            raise WorkflowCliError(
+                "an artifact ref is required; pick one from the captured-evidence "
+                "read (`moonmind workflow logs --json <workflow-id>`)."
+            )
+        assert self._client is not None
+        try:
+            response = self._client.get(
+                f"/api/executions/{workflow_id}/captured-evidence/download",
+                params={"ref": clean_ref},
+            )
+        except httpx.RequestError as exc:
+            raise WorkflowCliError(
+                f"evidence download failed: {type(exc).__name__}; the remote workflow "
+                "is unaffected — retry the download."
+            ) from exc
+        self._raise_for_status(response, action="evidence download")
+        payload = response.content
+        if len(payload) > _MAX_DOWNLOAD_BYTES:
+            raise WorkflowCliError(
+                f"evidence download is {len(payload)} bytes, above the CLI bound "
+                f"({_MAX_DOWNLOAD_BYTES} bytes); download the artifact from the "
+                "Workflow Detail page instead."
+            )
+        content_type = response.headers.get("content-type")
+        return EvidenceDownload(
+            filename=evidence_download_filename(
+                clean_ref, response.headers.get("content-disposition")
+            ),
+            content=payload,
+            content_type=content_type.strip() if content_type else None,
+        )
 
 
 def format_execution_json(payload: Mapping[str, Any]) -> str:

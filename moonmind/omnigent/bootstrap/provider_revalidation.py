@@ -2,8 +2,8 @@
 
 Two things must be true before ``moonmind.omnigent-execution-readiness.v3``
 advertises an OpenCode target: a Provider Profile must be enrolled and
-connected, and its persisted ``model_catalog_evidence_json`` must have been
-observed on the exact digest-pinned host image the deployment currently selects.
+connected, and its persisted ``model_catalog_evidence_json`` must answer for
+the deployment's current host image.
 
 Both used to require a console action. Enrollment only happened through the
 one-action bootstrap endpoint, and evidence was only written at that moment, so
@@ -18,6 +18,22 @@ This boundary closes both gaps from deployment configuration alone:
   ``OPENCODE_API_KEY`` when the default profile is missing or its key changed; and
 * re-validation re-runs the pinned-runtime check against the already-enrolled
   SecretRef when only the evidence is stale.
+
+MoonLadderStudios/MoonMind#4538: the ``OPENROUTER_API_KEY`` route
+(``opencode``/``openrouter`` via the ``opencode_api_key`` role) shares this
+same re-validation path. ``_opencode_profiles`` selects every ``opencode``
+runtime row, so the OpenRouter profile is revalidated, rotated via its
+``env://OPENROUTER_API_KEY`` SecretRef, and probed with the same bounded
+transient-retry contract. Key presence alone never claims launch readiness:
+readiness still requires persisted catalog evidence for the current host
+image.
+
+Exact image provenance schedules discovery refresh, but it is not a
+runtime-compatibility veto: evidence observed on a compatible same-repository
+rebuild still answers for execution, while only an observation on the exact
+currently selected image counts as current. Transient probe failures (network,
+registry, lease, secret-resolution) defer with the attempt budget intact;
+only definitive provider or runtime verdicts spend it.
 
 Neither path substitutes a credential, an image, or a weaker evidence contract.
 """
@@ -204,12 +220,27 @@ def revalidation_is_exhausted(profile: Any, *, image_refs: Collection[str]) -> b
 def evidence_matches_launchable_identity(
     evidence: Any, *, profile: Any, image_ref: str
 ) -> bool:
-    """Report whether one observation belongs to the launchable identity.
+    """Report whether one observation answers for the launchable identity.
 
-    This mirrors the readiness and planner admission checks exactly: evidence
-    must belong to the profile's current credential generation, to the host
-    image the deployment currently pins, and to the materializer the launch
-    path uses, and it must contain the profile's selected model.
+    This mirrors the readiness and planner admission checks: evidence must
+    belong to the profile's current credential generation, to a host image
+    compatible with the one the deployment currently selects, and to the
+    materializer the launch path uses, and it must contain the profile's
+    selected model.
+
+    MoonLadderStudios/MoonMind#4538: the model-neutral ``opencode-openrouter``
+    profile (``default_model=None``) inherits the configured OpenCode default
+    at launch. When an ``openrouter/...``-qualified inherited default is
+    configured it must be present in the observed catalog; when no inherited
+    default is configured any non-empty catalog proves the credential and
+    image work, and model selection stays unresolved until an explicit
+    compatible choice is made. The execution host re-verifies the selected
+    model before session start.
+
+    Exact image provenance schedules discovery refresh (see
+    :func:`evidence_is_current`) but is not an execution veto: a compatible
+    same-repository rebuild still answers for the selected model and required
+    capabilities, which the execution host re-verifies before session start.
     """
 
     if not isinstance(evidence, Mapping):
@@ -220,8 +251,12 @@ def evidence_matches_launchable_identity(
         return False
     if generation != int(profile.credential_generation):
         return False
-    if str(evidence.get("imageRef") or "") != image_ref:
-        return False
+    observed_image = str(evidence.get("imageRef") or "")
+    if observed_image != image_ref:
+        from moonmind.omnigent.host_image_drift import is_compatible_image_drift
+
+        if not is_compatible_image_drift(observed_image, image_ref):
+            return False
     if not isinstance(evidence.get("runtimeVersions"), dict):
         return False
     from moonmind.omnigent.harness_platform.materializers import (
@@ -243,7 +278,38 @@ def evidence_matches_launchable_identity(
         if isinstance(item, dict)
     }
     default_model = str(getattr(profile, "default_model", None) or "").strip()
-    return bool(default_model and default_model in models)
+    if default_model:
+        return bool(default_model in models)
+    # Model-neutral OpenCode/OpenRouter seed: inherit the configured OpenCode
+    # default for the execution context Omnigent actually launches. Only an
+    # explicit ``openrouter/``-qualified default counts; bare or
+    # cross-provider defaults stay unresolved at launch time.
+    if str(getattr(profile, "runtime_id", "") or "") == "opencode" and str(
+        getattr(profile, "provider_id", "") or ""
+    ) == "openrouter":
+        inherited = _inherited_openrouter_model()
+        if inherited:
+            return bool(inherited in models)
+        return bool(models)
+    return False
+
+
+def _inherited_openrouter_model() -> str | None:
+    """Return the configured OpenCode default when it selects OpenRouter."""
+    try:
+        from moonmind.workflows.executions.runtime_defaults import (
+            resolve_runtime_defaults,
+        )
+    except Exception:
+        return None
+    try:
+        runtime_model, _ = resolve_runtime_defaults("opencode")
+    except Exception:
+        return None
+    candidate = str(runtime_model or "").strip()
+    if candidate.startswith("openrouter/") and "/" in candidate:
+        return candidate
+    return None
 
 
 def evidence_is_current(
@@ -255,17 +321,22 @@ def evidence_is_current(
 ) -> bool:
     """Report whether persisted evidence still answers for this deployment.
 
-    Two separate questions must both hold: the observation belongs to the
-    launchable identity, and it was taken inside the configured catalog
-    interval. Identity alone would keep a first observation forever, because
-    the credential generation and image digest of a healthy deployment never
-    change on their own.
+    Three separate questions must all hold: the observation answers for the
+    launchable identity, it was taken on the exact image the deployment
+    currently selects, and it was taken inside the configured catalog
+    interval. Exact provenance schedules a discovery refresh after a rebuild,
+    but only the identity question gates execution (see
+    :func:`evidence_matches_launchable_identity`).
     """
 
     evidence = profile.model_catalog_evidence_json
     if not evidence_matches_launchable_identity(
         evidence, profile=profile, image_ref=image_ref
     ):
+        return False
+    if not isinstance(evidence, Mapping):
+        return False
+    if str(evidence.get("imageRef") or "") != image_ref:
         return False
     return evidence_observation_is_current(evidence, env=env, now=now)
 
@@ -275,10 +346,11 @@ def _has_configured_runtime_authority(profile: Any) -> bool:
 
     Deliberately independent of ``enabled``. Enrollment applies API-key setup
     with ``enabled=True``, but only an explicit user or policy disable prevents
-    deployment configuration from repairing a disabled profile. The one
-    pending state accepted here is the startup seed's exact deployment
-    SecretRef: it is already materializable and must be promoted only by the
-    pinned-runtime evidence path below.
+    deployment configuration from repairing a disabled profile. The pending
+    states accepted here are the startup seeds' exact deployment SecretRefs
+    (``env://OPENCODE_API_KEY`` and ``env://OPENROUTER_API_KEY``): they are
+    already materializable and must be promoted only by the pinned-runtime
+    evidence path below.
     """
 
     from api_service.db.models import ProviderProfileAuthState
@@ -298,7 +370,7 @@ def _has_configured_runtime_authority(profile: Any) -> bool:
     secret_ref = str((profile.secret_refs or {}).get(OPENCODE_SECRET_ROLE) or "")
     return (state == ProviderProfileAuthState.CONNECTED.value and bool(secret_ref)) or (
         state == ProviderProfileAuthState.API_KEY_PENDING.value
-        and secret_ref == OPENCODE_DEPLOYMENT_SECRET_REF
+        and secret_ref in (OPENCODE_DEPLOYMENT_SECRET_REF, "env://OPENROUTER_API_KEY")
     )
 
 
@@ -862,6 +934,7 @@ async def _revalidate_stale_evidence(
             continue
 
         evidence: dict[str, Any] | None = None
+        probe_transient = False
         try:
             evidence = await OpenCodeProviderRuntimeValidationService(
                 session_factory=session_factory,
@@ -869,14 +942,34 @@ async def _revalidate_stale_evidence(
                 image_ref=image_ref,
             ).validate(profile=row, lease=guard.lease)
         except Exception as exc:
-            deferred.append(profile_id)
-            logger.warning(
-                "OpenCode Provider Profile re-validation deferred: "
-                "profile_id=%s image_ref=%s error=%s",
-                profile_id,
-                image_ref,
-                exc,
+            from moonmind.omnigent.opencode_runtime_validation import (
+                is_transient_validation_error,
             )
+
+            # Transient infrastructure, lease, secret-resolution, and
+            # materialization failures carry no verdict about the credential
+            # or the runtime: defer with the attempt budget intact instead of
+            # latching a recoverable outage into an operator-actionable
+            # exhaustion that demands a credential or image change.
+            probe_transient = is_transient_validation_error(exc)
+            deferred.append(profile_id)
+            if probe_transient:
+                logger.warning(
+                    "OpenCode Provider Profile re-validation deferred by a "
+                    "transient failure; the attempt budget is preserved: "
+                    "profile_id=%s image_ref=%s error=%s",
+                    profile_id,
+                    image_ref,
+                    exc,
+                )
+            else:
+                logger.warning(
+                    "OpenCode Provider Profile re-validation deferred: "
+                    "profile_id=%s image_ref=%s error=%s",
+                    profile_id,
+                    image_ref,
+                    exc,
+                )
         finally:
             try:
                 await guard.release()
@@ -887,12 +980,13 @@ async def _revalidate_stale_evidence(
                     exc_info=True,
                 )
         if evidence is None:
-            await _record_revalidation_failure(
-                session_factory=session_factory,
-                profile_id=profile_id,
-                image_ref=image_ref,
-                evidence_identity=operation_id,
-            )
+            if not probe_transient:
+                await _record_revalidation_failure(
+                    session_factory=session_factory,
+                    profile_id=profile_id,
+                    image_ref=image_ref,
+                    evidence_identity=operation_id,
+                )
             continue
 
         committed = await _persist_evidence(
@@ -962,10 +1056,20 @@ async def _persist_evidence(
     )
 
     observed_image = str(evidence.get("imageRef") or "")
-    if observed_image != image_ref:
+    requested_image = str(evidence.get("requestedImageRef") or observed_image)
+    if requested_image != image_ref:
         # The probe answered for an image other than the one this pass ran, so
         # it says nothing about the deployment's launchable identity.
         return False
+    if observed_image != image_ref:
+        # The validator truthfully substituted a qualified compatible image
+        # for an unavailable requested digest. Admit the substitution only
+        # when it stays inside the same image repository; anything else says
+        # nothing about this pass.
+        from moonmind.omnigent.host_image_drift import is_compatible_image_drift
+
+        if not is_compatible_image_drift(observed_image, image_ref):
+            return False
     pinned_image = _pinned_image_ref()
     if pinned_image is not None and pinned_image != image_ref:
         # The deployment re-pinned its host image while the probe ran. Writing

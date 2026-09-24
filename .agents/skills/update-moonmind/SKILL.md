@@ -61,6 +61,8 @@ recovery exhausts; preserve primary deployment success when only reporting remai
 
 If the caller disappears, resume the printed submission with `--resume <submission-id>`. Keep its original image and inputs. The controller reattaches to the same operation instead of launching a competing writer; inspect the durable result before retrying any side effect; preserve primary deployment success if only cleanup remains. Report the exact unfinished phase and its recorded recovery owner when bounded recovery exhausts. An explicit retry through the controller starts a fresh bounded attempt with prior diagnostics retained.
 
+The standalone controller project (`deploy/moonmind-controller`, MoonLadderStudios/MoonMind#4500) is the replacement owner that survives target-stack shutdown: install, update, or restore it while MoonMind is unhealthy with `tools/install-moonmind-controller.sh [install|update|restore|status]`. Controller update is host-owned and never self-applied.
+
 ## Options
 
 Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). A `--dry-run` preview never establishes completion: it writes no submission and proves nothing about the installed deployment. The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.

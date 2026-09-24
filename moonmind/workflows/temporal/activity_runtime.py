@@ -8901,6 +8901,14 @@ class TemporalAgentRuntimeActivities:
             return published
 
         async def _publish_issue_brief_artifact() -> dict[str, Any]:
+            # The trusted issue loader owns the durable brief (see
+            # docs/Workflows/WorkflowPresetsSystem.md: loader persists the
+            # complete brief and briefArtifactRef carries it; agent copies
+            # never replace it). Agents consume via carried refs/attachments
+            # and only rewrite the local file when identity/freshness
+            # requires it, so a missing file is a skippable handoff gap, not
+            # a workflow failure. Preserve progress and keep this best-effort
+            # like the MoonSpec verify publisher.
             brief_path = _metadata_text(
                 "brief_artifact_path",
                 "briefArtifactPath",
@@ -8919,35 +8927,30 @@ class TemporalAgentRuntimeActivities:
                 None,
             )
             if path is None:
-                failure_class = str(
-                    result_dict.get("failureClass")
-                    or result_dict.get("failure_class")
-                    or ""
-                ).strip()
-                if failure_class:
-                    logger.warning(
-                        "Skipping missing issue brief artifact for failed agent "
-                        "result (%s): %s",
-                        failure_class,
-                        brief_path,
-                    )
-                    return {}
-                raise TemporalActivityRuntimeError(
-                    "Declared issue brief artifact was not produced: "
-                    f"{brief_path}"
+                logger.warning(
+                    "Skipping missing issue brief artifact; durable loader "
+                    "brief remains authoritative: %s",
+                    brief_path,
                 )
+                return {}
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise TemporalActivityRuntimeError(
-                    "Declared issue brief artifact could not be read as JSON: "
-                    f"{brief_path}"
-                ) from exc
-            if not isinstance(payload, Mapping):
-                raise TemporalActivityRuntimeError(
-                    "Declared issue brief artifact payload must be a JSON object: "
-                    f"{brief_path}"
+            except (OSError, json.JSONDecodeError):
+                logger.warning(
+                    "Skipping issue brief artifact that could not be read "
+                    "as JSON; durable loader brief remains authoritative: %s",
+                    brief_path,
+                    exc_info=True,
                 )
+                return {}
+            if not isinstance(payload, Mapping):
+                logger.warning(
+                    "Skipping issue brief artifact payload that must be a "
+                    "JSON object; durable loader brief remains authoritative: "
+                    "%s",
+                    brief_path,
+                )
+                return {}
             brief_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
@@ -9067,18 +9070,6 @@ class TemporalAgentRuntimeActivities:
             _metadata_text(
                 "assessment_artifact_path",
                 "assessmentArtifactPath",
-            )
-        ) and not bool(
-            str(
-                result_dict.get("failureClass")
-                or result_dict.get("failure_class")
-                or ""
-            ).strip()
-        )
-        brief_output_required = bool(
-            _metadata_text(
-                "brief_artifact_path",
-                "briefArtifactPath",
             )
         ) and not bool(
             str(
@@ -9337,8 +9328,6 @@ class TemporalAgentRuntimeActivities:
             if report_output_enabled and report_output_required:
                 raise
             if assessment_output_required:
-                raise
-            if brief_output_required:
                 raise
             return result
 
@@ -11955,6 +11944,30 @@ class TemporalAgentRuntimeActivities:
                 failed=True,
                 reason="docker reference scan unavailable",
             )
+        loop = asyncio.get_running_loop()
+        initial_docker_state = docker_state
+
+        def _docker_reference_provider() -> (
+            DockerReferenceState | Mapping[str, object]
+        ):
+            nonlocal initial_docker_state
+            if initial_docker_state is not None:
+                state = initial_docker_state
+                initial_docker_state = None
+                return state
+            if self._session_controller is None or not hasattr(
+                self._session_controller,
+                "collect_managed_runtime_cleanup_docker_references",
+            ):
+                return DockerReferenceState(
+                    failed=True,
+                    reason="docker reference scan unavailable",
+                )
+            return asyncio.run_coroutine_threadsafe(
+                self._session_controller.collect_managed_runtime_cleanup_docker_references(),
+                loop,
+            ).result()
+
         # The janitor performs recursive synchronous filesystem work. Keep it
         # off this fleet's async loop so live status/control Activities remain
         # serviceable, and own heartbeats from the event-loop side. Cancellation
@@ -11974,7 +11987,7 @@ class TemporalAgentRuntimeActivities:
                     session_store=session_store,
                     config=config,
                     docker_reference_provider=(
-                        None if docker_state is None else lambda: docker_state
+                        None if docker_state is None else _docker_reference_provider
                     ),
                     progress_callback=_check_cleanup_cancellation,
                 ),

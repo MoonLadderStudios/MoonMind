@@ -68,7 +68,8 @@ class HarnessImplementationIdentity(BaseModel):
 
 
 class HarnessCapabilities(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    # New upstream capabilities remain in the content-addressed observation.
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     integrationMode: str | None = Field(default=None, alias="integrationMode")
     authModel: str | None = Field(default=None, alias="authModel")
@@ -80,14 +81,14 @@ class HarnessCapabilities(BaseModel):
     interrupt: bool | None = None
     streaming: bool | None = None
     subagents: bool | None = None
-    steering: str | None = None
-    liveQueue: str | None = Field(default=None, alias="liveQueue")
-    images: str | None = None
-    compaction: str | None = None
+    steering: bool | str | None = None
+    liveQueue: bool | str | None = Field(default=None, alias="liveQueue")
+    images: bool | str | None = None
+    compaction: bool | str | None = None
 
 
 class HarnessRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     id: str
     aliases: tuple[str, ...] = ()
@@ -231,9 +232,9 @@ def assert_catalog_refresh_attests(
     """Prove a fresh observation still matches immutable profile authority.
 
     Agent Profile versions remain bound to their original catalog snapshot.
-    A later synchronization can attest a compatible major.minor core release
-    with unchanged declared harness behavior. Plugin identity stays exact;
-    the original snapshot is retained rather than rewritten.
+    A later synchronization can attest a different core release when declared
+    required capabilities and runtime requirements are preserved. Plugin
+    identity stays exact; the original snapshot is retained rather than rewritten.
     """
 
     assert_catalog_fresh(observation)
@@ -268,8 +269,12 @@ def assert_catalog_refresh_attests(
                 and observation_harness.implementation.sourceKind == "core"
                 and authority_harness.implementation.package
                 == observation_harness.implementation.package
-                and authority_harness.model_dump(exclude={"implementation"})
-                == observation_harness.model_dump(exclude={"implementation"})
+                and authority_harness.runtimeRequirements
+                == observation_harness.runtimeRequirements
+                and _preserves_declared_capabilities(
+                    authority_harness.capabilities,
+                    observation_harness.capabilities,
+                )
             )
         )
     ):
@@ -277,6 +282,25 @@ def assert_catalog_refresh_attests(
             "fresh catalog observation reports a different harness implementation",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
+
+
+def _preserves_declared_capabilities(
+    authority: HarnessCapabilities, observation: HarnessCapabilities
+) -> bool:
+    """Check the old required behavior without treating new metadata as drift."""
+
+    old = authority.model_dump(by_alias=True, exclude_none=True)
+    new = observation.model_dump(by_alias=True, exclude_none=True)
+    for name, expected in old.items():
+        current = new.get(name)
+        if expected in (False, "unsupported"):
+            continue
+        if expected in (True, "supported"):
+            if current not in (True, "supported"):
+                return False
+        elif current != expected:
+            return False
+    return True
 
 
 class HarnessTrustRecord(BaseModel):
