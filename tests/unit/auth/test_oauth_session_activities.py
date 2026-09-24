@@ -201,6 +201,7 @@ class TestOAuthSessionWorkflowRegistration:
 
     def test_workflow_type_registered(self) -> None:
         assert "MoonMind.OAuthSession" in list_registered_workflow_types()
+        assert "MoonMind.OAuthCredentialValidation" in list_registered_workflow_types()
 
     def test_cleanup_stale_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()
@@ -265,11 +266,21 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
             host_lease,
             effective_launch,
         ):
+            observed["validation_attempts"] = (
+                int(observed.get("validation_attempts", 0)) + 1
+            )
             observed["validate_credential_mount"] = {
                 "binding": binding,
                 "host_lease": host_lease,
                 "effective_launch": effective_launch,
             }
+            if int(observed.get("fail_validation_times", 0)) >= int(
+                observed["validation_attempts"]
+            ):
+                raise OmnigentOAuthHostError(
+                    "transient credential preflight failure",
+                    code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                )
             if observed.get("fail_validation") == "credential":
                 raise OmnigentOAuthHostError(
                     "credential preflight failed",
@@ -334,6 +345,23 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
     assert lease.status == "stopped"
 
+    observed["fail_validation_times"] = 2
+    observed["validation_attempts"] = 0
+    lease.status = "allocating"
+    recovered_result = (
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+    )
+    assert recovered_result["status"] == "ready"
+    assert observed["validation_attempts"] == 3
+    assert lease.status == "stopped"
+    observed.pop("fail_validation_times")
+
     @asynccontextmanager
     async def profile_mutation_forbidden():
         raise AssertionError(
@@ -349,14 +377,20 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     observed["fail_validation"] = True
     lease.status = "allocating"
 
-    with pytest.raises(RuntimeError, match="credential preflight failed"):
-        await oauth_session_activities.oauth_session_revalidate_bound_host(
-            {
-                "session_id": session_id,
-                "profile_id": "codex_openai_oauth",
-                "provider_lease_id": "provider-lease-revalidate",
-            }
-        )
+    unavailable_result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": session_id,
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "provider-lease-revalidate",
+        }
+    )
+    assert unavailable_result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "validation_unavailable",
+        "credential_generation": 7,
+        "validation_mode": "credential_only",
+    }
+    assert lease.status == "stopped"
 
     assert lease.status == "stopped"
     assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
@@ -401,15 +435,20 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     observed["fail_validation"] = "credential"
     lease.status = "allocating"
 
-    with pytest.raises(OmnigentOAuthHostError, match="credential preflight failed"):
-        await oauth_session_activities.oauth_session_revalidate_bound_host(
-            {
-                "session_id": session_id,
-                "profile_id": "codex_openai_oauth",
-                "provider_lease_id": "provider-lease-revalidate",
-            }
-        )
+    invalid_result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": session_id,
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "provider-lease-revalidate",
+        }
+    )
 
+    assert invalid_result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "credential_invalid",
+        "credential_generation": 7,
+        "validation_mode": "credential_only",
+    }
     assert commits == 1
     assert profile.enabled is False
     assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
@@ -434,6 +473,128 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
         )
 
     assert lease.status == "starting"
+
+
+@pytest.mark.asyncio
+async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch = {
+        "snapshotRef": "omnigent-launch:sha256:first-enrollment",
+        "hostMode": "on_demand_docker",
+    }
+    binding = SimpleNamespace(
+        host_launch_profile_ref="codex-on-demand@1",
+        effective_launch_snapshot=launch,
+    )
+    lease = SimpleNamespace(
+        lease_id="ohl-first-enrollment",
+        status="allocating",
+        credential_generation=1,
+        effective_launch_snapshot=launch,
+    )
+    observed: dict[str, object] = {}
+
+    class Repository:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        async def refresh_binding_generation(self, _profile_id: str):
+            return None
+
+        async def create_or_update_static_binding(self, **kwargs):
+            observed["binding"] = kwargs
+            return binding
+
+        async def create_or_get_host_lease(self, **_kwargs):
+            return lease
+
+        async def transition_host_lease(self, _lease_id, **_kwargs):
+            lease.status = "starting"
+            return lease
+
+        async def mark_host_lease_stopped(self, _lease_id: str) -> None:
+            lease.status = "stopped"
+
+    class PolicyService:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def resolve_runtime_snapshot(self, policy_ref: str):
+            assert policy_ref == "codex-on-demand@1"
+            return {"policyRef": policy_ref}
+
+    class Runtime:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def validate_credential_mount(self, **kwargs):
+            observed["probe"] = kwargs
+            return {"validationMode": "credential_only"}
+
+        async def stop_host(self, **_kwargs):
+            return {"cleanupResult": "succeeded"}
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+    @asynccontextmanager
+    async def session_maker():
+        class Database:
+            async def get(self, _model, _profile_id):
+                return SimpleNamespace(runtime_id="codex_cli")
+
+        yield Database()
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_hosts.OmnigentOAuthHostRepository", Repository
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client.OmnigentHttpClient", Client
+    )
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", session_maker
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.OmnigentPolicyService", PolicyService
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution._compile_persisted_effective_launch",
+        lambda _policy, *, provider_profile_id: launch,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_server_url", lambda: "http://omnigent"
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_proxy_forward_headers", lambda: ()
+    )
+
+    result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": "oas-first-enrollment",
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "provider-lease-first-enrollment",
+        }
+    )
+
+    assert result["status"] == "ready"
+    assert observed["binding"] == {
+        "profile_id": "codex_openai_oauth",
+        "endpoint_ref": "default",
+        "host_launch_profile_ref": "codex-on-demand@1",
+        "execution_profile_ref": "omnigent-codex@1",
+        "launch_policy_ref": "codex-on-demand@1",
+        "effective_launch_snapshot": launch,
+    }
+    assert observed["probe"]["binding"] is binding
+    assert lease.status == "stopped"
 
 
 @pytest.mark.asyncio
