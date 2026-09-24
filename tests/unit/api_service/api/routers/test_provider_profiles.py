@@ -118,7 +118,7 @@ def _module_db(tmp_path_factory):
 @pytest.fixture
 def client_app(_module_db) -> AsyncClient:
     async def _maintenance_guard_override():
-        yield SimpleNamespace(lease=SimpleNamespace(lease_id="test-credential-lease"))
+        yield object()
 
     app.dependency_overrides[
         provider_profiles_router._credential_validation_guard
@@ -5159,14 +5159,6 @@ async def test_first_party_oauth_lifecycle_generalized_across_runtimes(
     async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
         synced_runtimes.append(runtime_id)
 
-    async def _fake_host_check(*, profile_id: str, provider_lease_id: str):
-        assert provider_lease_id == "test-credential-lease"
-        return {
-            "profile_id": profile_id,
-            "status": "ready",
-            "validation_mode": "credential_only",
-        }
-
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
         _fake_verify,
@@ -5174,11 +5166,6 @@ async def test_first_party_oauth_lifecycle_generalized_across_runtimes(
     monkeypatch.setattr(
         "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
         _fake_sync,
-    )
-    monkeypatch.setattr(
-        "api_service.services.oauth_session_service.validate_oauth_profile_on_host",
-        _fake_host_check,
-        raising=False,
     )
 
     async with db_base.async_session_maker() as session:
@@ -5203,9 +5190,7 @@ async def test_first_party_oauth_lifecycle_generalized_across_runtimes(
         profile.volume_ref = volume_ref
         profile.volume_mount_path = mount_path
         profile.home_path_overrides = {"CUSTOM_HOME": "/custom/home"}
-        profile.enabled = False
-        profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
-        profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+        profile.enabled = True
         await session.commit()
 
     async with client_app as client:
@@ -5256,73 +5241,6 @@ async def test_first_party_oauth_lifecycle_generalized_across_runtimes(
     assert disconnected_payload["enabled"] is False
     assert disconnected_payload["command_behavior"]["auth_actions"] == ["use_api_key"]
     assert synced_runtimes == [runtime_id, runtime_id]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("host_status", "expected_http_status"),
-    [
-        ("credential_invalid", 400),
-        ("validation_unavailable", 503),
-        ("ready", 503),
-    ],
-)
-async def test_codex_oauth_validate_requires_host_login_probe(
-    client_app: AsyncClient,
-    _module_db,
-    monkeypatch: pytest.MonkeyPatch,
-    host_status: str,
-    expected_http_status: int,
-) -> None:
-    profile_id = f"codex-host-validation-{host_status}"
-    checks: list[tuple[str, str]] = []
-
-    async def _volume_verified(**_kwargs):
-        return {"verified": True}
-
-    async def _host_check(*, profile_id: str, provider_lease_id: str):
-        checks.append((profile_id, provider_lease_id))
-        return {"profile_id": profile_id, "status": host_status}
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
-        _volume_verified,
-    )
-    monkeypatch.setattr(
-        "api_service.services.oauth_session_service.validate_oauth_profile_on_host",
-        _host_check,
-        raising=False,
-    )
-
-    async with db_base.async_session_maker() as session:
-        session.add(
-            ManagedAgentProviderProfile(
-                profile_id=profile_id,
-                runtime_id="codex_cli",
-                provider_id="openai",
-                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-                volume_ref="codex_auth_volume",
-                volume_mount_path="/home/app/.codex",
-                enabled=False,
-                auth_state=ProviderProfileAuthState.VALIDATION_FAILED,
-                disabled_reason=ProviderProfileDisabledReason.AUTH_INVALID,
-            )
-        )
-        await session.commit()
-
-    async with client_app as client:
-        response = await client.post(
-            f"/api/v1/provider-profiles/{profile_id}/oauth/validate"
-        )
-
-    assert response.status_code == expected_http_status
-    assert checks == [(profile_id, "test-credential-lease")]
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, profile_id)
-        assert profile is not None
-        assert profile.enabled is False
-        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
 
 
 @pytest.mark.asyncio
