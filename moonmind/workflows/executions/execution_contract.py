@@ -1003,19 +1003,6 @@ def is_self_managed_publish_skill(skill_id: object) -> bool:
     return is_auto_publish_capable_skill(skill_id)
 
 
-def _auto_publish_legacy_none_diagnostic(skill_id: str) -> dict[str, object]:
-    return {
-        "code": "legacy_auto_publish_none_normalized",
-        "skillId": skill_id,
-        "requestedMode": "none",
-        "resolvedMode": "auto",
-        "message": (
-            f"Legacy publish.mode='none' for auto-publish-capable skill "
-            f"'{skill_id}' was normalized to 'auto'."
-        ),
-    }
-
-
 def _auto_publish_fallback_diagnostic(skill_id: str) -> dict[str, object]:
     return {
         "code": "auto_publish_capability_migration_fallback",
@@ -1097,11 +1084,11 @@ def resolve_publish_mode_for_skill(
         if publish_mode == "auto":
             return "auto"
         if publish_mode == "none":
-            if diagnostics is not None:
-                diagnostics.append(
-                    _auto_publish_legacy_none_diagnostic(normalized_skill_id)
-                )
-            return "auto"
+            raise WorkflowContractError(
+                "task.publish.mode must be 'auto' when using auto-publish-capable "
+                f"skill '{normalized_skill_id}'; explicit 'none' is never "
+                "promoted to 'auto'"
+            )
         if publish_mode in {"branch", "pr"} and allow_repository_publish:
             return publish_mode
         if publish_mode in {"branch", "pr"}:

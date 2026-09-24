@@ -1,8 +1,8 @@
 """Producer-to-consumer publication policy coverage for #1090.
 
 Uses the existing publication contract, Skill consumers, and publisher:
-explicit None stays None, omission may use the admitted Skill default with a
-visible diagnostic (never a silent rewrite), Skill-owned Auto never grants the
+explicit None is never promoted to Auto, omission may use the admitted Skill
+default, Skill-owned Auto never grants the
 parent a second push/PR, aliases resolve once at the ingress boundary, each
 phase reconciles before retry, and only the unfinished effect retries with the
 same operation identity and lease-protected push.
@@ -99,7 +99,6 @@ def test_explicit_none_stays_none_omitted_may_use_skill_default() -> None:
 
 
 def test_auto_capable_skill_omission_uses_default_without_silent_rewrite() -> None:
-    diagnostics: list[dict[str, object]] = []
     assert (
         resolve_publish_mode_for_skill(
             "some-skill",
@@ -108,18 +107,17 @@ def test_auto_capable_skill_omission_uses_default_without_silent_rewrite() -> No
         )
         == "auto"
     )
-    # Explicit None for an auto-capable skill normalizes to Auto with a visible
-    # legacy diagnostic, never a silent None-to-Auto change on refresh.
-    resolved = resolve_publish_mode_for_skill(
-        "some-skill",
-        "none",
-        publish_metadata=AUTO_AGENT_METADATA,
-        diagnostics=diagnostics,
-    )
-    assert resolved == "auto"
-    assert any(
-        d.get("code") == "legacy_auto_publish_none_normalized" for d in diagnostics
-    )
+    # Explicit None for an auto-capable skill is never promoted to Auto
+    # (docs/Workflows/WorkflowPublishing.md PUBLISH-004). The operator's
+    # read-only selection fails before mutation instead of granting push or
+    # merge effects.
+    with pytest.raises(WorkflowContractError):
+        resolve_publish_mode_for_skill(
+            "some-skill",
+            "none",
+            publish_metadata=AUTO_AGENT_METADATA,
+            diagnostics=[],
+        )
     # Skill-owned Auto is not permission for the parent to push again.
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(

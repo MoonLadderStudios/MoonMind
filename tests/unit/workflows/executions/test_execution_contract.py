@@ -1477,27 +1477,10 @@ def test_auto_publish_capable_skills_resolve_to_auto(skill_id: str) -> None:
     assert "auto" in SUPPORTED_PUBLISH_MODES
     assert resolve_publish_mode_for_skill(skill_id, None) == "auto"
     assert resolve_publish_mode_for_skill(skill_id, "auto") == "auto"
-    diagnostics: list[dict[str, object]] = []
-    assert (
-        resolve_publish_mode_for_skill(
-            skill_id,
-            "none",
-            diagnostics=diagnostics,
-        )
-        == "auto"
-    )
-    assert diagnostics == [
-        {
-            "code": "legacy_auto_publish_none_normalized",
-            "skillId": skill_id,
-            "requestedMode": "none",
-            "resolvedMode": "auto",
-            "message": (
-                f"Legacy publish.mode='none' for auto-publish-capable skill "
-                f"'{skill_id}' was normalized to 'auto'."
-            ),
-        }
-    ]
+    # Explicit new "none" is never promoted to Auto (PUBLISH-004). The
+    # unsupported combination fails before mutation.
+    with pytest.raises(WorkflowContractError, match="explicit 'none'"):
+        resolve_publish_mode_for_skill(skill_id, "none", diagnostics=[])
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(skill_id, "pr")
 
