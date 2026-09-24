@@ -174,6 +174,167 @@ def test_new_history_applies_progress_projection(monkeypatch):
     assert parent._summary == "Waiting for feedback."
 
 
+def test_accepted_progress_updates_owning_step_ledger_row(monkeypatch):
+    """Accepted progress reaches the per-row Step ledger (#1088 R1/R4).
+
+    Producer payload (built through the real projection builder) ->
+    parent ``agent_run_progress`` signal -> owning ledger row summary /
+    waiting fields. The row update flows through the existing
+    awaiting-external path, so ``get_step_ledger``/``get_progress`` and
+    the step-ledger API surface the active child's progress.
+    """
+
+    from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+
+    parent = _install_parent(monkeypatch, NEW_HISTORY_PATCHES)
+    parent._step_ledger_rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "step-1", "title": "agent step", "tool": {"name": "agent"}},
+            {"id": "step-2", "title": "other", "tool": {"name": "other"}},
+        ],
+        dependency_map={},
+        updated_at=_LAUNCH_NOW,
+    )
+    parent._rebuild_step_ledger_index()
+    # Launch state as written when the parent starts the child workflow.
+    parent._mark_step_waiting(
+        "step-1",
+        status="awaiting_external",
+        updated_at=_LAUNCH_NOW,
+        waiting_reason="Awaiting child workflow progress",
+        summary="Awaiting child workflow",
+        refs={"childWorkflowId": CHILD_WF},
+    )
+
+    parent.agent_run_progress(_projection_payload(projection_revision=1))
+    row = parent._step_ledger_row_for("step-1")
+    assert row is not None
+    assert row["status"] == "awaiting_external"
+    assert row["summary"] == "Agent is running."
+    assert row["waitingReason"] is None
+    # The progress snapshot behind get_progress follows the ledger rows.
+    assert parent._progress_snapshot is not None
+    # Unrelated rows are untouched.
+    other = parent._step_ledger_row_for("step-2")
+    assert other is not None
+    assert other["summary"] is None or "Agent is running." not in str(
+        other["summary"]
+    )
+
+    parent.agent_run_progress(
+        _projection_payload(
+            projection_revision=2,
+            state="awaiting_feedback",
+            reason_code="awaiting_feedback",
+            wait_code="feedback",
+        )
+    )
+    row = parent._step_ledger_row_for("step-1")
+    assert row is not None
+    assert row["waitingReason"] == "feedback"
+    assert row["summary"] == "Waiting for feedback."
+    assert parent._waiting_reason == "feedback"
+
+
+def test_wait_resume_sequence_keeps_truthful_step_state(monkeypatch):
+    """Wait -> running resume keeps truthful state without new work (#1088 R2/R6)."""
+
+    from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+
+    parent = _install_parent(monkeypatch, NEW_HISTORY_PATCHES)
+    parent._step_ledger_rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "step-1", "title": "agent step", "tool": {"name": "agent"}},
+        ],
+        dependency_map={},
+        updated_at=_LAUNCH_NOW,
+    )
+    parent._rebuild_step_ledger_index()
+    parent._mark_step_waiting(
+        "step-1",
+        status="awaiting_external",
+        updated_at=_LAUNCH_NOW,
+        waiting_reason="Awaiting child workflow progress",
+        summary="Awaiting child workflow",
+        refs={"childWorkflowId": CHILD_WF},
+    )
+
+    parent.agent_run_progress(_projection_payload(projection_revision=1))
+    parent.agent_run_progress(
+        _projection_payload(
+            projection_revision=2,
+            state="awaiting_feedback",
+            reason_code="awaiting_feedback",
+            wait_code="feedback",
+        )
+    )
+    assert parent._step_ledger_row_for("step-1")["waitingReason"] == "feedback"
+    # The owner answers and the run resumes: higher revision reopens the
+    # wait display but never repeats agent work or moves the Step terminally.
+    parent.agent_run_progress(
+        _projection_payload(
+            projection_revision=3,
+            state="running",
+            reason_code="running",
+        )
+    )
+    entry = parent._agent_run_progress_by_child[CHILD_WF]
+    assert entry["acceptedRevision"] == 3
+    assert entry["acceptedState"] == "running"
+    row = parent._step_ledger_row_for("step-1")
+    assert row["waitingReason"] is None
+    assert row["summary"] == "Agent is running."
+    assert parent._state == STATE_EXECUTING
+
+
+def test_late_progress_cannot_reopen_terminal_step_row(monkeypatch):
+    """Late progress never reopens a terminal Step ledger row (#1088 R2).
+
+    The sealed AgentRunResult owns the outcome; the per-row reflection
+    skips terminal rows while the workflow-level fence still applies.
+    """
+
+    from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+
+    parent = _install_parent(monkeypatch, NEW_HISTORY_PATCHES)
+    parent._step_ledger_rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "step-1", "title": "agent step", "tool": {"name": "agent"}},
+        ],
+        dependency_map={},
+        updated_at=_LAUNCH_NOW,
+    )
+    parent._rebuild_step_ledger_index()
+    parent._mark_step_waiting(
+        "step-1",
+        status="awaiting_external",
+        updated_at=_LAUNCH_NOW,
+        waiting_reason="Awaiting child workflow progress",
+        summary="Awaiting child workflow",
+        refs={"childWorkflowId": CHILD_WF},
+    )
+
+    parent.agent_run_progress(_projection_payload(projection_revision=1))
+    parent._mark_step_terminal(
+        "step-1",
+        status="completed",
+        updated_at=_LAUNCH_NOW,
+        summary="Step completed with sealed result.",
+    )
+    parent.agent_run_progress(
+        _projection_payload(
+            projection_revision=2,
+            state="awaiting_feedback",
+            reason_code="awaiting_feedback",
+            wait_code="feedback",
+        )
+    )
+    row = parent._step_ledger_row_for("step-1")
+    assert row is not None
+    assert row["status"] == "completed"
+    assert row["waitingReason"] is None
+
+
 def test_new_history_terminal_progress_seals_without_step_move(monkeypatch):
     """Terminal progress seals the projection; AgentRunResult keeps authority."""
 
@@ -299,6 +460,30 @@ def test_emitter_routes_to_matching_parent_signal():
         CLASSIFIED_CHILD_TO_PARENT_LIFECYCLE_SIGNALS
     )
     assert "child_state_changed" in CLASSIFIED_CHILD_TO_PARENT_LIFECYCLE_SIGNALS
+
+
+def test_no_direct_legacy_signal_bypass_outside_cutover_gate():
+    """The typed projection is the single new-write path (#1088 R3).
+
+    Every child-side ``launching``/wait emission routes through
+    ``_signal_parent_child_state_changed`` so the cutover gate picks the
+    typed ``agent_run_progress`` signal on new histories. The only
+    remaining direct ``child_state_changed`` signal site is the gated
+    old-history fallback itself.
+    """
+
+    import pathlib
+
+    here = pathlib.Path(__file__).resolve()
+    repo_root = next(
+        candidate
+        for candidate in (here.parent, *here.parents)
+        if (candidate / "moonmind" / "workflows").is_dir()
+    )
+    source = repo_root.joinpath(
+        "moonmind/workflows/temporal/workflows/agent_run.py"
+    ).read_text()
+    assert source.count('"child_state_changed"') == 1
 
 
 def test_patch_identity_frozen_for_replay():

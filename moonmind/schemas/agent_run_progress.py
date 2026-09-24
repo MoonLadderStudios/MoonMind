@@ -247,6 +247,29 @@ TERMINAL_PROGRESS_STATES: frozenset[str] = frozenset(
     {"completed", "failed", "canceled", "timed_out"}
 )
 
+#: Owner-allowed backward edges the rank table alone would reject
+#: (MoonLadderStudios/MoonMind#1088 R6). Real ``MoonMindAgentRun`` producer
+#: sequences return from a wait to launching/running when the owner answers
+#: the wait (feedback/approval/callback answered, readiness restored,
+#: intervention resolved), and return from launching to awaiting_slot when
+#: capacity is requeued under the same owner. Every other backward move
+#: stays a domain-invalid regression. Terminal states never appear here:
+#: the terminal seal above owns them, so a higher revision still cannot
+#: reopen a terminal attempt or overwrite a replacement child.
+PROGRESS_LEGITIMATE_RESUME_EDGES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("awaiting_callback", "launching"),
+        ("awaiting_callback", "running"),
+        ("awaiting_feedback", "launching"),
+        ("awaiting_feedback", "running"),
+        ("awaiting_approval", "launching"),
+        ("awaiting_approval", "running"),
+        ("intervention_requested", "launching"),
+        ("intervention_requested", "running"),
+        ("launching", "awaiting_slot"),
+    }
+)
+
 
 def coerce_legacy_progress_triple(new_state: str) -> tuple[str, str, str]:
     """Map a legacy child state to one canonical (state, reason, wait) triple.
@@ -914,7 +937,10 @@ def apply_agent_run_progress(
                 disposition="stale",
                 diagnostics="accepted terminal progress cannot regress",
             )
-        if next_rank < previous_rank:
+        if next_rank < previous_rank and (
+            str(previous_state),
+            str(projection.state),
+        ) not in PROGRESS_LEGITIMATE_RESUME_EDGES:
             return ProgressApplyOutcome(
                 disposition="stale",
                 diagnostics=(
@@ -1006,6 +1032,37 @@ _STATE_SUMMARIES: dict[str, str] = {
     "canceled": "Agent run canceled.",
     "timed_out": "Agent run timed out.",
 }
+
+
+def progress_step_logical_id_for_child(
+    rows: Any,
+    child_workflow_id: str,
+) -> str | None:
+    """Return the logical Step id owning one AgentRun child workflow.
+
+    MoonLadderStudios/MoonMind#1088 R4: accepted progress is reflected in
+    the owning per-row Step ledger entry through the existing
+    awaiting-external row path. Ownership is the recorded
+    ``refs.childWorkflowId`` fence written when the parent launched the
+    child — never the untrusted payload identity fields, which the
+    reducer already fenced. Pure display lookup: unknown children yield
+    ``None`` so the caller keeps the workflow-level update only.
+    """
+
+    target = str(child_workflow_id or "").strip()
+    if not target or not isinstance(rows, (list, tuple)):
+        return None
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        refs = row.get("refs")
+        if not isinstance(refs, Mapping):
+            continue
+        if str(refs.get("childWorkflowId") or "").strip() != target:
+            continue
+        logical_step_id = str(row.get("logicalStepId") or "").strip()
+        return logical_step_id or None
+    return None
 
 
 def reduce_progress_to_step(accepted: Mapping[str, Any]) -> StepProgressView:
@@ -1124,6 +1181,7 @@ __all__ = [
     "LEGACY_STATE_TO_PROGRESS",
     "MAX_PROGRESS_DIAGNOSTIC_REF_CHARS",
     "MAX_PROGRESS_SUMMARY_CHARS",
+    "PROGRESS_LEGITIMATE_RESUME_EDGES",
     "PROGRESS_REASON_CODES",
     "PROGRESS_REPAIR_ACTIVITY",
     "PROGRESS_STATE_RANKS",
@@ -1143,6 +1201,7 @@ __all__ = [
     "coerce_legacy_progress_triple",
     "new_progress_parent_state",
     "note_successor_generation",
+    "progress_step_logical_id_for_child",
     "projection_digest",
     "redact_progress_summary",
     "reduce_progress_to_step",
