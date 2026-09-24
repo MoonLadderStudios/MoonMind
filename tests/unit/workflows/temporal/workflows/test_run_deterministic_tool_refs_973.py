@@ -674,3 +674,155 @@ async def test_execute_container_job_tool_cancellation_is_request_not_stop_proof
     assert "container_job.status" not in calls
     assert result["status"] == "CANCELLED"
     assert result["outputs"]["state"] == "canceling"
+
+
+def test_generic_skill_resolves_through_real_catalog_without_agent_run() -> None:
+    """REQ-1/REQ-2 real boundary: registry definition -> catalog route.
+
+    Uses the real ``parse_tool_definition`` + ``DEFAULT_ACTIVITY_CATALOG``
+    (no mocked ``execute_activity``) to prove a normal admitted skill node
+    reaches ``mm.tool.execute`` on its capability fleet with definition-owned
+    timeouts — never a caller-chosen activity type, queue, or mount.
+    """
+
+    from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+    from moonmind.workflows.temporal.workflows.run import DEFAULT_ACTIVITY_CATALOG
+
+    definition = parse_tool_definition(_tool_definition_payload("test.consume"))
+    route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(definition)
+    assert route.activity_type == "mm.tool.execute"
+    assert route.task_queue
+    assert "caller-chosen-queue" not in route.task_queue
+    assert (
+        route.timeouts.start_to_close_seconds
+        == definition.policies.timeouts.start_to_close_seconds
+    )
+    assert (
+        route.timeouts.schedule_to_close_seconds
+        == definition.policies.timeouts.schedule_to_close_seconds
+    )
+    assert route.retries.max_attempts == definition.policies.retries.max_attempts
+
+
+@pytest.mark.asyncio
+async def test_generic_skill_executes_through_real_dispatcher_without_agent_run() -> None:
+    """REQ-2 real boundary: ``execute_tool_activity`` with real dispatcher.
+
+    A registered deterministic handler returns COMPLETED without any AgentRun
+    or model lease; an unregistered skill name fails closed as non-retryable
+    ``INVALID_INPUT`` (explicit denied/unknown enforcement at the dispatcher).
+    """
+
+    from moonmind.workflows.skills.tool_dispatcher import (
+        ToolActivityDispatcher,
+        execute_tool_activity,
+    )
+    from moonmind.workflows.skills.tool_plan_contracts import (
+        ToolFailure,
+        ToolResult,
+        parse_tool_definition,
+    )
+    from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot
+
+    definition = parse_tool_definition(_tool_definition_payload("test.consume"))
+    snapshot = ToolRegistrySnapshot(
+        digest="reg:sha256:" + "a" * 64,
+        artifact_ref="art:sha256:456",
+        skills=(definition,),
+    )
+    dispatcher = ToolActivityDispatcher()
+
+    async def deterministic_handler(inputs: Any, context: Any) -> ToolResult:
+        assert inputs.get("ticket") == "MM-1"
+        assert context is not None
+        return ToolResult(status="COMPLETED", outputs={"ok": True})
+
+    dispatcher.register_skill(skill_name="test.consume", handler=deterministic_handler)
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "consume",
+            "tool": {"type": "skill", "name": "test.consume"},
+            "inputs": {"ticket": "MM-1"},
+            "options": {},
+        },
+        registry_snapshot=snapshot,
+        dispatcher=dispatcher,
+        context={"principal": "owner-1", "idempotency_key": "wf-1:consume:1:execute"},
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs == {"ok": True}
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await execute_tool_activity(
+            invocation_payload={
+                "id": "consume",
+                "tool": {"type": "skill", "name": "test.unknown"},
+                "inputs": {"ticket": "MM-1"},
+                "options": {},
+            },
+            registry_snapshot=snapshot,
+            dispatcher=dispatcher,
+            context={"principal": "owner-1"},
+        )
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_lost_ack_idempotency_key_reaches_real_dispatcher_context() -> None:
+    """REQ-2 lost-ack plumbing: stable step key arrives in activity context.
+
+    The same step/execution/operation identity produces one key and the real
+    dispatcher path carries it into the handler context, so a retried
+    acknowledgment reconciles against the same operation instead of mutating
+    twice under a fresh key.
+    """
+
+    from moonmind.workflows.skills.tool_dispatcher import (
+        ToolActivityDispatcher,
+        execute_tool_activity,
+    )
+    from moonmind.workflows.skills.tool_plan_contracts import (
+        ToolResult,
+        parse_tool_definition,
+    )
+    from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot
+    from moonmind.workflows.temporal.step_executions import (
+        step_execution_operation_idempotency_key,
+    )
+
+    definition = parse_tool_definition(_tool_definition_payload("test.consume"))
+    snapshot = ToolRegistrySnapshot(
+        digest="reg:sha256:" + "b" * 64,
+        artifact_ref="art:sha256:456",
+        skills=(definition,),
+    )
+    dispatcher = ToolActivityDispatcher()
+    seen_contexts: list[Any] = []
+
+    async def capturing_handler(inputs: Any, context: Any) -> ToolResult:
+        seen_contexts.append(dict(context or {}))
+        return ToolResult(status="COMPLETED", outputs={"ok": True})
+
+    dispatcher.register_skill(skill_name="test.consume", handler=capturing_handler)
+    key = step_execution_operation_idempotency_key(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="consume",
+        execution_ordinal=1,
+        operation="execute",
+    )
+    for _ in range(2):
+        result = await execute_tool_activity(
+            invocation_payload={
+                "id": "consume",
+                "tool": {"type": "skill", "name": "test.consume"},
+                "inputs": {"ticket": "MM-1"},
+                "options": {},
+            },
+            registry_snapshot=snapshot,
+            dispatcher=dispatcher,
+            context={"principal": "owner-1", "idempotency_key": key},
+        )
+        assert result.status == "COMPLETED"
+    assert [ctx.get("idempotency_key") for ctx in seen_contexts] == [key, key]
