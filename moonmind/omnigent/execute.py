@@ -310,13 +310,15 @@ def _snapshot_projects_lost_host(snapshot: Mapping[str, Any]) -> bool:
     """Whether Omnigent reports the session's runner and host gone for good.
 
     Only explicit ``False`` liveness counts: a snapshot without the fields
-    proves nothing, and a resumable host is expected to come back.
+    proves nothing, and a resumable host is expected to come back. An omitted
+    ``host_resumable`` is uncertain liveness and must preserve existing work,
+    so only an explicit ``False`` establishes a non-resumable host.
     """
 
     return (
         snapshot.get("runner_online") is False
         and snapshot.get("host_online") is False
-        and snapshot.get("host_resumable") is not True
+        and snapshot.get("host_resumable") is False
     )
 
 
@@ -417,6 +419,7 @@ class _MarkedTurnStartWatchdog:
         turn_state: Mapping[str, Any],
         *,
         observation_started_at: float,
+        observation_completed_at: float | None = None,
     ) -> None:
         active_response_id = _snapshot_active_response_id(snapshot)
         self.active_response_known_terminal = bool(
@@ -429,10 +432,20 @@ class _MarkedTurnStartWatchdog:
             self.ever_active = True
         if bool(turn_state.get("progress")):
             self.progress = True
+        # Host liveness is observed when the snapshot arrives: a slow read
+        # spends unobserved time retrying before any lost-host projection
+        # exists, so the grace starts at completion. The turn-start watchdog
+        # keeps the request-start time so a read initiated before its
+        # deadline can only disarm the budget, never fire it.
+        observation_observed_at = (
+            float(observation_completed_at)
+            if observation_completed_at is not None
+            else float(observation_started_at)
+        )
         self._observe_host_liveness(
             snapshot,
             turn_state,
-            observation_started_at=observation_started_at,
+            observation_started_at=observation_observed_at,
         )
         if not self.armed or turn_state.get("boundarySource") is None:
             return
@@ -1739,6 +1752,7 @@ async def _await_marked_turn_terminal(
             snapshot,
             turn_state,
             observation_started_at=observation_started_at,
+            observation_completed_at=observation_completed_at,
         )
         terminal_event_tool_only_candidate = bool(
             not inactive
@@ -1888,6 +1902,7 @@ async def _reconcile_inactive_marked_turn(
     event_count: int,
     snapshot: dict[str, Any] | None = None,
     snapshot_observed_at: float | None = None,
+    snapshot_completed_at: float | None = None,
     timeout_seconds: float = 1800.0,
     interval_seconds: float = 2.0,
     quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
@@ -1908,13 +1923,16 @@ async def _reconcile_inactive_marked_turn(
     by it *before* terminal eligibility is tested, so an active projection seen
     on reattach or heartbeat is never forgotten by an early return. A caller
     that supplies ``snapshot`` also supplies ``snapshot_observed_at`` (the loop
-    time its read was initiated); a read initiated before the watchdog deadline
-    can only disarm the budget, never fire it.
+    time its read was initiated) and ``snapshot_completed_at`` (the loop time
+    the read completed); a read initiated before the watchdog deadline
+    can only disarm the budget, never fire it, while host liveness always
+    uses the completion time.
     """
 
     if snapshot is None:
         snapshot_observed_at = asyncio.get_running_loop().time()
         candidate = await client.get_session(session_id)
+        snapshot_completed_at = asyncio.get_running_loop().time()
     else:
         candidate = snapshot
     if start_watchdog is not None:
@@ -1930,6 +1948,7 @@ async def _reconcile_inactive_marked_turn(
                 if snapshot_observed_at is not None
                 else start_watchdog.started_at
             ),
+            observation_completed_at=snapshot_completed_at,
         )
     terminal_status = _inactive_marked_turn_terminal_status(
         candidate,
@@ -2327,6 +2346,7 @@ async def run_omnigent_execution(
     # pre-dispatch session snapshot was read.
     turn_dispatched_at: float | None = None
     initial_snapshot_observed_at: float | None = None
+    initial_snapshot_completed_at: float | None = None
     heartbeat_task: asyncio.Task[None] | None = None
     artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
     first_message: dict[str, Any] | None = None
@@ -2620,6 +2640,7 @@ async def run_omnigent_execution(
             initial_snapshot_observed_at = asyncio.get_running_loop().time()
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
+            initial_snapshot_completed_at = asyncio.get_running_loop().time()
             record_session_created = (
                 getattr(run_store, "record_session_created", None)
                 if run_store is not None
@@ -3093,6 +3114,7 @@ async def run_omnigent_execution(
                     event_count=event_count["value"],
                     snapshot=initial_snapshot,
                     snapshot_observed_at=initial_snapshot_observed_at,
+                    snapshot_completed_at=initial_snapshot_completed_at,
                     timeout_seconds=marked_turn_timeout_seconds,
                     start_watchdog=start_watchdog,
                 )
@@ -3165,6 +3187,7 @@ async def run_omnigent_execution(
                     observed_at + _TERMINAL_RECONCILIATION_INTERVAL_SECONDS
                 )
                 observed_snapshot = await client.get_session(session_id)
+                observed_completed_at = asyncio.get_running_loop().time()
                 reconciled = await _reconcile_inactive_marked_turn(
                     client=client,
                     session_id=session_id,
@@ -3173,6 +3196,7 @@ async def run_omnigent_execution(
                     event_count=event_count["value"],
                     snapshot=observed_snapshot,
                     snapshot_observed_at=observed_at,
+                    snapshot_completed_at=observed_completed_at,
                     timeout_seconds=marked_turn_timeout_seconds,
                     start_watchdog=start_watchdog,
                 )
@@ -3320,6 +3344,7 @@ async def run_omnigent_execution(
                         )
                         terminal_observed_at = asyncio.get_running_loop().time()
                         terminal_snapshot = await client.get_session(session_id)
+                        terminal_completed_at = asyncio.get_running_loop().time()
                         failed_snapshot = _marked_turn_failure_snapshot(
                             event,
                             terminal_snapshot,
@@ -3349,6 +3374,7 @@ async def run_omnigent_execution(
                                 terminal_snapshot,
                                 terminal_turn_state,
                                 observation_started_at=terminal_observed_at,
+                                observation_completed_at=terminal_completed_at,
                             )
                             continue
                         current_turn_progress = (
@@ -3453,11 +3479,13 @@ async def run_omnigent_execution(
                 await _cancel_task(stream_task)
 
             final_snapshot_observed_at: float | None = None
+            final_snapshot_completed_at: float | None = None
             if terminal_snapshot_override is not None:
                 final_snapshot = terminal_snapshot_override
             else:
                 final_snapshot_observed_at = asyncio.get_running_loop().time()
                 final_snapshot = await client.get_session(session_id)
+                final_snapshot_completed_at = asyncio.get_running_loop().time()
             if terminal_status is None:
                 normalized_snapshot = normalize_omnigent_observation(final_snapshot)
                 closed_turn_state = (
@@ -3483,6 +3511,7 @@ async def run_omnigent_execution(
                         final_snapshot,
                         closed_turn_state,
                         observation_started_at=final_snapshot_observed_at,
+                        observation_completed_at=final_snapshot_completed_at,
                     )
                 if (
                     closed_turn_state is not None
@@ -3933,6 +3962,13 @@ async def run_omnigent_execution(
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
         final_snapshot = dict(exc.snapshot or {"status": "idle"})
+        # Persist the typed failure in the snapshot used for terminal refs so
+        # a later Activity retry that restores the durable failure keeps its
+        # recoverable code and retry recommendation instead of degrading to a
+        # generic terminal failure.
+        final_snapshot.setdefault("failureCode", exc.code)
+        final_snapshot.setdefault("providerErrorCode", exc.code)
+        final_snapshot.setdefault("summary", str(exc) or exc.fallback_summary)
         bundle = await _build_capture_bundle(
             client=client,
             artifact_gateway=artifact_gateway,
