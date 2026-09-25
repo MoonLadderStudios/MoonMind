@@ -703,6 +703,10 @@ Representative lifecycle:
 
 This is a support workflow, not a general user workflow.
 
+`MoonMind.OAuthCredentialValidation` is the short saved-profile validation
+workflow. It runs the same credential-only host probe as OAuth finalization
+under the caller's credential-maintenance lease and returns the probe result.
+
 ## 11.9 `MoonMind.MergeAutomation` lifecycle
 
 Representative lifecycle:
