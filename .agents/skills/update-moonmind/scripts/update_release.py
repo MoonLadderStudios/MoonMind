@@ -1,7 +1,9 @@
-"""Portable host entrypoint for the image-owned MoonMind release controller.
+"""Portable host entrypoint for the standalone MoonMind release controller.
 
 Only standard-library Python, Git and Compose are required on the host. The
-selected image owns deployment semantics, including canary, promotion and drain.
+submission is executed by the standalone controller in its own Compose
+project (deploy/controller), which owns image staging, changed-service
+``up``, local state, and recovery independently of MoonMind health.
 """
 
 from __future__ import annotations
@@ -13,8 +15,21 @@ import re
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
+
+
+_DEFAULT_CONTROLLER_URL = os.environ.get(
+    "MOONMIND_CONTROLLER_URL", "http://127.0.0.1:8472"
+)
+# Services the controller never recreates through itself: the Docker transport
+# substrate. Postgres stays in the service set: `up` is a no-op while its
+# definition is unchanged, and required init-db gating stays inside Compose.
+_CONTROLLER_EXCLUDED_SERVICES = frozenset({"docker-proxy", "sandbox-egress-proxy"})
+_CONTROLLER_POLL_INTERVAL_SECONDS = 10
+_CONTROLLER_POLL_TIMEOUT_SECONDS = 1800
 
 
 _MAX_DIAGNOSTIC_CHARS = 4000
@@ -214,6 +229,23 @@ def main(argv=None):
     parser.add_argument(
         "--resume", help="Resume the printed submission ID using its original inputs"
     )
+    parser.add_argument(
+        "--controller-url", default=_DEFAULT_CONTROLLER_URL,
+        help="Standalone controller endpoint (default %(default)s)",
+    )
+    parser.add_argument(
+        "--controller-secret-file", default=None,
+        help="Deployment-owned controller bearer secret file "
+        "(default <repo>/deploy/state/controller/secrets/controller-bearer "
+        "or $MOONMIND_CONTROLLER_SECRET_FILE)",
+    )
+    parser.add_argument(
+        "--legacy-direct", action="store_true",
+        help="Transitional escape hatch: launch the legacy application-owned "
+        "updater container instead of the standalone controller. Prefer the "
+        "controller; the legacy path requires the target image's worker "
+        "runtime and Docker proxy to work.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--local-build", action="store_true",
@@ -340,14 +372,209 @@ def main(argv=None):
         f"Release submission: {submission_id} (resume with --resume {submission_id})",
         flush=True,
     )
-    # Replacement owner first: the standalone controller in its own Compose
-    # project (MoonLadderStudios/MoonMind#4500). Its Docker transport and
-    # command endpoint survive target-project shutdown, unlike the legacy
-    # application-owned control service below. The legacy path is retained
-    # only until the old writer is positively stopped/reconciled.
+    # Replacement owner first: the canonical client handoff when configured,
+    # then this PR's direct controller path; the legacy application-owned
+    # updater remains the final fallback.
     controller_rc = _try_controller_handoff(record=record)
     if controller_rc is not None:
         return controller_rc
+    if args.legacy_direct:
+        return _submit_legacy_direct(record, repo)
+    return _submit_via_controller(
+        record,
+        repo,
+        controller_url=args.controller_url,
+        secret_file=args.controller_secret_file,
+    )
+
+
+def _default_controller_secret_file(repo):
+    override = os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
+    if override:
+        return Path(override)
+    return repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"
+
+
+def _controller_call(controller_url, secret, method, path, payload=None, timeout=30):
+    from urllib.parse import urljoin
+
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        urljoin(controller_url.rstrip("/") + "/", path.lstrip("/")),
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        detail = _redact_diagnostics(exc.read().decode("utf-8", errors="replace")[-2000:])
+        raise RuntimeError(
+            f"Controller {method} {path} failed with HTTP {exc.code}: {detail}"
+        ) from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Controller at {controller_url} is unreachable ({exc.reason}); "
+            "install and start it with "
+            "`python3 deploy/controller/bootstrap.py install` (then `start`), "
+            "or pass --legacy-direct for the transitional application-owned path."
+        ) from None
+
+
+def _resolve_compose_files(repo):
+    """Resolve the deployment-owned Compose file set for the controller.
+
+    The initial `docker compose config` honors deployment-owned selection
+    such as COMPOSE_FILE; the controller request must carry that same
+    resolved file set instead of a hard-coded base file, or an installation
+    using extra files (for example `COMPOSE_FILE=docker-compose.yaml:site.yaml`)
+    would apply with a materially different stack. Each entry resolves
+    relative to the deployment checkout and must exist.
+    """
+    selection = os.environ.get("COMPOSE_FILE", "")
+    if selection.strip():
+        files = []
+        for part in re.split(r"[;:]", selection):
+            name = part.strip()
+            if not name:
+                continue
+            candidate = Path(name)
+            if not candidate.is_absolute():
+                candidate = repo / name
+            if not candidate.is_file():
+                raise RuntimeError(
+                    f"COMPOSE_FILE entry does not exist: {name!r}; refusing "
+                    "to apply with a different file set than the deployment uses."
+                )
+            try:
+                files.append(str(candidate.resolve().relative_to(repo.resolve())))
+            except ValueError:
+                raise RuntimeError(
+                    f"COMPOSE_FILE entry is outside the deployment checkout: "
+                    f"{name!r}; refusing to pass an out-of-project file set "
+                    "to the controller."
+                ) from None
+        if not files:
+            raise RuntimeError(
+                "COMPOSE_FILE is set but selects no files; refusing to apply "
+                "with a different file set than the deployment uses."
+            )
+        return files
+    compose_files = ["docker-compose.yaml"]
+    for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+        if (repo / name).exists():
+            compose_files.append(name)
+            break
+    return compose_files
+
+
+def _submit_via_controller(record, repo, *, controller_url, secret_file):
+    """Execute the recorded submission through the standalone controller.
+
+    The controller owns image staging, changed-service `up`, local state, and
+    recovery. Its Docker transport and endpoint survive target-project
+    shutdown, so this path works while MoonMind itself is unhealthy.
+    """
+    secret_path = Path(secret_file) if secret_file else _default_controller_secret_file(repo)
+    if not secret_path.exists():
+        raise RuntimeError(
+            f"Controller secret is missing at {secret_path}; install the "
+            "controller first with "
+            "`python3 deploy/controller/bootstrap.py install`."
+        )
+    secret = secret_path.read_text(encoding="utf-8").strip()
+    rendered = json.loads(
+        run(["docker", "compose", "config", "--format", "json"], cwd=repo)
+    )
+    configured = rendered.get("services", {}) or {}
+    services = sorted(
+        name for name in configured if name not in _CONTROLLER_EXCLUDED_SERVICES
+    )
+    if not services:
+        raise RuntimeError("Controller apply has no services to reconcile.")
+    compose_files = _resolve_compose_files(repo)
+    context = record.get("context", {}) or {}
+    operator_urls = list(context.get("deployment_operator_urls", []) or [])
+    deployment_env = repo / ".env"
+    target = {
+        "project": record["project"],
+        "projectDir": str(repo),
+        "composeFiles": compose_files,
+        "services": services,
+        "idempotencyKey": context.get("idempotency_key", ""),
+    }
+    if deployment_env.is_file():
+        # The controller layers this under its image overlay so Compose
+        # keeps operator authentication, bindings, and infrastructure
+        # versions instead of rendering with defaults.
+        target["envFile"] = str(deployment_env)
+    if operator_urls:
+        # Recorded for post-apply operator-access verification; the
+        # controller stores the submission target unchanged.
+        target["operatorUrls"] = operator_urls
+    _, created = _controller_call(
+        controller_url,
+        secret,
+        "POST",
+        "/v1/operations",
+        {
+            "stack": "moonmind",
+            "desiredImage": record["image"],
+            "sourceRevision": record["inputs"].get("sourceRevision", ""),
+            "reason": record["inputs"].get("reason", ""),
+            "target": target,
+        },
+    )
+    operation_id = created.get("operationId")
+    if not operation_id:
+        raise RuntimeError(f"Controller refused the submission: {created}")
+    print(f"Controller operation: {operation_id}", flush=True)
+    deadline = time.time() + _CONTROLLER_POLL_TIMEOUT_SECONDS
+    last_status = None
+    while True:
+        _, operation = _controller_call(
+            controller_url, secret, "GET", f"/v1/operations/{operation_id}"
+        )
+        status = operation.get("status")
+        if status != last_status:
+            print(f"Controller operation {operation_id}: {status}", flush=True)
+            last_status = status
+        if status == "succeeded":
+            installed = (operation.get("installed") or {}).get("image", "")
+            print(f"Update installed: {installed}", flush=True)
+            return 0
+        if status == "partially_verified":
+            print(
+                "Update installed with explicit verification gaps: "
+                f"{_redact_diagnostics(json.dumps(operation.get('verification', [])))}",
+                flush=True,
+            )
+            return 2
+        if status == "failed":
+            raise RuntimeError(
+                "Controller operation failed: "
+                f"{_redact_diagnostics(operation.get('errorSummary', 'unknown error'))}"
+            )
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"Controller operation {operation_id} did not finish within "
+                f"{_CONTROLLER_POLL_TIMEOUT_SECONDS}s; reattach with "
+                f"--resume {record.get('submissionId', '')} or inspect the "
+                "controller operation directly."
+            )
+        _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
+
+
+def _submit_legacy_direct(record, repo):
+    """Transitional escape hatch: the old application-owned updater container.
+
+    Requires the target image's worker runtime and Docker proxy to work, so it
+    cannot repair an unhealthy MoonMind. Prefer the standalone controller.
+    """
     compose = run(
         [
             "docker",
