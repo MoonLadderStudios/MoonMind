@@ -693,23 +693,31 @@ def _readiness_denials(
 
     denials: list[RolloutReason] = []
     if rule.requires_support_evidence:
-        if not context.support_evidence_ref:
-            denials.append(RolloutReason.support_evidence_missing)
-        elif context.support_evidence_expired:
-            denials.append(RolloutReason.support_evidence_stale)
-        elif not context.support_evidence_usable:
-            # A row exists and is current, but it records a non-pass outcome,
-            # so no passing row backs this combination and admission will
-            # refuse the same document. Reported as "missing" rather than a new
-            # reason: what the operator has to restore is a passing row.
-            denials.append(RolloutReason.support_evidence_missing)
-        elif (
-            rule.evidence_max_age_seconds is not None
-            and context.support_evidence_age_seconds is not None
-            and context.support_evidence_age_seconds
-            > float(rule.evidence_max_age_seconds)
-        ):
-            denials.append(RolloutReason.support_evidence_stale)
+        from moonmind.omnigent.settings import omnigent_requires_certification
+
+        # MoonLadderStudios/MoonMind#4560: historical certificates never veto
+        # ordinary execution. Missing, expired, malformed, or unavailable
+        # optional certificates demote a row only under explicit strict
+        # certification, chosen at the trusted settings boundary. Ordinary
+        # installations keep the freshness observation as advisory only.
+        if omnigent_requires_certification():
+            if not context.support_evidence_ref:
+                denials.append(RolloutReason.support_evidence_missing)
+            elif context.support_evidence_expired:
+                denials.append(RolloutReason.support_evidence_stale)
+            elif not context.support_evidence_usable:
+                # A row exists and is current, but it records a non-pass outcome,
+                # so no passing row backs this combination and admission will
+                # refuse the same document. Reported as "missing" rather than a new
+                # reason: what the operator has to restore is a passing row.
+                denials.append(RolloutReason.support_evidence_missing)
+            elif (
+                rule.evidence_max_age_seconds is not None
+                and context.support_evidence_age_seconds is not None
+                and context.support_evidence_age_seconds
+                > float(rule.evidence_max_age_seconds)
+            ):
+                denials.append(RolloutReason.support_evidence_stale)
     if not context.launch_ready:
         denials.append(RolloutReason.target_not_launch_ready)
     if not context.model_qualified:
@@ -921,8 +929,11 @@ def _rule(
     """Build one built-in rollout row.
 
     ``requires_support_evidence`` defaults to ``True``, matching
-    :class:`RolloutRule`, so a built-in row is promoted for new work only while
-    the deployment holds current support evidence for that exact combination.
+    :class:`RolloutRule`, so under explicit strict certification a built-in
+    row is promoted for new work only while the deployment holds current
+    support evidence for that exact combination. Under ordinary
+    certificate-independent admission (MoonLadderStudios/MoonMind#4560) the
+    evidence observation stays advisory and never demotes the row.
     The readiness context is supplied at plan compilation
     (``compile_execution_plan``); a promoted row with missing, expired, or
     over-age evidence is demoted to ``explicit_only`` with the exact reason
