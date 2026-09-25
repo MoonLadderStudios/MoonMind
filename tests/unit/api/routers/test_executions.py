@@ -13612,6 +13612,144 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
         "preserved": False,
     }
 
+def test_get_execution_steps_surfaces_accepted_agent_run_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The steps endpoint surfaces the active child's progress (#1088 R1).
+
+    Producer-to-parent-to-Step/API journey against the candidate: a real
+    projection payload (built through ``build_progress_projection``) is
+    delivered to the real parent ``agent_run_progress`` signal handler,
+    the owning ledger row is read back through the real
+    ``get_step_ledger``/``get_progress`` queries, and that query payload
+    is served through ``GET /api/executions/{id}/steps``
+    (``_load_execution_step_ledger`` enrichment + validation). The
+    dashboard fetches this same endpoint (see
+    ``frontend/src/entrypoints/workflow-detail.test.tsx`` step-ledger
+    cases, which mock ``/api/executions/test-123/steps``).
+    """
+    from datetime import timezone as _timezone
+
+    from temporalio import workflow as _temporal_workflow
+
+    from moonmind.schemas.agent_run_progress import (
+        AGENT_RUN_PROGRESS_PATCH_ID,
+        build_progress_projection,
+    )
+    from moonmind.workflows.temporal.step_ledger import (
+        build_initial_step_rows,
+    )
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH,
+        RUN_REAL_STARTED_AT_PATCH,
+        MoonMindUserWorkflow,
+    )
+
+    child_wf = "child-wf-api-1"
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=_timezone.utc)
+
+    parent = MoonMindUserWorkflow()
+    parent._update_search_attributes = lambda: None  # noqa: E731
+    parent._update_memo = lambda: None  # noqa: E731
+    parent._active_agent_child_workflow_id = child_wf
+
+    monkeypatch.setattr(
+        _temporal_workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            AGENT_RUN_PROGRESS_PATCH_ID,
+            RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH,
+            RUN_REAL_STARTED_AT_PATCH,
+        },
+    )
+    monkeypatch.setattr(_temporal_workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        _temporal_workflow, "deprecate_patch", lambda _patch_id: None
+    )
+    monkeypatch.setattr(
+        _temporal_workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="mm:wf-1", run_id="run-99"),
+    )
+
+    parent._step_ledger_rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "step-1",
+                "title": "agent step",
+                "tool": {"name": "agent"},
+            },
+        ],
+        dependency_map={},
+        updated_at=now,
+    )
+    parent._rebuild_step_ledger_index()
+    parent._mark_step_waiting(
+        "step-1",
+        status="awaiting_external",
+        updated_at=now,
+        waiting_reason="Awaiting child workflow progress",
+        summary="Awaiting child workflow",
+        refs={"childWorkflowId": child_wf},
+    )
+
+    def _payload(**overrides: object) -> dict[str, Any]:
+        fields: dict[str, Any] = {
+            "agent_run_workflow_id": child_wf,
+            "agent_run_run_id": "child-run-A",
+            "source_workflow_id": "mm:wf-1",
+            "source_run_id": "run-99",
+            "step_execution_id": "mm:wf-1:run-99:step:execution:1",
+            "source_generation": child_wf,
+            "projection_revision": 1,
+            "state": "running",
+            "reason_code": "running",
+            "wait_code": "none",
+        }
+        fields.update(overrides)
+        return build_progress_projection(**fields).canonical_dict()
+
+    def _get_steps_response(ledger: dict[str, Any]) -> dict[str, Any]:
+        app = FastAPI()
+        app.include_router(router)
+        mock_service = AsyncMock()
+        mock_service.describe_execution.return_value = (
+            _build_execution_record()
+        )
+        app.dependency_overrides[_get_service] = lambda: mock_service
+        _override_query_client(app, ledger=ledger)
+        _override_user_dependencies(app, is_superuser=True)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/executions/mm:wf-1/steps")
+        assert response.status_code == 200
+        return response.json()
+
+    parent.agent_run_progress(_payload(projection_revision=1))
+    ledger = parent.get_step_ledger()
+    assert ledger["steps"][0]["summary"] == "Agent is running."
+    progress = parent.get_progress()
+    assert progress["awaitingExternal"] == 1
+    assert progress["total"] == 1
+    body = _get_steps_response(ledger)
+    assert body["steps"][0]["summary"] == "Agent is running."
+    assert body["steps"][0]["waitingReason"] is None
+
+    parent.agent_run_progress(
+        _payload(
+            projection_revision=2,
+            state="awaiting_feedback",
+            reason_code="awaiting_feedback",
+            wait_code="feedback",
+        )
+    )
+    ledger = parent.get_step_ledger()
+    assert ledger["steps"][0]["waitingReason"] == "feedback"
+    body = _get_steps_response(ledger)
+    assert body["steps"][0]["waitingReason"] == "feedback"
+    assert body["steps"][0]["summary"] == "Waiting for feedback."
+
+
 def test_get_execution_steps_enriches_missing_agent_run_ids_once() -> None:
     app = FastAPI()
     app.include_router(router)
