@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1010,6 +1010,31 @@ class CheckpointBranchService:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         return await self._branch_graph(branch)
 
+    async def read_branch_turn_verification_handoff(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+    ) -> dict[str, Any] | None:
+        """Load one terminal turn's handoff for the result-verification owner.
+
+        Completed branch turns persist their terminal candidate handoff in
+        turn diagnostics at finalization time. This production reader lets
+        the MoonLadderStudios/MoonMind#3622 owner discover that candidate
+        without replaying the Temporal workflow result; turns finalized
+        without a handoff read back as None.
+        """
+
+        await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        turn = await self._require_turn_on_branch(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            relation="branchTurnId",
+        )
+        handoff = (turn.diagnostics or {}).get("verificationHandoff")
+        return dict(handoff) if isinstance(handoff, dict) else None
+
     async def claim_turn_execution(
         self,
         *,
@@ -1231,6 +1256,8 @@ class CheckpointBranchService:
         terminal_ref: str | None = None,
         output_refs: list[str] | None = None,
         terminal_disposition: str | None = None,
+        save_commit: Mapping[str, Any] | None = None,
+        verification_handoff: Mapping[str, Any] | None = None,
     ) -> WorkflowCheckpointBranchTurn:
         """Persist truthful terminal delivery and verifier-handoff evidence."""
 
@@ -1253,6 +1280,20 @@ class CheckpointBranchService:
             }
             for field_name, expected in replay_values.items():
                 if existing_diagnostics.get(field_name) != expected:
+                    raise ValueError(
+                        f"immutable terminal field {field_name} cannot be changed"
+                    )
+            # Handoff metadata is informational: enforce it only when the
+            # stored turn already carries it, so retries of turns finalized
+            # before this handoff existed still replay without overwrite.
+            for field_name, expected in (
+                ("saveCommit", save_commit),
+                ("verificationHandoff", verification_handoff),
+            ):
+                if expected is None:
+                    continue
+                stored = existing_diagnostics.get(field_name)
+                if stored is not None and stored != dict(expected):
                     raise ValueError(
                         f"immutable terminal field {field_name} cannot be changed"
                     )
@@ -1303,6 +1344,12 @@ class CheckpointBranchService:
             "agentResultRef": agent_result_ref,
             "diagnosticsRef": diagnostics_ref,
             "terminalDisposition": terminal_disposition or delivery_stage,
+            **({"saveCommit": dict(save_commit)} if save_commit is not None else {}),
+            **(
+                {"verificationHandoff": dict(verification_handoff)}
+                if verification_handoff is not None
+                else {}
+            ),
         }
         if checkpoint_ref:
             branch.current_head_checkpoint_ref = checkpoint_ref
@@ -1318,6 +1365,13 @@ class CheckpointBranchService:
         }
         if checkpoint_ref:
             branch.artifact_refs["latestBranchTurnCheckpoint"] = checkpoint_ref
+        if verification_handoff is not None:
+            # Index the terminal handoff beside the result refs so the #3622
+            # result-verification owner can discover completed candidates
+            # without replaying the Temporal workflow result.
+            branch.artifact_refs["latestBranchTurnVerificationHandoff"] = (
+                branch_turn_id
+            )
         for kind, ref, digest in (
             ("runtime.branch_turn.agent_result.json", agent_result_ref, None),
             ("output.branch_turn.diagnostics.json", diagnostics_ref, None),

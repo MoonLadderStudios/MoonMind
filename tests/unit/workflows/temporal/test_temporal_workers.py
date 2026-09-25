@@ -141,6 +141,7 @@ def test_registered_workflow_types_exclude_retired_manifest_ingest():
         "MoonMind.OmnigentSession",
         "MoonMind.CheckpointBranchTurn",
         "MoonMind.OAuthSession",
+        "MoonMind.OAuthCredentialValidation",
         "MoonMind.OmnigentOAuthHostJanitor",
         "MoonMind.MergeAutomation",
         "MoonMind.PRResolver",

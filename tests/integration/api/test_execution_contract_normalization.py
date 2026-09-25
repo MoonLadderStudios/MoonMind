@@ -92,7 +92,8 @@ def test_auto_publish_capable_skill_explicit_auto_is_preserved() -> None:
     assert result["workflow"]["publish"]["mode"] == "auto"
 
 
-def test_auto_publish_capable_skill_legacy_none_normalizes_to_auto() -> None:
+def test_auto_publish_capable_skill_explicit_none_is_preserved() -> None:
+    # PUBLISH-004: explicit new "none" is never promoted to Auto.
     result = build_canonical_workflow_view(
         job_type="task",
         payload=_workflow_payload(
@@ -103,7 +104,7 @@ def test_auto_publish_capable_skill_legacy_none_normalizes_to_auto() -> None:
         ),
     )
 
-    assert result["workflow"]["publish"]["mode"] == "auto"
+    assert result["workflow"]["publish"]["mode"] == "none"
 
 
 def test_non_capable_skill_rejects_auto_publish_mode() -> None:

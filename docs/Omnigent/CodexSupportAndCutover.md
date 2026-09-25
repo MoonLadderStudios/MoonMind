@@ -125,10 +125,17 @@ changes only future default selection and never rewrites existing run evidence.
 Catalog `gateReasons` are operational launch blockers. Protected acceptance
 matrix gaps are published separately as `supportGateReasons`: they qualify
 release support and default promotion, but do not deny an otherwise safe local
-launch. The canonical Compose path enables the bridge and internal endpoint by
-default, seeds an active portable `codex` agent profile, resolves stock image
-tags to immutable policy digests, and uses the on-demand policy unless an
-operator explicitly selects static hosting. The API synchronizes the stable
+launch. A first ordinary launch does not require prior session observations or
+the protected browser acceptance, exact-artifact, and live-health files; those
+signals remain visible in `admissionReadiness.capabilities` and
+`supportGateReasons`. Runtime registration, schema, WebSocket, worker/backend,
+janitor, profile, and policy checks still gate admission. The workflow
+supervisor reports readiness and registration for its child workers;
+worker build identities are recorded independently and do not have to match for
+new admission. The canonical Compose path enables the bridge and internal
+endpoint by default, seeds an active portable `codex` agent profile, resolves
+stock image tags to immutable policy digests, and uses the on-demand policy
+unless an operator explicitly selects static hosting. The API synchronizes the stable
 upstream agent identity before activating that profile, keeps its projection
 fresh, and retries transient image, bridge, or inventory startup failures with
 capped backoff; no service restart is required for recovery.

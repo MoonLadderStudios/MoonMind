@@ -2480,12 +2480,16 @@ class AppSettings(BaseSettings):
     # Default providers and models
     default_chat_provider: str = Field("google", alias="DEFAULT_CHAT_PROVIDER")
 
-    # Model cache settings
-    model_cache_refresh_interval: int = Field(
-        3600, alias="MODEL_CACHE_REFRESH_INTERVAL"
-    )
+    # Model cache settings (MoonLadderStudios/MoonMind#3941: the unit-less
+    # MODEL_CACHE_REFRESH_INTERVAL name is a legacy alias honored once through
+    # this owner. MODEL_CACHE_REFRESH_INTERVAL_SECONDS is canonical and wins
+    # when both are set; a blank value behaves like an omitted one.)
     model_cache_refresh_interval_seconds: int = Field(
-        3600, alias="MODEL_CACHE_REFRESH_INTERVAL_SECONDS"
+        3600,
+        validation_alias=AliasChoices(
+            "MODEL_CACHE_REFRESH_INTERVAL_SECONDS",
+            "MODEL_CACHE_REFRESH_INTERVAL",
+        ),
     )
     # Other settings
     fastapi_reload: bool = Field(False, alias="FASTAPI_RELOAD")
@@ -2495,6 +2499,25 @@ class AppSettings(BaseSettings):
     # ------------------------------------------------------------------
     # Validators
     # ------------------------------------------------------------------
+
+    @field_validator("model_cache_refresh_interval_seconds", mode="before")
+    @classmethod
+    def _blank_model_cache_interval_to_default(cls, v):
+        """Ensure a blank interval behaves like an omitted one.
+
+        An empty string must resolve to the documented default instead of
+        failing startup, while an explicit ``0`` stays ``0``. Because
+        ``AliasChoices`` selects the blank canonical value before this
+        validator runs, a blank canonical input falls through to the legacy
+        ``MODEL_CACHE_REFRESH_INTERVAL`` override when one is set.
+        """
+
+        if v is None or (isinstance(v, str) and not v.strip()):
+            legacy = os.environ.get("MODEL_CACHE_REFRESH_INTERVAL", "")
+            if isinstance(legacy, str) and legacy.strip():
+                return legacy
+            return 3600
+        return v
 
     @field_validator("fastapi_reload", mode="before")
     @classmethod

@@ -74,6 +74,7 @@ services:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     restart: unless-stopped
+    stop_grace_period: 60s
     ports:
       # Explicit local-mode exposure (#4120 req 5): the operator-facing
       # publish host is validated at startup by validate_publish_binding.
