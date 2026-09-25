@@ -2299,6 +2299,7 @@ async def test_finalize_success_stamps_oauth_home_overrides_and_readiness(
         assert profile.auth_state == ProviderProfileAuthState.CONNECTED
         assert profile.home_path_overrides == {
             "CLAUDE_HOME": "/home/app/.claude",
+            "CLAUDE_CONFIG_DIR": "/home/app/.claude",
         }
         behavior = profile.command_behavior or {}
         assert behavior.get("auth_strategy") == "claude_credential_methods"
