@@ -683,10 +683,10 @@ async def reconcile_builtin_claude_agent_profile(
     if stock is None:
         return False
     upstream_id = _inventory_text(stock, "id", "agentId", "agent_id")
-    upstream_version = _inventory_text(
-        stock, "version", "agentVersion", "agent_version"
+    upstream_version = (
+        _inventory_text(stock, "version", "agentVersion", "agent_version") or None
     )
-    if not upstream_id or not upstream_version:
+    if not upstream_id:
         return False
     observed_at = now or datetime.now(timezone.utc)
     projection = await session.get(

@@ -449,6 +449,56 @@ async def test_reconcile_preserves_numeric_stock_agent_version(session):
     }
 
 
+async def test_reconcile_builtin_claude_allows_versionless_stock_entry(session):
+    """A stock Claude entry without `version` must still materialize (#4546)."""
+
+    shared_image = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
+    env = {
+        "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "true",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF": shared_image,
+    }
+
+    async def resolver(image_ref: str) -> str:
+        if "host-moonmind" in image_ref:
+            return shared_image
+        return (
+            "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+            if "host" in image_ref
+            else "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+        )
+
+    await seed_bootstrap_policies(session, env=env, image_resolver=resolver)
+    inventory = [
+        {
+            "id": "ag_claude",
+            "name": "claude-native-ui",
+            "harness": "claude-native",
+            "capabilities": ["session.start"],
+        }
+    ]
+    await synchronize_upstream_inventory(
+        session,
+        endpoint_ref="default",
+        bridge_mode="proxy",
+        inventory=inventory,
+    )
+    await session.commit()
+
+    assert (
+        await reconcile_builtin_claude_agent_profile(
+            session, inventory=inventory, env=env
+        )
+        is True
+    )
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID
+        )
+    )
+    assert version is not None
+    assert version.document["source"] == {"upstreamId": "ag_claude"}
+
+
 async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
     assert (
         await reconcile_bootstrap_agent_profile(
