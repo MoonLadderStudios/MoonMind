@@ -474,6 +474,15 @@ Rules:
 - preserve horizontal space for comparison instead of collapsing into stacked cards on desktop
 - use cards only for narrow/mobile layouts
 
+Mobile records follow one shared contract (MoonLadderStudios/MoonMind#4559):
+
+- labels stack above their values; never reserve a wide permanent left label column on phones
+- details and actions use the full record width, with actions in their own wrapping area below the values
+- loading, error, and empty states render in the card fallback, not only in the hidden table
+- action labels wrap at word boundaries and ordinary controls keep a comfortable activation height instead of collapsing into tall pills
+- forms stay single-column on phones, fieldsets shrink to their section (`min-inline-size: 0`), and inputs keep a 16px mobile text baseline
+- genuinely two-dimensional technical content (raw JSON, diffs) may use a bounded, keyboard-focusable local scroll region that never widens the page
+
 ### 10.6 Column economics
 
 Desktop tables should prioritize comparison.

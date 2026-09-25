@@ -42,6 +42,7 @@ OUTPUT_KEYS = (
     "frontend_static",
     "frontend_browser_chromium",
     "frontend_browser_firefox",
+    "frontend_browser_webkit",
     "full_frontend",
 )
 
@@ -64,6 +65,19 @@ FRONTEND_FIREFOX_EXACT = {
     "frontend/vitest.browser.config.ts",
 }
 FRONTEND_FIREFOX_PREFIXES = ("frontend/src/browser/", "frontend/src/styles/")
+# MoonLadderStudios/MoonMind#4559: targeted WebKit regression leg for the
+# reported form, fieldset, and overlay cases. Scoped to the browser runner
+# guard plus the mobile-overflow journey and its owned production surfaces so
+# unrelated frontend changes do not pay for a third engine.
+FRONTEND_WEBKIT_EXACT = {
+    "package.json",
+    "package-lock.json",
+    "frontend/vitest.browser.config.ts",
+    "frontend/src/browser/mobileOverflow.browser.test.tsx",
+    "frontend/src/components/tables/DataTable.tsx",
+    "frontend/src/entrypoints/omnigent-inventory.tsx",
+    "frontend/src/components/settings/ProviderProfilesManager.tsx",
+}
 
 FORCE_FULL_EXACT = {
     "pyproject.toml",
@@ -504,6 +518,7 @@ class SuiteSelection:
     frontend_static: bool = False
     frontend_browser_chromium: bool = False
     frontend_browser_firefox: bool = False
+    frontend_browser_webkit: bool = False
     full_frontend: bool = False
 
     def as_outputs(self) -> dict[str, str]:
@@ -634,6 +649,7 @@ def _full_selection() -> SuiteSelection:
             "frontend_static": True,
             "frontend_browser_chromium": True,
             "frontend_browser_firefox": True,
+            "frontend_browser_webkit": True,
             "full_frontend": True,
         }
     )
@@ -683,6 +699,7 @@ def select_suites(
         and _matches(path, prefixes=FRONTEND_CHROMIUM_PREFIXES)
         for path in paths
     )
+    webkit = any(_matches(path, exact=FRONTEND_WEBKIT_EXACT) for path in paths)
     full_frontend = any(path in {"package.json", "package-lock.json"} for path in paths)
 
     profile_authoring_changed = any(
@@ -745,6 +762,7 @@ def select_suites(
         frontend_static=static or chromium or profile_authoring_changed,
         frontend_browser_chromium=chromium,
         frontend_browser_firefox=firefox,
+        frontend_browser_webkit=webkit,
         full_frontend=full_frontend,
     )
 

@@ -41,9 +41,9 @@ describe('Remediations', () => {
   it('distinguishes empty and filtered-empty inventory states', async () => {
     vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ items: [] }) } as Response);
     renderPage();
-    expect(await screen.findByText('No remediation workflows are visible.')).toBeTruthy();
+    expect(await screen.findAllByText('No remediation workflows are visible.')).not.toHaveLength(0);
     fireEvent.change(screen.getByLabelText('Filter remediations'), { target: { value: 'missing' } });
-    expect(screen.getByText('No remediations match the current filter.')).toBeTruthy();
+    expect(screen.getAllByText('No remediations match the current filter.').length).toBeGreaterThan(0);
   });
 
   it('preserves the route shell and offers retry for unauthorized reads', async () => {
@@ -119,7 +119,7 @@ describe('Remediations', () => {
 
     renderPage();
 
-    expect(await screen.findByText('No remediation workflows are visible.')).toBeTruthy();
+    expect(await screen.findAllByText('No remediation workflows are visible.')).not.toHaveLength(0);
     expect(screen.queryByRole('link', { name: /Unauthorized repair/ })).toBeNull();
   });
 });

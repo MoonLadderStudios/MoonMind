@@ -3121,13 +3121,14 @@ tbody tr:hover {
   }
 
   .provider-profiles-table td {
-    display: grid;
-    grid-template-columns: minmax(6.5rem, 34%) minmax(0, 1fr);
-    gap: 0.75rem;
-    align-items: start;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    align-items: stretch;
     border-bottom: 1px solid rgb(var(--mm-border) / 0.58);
     padding: 0.78rem 0.85rem;
     min-width: 0;
+    min-inline-size: 0;
     overflow-wrap: anywhere;
   }
 
@@ -3140,6 +3141,31 @@ tbody tr:hover {
     letter-spacing: 0;
     line-height: 1.35;
     text-transform: uppercase;
+  }
+
+  .provider-profiles-table td > * {
+    min-width: 0;
+    min-inline-size: 0;
+    max-width: 100%;
+  }
+
+  /* Actions own a full-width wrapping area below the record values. Labels
+   * wrap at word boundaries and every control stays comfortably tappable
+   * instead of compressing into a narrow column of tall pills. */
+  .provider-profile-actions {
+    min-width: 0;
+    min-inline-size: 0;
+    max-width: 100%;
+  }
+
+  .provider-profile-actions > button,
+  .provider-profile-actions > a {
+    min-height: 2.75rem;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
   }
 
   .provider-profiles-table td:last-child {
@@ -4101,13 +4127,14 @@ tbody tr:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
   background: rgb(15 23 42 / 0.52);
 }
 
 .dashboard-dialog {
   width: min(34rem, 100%);
   max-height: min(42rem, calc(100vh - 2rem));
+  max-height: min(42rem, calc(100dvh - 2rem));
   overflow: auto;
   border: 1px solid rgb(var(--mm-border));
   border-radius: 0.5rem;
@@ -4205,8 +4232,17 @@ tbody tr:hover {
 
 .dashboard-dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.55rem;
+}
+
+.dashboard-dialog-actions button {
+  min-height: 2.75rem;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .dashboard-dialog-danger {
@@ -4301,6 +4337,78 @@ form {
   padding-bottom: 6.5rem;
 }
 
+/* MoonLadderStudios/MoonMind#4559: shared responsive contract for dashboard
+ * forms. Native fieldsets carry a UA `min-inline-size: min-content` that
+ * forces single-column forms wider than the viewport; every other rule keeps
+ * labels, controls, and tier rows shrinkable within their section. Scoped to
+ * the dashboard root so workflow surfaces keep their own composition. */
+.dashboard-root fieldset {
+  min-inline-size: 0;
+}
+
+.provider-profile-form {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+}
+
+.provider-profile-form fieldset {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+}
+
+.provider-profile-form legend {
+  max-width: 100%;
+}
+
+.provider-profile-form label {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+}
+
+.provider-profile-form input,
+.provider-profile-form select,
+.provider-profile-form textarea {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+}
+
+.provider-profile-form input,
+.provider-profile-form select,
+.provider-profile-form textarea {
+  font-size: 1rem;
+}
+
+@media (min-width: 721px) {
+  .provider-profile-form input,
+  .provider-profile-form select,
+  .provider-profile-form textarea {
+    font-size: 0.875rem;
+  }
+}
+
+/* Tier rows: the legend names the group; Duplicate/Remove live in a separate
+ * wrapping action area. Model and effort stack on phones and share a row only
+ * where the container is wide enough (via the existing md: breakpoint). */
+.provider-tier-actions {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+}
+
+.provider-tier-actions > button {
+  min-height: 2.75rem;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* Queue submit fieldsets already carry their own min-inline-size contract. */
 .queue-submit-form > fieldset {
   min-inline-size: 0;
   margin: 0;
@@ -10206,17 +10314,59 @@ button.workflow-workspace-sidebar-row:active {
   border: 1px solid rgb(var(--mm-border) / 0.72);
   border-radius: 0.6rem;
   background: rgb(var(--mm-panel) / 0.86);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
+/* MoonLadderStudios/MoonMind#4559: card values use the full record width with
+ * the label stacked above, so status/metadata never squeeze into a narrow
+ * column beside a wide label. */
 .data-table-card__row {
   display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
 }
 
 .data-table-card__label {
   color: rgb(var(--mm-muted));
-  font-size: 0.78rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.data-table-card__value {
+  min-width: 0;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Actions own a full-width wrapping area below the values instead of
+ * competing with a label column. Labels wrap at word boundaries and controls
+ * stay comfortably tappable without collapsing into tall pills. */
+.data-table-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-top: 0.25rem;
+}
+
+.data-table-card__actions button,
+.data-table-card__actions a {
+  min-height: 2.75rem;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.data-table-card--state {
+  align-items: flex-start;
 }
 
 @media (max-width: 720px) {
@@ -10331,23 +10481,80 @@ button.workflow-workspace-sidebar-row:active {
   display: grid;
   gap: 1.25rem;
   padding: 1.5rem;
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
 }
 
 .omnigent-inventory__toolbar {
   align-items: center;
   display: flex;
   justify-content: space-between;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.omnigent-inventory__toolbar .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.omnigent-inventory__toolbar button {
+  min-height: 2.75rem;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .omnigent-inventory label,
 .omnigent-inventory td strong,
 .omnigent-inventory td small { display: block; }
-.omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; }
+.omnigent-inventory label { min-width: 0; min-inline-size: 0; max-width: 100%; }
+.omnigent-inventory input[type='search'] {
+  margin-top: .35rem;
+  max-width: 28rem;
+  width: 100%;
+  min-width: 0;
+  min-inline-size: 0;
+  font-size: 1rem;
+}
+.omnigent-policy-editor { min-width: 0; min-inline-size: 0; max-width: 100%; }
+.omnigent-policy-editor input,
+.omnigent-policy-editor select,
+.omnigent-policy-editor textarea {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+}
 .omnigent-policy-editor textarea { display: block; font-family: monospace; margin-top: .35rem; max-width: 70rem; width: 100%; }
-.omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; }
+/* Genuinely two-dimensional content (raw policy JSON, normalized diffs) gets
+ * a bounded, keyboard-focusable local scroll region that never widens the
+ * page on narrow viewports. */
+.omnigent-policy-detail { min-width: 0; min-inline-size: 0; max-width: 100%; }
+.omnigent-policy-detail pre {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
 .omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,
 .omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+/* The shared slab keeps cells on one line by default; inventory records wrap
+ * like the raw table they replace so desktop keeps its reading behavior. */
+.omnigent-inventory .data-table { white-space: normal; }
+.omnigent-inventory .data-table th,
+.omnigent-inventory .data-table td { overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+  /* One modest page gutter on phones instead of the desktop 1.5rem padding. */
+  .omnigent-inventory { padding: 1rem 0.75rem; gap: 1rem; }
+  .omnigent-inventory__toolbar { align-items: flex-start; flex-direction: column; }
+}
 
 /* Context retrieval (RAG) authoring controls (MoonMind#3514). */
 .context-retrieval-controls { display: grid; gap: 1rem; }

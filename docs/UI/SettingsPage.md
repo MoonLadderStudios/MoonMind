@@ -322,6 +322,8 @@ when the session reaches `succeeded`.
 
 A page-local runtime filter may narrow the visible Provider Profile collection. It must not narrow global readiness counts unless the summary is explicitly labeled as filtered.
 
+On narrow viewports the saved-profile records stack each label above its value and give actions their own full-width wrapping area below the values (MoonLadderStudios/MoonMind#4559). The create/edit form stays single-column with shrinkable fieldsets, and tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. The shared contract lives in [DashboardDesignSystem.md](./DashboardDesignSystem.md).
+
 #### 7.1.1 Provider Profile creation
 
 Provider Profile creation uses one standard form with progressive disclosure as defined by [ProviderProfileCreation.md](./ProviderProfileCreation.md). Improving this form does not add an onboarding route or replace the existing credential lifecycle.

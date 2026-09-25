@@ -3971,7 +3971,7 @@ export function ProviderProfilesManager({
   };
 
   return (
-    <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+    <section className="rounded-3xl border border-mm-border/80 bg-transparent p-4 sm:p-6 shadow-sm min-w-0">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
@@ -4432,11 +4432,11 @@ export function ProviderProfilesManager({
                     headers="provider-profile-header-actions"
                     role="cell"
                   >
-                    <div className="flex flex-wrap gap-2">
+                    <div className="provider-profile-actions flex flex-wrap gap-2">
                       {canWriteProviderProfiles && canStartOAuth ? (
                         <button
                           type="button"
-                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                           onClick={() => startOAuthMutation.mutate(profile)}
                           disabled={startOAuthMutation.isPending}
                           aria-label={`OAuth ${profile.profile_id}`}
@@ -4447,7 +4447,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && canValidateCodexOAuth ? (
                         <button
                           type="button"
-                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                           onClick={() => oauthLifecycleMutation.mutate({
                             profileId: profile.profile_id,
                             actionId: 'validate_oauth',
@@ -4464,7 +4464,7 @@ export function ProviderProfilesManager({
                             <button
                               key={action.id}
                               type="button"
-                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                               onClick={() => {
                                 if (action.id === 'connect_oauth') {
                                   startOAuthMutation.mutate(profile);
@@ -4494,7 +4494,7 @@ export function ProviderProfilesManager({
                             <button
                               key={action.id}
                               type="button"
-                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                               onClick={() => {
                                 if (action.id === 'use_api_key') {
                                   openOpencodeEnrollment(profile);
@@ -4511,7 +4511,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && canUseGenericApiKey ? (
                         <button
                           type="button"
-                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                           onClick={() => openOpencodeEnrollment(profile)}
                           disabled={opencodeEnrollmentMutation.isPending}
                           aria-label={`Use ${apiKeyEnrollmentCopy(profile).credentialLabel} ${profile.profile_id}`}
@@ -4522,7 +4522,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
-                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                           onClick={() =>
                             cancelOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4538,7 +4538,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && oauthSession && canFinalizeOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
-                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                           onClick={() =>
                             finalizeOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4554,7 +4554,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && oauthSession && canRetryOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
-                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                           onClick={() =>
                             retryOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4571,7 +4571,7 @@ export function ProviderProfilesManager({
                         <>
                           <button
                             type="button"
-                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() => {
                               beginEditingProfile(profile);
                             }}
@@ -4580,7 +4580,7 @@ export function ProviderProfilesManager({
                           </button>
                           <button
                             type="button"
-                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() => handleEditTiers(profile)}
                             aria-label={`Edit tiers ${profile.profile_id}`}
                           >
@@ -4588,7 +4588,7 @@ export function ProviderProfilesManager({
                           </button>
                           <button
                             type="button"
-                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() =>
                               toggleMutation.mutate({
                                 profileId: profile.profile_id,
@@ -4644,7 +4644,7 @@ export function ProviderProfilesManager({
             role="dialog"
             aria-modal="true"
             aria-labelledby="tmate-oauth-session-title"
-            className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-2xl outline-none dark:border-slate-800 dark:bg-slate-900"
+            className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-2xl outline-none dark:border-slate-800 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto"
           >
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -4996,14 +4996,14 @@ export function ProviderProfilesManager({
         </div>
 
         <form
-          className="space-y-6"
+          className="provider-profile-form space-y-6 min-w-0"
           onSubmit={(event) => {
             event.preventDefault();
             handleSaveSubmit();
           }}
         >
           {/* ── 1. Identity (Profile ID, Runtime, Provider, Account label) ── */}
-          <fieldset className="rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4">
+          <fieldset className="min-w-0 max-w-full rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-4 sm:p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
               Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
             </legend>
@@ -5060,7 +5060,7 @@ export function ProviderProfilesManager({
             </div>
           </fieldset>
 
-          <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">
+          <fieldset className="min-w-0 max-w-full rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-4 sm:p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
               Authentication and readiness
             </legend>
@@ -5145,7 +5145,7 @@ export function ProviderProfilesManager({
 
 
           {/* ── Model & effort tiers ── */}
-          <fieldset ref={tierSectionRef as unknown as React.RefObject<HTMLFieldSetElement>} className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4" aria-labelledby="tier-section-title">
+          <fieldset ref={tierSectionRef as unknown as React.RefObject<HTMLFieldSetElement>} className="min-w-0 max-w-full rounded-2xl border border-slate-200 dark:border-slate-700 p-4 sm:p-5 space-y-4" aria-labelledby="tier-section-title">
             <legend id="tier-section-title" className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Model &amp; effort tiers</legend>
             <p className="text-sm text-slate-600 dark:text-slate-400">Map workflow tier requests to a model and effort for this profile. Future launches use the saved policy. Historical runs keep their record.</p>
             {canWriteProviderProfiles ? (
@@ -5190,23 +5190,21 @@ export function ProviderProfilesManager({
               </ul>
             ) : null}
             <div className="sr-only" aria-live="polite" ref={tierLiveRef}>{tierLiveMessage}</div>
-            <ol className="space-y-4" aria-label="Model and effort tiers">
+            <ol className="m-0 list-none space-y-4 p-0" aria-label="Model and effort tiers">
               {tierDrafts.map((tier, index) => {
                 const tierNumber = index + 1;
                 const isDefault = tier.clientId === defaultTierClientId;
                 const isOnlyTier = tierDrafts.length === 1;
                 return (
-                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`rounded-2xl border p-4 shadow-sm ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
-                    <fieldset className="space-y-3">
-                      <legend className="flex w-full items-center justify-between">
-                        <span className="text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</span>
-                        {canWriteProviderProfiles ? (
-                          <span className="flex items-center gap-2">
-                            <button type="button" className="text-xs font-medium text-slate-600 dark:text-slate-400 hover:underline" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate as new last tier</button>
-                            <button type="button" className={`text-xs font-medium ${isOnlyTier ? 'text-slate-400 cursor-not-allowed' : 'text-rose-600 dark:text-rose-400 hover:underline'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
-                          </span>
-                        ) : null}
-                      </legend>
+                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`min-w-0 rounded-2xl border p-3 sm:p-4 shadow-sm ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
+                    <fieldset className="min-w-0 space-y-3">
+                      <legend className="px-1 text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</legend>
+                      {canWriteProviderProfiles ? (
+                        <div className="provider-tier-actions flex flex-wrap items-center gap-2">
+                          <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-400 transition hover:border-slate-400 dark:hover:border-slate-500" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate tier</button>
+                          <button type="button" className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${isOnlyTier ? 'border-slate-200 text-slate-400 cursor-not-allowed dark:border-slate-800' : 'border-slate-300 text-rose-600 hover:border-rose-400 dark:border-slate-700 dark:text-rose-400'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
+                        </div>
+                      ) : null}
                       {canWriteProviderProfiles ? (
                         <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                           <input type="radio" name="default-tier-group" value={tier.clientId} checked={isDefault} onChange={() => setDefaultTierClientId(tier.clientId)} aria-label={isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`} />
@@ -5354,7 +5352,7 @@ export function ProviderProfilesManager({
             <p className="text-xs text-slate-500 dark:text-slate-400">Future launches use the saved policy. Historical runs keep their record.</p>
             {tierRemoveDialog ? (
               <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }}>
-                <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
+                <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
                   <h4 id="tier-remove-title" className="text-sm font-semibold text-slate-900 dark:text-white">Remove Tier {tierRemoveDialog.index + 1}?</h4>
                   {tierRemoveDialog.isMiddle ? (
                     <div className="mt-3 text-sm text-slate-600 dark:text-slate-400">
