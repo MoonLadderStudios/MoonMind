@@ -4,8 +4,11 @@ import { playwright } from '@vitest/browser-playwright';
 
 // Real-browser regression suite for styling contracts that jsdom cannot
 // verify: computed pseudo-element styles, CSS custom-property scoping, and
-// layout overflow. Run with `npm run ui:test:browser`.
-const supportedEngines = ['chromium', 'firefox'] as const;
+// layout overflow. Run with `npm run ui:test:browser`. WebKit covers the
+// targeted form/fieldset/overlay leg (MoonLadderStudios/MoonMind#4559); the
+// Playwright container image used in CI ships all three engines, so no extra
+// provisioning step is needed there.
+const supportedEngines = ['chromium', 'firefox', 'webkit'] as const;
 type BrowserEngine = (typeof supportedEngines)[number];
 const configuredEngines = process.env.MOONMIND_BROWSER_ENGINES
   ?.split(',')
