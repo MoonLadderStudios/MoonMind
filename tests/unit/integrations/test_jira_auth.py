@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from moonmind.config.settings import AtlassianSettings, JiraSettings
+import moonmind.integrations.jira.auth as jira_auth
 from moonmind.integrations.jira.auth import resolve_jira_connection
 from moonmind.integrations.jira.errors import JiraToolError
 
@@ -34,7 +35,8 @@ async def test_resolve_service_account_connection_from_secret_refs(
         return secret_values[ref]
 
     monkeypatch.setattr(
-        "moonmind.integrations.jira.auth.resolve_managed_api_key_reference",
+        jira_auth,
+        "resolve_managed_api_key_reference",
         _fake_resolve,
     )
 
@@ -86,7 +88,8 @@ async def test_secret_ref_resolution_failure_is_sanitized(
         raise ValueError(f"secret resolution failed for {ref}: token-999")
 
     monkeypatch.setattr(
-        "moonmind.integrations.jira.auth.resolve_managed_api_key_reference",
+        jira_auth,
+        "resolve_managed_api_key_reference",
         _fake_resolve,
     )
 
