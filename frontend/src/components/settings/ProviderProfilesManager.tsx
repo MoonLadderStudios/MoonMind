@@ -5357,7 +5357,7 @@ export function ProviderProfilesManager({
                   {tierRemoveDialog.isMiddle ? (
                     <div className="mt-3 text-sm text-slate-600 dark:text-slate-400">
                       <p>This changes future tier-number resolution for this profile:</p>
-                      <ul className="mt-2 list-disc pl-5">
+                        <ul className="mt-2 list-disc space-y-1 break-words pl-5">
                         {computeTierRenumberingImpact(tierDrafts, tierRemoveDialog.index).map((item) => (
                           <li key={`${item.from}-${item.to}`}>Tier {item.from}: {item.label} → becomes Tier {item.to}</li>
                         ))}
@@ -5372,8 +5372,8 @@ export function ProviderProfilesManager({
                         {tierDrafts.filter((_, i) => i !== tierRemoveDialog.index).map((t) => {
                           const originalIndex = tierDrafts.findIndex((x) => x.clientId === t.clientId);
                           return (
-                            <label key={t.clientId} className="flex items-center gap-2 text-sm">
-                              <input type="radio" name="replacement-default-tier" value={t.clientId} checked={tierRemoveReplacementId === t.clientId} onChange={() => setTierRemoveReplacementId(t.clientId)} />
+                            <label key={t.clientId} className="flex min-w-0 items-start gap-2 break-words text-sm">
+                              <input type="radio" name="replacement-default-tier" value={t.clientId} checked={tierRemoveReplacementId === t.clientId} onChange={() => setTierRemoveReplacementId(t.clientId)} className="mt-1 shrink-0" />
                               Tier {originalIndex + 1}{originalIndex >= tierRemoveDialog.index ? ` → Tier ${originalIndex}` : ''}: {t.label || `Tier ${originalIndex + 1}`}
                             </label>
                           );
@@ -5381,9 +5381,9 @@ export function ProviderProfilesManager({
                       </div>
                     </div>
                   ) : null}
-                  <div className="mt-5 flex justify-end gap-3">
-                    <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm" onClick={() => setTierRemoveDialog(null)}>Cancel</button>
-                    <button type="button" className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white" onClick={confirmRemoveTier}>Remove and renumber</button>
+                  <div className="mt-5 flex flex-wrap justify-end gap-2 sm:gap-3">
+                    <button type="button" className="max-w-full break-words rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm min-h-[2.75rem]" onClick={() => setTierRemoveDialog(null)}>Cancel</button>
+                    <button type="button" className="max-w-full break-words rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white min-h-[2.75rem]" onClick={confirmRemoveTier}>Remove and renumber</button>
                   </div>
                 </div>
               </div>

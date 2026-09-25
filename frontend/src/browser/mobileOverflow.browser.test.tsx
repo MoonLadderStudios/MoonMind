@@ -19,6 +19,7 @@ import '../styles/dashboard.css';
 
 const MOBILE_320 = { width: 320, height: 568 } as const;
 const MOBILE_390 = { width: 390, height: 844 } as const;
+const LANDSCAPE_SHORT = { width: 568, height: 320 } as const;
 const DESKTOP = { width: 1280, height: 800 } as const;
 const TOLERANCE = 1;
 
@@ -296,4 +297,69 @@ describe('mobile overflow (MoonLadderStudios/MoonMind#4559)', () => {
     expect(tierItems.length).toBeGreaterThan(0);
     tierItems.forEach((tier, index) => expectFitsViewport(tier, `tier row ${index}`));
   }, 30000);
+
+  it('keeps the tier-remove confirmation usable at narrow portrait and short landscape sizes', async () => {
+    const viewports = [
+      { ...MOBILE_320, label: '320x568 portrait' },
+      { ...LANDSCAPE_SHORT, label: '568x320 landscape' },
+    ];
+    for (const viewport of viewports) {
+      await page.viewport(viewport.width, viewport.height);
+      mockFetchRejectAll();
+      document.body.innerHTML = shell('<div id="provider-overlay-host"></div>');
+      const host = document.getElementById('provider-overlay-host')!;
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const { unmount } = renderWithClient(
+        <ProviderProfilesManager
+          profiles={[syntheticProfile]}
+          secretSlugs={['SYNTHETIC_API_KEY']}
+          onNotice={() => {}}
+          queryClient={queryClient}
+          defaultTaskModelByRuntime={{}}
+        />,
+        { container: host },
+      );
+      try {
+        const record = await waitFor(() => {
+          const found = host.querySelector('.provider-profiles-table tbody tr');
+          expect(found).not.toBeNull();
+          return found!;
+        });
+        within(record as HTMLElement).getByRole('button', { name: 'Edit' }).click();
+        // Tier 1 is the default with a deliberately long label, so removing it
+        // exercises the renumbering + replacement-default confirmation content.
+        const removeButton = await screen.findByRole('button', { name: 'Remove Tier 1' });
+        removeButton.click();
+        const dialog = await screen.findByRole('dialog');
+        const panel = dialog.firstElementChild as HTMLElement | null;
+        expect(panel).not.toBeNull();
+        expectFitsViewport(panel!, `tier-remove panel at ${viewport.label}`);
+        const panelRect = panel!.getBoundingClientRect();
+        expect(
+          panelRect.bottom,
+          `tier-remove panel must stay inside the viewport at ${viewport.label} (bottom=${panelRect.bottom.toFixed(1)}, viewport=${window.innerHeight})`,
+        ).toBeLessThanOrEqual(window.innerHeight + TOLERANCE);
+        if (viewport.height <= 400) {
+          // Short viewports keep the panel bounded by scrolling its own
+          // content rather than growing past the viewport.
+          expect(panel!.scrollHeight).toBeGreaterThanOrEqual(panel!.clientHeight);
+        }
+        const cancel = within(dialog as HTMLElement).getByRole('button', { name: 'Cancel' });
+        const confirm = within(dialog as HTMLElement).getByRole('button', {
+          name: 'Remove and renumber',
+        });
+        // Footer actions wrap onto their own lines instead of forcing
+        // sideways overflow; horizontal bounds hold even below the fold.
+        expectFitsViewport(cancel, `tier-remove cancel at ${viewport.label}`);
+        expectFitsViewport(confirm, `tier-remove confirm at ${viewport.label}`);
+        cancel.click();
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      } finally {
+        unmount();
+        fetchSpy?.mockRestore();
+      }
+    }
+  }, 60000);
 });
