@@ -84,6 +84,28 @@ const syntheticProfile: ProviderProfile = {
   default_model_tier: 1,
 };
 
+// Claude-credential profile shape mirrors the jsdom enrollment coverage: the
+// saved record offers API-key enrollment without an OAuth terminal session.
+const claudeEnrollmentProfile: ProviderProfile = {
+  ...syntheticProfile,
+  profile_id: 'claude-anthropic',
+  runtime_id: 'claude_code',
+  provider_id: 'anthropic',
+  provider_label: 'Anthropic',
+  volume_ref: 'claude-auth-volume-with-a-long-unbroken-name-for-mobile',
+  volume_mount_path: '/home/app/.claude',
+  account_label: 'Claude Anthropic OAuth',
+  enabled: false,
+  auth_state: 'not_configured',
+  disabled_reason: 'missing_credentials',
+  command_behavior: {
+    auth_strategy: 'claude_credential_methods',
+    auth_state: 'not_connected',
+    auth_actions: ['connect_oauth', 'use_api_key'],
+    auth_status_label: 'Claude credentials not connected',
+  },
+};
+
 let fetchSpy: MockInstance;
 let cleanupRender: (() => void) | null = null;
 
@@ -297,6 +319,60 @@ describe('mobile overflow (MoonLadderStudios/MoonMind#4559)', () => {
     expect(tierItems.length).toBeGreaterThan(0);
     tierItems.forEach((tier, index) => expectFitsViewport(tier, `tier row ${index}`));
   }, 30000);
+
+  it('keeps the API-key enrollment drawer usable at narrow portrait and short landscape sizes', async () => {
+    const viewports = [
+      { ...MOBILE_320, label: '320x568 portrait' },
+      { ...LANDSCAPE_SHORT, label: '568x320 landscape' },
+    ];
+    for (const viewport of viewports) {
+      await page.viewport(viewport.width, viewport.height);
+      mockFetchRejectAll();
+      document.body.innerHTML = shell('<div id="provider-enrollment-host"></div>');
+      const host = document.getElementById('provider-enrollment-host')!;
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const { unmount } = renderWithClient(
+        <ProviderProfilesManager
+          profiles={[claudeEnrollmentProfile]}
+          secretSlugs={['SYNTHETIC_API_KEY']}
+          onNotice={() => {}}
+          queryClient={queryClient}
+          defaultTaskModelByRuntime={{}}
+        />,
+        { container: host },
+      );
+      try {
+        const opener = await screen.findByRole('button', {
+          name: 'Use Anthropic API key claude-anthropic',
+        });
+        opener.click();
+        const dialog = await screen.findByRole('dialog', {
+          name: 'Anthropic API key enrollment for claude-anthropic',
+        });
+        expectFitsViewport(dialog, `enrollment drawer at ${viewport.label}`);
+        const dialogRect = dialog.getBoundingClientRect();
+        expect(
+          dialogRect.bottom,
+          `enrollment drawer must stay inside the viewport at ${viewport.label} (bottom=${dialogRect.bottom.toFixed(1)}, viewport=${window.innerHeight})`,
+        ).toBeLessThanOrEqual(window.innerHeight + TOLERANCE);
+        // Token paste step: the password field stays inside the drawer.
+        within(dialog as HTMLElement).getByRole('button', { name: 'Continue to API key paste' }).click();
+        const tokenInput = await screen.findByLabelText('Anthropic API key');
+        expectFitsViewport(tokenInput, `enrollment token field at ${viewport.label}`);
+        const cancel = within(dialog as HTMLElement).getByRole('button', {
+          name: 'Cancel API key enrollment',
+        });
+        expectFitsViewport(cancel, `enrollment cancel at ${viewport.label}`);
+        cancel.click();
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      } finally {
+        unmount();
+        fetchSpy?.mockRestore();
+      }
+    }
+  }, 60000);
 
   it('keeps the tier-remove confirmation usable at narrow portrait and short landscape sizes', async () => {
     const viewports = [

@@ -4669,7 +4669,7 @@ export function ProviderProfilesManager({
             <dl className="mt-4 space-y-3 text-sm">
               <div>
                 <dt className="font-medium text-slate-700 dark:text-slate-300">Session</dt>
-                <dd className="mt-1 font-mono text-xs text-slate-600 dark:text-slate-400">
+                <dd className="mt-1 break-all font-mono text-xs text-slate-600 dark:text-slate-400">
                   {tmateOAuthSession.sessionId}
                 </dd>
               </div>
