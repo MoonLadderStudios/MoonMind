@@ -1362,7 +1362,6 @@ async def compile_and_persist_execution_plan(
                 exc,
             )
             support_evidence = None
-            support_tier = "uncertified"
             support_evidence_ref = ""
             plan = create_execution_plan_envelope(
                 plan.payload.model_copy(
