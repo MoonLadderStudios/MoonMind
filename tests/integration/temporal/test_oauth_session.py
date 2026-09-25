@@ -8,11 +8,16 @@ from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
-from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
+from api_service.services.oauth_session_service import validate_oauth_profile_on_host
+from moonmind.workflows.temporal.activity_catalog import (
+    WORKFLOW_TASK_QUEUE,
+    get_workflow_task_queue,
+)
 from moonmind.workflows.temporal.workflows.oauth_session import (
-    MoonMindOAuthSessionWorkflow,
     ACTIVITY_TASK_QUEUE,
     RUNNER_ACTIVITY_TASK_QUEUE,
+    MoonMindOAuthCredentialValidationWorkflow,
+    MoonMindOAuthSessionWorkflow,
 )
 
 # NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
@@ -76,6 +81,42 @@ class TestOAuthMaintenanceLeaseBoundaryWorkflow:
             "lease_id": oauth_workflow._maintenance_lease_id,
         }
 
+
+@workflow.defn(name="MoonMind.TestOAuthCredentialFailureRelease")
+class TestOAuthCredentialFailureReleaseWorkflow:
+    @workflow.run
+    async def run(self) -> dict:
+        oauth_workflow = MoonMindOAuthSessionWorkflow()
+        oauth_workflow._session_id = "oas-credential-failure"
+        oauth_workflow._maintenance_lease_acquired = True
+        oauth_workflow._maintenance_profile_id = "codex_openai_oauth"
+        oauth_workflow._maintenance_runtime_id = "codex_cli"
+        oauth_workflow._maintenance_lease_id = "lease-credential-failure"
+        oauth_workflow._maintenance_fencing_generation = 3
+        return await oauth_workflow._finish(
+            {
+                "session_id": "oas-credential-failure",
+                "status": "succeeded",
+                "failure_reason": None,
+            },
+            revalidate_bound_host=True,
+        )
+
+
+@workflow.defn(name="MoonMind.TestOAuthMaintenanceManager")
+class TestOAuthMaintenanceManagerWorkflow:
+    def __init__(self) -> None:
+        self.release: dict | None = None
+
+    @workflow.signal(name="release_slot")
+    def release_slot(self, payload: dict) -> None:
+        self.release = payload
+
+    @workflow.run
+    async def run(self) -> dict:
+        await workflow.wait_condition(lambda: self.release is not None)
+        return self.release or {}
+
 @asynccontextmanager
 async def _oauth_workers(
     env: WorkflowEnvironment,
@@ -103,7 +144,10 @@ async def _oauth_workers(
             Worker(
                 env.client,
                 task_queue=WORKFLOW_TASK_QUEUE,
-                workflows=[MoonMindOAuthSessionWorkflow],
+            workflows=[
+                MoonMindOAuthSessionWorkflow,
+                TestOAuthMaintenanceManagerWorkflow,
+            ],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             )
         )
@@ -202,6 +246,214 @@ async def test_oauth_maintenance_lease_uses_acknowledged_activity_boundary() -> 
             },
         }
     ]
+
+
+async def test_saved_oauth_validation_runs_credential_probe_on_runtime_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict] = []
+
+    @activity.defn(name="oauth_session.revalidate_bound_host")
+    async def host_probe(request: dict) -> dict:
+        requests.append(request)
+        return {"profile_id": request["profile_id"], "status": "credential_invalid"}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        class Adapter:
+            async def get_client(self):
+                return env.client
+
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.client.TemporalClientAdapter", Adapter
+        )
+        async with Worker(
+            env.client,
+            task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
+            activities=[host_probe],
+        ), Worker(
+            env.client,
+            task_queue=get_workflow_task_queue(),
+            workflows=[MoonMindOAuthCredentialValidationWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await validate_oauth_profile_on_host(
+                profile_id="codex_openai_oauth",
+                provider_lease_id="lease-saved-profile-validation",
+            )
+
+    assert result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "credential_invalid",
+    }
+    assert requests == [
+        {
+            "session_id": "lease-saved-profile-validation",
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "lease-saved-profile-validation",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("validation_status", "expected_status"),
+    [("ready", "succeeded"), ("credential_invalid", "failed")],
+)
+async def test_api_finalized_oauth_session_reports_result_after_host_check(
+    validation_status: str, expected_status: str
+) -> None:
+    events: list[str] = []
+    status_attempts: list[str] = []
+
+    @activity.defn(name="provider_profile.acquire_credential_maintenance_lease")
+    async def acquire_lease(request: dict) -> dict:
+        return {
+            "lease_id": request["owner_id"],
+            "fencing_generation": 4,
+        }
+
+    @activity.defn(name="oauth_session.prepare_credential_maintenance")
+    async def prepare_maintenance(request: dict) -> dict:
+        return {"profile_id": request["profile_id"]}
+
+    @activity.defn(name="oauth_session.update_status")
+    async def record_status(request: dict) -> dict:
+        if request["status"] == "succeeded":
+            status_attempts.append(request["status"])
+            if len(status_attempts) < 5:
+                raise RuntimeError("temporary database outage")
+        events.append(request["status"])
+        return request
+
+    @activity.defn(name="oauth_session.revalidate_bound_host")
+    async def host_check(request: dict) -> dict:
+        events.append("host_check")
+        return {
+            "profile_id": request["profile_id"],
+            "status": validation_status,
+            "validation_mode": "credential_only",
+        }
+
+    @activity.defn(name="oauth_session.mark_failed")
+    async def record_failure(request: dict) -> dict:
+        events.append("failed")
+        return request
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with _oauth_workers(
+            env,
+            activity_activities=[acquire_lease, record_status, record_failure],
+            runner_activities=[
+                prepare_maintenance,
+                mock_ensure_volume,
+                mock_stop_auth_runner,
+                host_check,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                TestOAuthMaintenanceManagerWorkflow.run,
+                id="provider-profile-manager:codex_cli",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+            session = await env.client.start_workflow(
+                MoonMindOAuthSessionWorkflow.run,
+                {
+                    "session_id": "oas-final-status",
+                    "runtime_id": "codex_cli",
+                    "profile_id": "codex_openai_oauth",
+                    "volume_ref": "codex_auth_volume",
+                    "volume_mount_path": "/home/app/.codex",
+                    "session_transport": "none",
+                },
+                id="oauth-session:oas-final-status",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+            await session.signal(MoonMindOAuthSessionWorkflow.api_finalize_succeeded)
+            result = await session.result()
+            release = await manager.result()
+
+    assert result["status"] == expected_status
+    assert events.index("host_check") < events.index(expected_status)
+    assert ("succeeded" in events) is (expected_status == "succeeded")
+    if expected_status == "succeeded":
+        assert len(status_attempts) == 5
+    assert release["fencing_generation"] == 4
+
+
+@pytest.mark.parametrize(
+    ("validation_status", "expected_failure"),
+    [
+        ("credential_invalid", "Bound host OAuth credential validation failed"),
+        ("validation_unavailable", "Bound host credential preflight unavailable"),
+        ("no_binding", "Bound host credential preflight unavailable"),
+    ],
+)
+async def test_failed_oauth_host_check_releases_lease_after_verified_cleanup(
+    validation_status: str, expected_failure: str
+) -> None:
+    failures: list[dict] = []
+
+    @activity.defn(name="oauth_session.revalidate_bound_host")
+    async def invalid_host_credential(_request: dict) -> dict:
+        return {
+            "profile_id": "codex_openai_oauth",
+            "status": validation_status,
+            "credential_generation": 6,
+            "validation_mode": "credential_only",
+        }
+
+    @activity.defn(name="oauth_session.mark_failed")
+    async def mark_failed(request: dict) -> dict:
+        failures.append(request)
+        return {}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[mark_failed],
+        ), Worker(
+            env.client,
+            task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
+            activities=[mock_stop_auth_runner, invalid_host_credential],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[
+                TestOAuthCredentialFailureReleaseWorkflow,
+                TestOAuthMaintenanceManagerWorkflow,
+            ],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            manager = await env.client.start_workflow(
+                TestOAuthMaintenanceManagerWorkflow.run,
+                id="provider-profile-manager:codex_cli",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+            result = await env.client.execute_workflow(
+                TestOAuthCredentialFailureReleaseWorkflow.run,
+                id="test-oauth-credential-failure-release",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+            release = await manager.result()
+
+    assert result == {
+        "session_id": "oas-credential-failure",
+        "status": "failed",
+        "failure_reason": expected_failure,
+    }
+    assert failures == [{
+        "session_id": "oas-credential-failure",
+        "reason": expected_failure,
+    }]
+    assert release == {
+        "requester_workflow_id": "oauth-session:oas-credential-failure",
+        "owner_id": "oauth-session:oas-credential-failure",
+        "runtime_id": "codex_cli",
+        "profile_id": "codex_openai_oauth",
+        "lease_id": "lease-credential-failure",
+        "purpose": "oauth_connect",
+        "fencing_generation": 3,
+    }
             
 async def test_oauth_session_workflow_cancel() -> None:
     """Test OAuth session workflow cancellation."""
