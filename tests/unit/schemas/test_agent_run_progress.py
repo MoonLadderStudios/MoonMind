@@ -32,6 +32,7 @@ from moonmind.schemas.agent_run_progress import (
     coerce_legacy_progress_triple,
     new_progress_parent_state,
     note_successor_generation,
+    progress_step_logical_id_for_child,
     projection_digest,
     reduce_progress_to_step,
     seal_terminal_result,
@@ -313,6 +314,222 @@ def test_domain_invalid_regression_rejected_but_repeated_phases_pass():
     )
 
 
+# --- #1088 R6: legitimate wait/resume and capacity-requeue movement --------
+
+def test_wait_resume_back_to_running_accepted():
+    """Real producers resume running after a wait is answered (#1088 R6).
+
+    running -> awaiting_feedback -> running is the actual owner-allowed
+    resume path (feedback answered, deployment readiness restored); it
+    must not be rejected as a domain-invalid regression.
+    """
+
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="running", reasonCode="running"
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="awaiting_feedback",
+                reasonCode="awaiting_feedback", waitCode="feedback",
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=3, state="running", reasonCode="running"
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert state["acceptedState"] == "running"
+    assert state["acceptedRevision"] == 3
+
+
+def test_awaiting_callback_resume_to_launching_accepted():
+    """awaiting_callback -> launching is the readiness-recovery path."""
+
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="awaiting_callback",
+                reasonCode="awaiting_callback", waitCode="callback",
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="launching", reasonCode="launching"
+            ),
+        ).disposition
+        == "accepted"
+    )
+
+
+def test_launching_capacity_requeue_to_awaiting_slot_accepted():
+    """launching -> awaiting_slot is the capacity-requeue path (#1088 R6).
+
+    Capacity the ledger took back between admission and allocation
+    returns the run to durable waiting under the same owner instead of
+    failing valid work.
+    """
+
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="launching", reasonCode="launching"
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="awaiting_slot",
+                reasonCode="awaiting_provider_capacity",
+                waitCode="provider_capacity",
+            ),
+        ).disposition
+        == "accepted"
+    )
+
+
+def test_true_regression_still_rejected_after_resume_rules():
+    """Only owner-allowed resume edges pass; real regressions stay stale."""
+
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="collecting_results",
+                reasonCode="collecting_results", waitCode="evidence",
+            ),
+        ).disposition
+        == "accepted"
+    )
+    # Evidence collection never legitimately returns to launch or run.
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="launching", reasonCode="launching"
+            ),
+        ).disposition
+        == "stale"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="running", reasonCode="running"
+            ),
+        ).disposition
+        == "stale"
+    )
+    # running never returns to queued.
+    state2 = _parent()
+    apply_agent_run_progress(
+        state2,
+        _payload(projectionRevision=1, state="running", reasonCode="running"),
+    )
+    assert (
+        apply_agent_run_progress(
+            state2, _payload(projectionRevision=2, state="queued")
+        ).disposition
+        == "stale"
+    )
+
+
+def test_launching_requeue_rejected_without_resume_edges_patch():
+    """Old histories retain the prior reducer for replay compatibility.
+
+    The ``launching -> awaiting_slot`` capacity-requeue edge (and the other
+    resume edges) was added after the progress cutover. Histories recorded
+    while the reducer rejected that edge must keep rejecting it: accepting
+    it on replay would emit memo/search-attribute upsert commands absent
+    from the recorded history and wedge the workflow nondeterministically.
+    New histories opt in through
+    ``AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID``.
+    """
+
+    from moonmind.schemas.agent_run_progress import (
+        AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID,
+    )
+
+    assert (
+        AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID
+        == "agent-run-progress-resume-edges-v1"
+    )
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="launching", reasonCode="launching"
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="awaiting_slot",
+                reasonCode="awaiting_provider_capacity",
+                waitCode="provider_capacity",
+            ),
+            enable_resume_edges=False,
+        ).disposition
+        == "stale"
+    )
+
+
+def test_wait_resume_rejected_without_resume_edges_patch():
+    """Old histories reject wait -> running resume edges as before."""
+
+    state = _parent()
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=1, state="awaiting_feedback",
+                reasonCode="awaiting_feedback", waitCode="feedback",
+            ),
+        ).disposition
+        == "accepted"
+    )
+    assert (
+        apply_agent_run_progress(
+            state,
+            _payload(
+                projectionRevision=2, state="running", reasonCode="running"
+            ),
+            enable_resume_edges=False,
+        ).disposition
+        == "stale"
+    )
+
+
 # --- REQ-A3: retries, replacement, Continue-As-New, delayed old runs ------
 
 def test_bounded_pending_observation_before_run_identity_established():
@@ -380,6 +597,64 @@ def test_rollover_persists_lineage():
         apply_agent_run_progress(restored, _payload(projectionRevision=3)).disposition
         == "accepted"
     )
+
+
+def test_progress_step_lookup_finds_owning_step_row():
+    """Accepted progress resolves its owning Step row by child fence (#1088 R4)."""
+
+    rows = [
+        {
+            "logicalStepId": "step-1",
+            "refs": {"childWorkflowId": "child-wf-1"},
+        },
+        {
+            "logicalStepId": "step-2",
+            "refs": {"childWorkflowId": "child-wf-9"},
+        },
+        {"logicalStepId": "step-3"},
+    ]
+    assert progress_step_logical_id_for_child(rows, "child-wf-1") == "step-1"
+    assert progress_step_logical_id_for_child(rows, "child-wf-9") == "step-2"
+    assert progress_step_logical_id_for_child(rows, "unknown-wf") is None
+    assert progress_step_logical_id_for_child([], "child-wf-1") is None
+
+
+def test_emitter_retry_reconciles_as_duplicate_without_repeating_work():
+    """Same-revision retry after accepted delivery is a duplicate (#1088 R7).
+
+    The emitter keeps the pending revision until positive delivery; the
+    parent reconciles a redelivered revision as a duplicate, so transient
+    delivery failure recovers through the existing bounded path without
+    rerunning agent work.
+    """
+
+    from moonmind.schemas.agent_run_progress import AgentRunProgressEmitter
+
+    emitter = AgentRunProgressEmitter(
+        agent_run_workflow_id="child-wf-1",
+        source_workflow_id="parent-wf-1",
+        source_run_id="parent-run-1",
+        step_execution_id="parent-wf-1:parent-run-1:step:execution:1",
+        source_generation="child-wf-1",
+        agent_run_run_id="child-run-A",
+    )
+    first = emitter.build(state="running", reason_code="running")
+    assert first["projectionRevision"] == 1
+    emitter.mark_delivered()
+    changed = emitter.build(
+        state="awaiting_feedback", reason_code="awaiting_feedback",
+        wait_code="feedback",
+    )
+    # Delivery fails: the same revision stays pending for a bounded retry.
+    retry = emitter.retry_pending()
+    assert retry is not None
+    assert retry["projectionRevision"] == changed["projectionRevision"]
+
+    state = _parent()
+    assert apply_agent_run_progress(state, changed).disposition == "accepted"
+    # The retry reconciles as a duplicate: no repeated work, same state.
+    assert apply_agent_run_progress(state, retry).disposition == "duplicate"
+    assert state["acceptedState"] == "awaiting_feedback"
 
 
 # --- REQ-A4: Step mapping without provider/harness branches ---------------
