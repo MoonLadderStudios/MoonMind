@@ -598,13 +598,16 @@ class OmnigentHttpClient:
     async def _stream_events_inner(
         self, session_id: str
     ) -> AsyncIterator[dict[str, Any]]:
+        window_started_at = time.monotonic()
         while True:
             try:
                 async for event in self._stream_events_once(session_id):
                     self._connect_outage_deadline = None
                     yield event
             except OmnigentClientError as exc:
-                if await self._await_connect_outage_retry(exc):
+                if await self._await_connect_outage_retry(
+                    exc, window_started_at=window_started_at
+                ):
                     continue
                 raise
             self._connect_outage_deadline = None
@@ -825,13 +828,16 @@ class OmnigentHttpClient:
         request_timeout: httpx.Timeout | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        window_started_at = time.monotonic()
         while True:
             try:
                 result = await self._request_once(
                     method, path, request_timeout=request_timeout, **kwargs
                 )
             except OmnigentClientError as exc:
-                if await self._await_connect_outage_retry(exc):
+                if await self._await_connect_outage_retry(
+                    exc, window_started_at=window_started_at
+                ):
                     continue
                 raise
             self._connect_outage_deadline = None
@@ -936,11 +942,14 @@ class OmnigentHttpClient:
         return {"body": redact_sensitive_payload(parsed)}
 
     async def _request_bytes(self, method: str, path: str) -> bytes:
+        window_started_at = time.monotonic()
         while True:
             try:
                 content = await self._request_bytes_once(method, path)
             except OmnigentClientError as exc:
-                if await self._await_connect_outage_retry(exc):
+                if await self._await_connect_outage_retry(
+                    exc, window_started_at=window_started_at
+                ):
                     continue
                 raise
             self._connect_outage_deadline = None
@@ -1046,12 +1055,19 @@ class OmnigentHttpClient:
     def _redact(self, value: str) -> str:
         return redact_sensitive_text(self._redactor.scrub(value))
 
-    async def _await_connect_outage_retry(self, exc: OmnigentClientError) -> bool:
+    async def _await_connect_outage_retry(
+        self,
+        exc: OmnigentClientError,
+        *,
+        window_started_at: float | None = None,
+    ) -> bool:
         """Wait before re-sending a request the server never received.
 
         Only a failed connect proves the request was not delivered; any answer,
         including an HTTP error or a broken read, ends the outage and is never
-        replayed here.
+        replayed here. The outage window is anchored at the first attempt so
+        the configured grace bounds the whole wait instead of starting after
+        the first connect timeout completes.
         """
 
         if not isinstance(exc.__cause__, _CONNECT_OUTAGE_ERRORS):
@@ -1061,7 +1077,12 @@ class OmnigentHttpClient:
             return False
         now = time.monotonic()
         if self._connect_outage_deadline is None:
-            self._connect_outage_deadline = now + self._connect_outage_grace_seconds
+            anchored_start = (
+                float(window_started_at) if window_started_at is not None else now
+            )
+            self._connect_outage_deadline = (
+                anchored_start + self._connect_outage_grace_seconds
+            )
         remaining = self._connect_outage_deadline - now
         if remaining <= 0:
             return False
