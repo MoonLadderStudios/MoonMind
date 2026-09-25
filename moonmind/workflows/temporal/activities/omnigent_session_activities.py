@@ -1156,7 +1156,9 @@ async def _migrate_stranded_pre_upgrade_plan(
     )
     from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 
-    migrated = reissue_ordinary_admission_for_saved_plan(raw_payload)
+    migrated = reissue_ordinary_admission_for_saved_plan(
+        raw_payload, require_certification=False
+    )
     await DbExecutionPlanStore(session_factory).persist(migrated)
     logging.getLogger(__name__).warning(
         "migrated pre-upgrade execution plan %s to ordinary uncertified "
