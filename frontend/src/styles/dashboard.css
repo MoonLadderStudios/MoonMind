@@ -7162,6 +7162,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .oauth-terminal-page {
   display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   padding: 24px;
 }
@@ -7244,6 +7246,60 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   min-height: 5.5rem;
   resize: vertical;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 767px) {
+  .dashboard-root:has(.oauth-terminal-page) {
+    padding-inline: 0;
+  }
+
+  .panel:has(.oauth-terminal-page) {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    min-height: 0;
+  }
+
+  .oauth-terminal-page {
+    padding: 8px 0;
+    gap: 12px;
+  }
+
+  .oauth-terminal-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .oauth-terminal-header h1 {
+    font-size: 1.25rem;
+  }
+
+  .oauth-terminal-actions {
+    justify-content: flex-start;
+  }
+
+  .oauth-terminal-header,
+  .oauth-terminal-paste-box,
+  .oauth-terminal-session-panel {
+    padding-inline: 12px;
+  }
+
+  .oauth-terminal-page .oauth-terminal-surface {
+    border-radius: 0;
+    padding: 4px;
+    height: 60svh;
+    min-height: 240px;
+  }
+
+  .oauth-terminal-paste-input {
+    /* Keep native iOS text selection usable without focus zoom. */
+    font-size: 16px;
+  }
 }
 
 .oauth-terminal-paste-controls > .primary {

@@ -951,3 +951,19 @@ Pending hard-switch renames still visible in live contracts (do not rewrite ahea
 4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common in real usage?
 5. Should submit show deployment-default skill sets as read-only chips unless the user expands advanced controls?
 6. Is there any proven list-page benefit to a compact skill-set badge, or should that remain detail-only?
+
+---
+
+## 20. README screenshot recipe
+
+The README Dashboard preview images (`docs/assets/workflow-list.png`, `docs/assets/workflow-detail.png`) are captured from the real Vite-built dashboard served through the normal routes with deterministic synthetic fixture data. They demonstrate presentation only, not a live provider run.
+
+Recipe:
+
+1. Build: `npm run ui:build` (Vite `dashboard` bundle under `api_service/static/workflow_console/dist/`).
+2. Serve the production HTML shell (`api_service/templates/react_dashboard.html`) with boot payload `{"page":"dashboard","apiBase":"/api"}` on the normal routes `/workflows` and `/workflows/{workflowId}`.
+3. Fixture: deterministic synthetic rows over the existing `/api/executions` list/detail/steps contracts, shaped like `frontend/src/entrypoints/workflow-list.test.tsx` (public repository name only; no private repositories, prompts, emails, tokens, or signed URLs). Detail capture uses the Overview tab (`/workflows/{workflowId}/overview?source=temporal`).
+4. Viewport 1280x800, default light theme; wait for the fixture text (`Docs example: README screenshot workflow`), then capture.
+5. Crop to content and PNG-optimize without changing meaning; confirm the relative asset paths resolve and the README renders with both images.
+
+Refresh the images when the pictured flow materially changes. Do not add byte-identical regeneration checks, a required CI workflow, prose/alt-text unit tests, or a light/dark/mobile image matrix for these captures.
