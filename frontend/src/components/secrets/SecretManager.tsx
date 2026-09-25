@@ -362,8 +362,8 @@ export function SecretManager({
           <div className="border-b border-slate-200 dark:border-slate-800 px-5 py-4">
             <h4 className="text-base font-semibold text-slate-900 dark:text-white">Stored secrets</h4>
           </div>
-          <div className="overflow-x-auto px-5 py-4">
-            <table className="w-full text-left text-sm border-collapse">
+          <div className="managed-secrets-table-wrap overflow-x-auto px-5 py-4">
+            <table className="managed-secrets-table w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800">
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Secret slug</th>
@@ -384,23 +384,23 @@ export function SecretManager({
                 ) : (
                   secrets.map((secret) => (
                     <tr key={secret.slug}>
-                      <td className="px-2 py-4 font-mono font-bold text-slate-900 dark:text-white">
+                      <td data-label="Secret slug" className="px-2 py-4 font-mono font-bold text-slate-900 dark:text-white">
                         {secret.slug}
                       </td>
-                      <td className="px-2 py-4">
+                      <td data-label="SecretRef" className="px-2 py-4">
                         <code className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-100">
                           {secret.secretRef ?? `db://${secret.slug}`}
                         </code>
                       </td>
-                      <td className="px-2 py-4">{renderStatus(secret.status)}</td>
-                      <td className="px-2 py-4">{renderUsages(secret)}</td>
-                      <td className="px-2 py-4 text-xs text-slate-500 dark:text-slate-400">
+                      <td data-label="Status" className="px-2 py-4">{renderStatus(secret.status)}</td>
+                      <td data-label="Usage" className="px-2 py-4">{renderUsages(secret)}</td>
+                      <td data-label="Updated" className="px-2 py-4 text-xs text-slate-500 dark:text-slate-400">
                         {secret.updatedAt
                           ? new Date(secret.updatedAt).toLocaleString()
                           : new Date(secret.createdAt).toLocaleString()}
                       </td>
-                      <td className="px-2 py-4">
-                        <div className="flex gap-2">
+                      <td data-label="Actions" className="px-2 py-4">
+                        <div className="managed-secrets-actions flex flex-wrap gap-2">
                           <button
                             type="button"
                             onClick={() => copySecretRef(secret.secretRef ?? `db://${secret.slug}`)}
@@ -510,7 +510,7 @@ export function SecretManager({
                 </div>
               </div>
 
-              <div className="flex gap-2 mt-6">
+              <div className="flex flex-wrap gap-2 mt-6">
                 <button
                   type="submit"
                   className="settings-submit-btn inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
@@ -565,7 +565,7 @@ export function SecretManager({
                   required
                 />
               </div>
-              <div className="flex justify-end gap-3 mt-8">
+              <div className="flex flex-wrap justify-end gap-3 mt-8">
                 <button
                   type="button"
                   className="btn btn-outline"

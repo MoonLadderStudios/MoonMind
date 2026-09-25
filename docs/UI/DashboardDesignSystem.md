@@ -482,6 +482,7 @@ Mobile records follow one shared contract (MoonLadderStudios/MoonMind#4559):
 - action labels wrap at word boundaries and ordinary controls keep a comfortable activation height instead of collapsing into tall pills
 - forms stay single-column on phones, fieldsets shrink to their section (`min-inline-size: 0`), and inputs keep a 16px mobile text baseline
 - genuinely two-dimensional technical content (raw JSON, diffs) may use a bounded, keyboard-focusable local scroll region that never widens the page
+- hand-rolled settings tables (provider profiles, managed secrets) reuse the same stacked-card treatment via `data-label` cells instead of inventing a second mobile pattern
 
 ### 10.6 Column economics
 

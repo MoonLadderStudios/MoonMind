@@ -3038,6 +3038,18 @@ tbody tr:hover {
   vertical-align: top;
 }
 
+/*
+ * Managed Secrets table (flat / desktop layout).
+ * Same shared contract as the Provider Profiles table: dense cells wrap
+ * instead of forcing the 6-column table wider than the settings panel, and
+ * the table degrades to the stacked card layout below.
+ */
+.managed-secrets-table th,
+.managed-secrets-table td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
 .provider-profile-status-details > summary {
   list-style: none;
   display: inline-flex;
@@ -3178,6 +3190,107 @@ tbody tr:hover {
   }
 
   .provider-profiles-table td[colspan]::before {
+    content: none;
+  }
+
+  /* MoonLadderStudios/MoonMind#4559: the Managed Secrets table follows the
+   * same stacked-card contract as Provider Profiles, so secret metadata uses
+   * the full record width and the Copy/Edit/Rotate/Delete actions own a
+   * wrapping area instead of one unwrapped row. */
+  .managed-secrets-table-wrap {
+    overflow: visible;
+  }
+
+  .managed-secrets-table {
+    display: block;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .managed-secrets-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .managed-secrets-table tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .managed-secrets-table tbody tr {
+    display: grid;
+    gap: 0;
+    border: 1px solid rgb(var(--mm-border) / 0.8);
+    border-radius: 0.5rem;
+    background: rgb(var(--mm-panel) / 0.78);
+    box-shadow: 0 14px 32px -28px rgb(var(--mm-ink) / 0.55);
+    overflow: hidden;
+  }
+
+  .managed-secrets-table td {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    align-items: stretch;
+    border-bottom: 1px solid rgb(var(--mm-border) / 0.58);
+    padding: 0.78rem 0.85rem;
+    min-width: 0;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .managed-secrets-table td::before {
+    content: attr(data-label);
+    color: rgb(var(--mm-muted));
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.35;
+    text-transform: uppercase;
+  }
+
+  .managed-secrets-table td > * {
+    min-width: 0;
+    min-inline-size: 0;
+    max-width: 100%;
+  }
+
+  .managed-secrets-actions {
+    min-width: 0;
+    min-inline-size: 0;
+    max-width: 100%;
+  }
+
+  .managed-secrets-actions > button,
+  .managed-secrets-actions > a {
+    min-height: 2.75rem;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  .managed-secrets-table td:last-child {
+    border-bottom: 0;
+  }
+
+  .managed-secrets-table td[colspan] {
+    display: block;
+    text-align: center;
+  }
+
+  .managed-secrets-table td[colspan]::before {
     content: none;
   }
 }
