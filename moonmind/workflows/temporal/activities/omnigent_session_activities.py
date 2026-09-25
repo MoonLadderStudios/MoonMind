@@ -996,7 +996,15 @@ def _bind_request_to_execution_plan(
 
 
 async def _validate_plan_admission_authority(persisted: Any) -> None:
-    """Load and validate support, replay, and rollback evidence from the plan."""
+    """Load and validate support, replay, and rollback evidence from the plan.
+
+    MoonLadderStudios/MoonMind#4560: ordinary certificate-independent
+    admission carries no historical certificate prerequisite. A frozen
+    certificate aging out must not prevent authorized inspection or
+    preservation of completed work; plan integrity and historical reads are
+    separated from certificate freshness. Explicit strict new-effect
+    semantics remain enforced at this new-effect boundary.
+    """
 
     authority = persisted.payload.authority
     admission_authority = persisted.payload.admissionAuthority
@@ -1030,6 +1038,15 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
         != SUPERVISOR_ROLLBACK_POLICY_VERSION
     ):
         raise ValueError("execution plan rollback policy is unsupported")
+    if getattr(admission_authority, "admissionMode", "strict") == "ordinary":
+        # Ordinary admission is certificate-independent: missing, expired,
+        # malformed, or unavailable optional certificates never veto ordinary
+        # execution, and post-admission expiry never strands work, reads, or
+        # saved results. Plan/artifact integrity, credential ownership, and
+        # substantive compatibility remain enforced by their own owners.
+        # An invalid optional report authorizes nothing but also blocks
+        # nothing here.
+        return
     support_ref = admission_authority.supportEvidenceRef.removeprefix(
         "artifact:"
     )

@@ -1287,11 +1287,22 @@ async def compile_and_persist_execution_plan(
         OMNIGENT_SESSION_FEATURE_GENERATION,
     )
 
-    # Execution evidence is policy-driven. The default ``either`` policy
-    # prefers protected evidence and otherwise uses local deployment
-    # qualification; ``protected`` remains the strict support-certification
-    # gate. The resolver chooses the appropriate evidence or fails closed.
+    # Execution evidence is policy-driven. MoonLadderStudios/MoonMind#4560:
+    # ordinary admission (omitted/blank/shipped ``either``) is
+    # certificate-independent: a compatible, authorized workflow must not
+    # become unrunnable merely because a historical certificate is missing,
+    # stale, or names another policy revision. Optional certificates remain
+    # a truthful observation but never veto ordinary execution. Explicit
+    # ``protected``/``deployment`` selects strict certification, chosen only
+    # at the trusted settings boundary -- workflow-authored input can never
+    # downgrade it or forge admission.
     try:
+        from moonmind.omnigent.settings import (
+            omnigent_evidence_policy,
+            omnigent_requires_certification,
+        )
+
+        strict_admission = omnigent_requires_certification()
         support_evidence, support_tier = resolve_execution_evidence(plan.payload)
         # For deployment evidence, we still want to publish same artifact class
         # but supportTier distinguishes readiness (deployment_qualified vs supported)
@@ -1303,32 +1314,56 @@ async def compile_and_persist_execution_plan(
         raise ValueError(
             f"execution evidence unavailable under policy={policy}: {exc}"
         ) from exc
-    support_evidence_ref, support_evidence_digest = await persist_json_artifact(
-        artifact_service=artifact_service,
-        principal=principal,
-        artifact_class="omnigent.execution_support_evidence",
-        payload=support_evidence,
-    )
-    plan = create_execution_plan_envelope(
-        plan.payload.model_copy(
-            update={
-                "admissionAuthority": AdmissionAuthority(
-                    supportEvidenceRef=f"artifact:{support_evidence_ref}",
-                    supportEvidenceDigest=support_evidence_digest,
-                    # The evidence resolver returns the tier that admission
-                    # actually used; workers must re-validate the same schema.
-                    supportTier=(
-                        "supported"
-                        if support_tier == "supported"
-                        else "deployment_qualified"
-                    ),
-                    featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
-                    replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
-                    rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
-                )
-            }
+    if support_evidence is None:
+        # Certificate-independent ordinary admission. Never fabricate an
+        # empty passing certificate, never substitute {} for evidence, and
+        # never label uncertified execution supported/deployment_qualified.
+        # Ordinary admission is not a claim execution has already succeeded.
+        assert support_tier == "uncertified" and not strict_admission
+        support_evidence_ref = ""
+        plan = create_execution_plan_envelope(
+            plan.payload.model_copy(
+                update={
+                    "admissionAuthority": AdmissionAuthority(
+                        admissionMode="ordinary",
+                        supportEvidenceRef="",
+                        supportEvidenceDigest="",
+                        supportTier="uncertified",
+                        featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+                        replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
+                        rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+                    )
+                }
+            )
         )
-    )
+    else:
+        support_evidence_ref, support_evidence_digest = await persist_json_artifact(
+            artifact_service=artifact_service,
+            principal=principal,
+            artifact_class="omnigent.execution_support_evidence",
+            payload=support_evidence,
+        )
+        plan = create_execution_plan_envelope(
+            plan.payload.model_copy(
+                update={
+                    "admissionAuthority": AdmissionAuthority(
+                        admissionMode=("strict" if strict_admission else "ordinary"),
+                        supportEvidenceRef=f"artifact:{support_evidence_ref}",
+                        supportEvidenceDigest=support_evidence_digest,
+                        # The evidence resolver returns the tier that admission
+                        # actually used; workers must re-validate the same schema.
+                        supportTier=(
+                            "supported"
+                            if support_tier == "supported"
+                            else "deployment_qualified"
+                        ),
+                        featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+                        replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
+                        rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+                    )
+                }
+            )
+        )
     plan_store = execution_plan_store or DbExecutionPlanStore(session_factory)
     persisted = await plan_store.persist(plan)
     plan_payload = persisted.model_dump(mode="json", by_alias=True)
@@ -1347,6 +1382,9 @@ async def compile_and_persist_execution_plan(
         taskInputSnapshotDigest=task_input_snapshot_digest,
     )
     frozen_rollout = persisted.payload.runtimeProviderRollout
+    _evidence_refs: tuple[str, ...] = ()
+    if support_evidence is not None:
+        _evidence_refs = (support_evidence_ref,)
     return PersistedOmnigentExecutionPlan(
         envelope=persisted,
         binding=binding,
@@ -1359,7 +1397,7 @@ async def compile_and_persist_execution_plan(
             policy_artifact_ref,
             effective_launch_ref,
             profile_snapshot_ref,
-            support_evidence_ref,
+            *_evidence_refs,
             *skill_content_refs,
             skill_ref,
             plan_artifact_ref,

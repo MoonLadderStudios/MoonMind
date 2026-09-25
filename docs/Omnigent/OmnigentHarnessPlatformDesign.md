@@ -68,7 +68,7 @@ The platform has the following goals:
 8. **Immutable Skills.** Agent Profile Skill intent resolves to one per-run Skill snapshot and delivery descriptor before plan commitment.
 9. **Safe extension.** Built-in and community harnesses can be discovered without granting an untrusted plugin secrets, host authority, or production support.
 10. **Local-first operation.** Docker Compose remains the normal local deployment. On-demand hosts add no permanent container footprint.
-11. **Objective support claims.** A combination is supported only when evidence proves its exact model configuration and execution realizer.
+11. **Objective support claims.** A certified-supported claim for a combination requires evidence proving its exact model configuration and execution realizer. Ordinary execution instead requires actual request authority, credential ownership, runtime compatibility, required capabilities, and security policy at their enforcing boundaries; a missing historical certificate is not evidence of incompatibility (MoonLadderStudios/MoonMind#4560).
 12. **Durable recovery.** Retry, continuation, branch, remediation, cancellation, credential rotation, and janitor behavior use the same fenced authority model for every harness.
 
 ## 3. Non-goals
