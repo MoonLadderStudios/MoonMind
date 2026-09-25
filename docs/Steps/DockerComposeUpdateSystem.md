@@ -31,7 +31,7 @@ One portable controller implements updates for the host entrypoint and the Setti
 
 The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery. Temporal and the UI may request or observe an update, but neither is required for the controller to keep making progress. An observer must not become a second update algorithm.
 
-Use existing Docker/Compose, local job files, and process ownership. The controller is one small separate release service in its own Compose project (see section 11.2), not a parallel supervisor, promotion state machine, or mandatory approval workflow.
+Use existing Docker/Compose, local job files, and process ownership. The controller is one small separate release service in its own Compose project (see section 11.2) and is the replacement owner, not a second deployment mode: do not add a parallel supervisor, promotion state machine, or mandatory approval workflow.
 
 ## 3. Terminology
 
@@ -39,7 +39,7 @@ Use existing Docker/Compose, local job files, and process ownership. The control
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector. Resolve and record the concrete image that will run.
 
-**Controller:** The standalone deployment controller in its own Compose project (`deploy/moonmind-controller`), capable of outliving the worker or API that submitted work to it. Its privileged execution boundary is deployment-owned, not selectable by an agent. The controller never replaces itself; its lifecycle is host-owned.
+**Controller:** The standalone deployment controller in its own Compose project (`deploy/moonmind-controller`), separate from the MoonMind stack. It owns its durable state, restart policy, direct Docker socket mount, and one small authenticated local endpoint guarded by a deployment-owned secret, and is capable of outliving the worker or API that submitted work to it. Its Docker transport and command endpoint survive target-project shutdown. The host CLI installs, starts, updates, and restores the controller; the controller never replaces itself, and controller updates are serialized against active deployment mutation. Its privileged execution boundary is deployment-owned, not selectable by an agent. No agents receive sockets or unrestricted controller access; its lifecycle is host-owned.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -124,6 +124,10 @@ A broken application health check is diagnostic input, not a prerequisite that p
 
 Reuse the existing per-stack local lock across host and UI submissions. A second request observes/reattaches to its existing operation or waits within a bound. Do not transfer ownership merely because a PID or timestamp looks old in another container namespace.
 
+Staging/apply failures retry automatically up to the bounded per-group attempt budget, so a transient first failure reaches a terminal `failed` (or a later `succeeded`) instead of staying indefinitely open. Controller replacement (install/update/restore) holds this same stack lock, so it shares one atomic exclusion boundary with deployment mutation rather than a separate controller-only lock.
+
+Restart recovery reconciles before applying: only the newest open operation per stack survives, and an open operation older than a confirmed installation for the same stack is superseded, never replayed over confirmed intent. A retried submission for an already-installed image reattaches to the recorded terminal success (including after a lost response) instead of repeating the mutation.
+
 Do not retain a second background availability owner that competes for this lock or changes the target. Locks for separate deployment projects remain independent.
 
 ### 10.3 Capture before state
@@ -145,11 +149,17 @@ After resolving the target, persist the selected deployment intent before recrea
 Normal service replacement uses the equivalent of:
 
 ```bash
-docker compose pull
-docker compose up -d --remove-orphans --wait
+docker compose pull --policy always
+docker compose up -d --pull never --no-build --remove-orphans --wait
 ```
 
-These are semantic commands after resolving the correct deployment files, env overlays, project, and service set, not permission to operate on an arbitrary project. Do not use routine `docker compose down` or volume deletion. Recreate only changed services by default.
+under bounded timeouts, after staging all images needed for the requested
+update and before any recreation. These are semantic commands after resolving
+the correct deployment files, env overlays, project, and service set, not
+permission to operate on an arbitrary project. The deployment-owned Compose file set (including `COMPOSE_FILE` selection) passes through unchanged, and the deployment-owned `.env` layers under the controller-generated image overlay so operator authentication, bindings, and infrastructure versions are preserved. Privileged-endpoint submissions validate the safe shape of project, paths, services, and image references before persistence. Do not use routine
+`docker compose down`, force-recreate, or volume/image pruning; those are
+explicit repair operations only, never automatic escalation. Recreate only
+changed services by default.
 
 Preserve dependency order and required `init-db`/schema migration gating before new dependent services start. Bring necessary infrastructure up in the existing Compose lifecycle. A failed migration preserves the original error and data rather than starting an incompatible application or attempting a destructive downgrade.
 
@@ -191,7 +201,7 @@ Persist the primary result before secondary cleanup and release ownership safely
 
 A development bind mount can change files without restarting imported code. Recreate affected processes through the same supported owner. Record actual startup provenance for diagnosis, but do not turn checkout equality into a universal runtime admission or compatibility gate.
 
-Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon's host bind namespace is not the same as a WSL user-distro `/mnt/<drive>` path. Resolve existing daemon-visible mounts, including `/run/desktop/mnt/host/<drive>` where applicable, and do not create an empty directory over a missing source mount. This behavior is a supported deployment boundary, not a reason to add a second Windows updater.
+Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon's host bind namespace is not the same as a WSL user-distro `/mnt/<drive>` path. Resolve existing daemon-visible mounts, including `/run/desktop/mnt/host/<drive>` where applicable, and do not create an empty directory over a missing source mount. Controller bootstrap resolves both bind sources through this adapter before rendering its Compose project, failing fast on a missing required source. This behavior is a supported deployment boundary, not a reason to add a second Windows updater.
 
 ## 11. Updater runner execution model
 
@@ -199,9 +209,9 @@ Preserve POSIX and Windows Docker Desktop path handling. The Linux Docker daemon
 
 The existing deployment-control worker is a submission/observation adapter where available. It is not the sole path to recovery. Privileged Docker operations remain in trusted deployment infrastructure and cannot be supplied by arbitrary agent-authored code.
 
-### 11.2 Separate controller project
+### 11.2 Standalone controller project
 
-The controller runs as one small service in its own Compose project with durable state, a configured restart policy, and a direct Docker socket mount, so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access.
+The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner.
 
 ### 11.3 Runner image policy
 
