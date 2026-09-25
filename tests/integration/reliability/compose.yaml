@@ -3,11 +3,13 @@
 # starts this file under its own isolated Docker project name
 # (moonmind-reliability-<suite>) with its own network and volumes, so no
 # mutable release state is shared between shards. Dependency-layer reuse
-# comes from the native Docker layer cache (pinned upstream images pulled
+# comes from the native Docker layer cache (pinned dependency images pulled
 # once per runner) plus the workflow pip cache; no custom cache subsystem.
 services:
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-02-03T21-03-04Z@sha256:a62e44a7db506b8ed114a44e67b4996c4f1ecca981d9c6e40aa2581334999313
+    # Same source-built community release as both root Compose files;
+    # the original quay.io/minio/minio image is no longer publicly pullable.
+    image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
     command: server /data
     environment:
       MINIO_ROOT_USER: reliability
