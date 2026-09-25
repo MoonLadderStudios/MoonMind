@@ -142,22 +142,12 @@ class AdmissionAuthority(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # MoonLadderStudios/MoonMind#4560: ordinary admission is
-    # certificate-independent; strict admission requires certification.
-    # Plans persisted before this field existed always carried certified
-    # evidence, so the default preserves their in-flight strict
-    # interpretation: missing metadata never silently bypasses validation.
-    admissionMode: Literal["ordinary", "strict"] = Field(
-        default="strict", alias="admissionMode"
-    )
-    supportEvidenceRef: str = Field(default="", alias="supportEvidenceRef")
-    supportEvidenceDigest: str = Field(default="", alias="supportEvidenceDigest")
+    supportEvidenceRef: str = Field(alias="supportEvidenceRef")
+    supportEvidenceDigest: str = Field(alias="supportEvidenceDigest")
     # Which evidence tier backs admission. Plans persisted before this field
     # existed always carried protected-tier evidence, so the default preserves
-    # their in-flight interpretation. ``uncertified`` names explicitly
-    # certificate-independent ordinary admission -- never a claim that
-    # execution has already succeeded.
-    supportTier: Literal["supported", "deployment_qualified", "uncertified"] = Field(
+    # their in-flight interpretation.
+    supportTier: Literal["supported", "deployment_qualified"] = Field(
         default="supported", alias="supportTier"
     )
     featureGeneration: str = Field(alias="featureGeneration")
@@ -166,32 +156,10 @@ class AdmissionAuthority(BaseModel):
 
     @model_validator(mode="after")
     def validate_authority(self) -> "AdmissionAuthority":
-        if self.admissionMode == "strict":
-            if not self.supportEvidenceRef.startswith("artifact:"):
-                raise ValueError("supportEvidenceRef must be artifact-backed")
-            if not self.supportEvidenceDigest.startswith("sha256:"):
-                raise ValueError("supportEvidenceDigest must be a sha256 digest")
-            if self.supportTier == "uncertified":
-                raise ValueError("strict admission requires certified evidence")
-        else:
-            # Ordinary admission: uncertified execution carries empty refs and
-            # the uncertified tier truthfully. When an optional certificate is
-            # present as a truthful observation it must still be well-formed,
-            # but its absence never vetoes ordinary execution.
-            if not self.supportEvidenceRef and not self.supportEvidenceDigest:
-                if self.supportTier != "uncertified":
-                    raise ValueError(
-                        "uncertified ordinary admission must use the uncertified tier"
-                    )
-            else:
-                if not self.supportEvidenceRef.startswith("artifact:"):
-                    raise ValueError("supportEvidenceRef must be artifact-backed")
-                if not self.supportEvidenceDigest.startswith("sha256:"):
-                    raise ValueError("supportEvidenceDigest must be a sha256 digest")
-                if self.supportTier == "uncertified" and self.supportEvidenceRef:
-                    raise ValueError(
-                        "uncertified tier must not carry an evidence reference"
-                    )
+        if not self.supportEvidenceRef.startswith("artifact:"):
+            raise ValueError("supportEvidenceRef must be artifact-backed")
+        if not self.supportEvidenceDigest.startswith("sha256:"):
+            raise ValueError("supportEvidenceDigest must be a sha256 digest")
         for field_name in (
             "featureGeneration",
             "replayCompatibilityVersion",
