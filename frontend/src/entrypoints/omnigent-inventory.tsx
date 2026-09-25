@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { ContextRetrievalControls } from '../components/ContextRetrievalControls';
+import { DataTable, type Column } from '../components/tables/DataTable';
 import {
   type ContextRetrievalAuthoring,
   defaultContextRetrievalAuthoring,
@@ -447,12 +448,52 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     <section aria-labelledby="omnigent-inventory-heading">
       <div className="omnigent-inventory__toolbar"><h2 id="omnigent-inventory-heading">{label} inventory</h2>{kind === 'policies' ? <button type="button" onClick={() => setEditor({ mode: 'create', id: '', name: '', document: '{}' })}>Create policy</button> : null}<button type="button" onClick={() => void result.refetch()} disabled={result.isFetching}>Refresh</button></div>
       <label><span>Filter {label.toLowerCase()}</span><input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
-      {result.isPending ? <p role="status">Loading {label.toLowerCase()}…</p> : null}
-      {result.isError ? <div role="alert"><p>{result.error.message}</p><button type="button" onClick={() => void result.refetch()}>Try again</button></div> : null}
-      {result.data && rows.length === 0 ? <p>{filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
       {transition.isError ? <p role="alert">{transition.error.message}</p> : null}
-      {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th>{kind === 'policies' ? <th>Actions</th> : null}</tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}{row.version ? `@${row.version}` : ''}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td>{kind === 'policies' ? <td><button type="button" onClick={() => { setSelected(row); setSelectedVersion(null); }}>Inspect</button>{row.version ? <button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button> : null}</td> : null}</tr>)}</tbody></table></div> : null}
+      <div className="omnigent-inventory__table-wrap">
+        <DataTable<InventoryRow>
+          data={rows}
+          ariaLabel={`${label} inventory`}
+          responsive
+          isLoading={result.isPending}
+          loadingMessage={`Loading ${label.toLowerCase()}…`}
+          isError={result.isError}
+          errorMessage={result.error?.message ?? `${label} request failed`}
+          emptyMessage={filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}
+          getRowKey={(row) => row.id}
+          columns={[
+            {
+              key: 'identity',
+              header: 'Identity',
+              render: (row) => (
+                <span className="omnigent-inventory__identity">
+                  <strong>{row.name}</strong>
+                  <small>{row.id}{row.version ? `@${row.version}` : ''}</small>
+                </span>
+              ),
+            },
+            { key: 'status', header: 'Status', render: (row) => row.status },
+            { key: 'summary', header: 'Summary', render: (row) => row.summary },
+            {
+              key: 'freshness',
+              header: 'Freshness',
+              render: (row) => (row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'),
+            },
+          ] as Column<InventoryRow>[]}
+          {...(kind === 'policies'
+            ? {
+                rowActions: (row: InventoryRow) => (
+                  <span className="omnigent-inventory__row-actions">
+                    <button type="button" onClick={() => { setSelected(row); setSelectedVersion(null); }}>Inspect</button>
+                    {row.version ? <button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button> : null}
+                  </span>
+                ),
+              }
+            : {})}
+          rowActionsHeader="Actions"
+        />
+      </div>
+      {result.isError ? <div role="alert"><p>{result.error.message}</p><button type="button" onClick={() => void result.refetch()}>Try again</button></div> : null}
       {kind === 'policies' ? <p>Creating, cloning, and editing always produces an immutable new version through the policy editor API; active historical versions are never changed.</p> : null}
       {selected ? <section className="omnigent-policy-detail" aria-label="Immutable policy version">
         <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => { setSelected(null); setSelectedVersion(null); }}>Close</button></div>
@@ -532,8 +573,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <div className="actions"><button type="button" onClick={() => setAgentEditor({ mode: 'create', id: 'omnigent-opencode-default', name: 'OpenCode via Omnigent', description: '', document: '{}', preset: 'opencode', sourceRef: '', defaultModel: '', launchPolicyRef: 'omnigent-on-demand@1', workspaceMutation: 'allowed', skillsText: '', toolsText: '', captureStream: true, captureEvidence: true, continuationCheckpoint: true, continuationBranch: true, publicationMode: 'none' })}>Create Omnigent agent</button><button type="button" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</button></div>
       </div>
       <p>Immutable, validated selections used by workflows and continuations.</p>
-      {profiles.isPending ? <p role="status">Loading execution configurations…</p> : null}
-      {profiles.isError ? <p role="alert">{profiles.error.message}</p> : null}
       {profileAction.isError ? <p role="alert">{profileAction.error.message}</p> : null}
       {agentEditor ? <form className="omnigent-policy-editor" onSubmit={(event) => { event.preventDefault(); saveAgentProfile.mutate(agentEditor); }}>
         <h3>{agentEditor.mode === 'version' ? 'Edit as immutable new version' : agentEditor.mode === 'clone' ? 'Clone execution configuration' : 'Create execution configuration'}</h3>
@@ -561,31 +600,77 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <button type="submit" disabled={saveAgentProfile.isPending}>Save immutable profile version</button><button type="button" onClick={() => setAgentEditor(null)}>Cancel</button>
       </form> : null}
       {profiles.data?.length === 0 ? <p>No persistent execution configurations are available.</p> : null}
-      {profiles.data?.length ? <div className="omnigent-inventory__table-wrap"><table>
-        <thead><tr><th>Profile</th><th>Lifecycle</th><th>Version history</th><th>Readiness</th><th>Actions</th></tr></thead>
-        <tbody>{profiles.data.map((profile) => {
-          const latest = profile.versions[0];
-          const ready = latest?.validationResult?.ready === true;
-          return <tr key={profile.profileId}>
-            <td><strong>{profile.displayName}</strong><small>{profile.profileId}</small>{profile.description ? <small>{profile.description}</small> : null}</td>
-            <td>{profile.state}{profile.defaultForRuntime ? ' · Deployment default' : ''}</td>
-            <td>{latest ? <><span>Version {latest.version}</span><small title={latest.digest}>{latest.digest.slice(0, 18)}…</small><small>{profile.versions.length} immutable version{profile.versions.length === 1 ? '' : 's'}</small></> : 'No versions'}</td>
-            <td>{ready ? 'Ready' : 'Validation required'}</td>
-            <td>
-              <button type="button" onClick={() => setSelectedProfile(profile)}>View details, history, diff, audit, and usage</button>
-              <button type="button" onClick={() => setAgentEditor({ mode: 'clone', source: profile, id: `${profile.profileId}-clone`, name: `${profile.displayName} clone`, description: profile.description || '', document: '{}' })}>Clone {profile.displayName}</button>
-              {latest?.document ? <button type="button" onClick={() => setAgentEditor({ mode: 'version', source: profile, id: profile.profileId, name: profile.displayName, description: profile.description || '', document: JSON.stringify(latest.document, null, 2) })}>Edit {profile.displayName} as new version</button> : null}
-              <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'validate' })}>Validate {profile.displayName}</button>
-              <button type="button" disabled={profileAction.isPending || !ready} onClick={() => profileAction.mutate({ profile, action: 'smoke' })}>Smoke test {profile.displayName}</button>
-              {latest?.document && (latest.document.source as { bundleArtifactRef?: unknown } | undefined)?.bundleArtifactRef ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'import-bundle' })}>Import bundle for {profile.displayName}</button> : null}
-              {ready && (profile.state !== 'active' || latest.version !== profile.activeVersion) ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'activate' })}>Activate {profile.displayName}</button> : null}
-              {profile.state === 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'disable' })}>Disable {profile.displayName}</button> : null}
-              {profile.state !== 'deprecated' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'deprecate' })}>Deprecate {profile.displayName}</button> : null}
-              {profile.state === 'draft' ? <button type="button" className="destructive" disabled={profileAction.isPending} onClick={() => { if (window.confirm(`Delete unused draft ${profile.displayName}? This cannot be undone.`)) profileAction.mutate({ profile, action: 'delete' }); }}>Delete unused draft {profile.displayName}</button> : null}
-            </td>
-          </tr>;
-        })}</tbody>
-      </table></div> : null}
+      <div className="omnigent-inventory__table-wrap">
+        <DataTable<AgentProfile>
+          data={profiles.data ?? []}
+          ariaLabel="Execution configurations"
+          responsive
+          isLoading={profiles.isPending}
+          loadingMessage="Loading execution configurations…"
+          isError={profiles.isError}
+          errorMessage={profiles.error?.message ?? 'Execution configurations request failed'}
+          emptyMessage="No persistent execution configurations are available."
+          getRowKey={(profile) => profile.profileId}
+          columns={[
+            {
+              key: 'profile',
+              header: 'Profile',
+              render: (profile) => (
+                <span className="omnigent-inventory__identity">
+                  <strong>{profile.displayName}</strong>
+                  <small>{profile.profileId}</small>
+                  {profile.description ? <small>{profile.description}</small> : null}
+                </span>
+              ),
+            },
+            {
+              key: 'lifecycle',
+              header: 'Lifecycle',
+              render: (profile) => `${profile.state}${profile.defaultForRuntime ? ' · Deployment default' : ''}`,
+            },
+            {
+              key: 'versions',
+              header: 'Version history',
+              render: (profile) => {
+                const latest = profile.versions[0];
+                if (!latest) return 'No versions';
+                return (
+                  <span className="omnigent-inventory__identity">
+                    <span>Version {latest.version}</span>
+                    <small title={latest.digest}>{latest.digest.slice(0, 18)}…</small>
+                    <small>{profile.versions.length} immutable version{profile.versions.length === 1 ? '' : 's'}</small>
+                  </span>
+                );
+              },
+            },
+            {
+              key: 'readiness',
+              header: 'Readiness',
+              render: (profile) => (profile.versions[0]?.validationResult?.ready === true ? 'Ready' : 'Validation required'),
+            },
+          ] as Column<AgentProfile>[]}
+          rowActions={(profile) => {
+            const latest = profile.versions[0];
+            const ready = latest?.validationResult?.ready === true;
+            return (
+              <span className="omnigent-inventory__row-actions">
+                <button type="button" onClick={() => setSelectedProfile(profile)}>View details, history, diff, audit, and usage</button>
+                <button type="button" onClick={() => setAgentEditor({ mode: 'clone', source: profile, id: `${profile.profileId}-clone`, name: `${profile.displayName} clone`, description: profile.description || '', document: '{}' })}>Clone {profile.displayName}</button>
+                {latest?.document ? <button type="button" onClick={() => setAgentEditor({ mode: 'version', source: profile, id: profile.profileId, name: profile.displayName, description: profile.description || '', document: JSON.stringify(latest.document, null, 2) })}>Edit {profile.displayName} as new version</button> : null}
+                <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'validate' })}>Validate {profile.displayName}</button>
+                <button type="button" disabled={profileAction.isPending || !ready} onClick={() => profileAction.mutate({ profile, action: 'smoke' })}>Smoke test {profile.displayName}</button>
+                {latest?.document && (latest.document.source as { bundleArtifactRef?: unknown } | undefined)?.bundleArtifactRef ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'import-bundle' })}>Import bundle for {profile.displayName}</button> : null}
+                {ready && (profile.state !== 'active' || latest.version !== profile.activeVersion) ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'activate' })}>Activate {profile.displayName}</button> : null}
+                {profile.state === 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'disable' })}>Disable {profile.displayName}</button> : null}
+                {profile.state !== 'deprecated' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'deprecate' })}>Deprecate {profile.displayName}</button> : null}
+                {profile.state === 'draft' ? <button type="button" className="destructive" disabled={profileAction.isPending} onClick={() => { if (window.confirm(`Delete unused draft ${profile.displayName}? This cannot be undone.`)) profileAction.mutate({ profile, action: 'delete' }); }}>Delete unused draft {profile.displayName}</button> : null}
+              </span>
+            );
+          }}
+          rowActionsHeader="Actions"
+        />
+      </div>
+      {profiles.isError ? <p role="alert">{profiles.error.message}</p> : null}
       {selectedProfile ? <section className="card" aria-labelledby="agent-profile-detail-heading">
         <div className="actions"><h3 id="agent-profile-detail-heading">{selectedProfile.displayName} details</h3><button type="button" onClick={() => setSelectedProfile(null)}>Close details</button></div>
         <p><code>{selectedProfile.profileId}</code> · {selectedProfile.state} · {selectedProfile.versions.length} immutable version{selectedProfile.versions.length === 1 ? '' : 's'}</p>

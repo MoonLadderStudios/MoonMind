@@ -1410,11 +1410,42 @@ jobs:
         MOONMIND_BROWSER_ENGINES: ${{ matrix.engine }}
       run: npm run ui:test:browser
 
+  frontend-browser-webkit-targeted:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.frontend_browser_chromium == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+    env:
+      HOME: /root
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '20'
+        cache: npm
+    - name: Install Node dependencies
+      run: npm ci --no-audit --no-fund
+    - name: Report Playwright environment
+      run: npx playwright --version
+    - name: Run targeted WebKit form/fieldset/overlay leg (MoonMind#4559)
+      env:
+        MOONMIND_BROWSER_ENGINES: webkit
+      run: npx vitest run --config frontend/vitest.browser.config.ts frontend/src/browser/mobileOverflow4559.browser.test.tsx
+
   test-frontend:
     needs:
       - select-test-suites
       - frontend-static
       - frontend-browser
+      - frontend-browser-webkit-targeted
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1428,6 +1459,7 @@ jobs:
         browser_selected="${{ needs.select-test-suites.outputs.frontend_browser_chromium }}"
         static_result="${{ needs.frontend-static.result }}"
         browser_result="${{ needs.frontend-browser.result }}"
+        webkit_result="${{ needs.frontend-browser-webkit-targeted.result }}"
 
         {
           echo "## Frontend validation"
@@ -1436,6 +1468,7 @@ jobs:
           echo "| Static | $static_selected | $static_result |"
           echo "| Chromium | $browser_selected | $browser_result |"
           echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
+          echo "| WebKit targeted (MoonMind#4559) | $browser_selected | $webkit_result |"
         } >> "$GITHUB_STEP_SUMMARY"
 
         if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
@@ -1448,6 +1481,10 @@ jobs:
         fi
         if [[ "$browser_selected" == "true" && "$browser_result" != "success" ]]; then
           echo "::error::frontend-browser was selected but ended with result=$browser_result"
+          exit 1
+        fi
+        if [[ "$browser_selected" == "true" && "$webkit_result" != "success" && "$webkit_result" != "skipped" ]]; then
+          echo "::error::frontend-browser-webkit-targeted was selected but ended with result=$webkit_result"
           exit 1
         fi
 
