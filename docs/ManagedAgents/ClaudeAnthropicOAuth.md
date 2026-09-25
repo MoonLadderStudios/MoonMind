@@ -183,7 +183,12 @@ interactive login writes into the mounted auth volume:
 
 - `HOME=/home/app`
 - `CLAUDE_HOME=/home/app/.claude`
+- `CLAUDE_CONFIG_DIR=/home/app/.claude`
 - `CLAUDE_VOLUME_PATH=/home/app/.claude`
+
+`CLAUDE_CONFIG_DIR` is the variable the Claude Code CLI honors for its config
+and credential location (`CLAUDE_HOME` is ignored by current CLI releases and
+is retained only as MoonMind-internal mount plumbing).
 
 The runner should clear competing API-key environment variables during OAuth
 enrollment so the login state comes from the account-auth flow, not an ambient
