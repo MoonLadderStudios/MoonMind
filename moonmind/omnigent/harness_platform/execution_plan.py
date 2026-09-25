@@ -677,6 +677,8 @@ def forbidden_plan_check(payload: dict[str, Any]) -> None:
 
 def reissue_ordinary_admission_for_saved_plan(
     payload: dict[str, Any] | OmnigentExecutionPlanPayload,
+    *,
+    require_certification: bool,
 ) -> OmnigentExecutionPlanEnvelope:
     """Reissue fresh ordinary admission for a pre-upgrade saved plan.
 
@@ -692,22 +694,23 @@ def reissue_ordinary_admission_for_saved_plan(
     the caller keeps the old envelope as history and persists the returned
     envelope as the new attempt.
 
-    The trusted settings boundary owns the mode: under explicit strict
-    certification this refuses instead of silently downgrading. Strict
-    saved plans keep their consumer -- re-admission through the strict
-    path with fresh evidence -- and that path is their exit condition.
+    The trusted settings boundary owns the mode and injects it as
+    ``require_certification``: under explicit strict certification this
+    refuses instead of silently downgrading. This module never reads
+    deployment configuration itself. Strict saved plans keep their
+    consumer -- re-admission through the strict path with fresh evidence --
+    and that path is their exit condition.
     """
 
     from moonmind.omnigent.session_supervisor_rollback import (
         SUPERVISOR_ROLLBACK_POLICY_VERSION,
     )
-    from moonmind.omnigent.settings import omnigent_requires_certification
     from moonmind.schemas.omnigent_session_models import (
         OMNIGENT_SESSION_COMPATIBILITY_VERSION,
         OMNIGENT_SESSION_FEATURE_GENERATION,
     )
 
-    if omnigent_requires_certification():
+    if require_certification:
         raise ValueError(
             "saved-plan ordinary reissue is unavailable under explicit strict "
             "certification: re-admit through the strict path with fresh evidence"

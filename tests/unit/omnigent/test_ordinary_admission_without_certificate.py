@@ -582,7 +582,9 @@ def test_saved_schedule_migrates_to_fresh_ordinary_admission(
     saved_plan_snapshot = copy.deepcopy(saved_plan)
     historical_ref = compute_plan_ref(saved_plan)
 
-    migrated = reissue_ordinary_admission_for_saved_plan(saved_schedule["plan"])
+    migrated = reissue_ordinary_admission_for_saved_plan(
+        saved_schedule["plan"], require_certification=False
+    )
     migrated_payload = migrated.payload.model_dump(by_alias=True, mode="json")
 
     # Schedule wrapper intent is untouched; only the plan was re-admitted.
@@ -635,7 +637,9 @@ def test_saved_schedule_migrates_to_fresh_ordinary_admission(
     # Explicit strict deployments must not silently downgrade saved plans.
     monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "deployment")
     with pytest.raises(ValueError, match="strict"):
-        reissue_ordinary_admission_for_saved_plan(saved_plan_snapshot)
+        reissue_ordinary_admission_for_saved_plan(
+            saved_plan_snapshot, require_certification=True
+        )
 
 
 @pytest.mark.asyncio
