@@ -319,6 +319,14 @@ class BootstrapController:
                 api_key=None,
                 principal=None,
             )
+            # MoonLadderStudios/MoonMind#4560: in ordinary
+            # certificate-independent admission, missing optional evidence
+            # never gates readiness. Strict certification keeps the
+            # per-materializer sweep mandatory.
+            from moonmind.omnigent.settings import omnigent_requires_certification
+
+            if not omnigent_requires_certification():
+                return initialized.state == BootstrapState.ready
             return await self._ensure_launchable_materializer_qualifications(
                 initialized
             )
@@ -422,14 +430,32 @@ class BootstrapController:
         # bootstrap record remains current. In particular, a launch-ready Zen
         # profile must not lose ``none@1`` evidence because a disabled or
         # drifted OpenCode Go default cannot be requalified.
-        materializers_ready = await self._ensure_launchable_materializer_qualifications(
-            record
-        )
+        # MoonLadderStudios/MoonMind#4560: in ordinary
+        # certificate-independent admission this sweep stays opportunistic
+        # and never gates readiness -- missing optional evidence is advisory
+        # only. Strict certification keeps it mandatory.
+        from moonmind.omnigent.settings import omnigent_requires_certification
+
+        ordinary_admission = not omnigent_requires_certification()
+        materializers_ready = True
+        if not ordinary_admission:
+            materializers_ready = await self._ensure_launchable_materializer_qualifications(
+                record
+            )
 
         if record.state != BootstrapState.ready:
             drift.append("bootstrap_state")
+        if ordinary_admission:
+            # Optional evidence staleness never drives requalification by
+            # itself and never strands ordinary execution.
+            drift = [
+                entry
+                for entry in drift
+                if entry != "deployment_evidence"
+                and not entry.startswith("evidence_")
+            ]
         if not drift:
-            return materializers_ready
+            return True if ordinary_admission else materializers_ready
 
         logger.info(
             "Refreshing OpenCode deployment qualification after managed "
@@ -443,19 +469,25 @@ class BootstrapController:
                 "OpenCode default deployment qualification refresh deferred: %s",
                 exc,
             )
-            return materializers_ready
+            # A requalify refusal is substantive (missing/default profile,
+            # not launch-ready, revalidation failed) in both modes.
+            return False if ordinary_admission else materializers_ready
         if refreshed.state == BootstrapState.ready:
             logger.info(
                 "OpenCode deployment qualification now matches Agent Profile %s",
                 refreshed.agent_profile_ref,
             )
+            if ordinary_admission:
+                return True
             return await self._ensure_launchable_materializer_qualifications(refreshed)
         failure_code = str((refreshed.failure or {}).get("code") or "unknown")
         logger.warning(
             "OpenCode deployment qualification refresh deferred: code=%s",
             failure_code,
         )
-        return materializers_ready
+        # A failed refresh still defers in both modes; ordinary readiness
+        # was already reported through the refreshed record state above.
+        return False if ordinary_admission else materializers_ready
 
     async def _ensure_launchable_materializer_qualifications(
         self,
@@ -776,22 +808,42 @@ class BootstrapController:
             record = record.model_copy(update={"agent_profile_ref": agent_ref})
             save_bootstrap_record(record)
 
-            # 5. Qualifying runtime
+            # 5. Optional certification report (MoonLadderStudios/MoonMind#4560).
+            # Ordinary launch readiness never requires historical
+            # qualification certificates: run_qualification() and
+            # certificate publication are a best-effort truthful
+            # observation here, never a synchronous prerequisite. Only
+            # explicit strict certification keeps them mandatory.
+            # Credential enrollment, provider validation, discovery, image
+            # acquisition, capability checks, and runtime health checks above
+            # remain required at their existing owners.
             record = record.model_copy(
                 update={"state": BootstrapState.qualifying_runtime}
             )
             save_bootstrap_record(record)
+            from moonmind.omnigent.settings import omnigent_requires_certification
+
+            require_certification = omnigent_requires_certification()
+            # Substantive provider/model authority inside
+            # _qualify_and_publish stays mandatory in both modes; only the
+            # certification report tail is best-effort when ordinary.
             evidence, record = await self._qualify_and_publish(
                 provider_profile_ref=provider_ref,
                 qualified_model=qualified,
                 effort=eff,
                 resolved=resolved,
                 record=record,
+                require_certification=require_certification,
+            )
+            last_evidence_ref = (
+                evidence.get("supportCombinationKey")
+                if evidence is not None
+                else record.last_evidence_ref
             )
             record = record.model_copy(
                 update={
                     "state": BootstrapState.ready,
-                    "last_evidence_ref": evidence.get("supportCombinationKey"),
+                    "last_evidence_ref": last_evidence_ref,
                     "failure": None,
                     "updated_at": datetime.now(UTC),
                 }
@@ -1274,7 +1326,17 @@ class BootstrapController:
         effort: str,
         resolved: Any,
         record: BootstrapRecord,
-    ) -> tuple[dict[str, Any], BootstrapRecord]:
+        require_certification: bool = True,
+    ) -> tuple[dict[str, Any] | None, BootstrapRecord]:
+        """Validate the selected provider/model authority, then report certification.
+
+        MoonLadderStudios/MoonMind#4560: provider/model authority validation
+        (exact-host model checks, credential enrollment, discovery) is always
+        mandatory -- a genuinely unavailable model or revoked credential still
+        fails. Only the certification report itself (``run_qualification`` +
+        evidence build/write) is best-effort when ``require_certification``
+        is False, returning ``(None, record)`` instead of failing readiness.
+        """
         import hashlib
         from datetime import UTC, datetime
 
@@ -1674,14 +1736,77 @@ class BootstrapController:
         )
         support_identity = dummy_plan.payload.supportIdentity
         support_key = compute_support_combination_key(support_identity)
+        # Certification report only (MoonLadderStudios/MoonMind#4560). All
+        # provider/model authority above stays mandatory; only this
+        # run_qualification + evidence build/write tail is best-effort for
+        # ordinary readiness. Optional reporting must not turn successful
+        # work into failure or erase saved results.
+        if not require_certification:
+            try:
+                evidence = await self._publish_certification_report(
+                    support_identity=support_identity,
+                    support_key=support_key,
+                    provider_profile_ref=provider_profile_ref,
+                    qualified_model=qualified_model,
+                    effort=effort,
+                    host_image_ref=host_class.imageRef,
+                    server_build_digest=catalog.snapshot.omnigentBuildDigest,
+                    resolved=resolved,
+                    record=record,
+                )
+                return evidence, record
+            except Exception as exc:
+                logger.warning(
+                    "OpenCode optional certification report unavailable; "
+                    "continuing ready without historical qualification: %s",
+                    exc,
+                )
+                return None, record
+        evidence = await self._publish_certification_report(
+            support_identity=support_identity,
+            support_key=support_key,
+            provider_profile_ref=provider_profile_ref,
+            qualified_model=qualified_model,
+            effort=effort,
+            host_image_ref=host_class.imageRef,
+            server_build_digest=catalog.snapshot.omnigentBuildDigest,
+            resolved=resolved,
+            record=record,
+        )
+        return evidence, record
+
+    async def _publish_certification_report(
+        self,
+        *,
+        support_identity: Any,
+        support_key: str,
+        provider_profile_ref: str,
+        qualified_model: str,
+        effort: str,
+        host_image_ref: str,
+        server_build_digest: str,
+        resolved: Any,
+        record: BootstrapRecord,
+    ) -> dict[str, Any]:
+        """Run qualification and publish the deployment evidence document."""
+
+        import hashlib
+
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.bootstrap.evidence import (
+            build_deployment_evidence,
+            write_deployment_evidence,
+        )
+        from moonmind.omnigent.bootstrap.qualification import run_qualification
+
         # Run qualification via generic realizer
         qualification = await run_qualification(
             session_factory=async_session_maker,
             provider_profile_ref=provider_profile_ref,
             model_qualified_id=qualified_model,
             effort=effort,
-            host_image_ref=host_class.imageRef,
-            server_build_digest=catalog.snapshot.omnigentBuildDigest,
+            host_image_ref=host_image_ref,
+            server_build_digest=server_build_digest,
         )
         # For deployment evidence we need policy digests; use deterministic dummy hashes
         policy_digest = "sha256:" + hashlib.sha256(b"policy").hexdigest()
@@ -1700,7 +1825,7 @@ class BootstrapController:
         evidence = build_deployment_evidence(
             support_identity=support_identity,
             support_combination_key=support_key,
-            host_image_ref=host_class.imageRef,
+            host_image_ref=host_image_ref,
             policy_snapshot_digest=policy_digest,
             effective_launch_snapshot_digest=effective_digest,
             provider_profile_ref=provider_profile_ref,
@@ -1712,7 +1837,7 @@ class BootstrapController:
             resolved_state=resolved,
         )
         write_deployment_evidence(evidence)
-        return evidence, record
+        return evidence
 
 
 def normalize_display(name: str) -> str:
