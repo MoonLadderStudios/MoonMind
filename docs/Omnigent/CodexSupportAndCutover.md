@@ -278,8 +278,15 @@ can supply or override a verdict, observation, or threshold count.
 `/api/omnigent/codex-catalog-readiness` as `remediationRelease`) re-resolves every
 manifest ref, binds its bytes to the recorded digest, re-validates each artifact,
 binds each evidence kind to exactly one artifact, and requires the full row
-cross-product before it reports `manualDiagnosisSupported` or
-`manualMutationSupported`. A missing, stale, malformed, secret-bearing, or
+cross-product before it allows full-release promotion. Per-operation qualification
+is scoped: `manualDiagnosisSupported` needs only the diagnosis rows, and
+`manualMutationSupported` needs only diagnosis plus manual-mutation rows, so an
+unrelated missing kind/row or report/runner outage blocks promotion without
+disabling basic authorized diagnosis. The separately-closed autonomous gate row
+never qualifies manual work. A scoped operation document (with `operation`) is
+judged against its own operation rows and carries the informational
+`operation_scoped_evidence_not_release` marker instead of full-release promotion;
+it never counts as rollback. A missing, stale, malformed, secret-bearing, or
 over-threshold document fails closed. Compose defaults that reference to
 `/workspace/cutover/remediation-release.json` on the existing read-only
 `MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR` mount.
