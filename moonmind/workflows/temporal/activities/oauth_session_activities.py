@@ -29,6 +29,7 @@ from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_r
 from moonmind.provider_profiles.oauth_policy import (
     effective_oauth_capacity_for_finalization,
 )
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider_bootstrap_command,
     get_provider_default,
@@ -37,8 +38,10 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 logger = logging.getLogger(__name__)
 
 
-async def _create_oauth_validation_binding(repository: Any, profile_id: str) -> Any:
-    """Resolve the persisted default launch before a profile's first host use."""
+async def _create_oauth_validation_binding(
+    repository: Any, profile_id: str, binding: Any = None
+) -> Any:
+    """Resolve missing launch metadata from persisted policy, preserving choices."""
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import ManagedAgentProviderProfile
@@ -52,24 +55,54 @@ async def _create_oauth_validation_binding(repository: Any, profile_id: str) -> 
         profile = await db.get(ManagedAgentProviderProfile, profile_id)
         if profile is None:
             raise ValueError("OAuth Provider Profile no longer exists")
-        execution_profile_ref = {
-            "codex_cli": "omnigent-codex@1",
-            "claude_code": "omnigent-claude@1",
-        }.get(profile.runtime_id)
-        if execution_profile_ref is None:
-            raise ValueError("OAuth Provider Profile runtime is unsupported")
-        execution_profile = PROFILES[execution_profile_ref]
-        policy_ref = execution_profile.default_policy_ref
-        policy_snapshot = await OmnigentPolicyService(db).resolve_runtime_snapshot(
-            policy_ref
+        provider_slug = {"codex_cli": "codex", "claude_code": "claude"}.get(
+            profile.runtime_id
         )
+        if provider_slug is None:
+            raise ValueError("OAuth Provider Profile runtime is unsupported")
+        execution_profile_ref = (
+            binding.execution_profile_ref if binding else None
+        ) or f"omnigent-{provider_slug}@1"
+        execution_profile = PROFILES[execution_profile_ref]
+        policies = OmnigentPolicyService(db)
+        if binding and binding.launch_policy_ref:
+            policy_snapshot = await policies.resolve_runtime_snapshot(
+                binding.launch_policy_ref
+            )
+        else:
+            # Pre-snapshot bindings used host_launch_profile_ref as a substrate
+            # selector, not a policy ref. Only its presence determines host mode.
+            if binding:
+                mode = "on-demand" if binding.host_launch_profile_ref else "static"
+                policy_id = f"{provider_slug}-{mode}"
+            else:
+                policy_id = execution_profile.default_policy_ref.rsplit("@", 1)[0]
+            policy_snapshot = await policies.resolve_default_runtime_snapshot(policy_id)
+        policy_ref = policy_snapshot["policyRef"]
         effective_launch = _compile_persisted_effective_launch(
             policy_snapshot, provider_profile_id=profile_id
         )
+        if binding:
+            expected_mode = (
+                "on_demand_docker"
+                if binding.host_launch_profile_ref
+                else "static_compose"
+            )
+            if effective_launch["hostMode"] != expected_mode:
+                raise ValueError(
+                    f"OAuth policy {policy_ref} conflicts with bound host mode {expected_mode}"
+                )
 
     return await repository.create_or_update_static_binding(
         profile_id=profile_id,
-        endpoint_ref=execution_profile.endpoint_ref,
+        endpoint_ref=(
+            binding.endpoint_ref if binding else execution_profile.endpoint_ref
+        ),
+        static_host_id=(
+            binding.static_host_id
+            if binding and effective_launch["hostMode"] == "static_compose"
+            else None
+        ),
         host_launch_profile_ref=(
             policy_ref if effective_launch["hostMode"] == "on_demand_docker" else None
         ),
@@ -173,15 +206,23 @@ async def oauth_session_revalidate_bound_host(
         raise ValueError("profile_id, provider_lease_id, and session_id are required")
     repository = OmnigentOAuthHostRepository(async_session_maker)
     binding = await repository.refresh_binding_generation(profile_id)
-    if binding is None:
+    if binding is None or not binding.effective_launch_snapshot:
         try:
-            binding = await _create_oauth_validation_binding(repository, profile_id)
+            binding = await _create_oauth_validation_binding(
+                repository, profile_id, binding
+            )
         except Exception as exc:
             logger.warning(
                 "OAuth host binding unavailable before credential validation: "
-                "profile_id=%s error_type=%s",
+                "profile_id=%s execution_profile_ref=%s launch_policy_ref=%s "
+                "error_type=%s detail=%s",
                 profile_id,
+                getattr(binding, "execution_profile_ref", None),
+                getattr(binding, "launch_policy_ref", None),
                 type(exc).__name__,
+                redact_sensitive_text(SecretRedactor.from_environ().scrub(str(exc)))[
+                    :500
+                ],
             )
             return {
                 "profile_id": profile_id,
@@ -232,6 +273,18 @@ async def oauth_session_revalidate_bound_host(
                     break
                 except (Exception, asyncio.CancelledError) as exc:
                     preflight_error = exc
+                    logger.warning(
+                        "OAuth credential preflight unavailable: profile_id=%s "
+                        "attempt=%s error_type=%s failure_code=%s",
+                        profile_id,
+                        attempt + 1,
+                        type(exc).__name__,
+                        (
+                            exc.code
+                            if isinstance(exc, OmnigentOAuthHostError)
+                            else "unclassified"
+                        ),
+                    )
                     retryable = isinstance(
                         exc, OmnigentOAuthHostError
                     ) and exc.code in {

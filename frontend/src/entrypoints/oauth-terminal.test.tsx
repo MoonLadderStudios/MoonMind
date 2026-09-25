@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OAuthTerminalPage } from './oauth-terminal';
@@ -22,6 +22,7 @@ type MockTerminal = {
   getSelection: ReturnType<typeof vi.fn>;
   onData: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  buffer: { active: { length: number; getLine: (index: number) => { isWrapped: boolean; translateToString: () => string } } };
 };
 
 const { terminalInstances } = vi.hoisted(() => ({
@@ -51,6 +52,13 @@ vi.mock('@xterm/xterm', () => ({
     disposed = false;
     dataHandler: TerminalDataHandler | null = null;
     selection = '';
+    buffer = { active: {
+      length: 3,
+      getLine: (index: number) => ({
+        isWrapped: index === 1,
+        translateToString: () => ['https://example.com/auth?', 'code=example', 'One-time code: ABCD'][index]!,
+      }),
+    } };
     helperTextarea: HTMLTextAreaElement | null = null;
 
     loadAddon = vi.fn();
@@ -133,7 +141,7 @@ async function waitForSocket() {
   if (!socket) {
     throw new Error('Expected OAuth terminal WebSocket');
   }
-  socket.onopen?.();
+  act(() => socket.onopen?.());
   return socket;
 }
 
@@ -166,13 +174,28 @@ afterEach(() => {
 });
 
 describe('OAuthTerminalPage clipboard behavior', () => {
+  it('offers selectable text with intact wrapped URLs without clipboard permission', async () => {
+    renderPage();
+    await waitForSocket();
+    vi.stubGlobal('navigator', {});
+    fireEvent.click(screen.getByRole('button', { name: 'Select terminal text' }));
+    const output = screen.getByLabelText('Selectable terminal text') as HTMLTextAreaElement;
+    expect(output.readOnly).toBe(true);
+    expect(output.value).toBe('https://example.com/auth?code=example\nOne-time code: ABCD');
+    expect(document.activeElement).toBe(output);
+    expect(output.selectionStart).toBe(0);
+    expect(output.selectionEnd).toBe(output.value.length);
+  });
+
+  it('focuses native paste when clipboard access is unavailable', async () => {
+    renderPage();
+    await waitForSocket();
+    vi.stubGlobal('navigator', {});
+    fireEvent.click(screen.getByRole('button', { name: 'Paste from clipboard' }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Paste authentication code')));
+  });
   it('renders the session projection and finalizes through the shared OAuth endpoint', async () => {
     const storageSetItem = vi.spyOn(window.localStorage.__proto__, 'setItem');
-    let finalized = false;
-    let releaseFinalStatus!: () => void;
-    const finalStatusGate = new Promise<void>((resolve) => {
-      releaseFinalStatus = resolve;
-    });
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -192,13 +215,12 @@ describe('OAuthTerminalPage clipboard behavior', () => {
         if (href.endsWith('/finalize')) {
           expect(init?.method).toBe('POST');
           expect(init?.body).toBeUndefined();
-          finalized = true;
           return new Response(
             JSON.stringify({
               session_id: 'session-1',
               runtime_id: 'codex_cli',
               profile_id: 'codex-oauth',
-              status: 'registering_profile',
+              status: 'succeeded',
               profile_summary: {
                 profile_id: 'codex-oauth',
                 runtime_id: 'codex_cli',
@@ -215,15 +237,12 @@ describe('OAuthTerminalPage clipboard behavior', () => {
             { status: 200, headers: { 'Content-Type': 'application/json' } },
           );
         }
-        if (finalized) {
-          await finalStatusGate;
-        }
         return new Response(
           JSON.stringify({
             session_id: 'session-1',
             runtime_id: 'codex_cli',
             profile_id: 'codex-oauth',
-            status: finalized ? 'succeeded' : 'awaiting_user',
+            status: 'awaiting_user',
             expires_at: '2026-05-05T22:00:00Z',
             terminal_session_id: 'terminal-1',
             terminal_bridge_id: 'bridge-1',
@@ -251,8 +270,6 @@ describe('OAuthTerminalPage clipboard behavior', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Finalize' }));
 
-    expect((await screen.findAllByText('Registering Profile')).length).toBeGreaterThan(0);
-    releaseFinalStatus();
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Provider profile registered successfully.')).toBeTruthy();
     expect(storageSetItem).toHaveBeenCalledWith(
@@ -261,7 +278,7 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     );
   });
 
-  it('hides the authentication code paste helper for Codex OAuth sessions', async () => {
+  it('supports native paste and Enter submission for Codex OAuth sessions', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: RequestInfo | URL) => {
@@ -293,11 +310,14 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     );
 
     renderPage();
-    await waitForSocket();
-
-    expect(screen.queryByLabelText('Paste authentication code')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Paste from clipboard' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Send to terminal' })).toBeNull();
+    const socket = await waitForSocket();
+    fireEvent.change(screen.getByLabelText('Paste authentication code'), {
+      target: { value: 'example-code' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
+    expect(socket.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'input', data: 'example-code\r' }),
+    );
   });
 
   it('shows the recovery action only for recoverable terminal sessions', async () => {
@@ -464,17 +484,17 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     });
   });
 
-  it('sends manually pasted authentication code from the paste box to the terminal', async () => {
+  it.each(['', '\n', '\r\n'])('submits a Claude code with Enter (copied suffix %j)', async (suffix) => {
     renderPage();
     const socket = await waitForSocket();
 
     fireEvent.change(screen.getByLabelText('Paste authentication code'), {
-      target: { value: 'manual-auth-code' },
+      target: { value: `manual-auth-code${suffix}` },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
 
     expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'input', data: 'manual-auth-code\n' }),
+      JSON.stringify({ type: 'input', data: 'manual-auth-code\r' }),
     );
     expect(
       (screen.getByLabelText('Paste authentication code') as HTMLTextAreaElement).value,
@@ -503,10 +523,11 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
 
     expect(socket.send).not.toHaveBeenCalledWith(
-      JSON.stringify({ type: 'input', data: 'manual-auth-code\n' }),
+      JSON.stringify({ type: 'input', data: 'manual-auth-code\r' }),
     );
     expect(
       (screen.getByLabelText('Paste authentication code') as HTMLTextAreaElement).value,
     ).toBe('manual-auth-code');
+    expect(screen.getByRole('alert').textContent).toContain('Your code has been kept');
   });
 });
