@@ -1268,7 +1268,11 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         "head": "branch_head_stale",
         "profile": "provider_profile_mismatch",
         "policy": "launch_policy_mismatch",
-        "credential": "credential_generation_changed",
+        # Rotation of a still-authorized Profile is tolerated by the
+        # destination-authority boundary (MoonLadderStudios/MoonMind#3621), so
+        # this case pairs the rotation with a revoked profile: current
+        # revocation still rejects before any mutation.
+        "credential": "provider_profile_not_ready",
     }
     mismatched_launches = {
         case: await seed_mismatched_launch(case) for case in mismatch_codes
@@ -1358,6 +1362,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                             )
                             assert profile_row is not None
                             profile_row.credential_generation = 2
+                            profile_row.enabled = False
                             await mismatch_session.commit()
                     branch_id, turn_id = mismatched_launches[case]
                     launch_intent: dict[str, object] = {
@@ -1388,6 +1393,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                             )
                             assert profile_row is not None
                             profile_row.credential_generation = 1
+                            profile_row.enabled = True
                             await mismatch_session.commit()
 
                 root_payload = {

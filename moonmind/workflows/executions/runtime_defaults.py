@@ -41,6 +41,12 @@ _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "codex_cli": ("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
     "claude_code": ("MOONMIND_CLAUDE_MODEL", "CLAUDE_MODEL"),
     "jules": ("MOONMIND_JULES_MODEL", "JULES_MODEL"),
+    # MoonLadderStudios/MoonMind#4538: the OpenCode runtime has no hard-coded
+    # stock model. The inherited default is the deployment-configured OpenCode
+    # default for the execution context Omnigent actually launches,
+    # reusing the existing ``MOONMIND_OMNIGENT_DEFAULT_MODEL`` setting that
+    # the Omnigent planner already reads. No new model knob is introduced.
+    "opencode": ("MOONMIND_OMNIGENT_DEFAULT_MODEL",),
 }
 
 _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
