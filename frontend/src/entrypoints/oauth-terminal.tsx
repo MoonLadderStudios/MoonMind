@@ -169,13 +169,6 @@ function isTerminalAttachable(session: OAuthSessionResponse): boolean {
   );
 }
 
-function isClaudeCodeOAuthSession(session: OAuthSessionResponse | null): boolean {
-  return (
-    session?.runtime_id === 'claude_code' ||
-    session?.profile_summary?.runtime_id === 'claude_code'
-  );
-}
-
 function contextMenuPositionForEvent(
   event: MouseEvent,
   fallbackElement: HTMLElement,
@@ -239,6 +232,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [pastedInput, setPastedInput] = useState('');
+  const [selectableOutput, setSelectableOutput] = useState<string | null>(null);
+  const selectableOutputRef = useRef<HTMLTextAreaElement | null>(null);
   const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
   const pastedInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -246,7 +241,28 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
-  const showAuthenticationPasteBox = isClaudeCodeOAuthSession(session);
+  const showAuthenticationPasteBox = Boolean(session && isTerminalAttachable(session));
+
+  const selectTerminalText = () => {
+    const buffer = terminalRef.current?.buffer.active;
+    if (!buffer) return;
+    let text = '';
+    for (let index = 0; index < buffer.length; index += 1) {
+      const line = buffer.getLine(index);
+      if (!line) continue;
+      // Rejoin soft wraps so a copied OAuth URL is usable on a narrow screen.
+      if (index > 0 && !line.isWrapped) text += '\n';
+      text += line.translateToString(true);
+    }
+    setSelectableOutput(text.trimEnd());
+  };
+
+  useEffect(() => {
+    if (selectableOutput !== null) {
+      selectableOutputRef.current?.focus();
+      selectableOutputRef.current?.select();
+    }
+  }, [selectableOutput]);
 
   const sendTerminalInput = (data: string) => {
     if (!data) {
@@ -262,6 +278,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     const selectedText = terminalRef.current?.getSelection() ?? '';
     if (selectedText) {
       copyTextToClipboard(selectedText);
+    } else {
+      selectTerminalText();
     }
   };
 
@@ -271,11 +289,14 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       return;
     }
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      setActionError('Terminal is not connected. Your code has been kept; reconnect before sending.');
       pastedInputRef.current?.focus();
       return;
     }
-    const input = pastedInput.endsWith('\n') ? pastedInput : `${pastedInput}\n`;
+    // Interactive raw-mode prompts use CR for Enter, just like xterm's keyboard.
+    const input = `${pastedInput.replace(/[\r\n]+$/, '').replace(/\r?\n/g, '\r')}\r`;
     sendTerminalInput(input);
+    setActionError(null);
     setPastedInput('');
   };
 
@@ -360,12 +381,6 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       window.removeEventListener('resize', closeContextMenu);
     };
   }, [contextMenu]);
-
-  useEffect(() => {
-    if (!showAuthenticationPasteBox && pastedInput) {
-      setPastedInput('');
-    }
-  }, [showAuthenticationPasteBox, pastedInput]);
 
   useEffect(() => {
     const terminalElement = terminalElementRef.current;
@@ -599,6 +614,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <button type="button" className="secondary" onClick={copyTerminalSelection}>
             Copy selection
           </button>
+          <button type="button" className="secondary" onClick={selectTerminalText}>
+            Select terminal text
+          </button>
           {showAuthenticationPasteBox ? (
             <button type="button" className="secondary" onClick={pasteClipboardToTerminal}>
               Paste from clipboard
@@ -610,6 +628,23 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
         <div ref={terminalElementRef} className="oauth-terminal-xterm" />
       </section>
+      {selectableOutput !== null ? (
+        <section className="oauth-terminal-paste-box">
+          <label htmlFor="oauth-terminal-selectable-output">Selectable terminal text</label>
+          <p>Touch and hold to select and copy text or a login link.</p>
+          <textarea
+            id="oauth-terminal-selectable-output"
+            ref={selectableOutputRef}
+            className="oauth-terminal-paste-input"
+            rows={6}
+            readOnly
+            value={selectableOutput}
+          />
+          <button type="button" className="secondary" onClick={() => setSelectableOutput(null)}>
+            Close selectable text
+          </button>
+        </section>
+      ) : null}
       {showAuthenticationPasteBox ? (
         <section className="oauth-terminal-paste-box">
           <label className="oauth-terminal-paste-label" htmlFor="oauth-terminal-paste-input">
@@ -621,6 +656,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
               ref={pastedInputRef}
               className="oauth-terminal-paste-input"
               rows={3}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               placeholder="Paste the returned authentication code here, then send it to the terminal."
               value={pastedInput}
               onChange={(event) => setPastedInput(event.target.value)}
