@@ -103,6 +103,11 @@ def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[st
                 "-e",
                 f"CLAUDE_HOME={volume_mount_path}",
                 "-e",
+                # The pinned Claude Code CLI ignores CLAUDE_HOME; the config
+                # dir override is what steers credential reads/writes into
+                # the mounted auth volume.
+                f"CLAUDE_CONFIG_DIR={volume_mount_path}",
+                "-e",
                 f"CLAUDE_VOLUME_PATH={volume_mount_path}",
                 "-e",
                 "ANTHROPIC_API_KEY=",
