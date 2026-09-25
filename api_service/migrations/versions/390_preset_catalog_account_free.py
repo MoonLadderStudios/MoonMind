@@ -20,20 +20,29 @@ Revises: 389_opencode_validation_repair
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from typing import Union
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "390_preset_catalog_account_free"
 down_revision: Union[str, None] = "389_opencode_validation_repair"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
 
 # (table, column, ondelete restored by downgrade)
 _ACCOUNT_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("presets", "created_by", "SET NULL"),
     ("presets", "reviewed_by", "SET NULL"),
+    ("preset_favorites", "user_id", "CASCADE"),
+    ("preset_recents", "user_id", "CASCADE"),
+)
+
+# Downgrade restores only constraints that existed at 389.
+# 327_mm912_slug_scope_presets added presets.reviewed_by as a plain UUID
+# column with no foreign key (the historical reviewer FK belonged to the
+# deleted preset_versions table), so the rollback must not invent
+# presets_reviewed_by_fkey.
+_DOWNGRADE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("presets", "created_by", "SET NULL"),
     ("preset_favorites", "user_id", "CASCADE"),
     ("preset_recents", "user_id", "CASCADE"),
 )
@@ -102,7 +111,7 @@ def downgrade() -> None:
     tables = set(inspector.get_table_names())
     if "user" not in tables:
         return
-    for table, column, _ in _ACCOUNT_COLUMNS:
+    for table, column, _ in _DOWNGRADE_COLUMNS:
         if table not in tables:
             continue
         orphans = bind.execute(
@@ -118,7 +127,7 @@ def downgrade() -> None:
                 "such as the account-free local operator. Repair forward so "
                 "no preset preference or provenance is discarded."
             )
-    for table, column, ondelete in _ACCOUNT_COLUMNS:
+    for table, column, ondelete in _DOWNGRADE_COLUMNS:
         if table not in tables or column in _user_foreign_keys(inspector, table):
             continue
         with op.batch_alter_table(table, naming_convention=_NAMING_CONVENTION) as batch:
