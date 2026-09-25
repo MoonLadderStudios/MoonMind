@@ -1616,7 +1616,7 @@ function isActiveOAuthStatus(status: OAuthSessionStatus): boolean {
 }
 
 function canFinalizeOAuthStatus(status: OAuthSessionStatus): boolean {
-  return status === 'awaiting_user' || status === 'verifying' || status === 'registering_profile';
+  return status === 'awaiting_user' || status === 'verifying';
 }
 
 function canRetryOAuthStatus(status: OAuthSessionStatus): boolean {
@@ -3732,30 +3732,21 @@ export function ProviderProfilesManager({
             : 'Failed to finalize OAuth session.';
         throw new Error(detail);
       }
-      const session = (await response.json()) as OAuthSessionResponse;
-      return { profileId, session };
+      return { profileId, sessionId };
     },
-    onSuccess: async ({ profileId, session }) => {
-      const sessionId = session.session_id;
-      const sessionState = oauthSessionStateFromResponse(session, profileId);
+    onSuccess: async ({ profileId, sessionId }) => {
       setOauthSessions((current) => ({
         ...current,
-        [profileId]: sessionState,
+        [profileId]: { ...current[profileId], sessionId, profileId, status: 'succeeded' },
       }));
       setTmateOAuthSession((current) =>
-        current?.sessionId === sessionId ? sessionState : current,
+        current?.sessionId === sessionId ? { ...current, status: 'succeeded' } : current,
       );
-      if (session.status === 'succeeded') {
-        queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-        const defaultNoticePosted = await applyPendingDefaultIntent(profileId);
-        if (!defaultNoticePosted) {
-          onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
-        }
-      } else if (session.status === 'failed') {
-        queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-        onNotice({ level: 'error', text: session.failure_reason || `OAuth session for "${profileId}" failed.` });
-      } else {
-        onNotice({ level: 'ok', text: `OAuth credentials saved for "${profileId}". Validating the host.` });
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      // The deferred default intent owns the final notice when it fires.
+      const defaultNoticePosted = await applyPendingDefaultIntent(profileId);
+      if (!defaultNoticePosted) {
+        onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
       }
     },
     onError: (error: Error) => {
@@ -3789,15 +3780,13 @@ export function ProviderProfilesManager({
     },
   });
 
-  const oauthLifecycleMutation = useMutation({
+  const claudeOAuthLifecycleMutation = useMutation({
     mutationFn: async ({
       profileId,
       actionId,
-      labelPrefix,
     }: {
       profileId: string;
       actionId: 'validate_oauth' | 'disconnect_oauth';
-      labelPrefix: 'Claude' | 'Codex';
     }) => {
       const endpointAction = actionId === 'validate_oauth' ? 'validate' : 'disconnect';
       const response = await fetch(
@@ -3806,18 +3795,18 @@ export function ProviderProfilesManager({
       );
       const payload: unknown = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)) ?? `${labelPrefix} OAuth action failed.`);
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)) ?? 'Claude OAuth action failed.');
       }
-      return { profileId, actionId, labelPrefix };
+      return { profileId, actionId };
     },
-    onSuccess: ({ profileId, actionId, labelPrefix }) => {
+    onSuccess: ({ profileId, actionId }) => {
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
         text:
           actionId === 'validate_oauth'
-            ? `${labelPrefix} OAuth validated for "${profileId}".`
-            : `${labelPrefix} OAuth disconnected for "${profileId}".`,
+            ? `Claude OAuth validated for "${profileId}".`
+            : `Claude OAuth disconnected for "${profileId}".`,
       });
     },
     onError: (error: Error) => {
@@ -3887,25 +3876,8 @@ export function ProviderProfilesManager({
         return oauthSessionStatesEqual(current, sessionState) ? current : sessionState;
       });
 
-      const terminalUpdates = appliedUpdates.filter(({ profileId, session }) => {
-        const previous = oauthSessions[profileId];
-        return previous?.sessionId === session.session_id
-          && previous.status !== session.status
-          && (session.status === 'succeeded' || session.status === 'failed');
-      });
-      if (terminalUpdates.length > 0) {
+      if (appliedUpdates.some(({ session }) => session.status === 'succeeded')) {
         queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      }
-      for (const { profileId, session } of terminalUpdates) {
-        if (session.status === 'succeeded') {
-          void applyPendingDefaultIntent(profileId).then((defaultNoticePosted) => {
-            if (!defaultNoticePosted) {
-              onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
-            }
-          });
-        } else {
-          onNotice({ level: 'error', text: session.failure_reason || `OAuth session for "${profileId}" failed.` });
-        }
       }
     };
 
@@ -4089,9 +4061,6 @@ export function ProviderProfilesManager({
                 const oauthSession = oauthSessions[profile.profile_id];
                 const authModel = providerAuthModel(profile);
                 const canStartOAuth = authModel.kind === 'codex_oauth';
-                const canValidateCodexOAuth = canStartOAuth &&
-                  profile.credential_source === 'oauth_volume' &&
-                  Boolean(profile.volume_ref && profile.volume_mount_path);
                 const canUseGenericApiKey = Boolean(
                   ((profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
                     hasGuidedApiKeySetup(profile)) &&
@@ -4316,11 +4285,6 @@ export function ProviderProfilesManager({
                           {authModel.statusLabel}
                         </div>
                       ) : null}
-                      {canValidateCodexOAuth && profile.disabled_reason === 'auth_invalid' ? (
-                        <div className="text-xs text-rose-600 dark:text-rose-400">
-                          Codex OAuth validation failed. Validate the saved credentials or reconnect OAuth.
-                        </div>
-                      ) : null}
                       {oauthSession ? (
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
                           OAuth: {oauthStatusLabel(oauthSession.status)}
@@ -4444,21 +4408,6 @@ export function ProviderProfilesManager({
                           OAuth
                         </button>
                       ) : null}
-                      {canWriteProviderProfiles && canValidateCodexOAuth ? (
-                        <button
-                          type="button"
-                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
-                          onClick={() => oauthLifecycleMutation.mutate({
-                            profileId: profile.profile_id,
-                            actionId: 'validate_oauth',
-                            labelPrefix: 'Codex',
-                          })}
-                          disabled={oauthLifecycleMutation.isPending}
-                          aria-label={`Validate OAuth ${profile.profile_id}`}
-                        >
-                          Validate OAuth
-                        </button>
-                      ) : null}
                       {canWriteProviderProfiles && authModel.kind === 'claude_credentials'
                         ? authModel.actions.map((action) => (
                             <button
@@ -4475,14 +4424,13 @@ export function ProviderProfilesManager({
                                   return;
                                 }
                                 if (action.id === 'validate_oauth' || action.id === 'disconnect_oauth') {
-                                  oauthLifecycleMutation.mutate({
+                                  claudeOAuthLifecycleMutation.mutate({
                                     profileId: profile.profile_id,
                                     actionId: action.id,
-                                    labelPrefix: 'Claude',
                                   });
                                 }
                               }}
-                              disabled={oauthLifecycleMutation.isPending}
+                              disabled={claudeOAuthLifecycleMutation.isPending}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}

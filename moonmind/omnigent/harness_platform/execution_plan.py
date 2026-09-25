@@ -6,6 +6,7 @@ Plan digest is non-self-referential: payload bytes hashed, ref stored outside pa
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from typing import Any, Literal
@@ -158,12 +159,24 @@ class AdmissionAuthority(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    supportEvidenceRef: str = Field(alias="supportEvidenceRef")
-    supportEvidenceDigest: str = Field(alias="supportEvidenceDigest")
+    # MoonLadderStudios/MoonMind#4560: ordinary admission is
+    # certificate-independent; strict admission requires certification.
+    # The trusted admission/settings boundary chooses the effective mode --
+    # workflow-authored input can never downgrade strict or forge admission.
+    # Plans persisted before this field existed always carried certified
+    # evidence, so the default preserves their in-flight strict
+    # interpretation: missing metadata never silently bypasses validation.
+    admissionMode: Literal["ordinary", "strict"] = Field(
+        default="strict", alias="admissionMode"
+    )
+    supportEvidenceRef: str = Field(default="", alias="supportEvidenceRef")
+    supportEvidenceDigest: str = Field(default="", alias="supportEvidenceDigest")
     # Which evidence tier backs admission. Plans persisted before this field
     # existed always carried protected-tier evidence, so the default preserves
-    # their in-flight interpretation.
-    supportTier: Literal["supported", "deployment_qualified"] = Field(
+    # their in-flight interpretation. ``uncertified`` names explicitly
+    # certificate-independent ordinary admission -- never a claim that
+    # execution has already succeeded.
+    supportTier: Literal["supported", "deployment_qualified", "uncertified"] = Field(
         default="supported", alias="supportTier"
     )
     featureGeneration: str = Field(alias="featureGeneration")
@@ -172,10 +185,32 @@ class AdmissionAuthority(BaseModel):
 
     @model_validator(mode="after")
     def validate_authority(self) -> "AdmissionAuthority":
-        if not self.supportEvidenceRef.startswith("artifact:"):
-            raise ValueError("supportEvidenceRef must be artifact-backed")
-        if not self.supportEvidenceDigest.startswith("sha256:"):
-            raise ValueError("supportEvidenceDigest must be a sha256 digest")
+        if self.admissionMode == "strict":
+            if not self.supportEvidenceRef.startswith("artifact:"):
+                raise ValueError("supportEvidenceRef must be artifact-backed")
+            if not self.supportEvidenceDigest.startswith("sha256:"):
+                raise ValueError("supportEvidenceDigest must be a sha256 digest")
+            if self.supportTier == "uncertified":
+                raise ValueError("strict admission requires certified evidence")
+        else:
+            # Ordinary admission: uncertified execution carries empty refs and
+            # the uncertified tier truthfully. When an optional certificate is
+            # present as a truthful observation it must still be well-formed,
+            # but its absence never vetoes ordinary execution.
+            if not self.supportEvidenceRef and not self.supportEvidenceDigest:
+                if self.supportTier != "uncertified":
+                    raise ValueError(
+                        "uncertified ordinary admission must use the uncertified tier"
+                    )
+            else:
+                if not self.supportEvidenceRef.startswith("artifact:"):
+                    raise ValueError("supportEvidenceRef must be artifact-backed")
+                if not self.supportEvidenceDigest.startswith("sha256:"):
+                    raise ValueError("supportEvidenceDigest must be a sha256 digest")
+                if self.supportTier == "uncertified" and self.supportEvidenceRef:
+                    raise ValueError(
+                        "uncertified tier must not carry an evidence reference"
+                    )
         for field_name in (
             "featureGeneration",
             "replayCompatibilityVersion",
@@ -184,6 +219,26 @@ class AdmissionAuthority(BaseModel):
             if not str(getattr(self, field_name) or "").strip():
                 raise ValueError(f"{field_name} is required")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_authority(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Keep strict plans wire-identical to the pre-#4560 authority shape.
+
+        Retained readers predate ``admissionMode`` and reject unknown fields
+        via ``extra="forbid"``. A strict plan already carries the historical
+        meaning (certified refs + a certified tier), so omitting the default
+        ``"strict"`` marker keeps it parseable by the retained fleet during
+        a rolling upgrade. Ordinary plans keep the marker: retained readers
+        fail closed on the new shape instead of misreading uncertified
+        admission as certified.
+        """
+
+        payload = handler(self)
+        if self.admissionMode == "strict":
+            payload.pop("admissionMode", None)
+        return payload
 
 
 class RuntimeProviderRolloutRecord(BaseModel):
@@ -618,3 +673,60 @@ def forbidden_plan_check(payload: dict[str, Any]) -> None:
             str(exc),
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
         ) from exc
+
+
+def reissue_ordinary_admission_for_saved_plan(
+    payload: dict[str, Any] | OmnigentExecutionPlanPayload,
+    *,
+    require_certification: bool,
+) -> OmnigentExecutionPlanEnvelope:
+    """Reissue fresh ordinary admission for a pre-upgrade saved plan.
+
+    MoonLadderStudios/MoonMind#4560 (R7): the next ordinary attempt of a
+    pre-upgrade recurring schedule or saved plan must preserve schedule
+    intent -- schedule ID, cadence, timezone, paused state, input, Profile
+    and account selection, model, budgets, publication intent -- while
+    obtaining fresh ordinary admission without the obsolete historical
+    certificate. Every intent field is carried over byte-identically; only
+    ``admissionAuthority`` is replaced with fresh uncertified ordinary
+    authority at the current generations. The input is never mutated, so
+    historical digests (the saved planRef, evidence refs) stay unchanged;
+    the caller keeps the old envelope as history and persists the returned
+    envelope as the new attempt.
+
+    The trusted settings boundary owns the mode and injects it as
+    ``require_certification``: under explicit strict certification this
+    refuses instead of silently downgrading. This module never reads
+    deployment configuration itself. Strict saved plans keep their
+    consumer -- re-admission through the strict path with fresh evidence --
+    and that path is their exit condition.
+    """
+
+    from moonmind.omnigent.session_supervisor_rollback import (
+        SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+    )
+
+    if require_certification:
+        raise ValueError(
+            "saved-plan ordinary reissue is unavailable under explicit strict "
+            "certification: re-admit through the strict path with fresh evidence"
+        )
+    data = (
+        payload.model_dump(by_alias=True, mode="json")
+        if isinstance(payload, OmnigentExecutionPlanPayload)
+        else copy.deepcopy(dict(payload))
+    )
+    data["admissionAuthority"] = AdmissionAuthority(
+        admissionMode="ordinary",
+        supportEvidenceRef="",
+        supportEvidenceDigest="",
+        supportTier="uncertified",
+        featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+        replayCompatibilityVersion=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    ).model_dump(by_alias=True, mode="json")
+    return create_execution_plan_envelope(data)
