@@ -227,4 +227,113 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
       host.remove();
     }
   });
+
+  it('keeps policy inspect/version/diff sections and action groups inside 320px (MoonMind#4559 AC-02)', async () => {
+    const host = document.createElement('div');
+    host.className = 'dashboard-content';
+    host.innerHTML = `
+      <div class="omnigent-inventory">
+        <section class="omnigent-policy-detail" aria-label="Immutable policy version">
+          <div class="omnigent-inventory__toolbar">
+            <h2>Long policy name that must wrap instead of stretching the page ${LONG_ID}</h2>
+            <button type="button">Close</button>
+          </div>
+          <div>
+            <h3>Version history</h3>
+            <button type="button" aria-pressed="true">policy@3 · active</button>
+            <button type="button" aria-pressed="false">policy@2 · deprecated</button>
+          </div>
+          <p>Validation: Needs attention</p>
+          <p role="alert">some/path: CODE: a very long diagnostic message that must wrap ${LONG_SUMMARY}</p>
+          <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, RAG, approvals, and retention</h3>
+          <pre>{"rule": "a-very-long-unbroken-document-string-that-must-not-stretch-the-page-0123456789-abcdef"}</pre>
+          <button type="button">Validate against deployment</button>
+          <button type="button">Roll back default to policy@2 with a very long action label</button>
+          <button type="button">Disable policy@3</button>
+          <button type="button">Deprecate policy@3</button>
+          <button type="button">Edit as new version</button>
+          <button type="button">Clone</button>
+          <h3>Normalized diff to current default</h3>
+          <pre>model.tier: "a" → "a very long changed value that must wrap inside the detail pane"</pre>
+          <h3>Audit history</h3>
+          <ol><li>transitioned · version 3 · operator</li></ol>
+        </section>
+        <form class="omnigent-policy-editor">
+          <h2>Edit as immutable new version</h2>
+          <label><span>Policy id</span><input value="${LONG_ID}" /></label>
+          <label><span>Complete policy document (JSON)</span><textarea rows="4">{"a": 1}</textarea></label>
+          <button type="submit">Validate and save draft</button>
+          <button type="button">Cancel</button>
+        </form>
+      </div>
+    `;
+    document.body.appendChild(host);
+    try {
+      for (const viewport of [
+        { width: 320, height: 568 },
+        { width: 390, height: 844 },
+      ]) {
+        await assertNoPageOverflow(viewport, 'policy-detail');
+        for (const el of Array.from(host.querySelectorAll('button, input, textarea, pre, p, h2'))) {
+          const rect = (el as HTMLElement).getBoundingClientRect();
+          expect(rect.right, `${el.tagName} "${(el.textContent ?? '').slice(0, 40)}" spills right`).toBeLessThanOrEqual(
+            window.innerWidth + 1,
+          );
+          expect(rect.left).toBeGreaterThanOrEqual(-1);
+        }
+      }
+    } finally {
+      host.remove();
+    }
+  });
+
+  it('keeps enrollment drawers and confirmation dialogs viewport-bounded with focus return (MoonMind#4559 AC-05)', async () => {
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.textContent = 'Remove profile';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const dialog = document.createElement('div');
+    dialog.className = 'dashboard-content';
+    dialog.innerHTML = `
+      <div role="dialog" aria-modal="true" aria-label="Remove provider profile confirmation">
+        <h2>Remove provider profile with a very long name that must wrap ${LONG_ID}</h2>
+        <p>Removing a default tier requires a reviewed replacement default. This message is long so wrapping is exercised: ${LONG_SUMMARY}</p>
+        <label>Confirmation input<input value="${LONG_ID}" /></label>
+        <div>
+          <button type="button" data-close>Cancel</button>
+          <button type="button" data-close>Remove and renumber with a very long destructive label</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+    try {
+      await page.viewport(320, 568);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await assertNoPageOverflow({ width: 320, height: 568 }, 'overlay');
+      const panel = dialog.querySelector('[role="dialog"]') as HTMLElement;
+      const rect = panel.getBoundingClientRect();
+      expect(rect.right).toBeLessThanOrEqual(window.innerWidth + 1);
+      expect(rect.left).toBeGreaterThanOrEqual(-1);
+      expect(rect.height).toBeLessThanOrEqual(window.innerHeight + 1);
+      // Keyboard/focus contract: move focus into the dialog, Escape closes it,
+      // and focus returns to the initiating action.
+      const firstButton = panel.querySelector('button') as HTMLElement;
+      firstButton.focus();
+      expect(document.activeElement).toBe(firstButton);
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') dialog.remove();
+      };
+      document.addEventListener('keydown', onKey);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      document.removeEventListener('keydown', onKey);
+      expect(document.body.contains(dialog)).toBe(false);
+      trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      dialog.remove();
+      trigger.remove();
+      await page.viewport(1280, 800);
+    }
+  });
 });
