@@ -555,6 +555,16 @@ describe('GeneratedSettingsSection', () => {
     expect(requests.some((request) => request.url.startsWith('/api/v1/settings/audit'))).toBe(false);
   });
 
+  it('keeps long setting keys inside the narrow row without squeezing actions', async () => {
+    renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
+
+    await screen.findByText('Default Publish Mode');
+    const keyLabel = screen.getByText('workflow.default_publish_mode');
+    expect(keyLabel.className).toContain('break-all');
+    const actionRow = keyLabel.closest('div.flex');
+    expect(actionRow?.className).toContain('flex-wrap');
+  });
+
   it('keeps generated settings usable when an audit request fails', async () => {
     fetchSpy.mockImplementation((input, init) => {
       const url = String(input);
