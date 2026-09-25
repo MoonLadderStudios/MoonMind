@@ -1,8 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { DataTable, type Column } from '../components/tables/DataTable';
+import {
+  ProviderProfilesManager,
+  type ProviderProfile,
+} from '../components/settings/ProviderProfilesManager';
+import {
+  buildProviderProfileTierPayload,
+  normalizeProviderProfileTiers,
+} from '../utils/providerProfileTiers';
 import '../styles/dashboard.css';
 
 // Real-browser guardrail for MoonLadderStudios/MoonMind#4559. Exercises the
@@ -334,6 +343,107 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
       dialog.remove();
       trigger.remove();
       await page.viewport(1280, 800);
+    }
+  });
+
+  it('keeps the production provider journey inside 320px with canonical tier payload (MoonMind#4559 AC-03/AC-04)', async () => {
+    // Production-component journey: the real ProviderProfilesManager with
+    // synthetic credential-free fixtures (long identity, long tier labels,
+    // several tiers, non-first default). Static props keep it network-quiet;
+    // any unexpected fetch fails loudly instead of hitting the network.
+    const originalFetch = window.fetch;
+    const profiles: ProviderProfile[] = [
+      {
+        profile_id: LONG_ID,
+        runtime_id: 'codex_cli',
+        provider_id: 'openai',
+        credential_source: 'secret_ref',
+        runtime_materialization_mode: 'api_key_env',
+        secret_refs: {},
+        max_parallel_runs: 1,
+        cooldown_after_429_seconds: 300,
+        rate_limit_policy: 'backoff',
+        enabled: true,
+        is_default: true,
+        model_tiers: [
+          { label: 'Plan and verify with a very long tier label that must wrap', model: 'gpt-5.5', effort: 'medium' },
+          { label: 'Implementation', model: 'gpt-5.5', effort: 'xhigh' },
+          { label: 'Docs and follow-through', model: null, effort: null },
+        ],
+        default_model_tier: 2,
+      },
+      {
+        profile_id: 'short-id',
+        runtime_id: 'codex_cli',
+        provider_id: 'openai',
+        credential_source: 'secret_ref',
+        runtime_materialization_mode: 'api_key_env',
+        secret_refs: {},
+        max_parallel_runs: 1,
+        cooldown_after_429_seconds: 300,
+        rate_limit_policy: 'backoff',
+        enabled: true,
+        is_default: false,
+      },
+    ];
+    window.fetch = (async () => {
+      throw new Error('Unexpected fetch in mobileOverflow4559 provider journey');
+    }) as typeof window.fetch;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <div className="dashboard-content">
+          <ProviderProfilesManager
+            profiles={profiles}
+            secretSlugs={[]}
+            onNotice={() => undefined}
+            queryClient={queryClient}
+            defaultTaskModelByRuntime={{}}
+          />
+        </div>
+      </QueryClientProvider>,
+    );
+    try {
+      // Normalized UI state survives the layout refactor.
+      const mapping = screen.getByLabelText(`${LONG_ID} model tier mapping`);
+      expect(mapping.textContent).toContain('Tier 2 default · Implementation');
+      for (const viewport of [
+        { width: 320, height: 568 },
+        { width: 390, height: 844 },
+      ]) {
+        await assertNoPageOverflow(viewport, 'provider-journey');
+        // Saved-profile actions use the full record width, not a squeezed label column.
+        const actionsCell = document.querySelector(
+          '.provider-profiles-table td[data-label="Actions"]',
+        ) as HTMLElement | null;
+        if (actionsCell && getComputedStyle(actionsCell).display !== 'none') {
+          const actionsRect = actionsCell.getBoundingClientRect();
+          expect(actionsRect.right).toBeLessThanOrEqual(window.innerWidth + 1);
+        }
+        for (const input of Array.from(document.querySelectorAll('input, select, textarea'))) {
+          const rect = (input as HTMLElement).getBoundingClientRect();
+          expect(rect.right, `${input.tagName} spills right`).toBeLessThanOrEqual(window.innerWidth + 1);
+        }
+        for (const button of Array.from(document.querySelectorAll('button'))) {
+          const rect = button.getBoundingClientRect();
+          expect(rect.right, `button "${button.textContent?.slice(0, 40)}" clipped`).toBeLessThanOrEqual(
+            window.innerWidth + 1,
+          );
+        }
+      }
+      // Canonical save payload for the same fixtures: order preserved,
+      // 1-based default, no legacy mirrors.
+      const saved = profiles[0]!;
+      const normalized = normalizeProviderProfileTiers(saved.model_tiers, saved.default_model_tier);
+      const payload = buildProviderProfileTierPayload(normalized.tiers, normalized.defaultTierClientId);
+      expect(payload.default_model_tier).toBe(2);
+      expect(payload.model_tiers).toHaveLength(3);
+      expect(payload).not.toHaveProperty('default_model');
+      expect(JSON.stringify(payload)).not.toContain('clientId');
+    } finally {
+      unmount();
+      window.fetch = originalFetch;
+      queryClient.clear();
     }
   });
 });
