@@ -3621,9 +3621,12 @@ def build_remediation_operation_evidence(
             }
             for row_id in row_ids:
                 if row_id not in required_rows:
-                    raise RemediationMatrixError(
-                        f"row {row_id!r} is outside operation {operation!r}"
-                    )
+                    # Scoped operation builds reuse the repository's normal
+                    # one-artifact-per-kind output: reliabilitySecurityEvidence
+                    # carries both manual-mutation rows and the separately gated
+                    # autonomous rollout row. Filter to the operation's required
+                    # rows instead of rejecting the autonomous row.
+                    continue
                 if row_id in observed_rows:
                     raise RemediationMatrixError(
                         f"duplicate observed remediation row: {row_id}"
@@ -3717,7 +3720,11 @@ class RemediationReleaseStatus:
             "manualPromotionAllowed": self.manual_mutation_supported,
             "autonomousPromotionAllowed": self.autonomous_rollout_authorized,
             "rollbackRequired": any(
-                blocker != "autonomous_rollout_gate_closed"
+                blocker
+                not in (
+                    "autonomous_rollout_gate_closed",
+                    "operation_scoped_evidence_not_release",
+                )
                 for blocker in self.blockers
             ),
             "evidenceRef": self.evidence_ref,
@@ -3730,13 +3737,21 @@ class RemediationReleaseStatus:
                     "code": blocker,
                     "severity": (
                         "warning"
-                        if blocker == "autonomous_rollout_gate_closed"
+                        if blocker
+                        in (
+                            "autonomous_rollout_gate_closed",
+                            "operation_scoped_evidence_not_release",
+                        )
                         else "critical"
                     ),
                     "operatorAction": (
                         "keep_autonomous_mutation_disabled"
                         if blocker == "autonomous_rollout_gate_closed"
-                        else "block_or_rollback_manual_promotion"
+                        else (
+                            "scoped_evidence_not_full_release"
+                            if blocker == "operation_scoped_evidence_not_release"
+                            else "block_or_rollback_manual_promotion"
+                        )
                     ),
                 }
                 for blocker in self.blockers
@@ -3862,6 +3877,7 @@ def evaluate_remediation_release(
         declared_rows = evidence.get("matrixRows")
         if (
             not isinstance(declared_rows, list)
+            or not all(isinstance(item, str) for item in declared_rows)
             or set(declared_rows) != doc_required_rows
         ):
             blockers.append("operation_matrix_rows_mismatch")
