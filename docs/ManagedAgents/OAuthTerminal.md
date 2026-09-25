@@ -312,6 +312,18 @@ not allow changing `profile_id`, `volume_ref`, `volume_mount_path`, or provider
 identity for the active session; those values come from the OAuth session that
 Settings created.
 
+### 5.5 Mobile terminal and clipboard controls
+
+The terminal provides a native paste field for both Codex and Claude sessions.
+**Send to terminal** submits the pasted code with a carriage return, matching
+the terminal Enter key used by interactive prompts. If the connection is not
+open, the field retains the code and reports the connection problem.
+**Select terminal text** exposes a read-only, selectable snapshot of the terminal
+buffer with soft-wrapped lines rejoined, so mobile users can copy complete login
+URLs and codes using native text selection even without browser clipboard API
+permission. This snapshot stays in the page only. On narrow screens, the terminal
+uses the available page width without the dashboard card border or padding.
+
 ## 6. Provider Profile Registration
 
 After OAuth verification succeeds, MoonMind registers or updates a Provider
@@ -323,6 +335,18 @@ finalize operation verifies the durable auth volume and registers or updates
 the selected Provider Profile before the workflow checks the bound host. The
 provider terminal page is a completion surface for the existing session, not a
 separate profile editor or a parallel credential store.
+
+Before post-registration credential validation, MoonMind resolves missing launch
+metadata for a new or existing host binding from the persisted launch policy.
+Existing policy, execution-profile, endpoint, and applicable static-host choices
+are preserved. Bindings predating saved policy references select the persisted
+default policy for their existing runtime and static/on-demand host mode; a
+legacy substrate reference is not interpreted as a policy reference. Conflicting
+policy host modes fail before binding updates. A complete launch snapshot is reused; credential-generation,
+lease, login-status, and cleanup checks still apply. Validation errors record
+the exception type and failure code without exposing credential material.
+Binding-repair failures also retain a bounded, redacted reason and the saved
+policy/profile references so missing or inactive policies remain diagnosable.
 
 For Codex OAuth, the resulting profile should preserve:
 
