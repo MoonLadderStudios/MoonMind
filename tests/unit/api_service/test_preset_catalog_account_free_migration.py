@@ -21,11 +21,13 @@ KNOWN_USER = "11111111111111111111111111111111"
 
 _PRE_CHANGE_SCHEMA = (
     'CREATE TABLE "user" (id CHAR(32) PRIMARY KEY)',
+    # 327_mm912_slug_scope_presets added presets.reviewed_by as a plain UUID
+    # column with no foreign key; only created_by carried a user FK at 389.
     """
     CREATE TABLE presets (
         id CHAR(32) PRIMARY KEY,
         slug VARCHAR(128) NOT NULL,
-        reviewed_by CHAR(32) REFERENCES "user"(id) ON DELETE SET NULL,
+        reviewed_by CHAR(32),
         created_by CHAR(32) REFERENCES "user"(id) ON DELETE SET NULL
     )
     """,
@@ -152,8 +154,9 @@ def test_downgrade_restores_user_references_when_every_value_resolves(
     _migrate(tmp_path, migration, "upgrade", "downgrade")
 
     with engine.begin() as connection:
+        # 327 added presets.reviewed_by as a plain UUID with no FK, so the
+        # downgrade must restore only constraints that existed at 389.
         assert _referred(connection, "presets") == {
-            "reviewed_by": "user",
             "created_by": "user",
         }
         assert _referred(connection, "preset_recents") == {
