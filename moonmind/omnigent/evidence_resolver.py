@@ -253,9 +253,118 @@ def evidence_policy_requires_protected(*, policy: str | None = None) -> bool:
 
 
 __all__ = [
+    "RETAINED_CERTIFICATION_CONSUMERS",
     "SupportEvidenceFreshness",
     "resolve_execution_evidence",
     "resolve_support_evidence_freshness",
     "evidence_policy_allows_deployment",
     "evidence_policy_requires_protected",
 ]
+
+
+#: Retained certificate machinery still wired as mandatory-for-strict
+#: (MoonLadderStudios/MoonMind#4560 R12 removal audit).
+#:
+#: Each entry names the retained consumer, the strict/diagnostic use that
+#: keeps it alive, and the exit condition that retires it. Ordinary
+#: admission never consults these gates for a veto: ``resolve_execution_evidence``
+#: returns ``(None, "uncertified")`` and the rollout/planner/bootstrap
+#: ordinary paths treat freshness as advisory-only. The R3/R7/R8
+#: ordinary-admission tests are the proof that no retained consumer
+#: reinstates the veto. Real integrity and security checks stay; only the
+#: historical-certificate prerequisite was removed from ordinary work.
+RETAINED_CERTIFICATION_CONSUMERS: tuple[dict[str, str], ...] = (
+    {
+        "consumer": "moonmind.omnigent.bootstrap.qualification:run_qualification",
+        "retained_use": (
+            "strict certification report tail behind "
+            "BootstrapController._publish_certification_report; "
+            "diagnostic observation for ordinary readiness"
+        ),
+        "exit_condition": (
+            "retire when explicit strict certification "
+            "(protected/deployment) is removed, or when no strict or "
+            "diagnostic consumer reads its report"
+        ),
+    },
+    {
+        "consumer": (
+            "moonmind.omnigent.bootstrap.controller:"
+            "materializer qualification sweep + deployment-evidence "
+            "freshness reconciliation"
+        ),
+        "retained_use": (
+            "mandatory sweep only under explicit strict certification; "
+            "best-effort truthful observation otherwise"
+        ),
+        "exit_condition": (
+            "remove the strict branch when strict certification is "
+            "retired; keep the advisory observation while schedules "
+            "report certification state"
+        ),
+    },
+    {
+        "consumer": (
+            "moonmind.omnigent.deployment_evidence:"
+            "validate_deployment_evidence expiry/max-age gates + "
+            "assert_deployment_evidence_matches_plan host-image gate"
+        ),
+        "retained_use": (
+            "strict admission enforcement and history-vs-new-effect "
+            "diagnosis; ordinary admission never calls this module "
+            "for a veto"
+        ),
+        "exit_condition": (
+            "re-scope to diagnostic-only when strict certification is "
+            "retired; host-image integrity stays with the runtime "
+            "adapter/launch-preflight owners"
+        ),
+    },
+    {
+        "consumer": (
+            "moonmind.omnigent.harness_platform.execution_plan:"
+            "AdmissionAuthority strict validator (default strict)"
+        ),
+        "retained_use": (
+            "preserves the in-flight interpretation of plans persisted "
+            "before admissionMode existed; missing metadata never "
+            "silently bypasses validation"
+        ),
+        "exit_condition": (
+            "default may become ordinary only after every pre-upgrade "
+            "strict plan has drained or migrated via "
+            "reissue_ordinary_admission_for_saved_plan"
+        ),
+    },
+    {
+        "consumer": (
+            "moonmind.omnigent.runtime_provider_rollout:_readiness_denials "
+            "strict branch + harness_platform.planner freshness observation"
+        ),
+        "retained_use": (
+            "strict row demotion for missing/stale/non-pass evidence; "
+            "advisory observation for ordinary rows and operator "
+            "migration views"
+        ),
+        "exit_condition": (
+            "remove the strict demotion branch when strict "
+            "certification is retired; keep the observation while "
+            "readiness reporting names evidence state"
+        ),
+    },
+    {
+        "consumer": (
+            "moonmind.workflows.temporal.activities."
+            "omnigent_session_activities:_validate_plan_admission_authority "
+            "strict branch"
+        ),
+        "retained_use": (
+            "explicit strict new-effect enforcement at the plan-reader "
+            "boundary; ordinary plans return before any certificate read"
+        ),
+        "exit_condition": (
+            "remove when strict admission is retired and no strict "
+            "plan remains loadable"
+        ),
+    },
+)
