@@ -247,6 +247,17 @@ The default Compose path must treat MinIO as the standard artifact backend:
 - external S3 is an explicit override
 - MinIO stays on the internal Docker network by default
 
+The deployment and disposable test Compose files pin the same multi-platform
+`ghcr.io/coollabsio/minio` community image by release and digest. This build uses
+[upstream MinIO source](https://github.com/coollabsio/minio) because the original
+Quay community image is no longer publicly pullable. The S3 endpoints, root
+credential variables, and `minio-data:/data` mount retain their existing contract.
+The replacement was qualified with ordinary and multipart artifact recovery and
+an isolated upgrade from `RELEASE.2025-02-03T21-03-04Z`, verifying existing bytes,
+presigned downloads, new writes, and restart persistence. Applying the release
+uses the ordinary deployment update path; merging a code change does not update
+an installed MinIO container.
+
 ---
 
 ## 7. Artifact identity and addressing

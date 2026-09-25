@@ -158,13 +158,14 @@ Compose, Docker/runtime infrastructure, database and migration changes, integrat
 
 `tools/test_integration.sh` builds its test image unless `MOONMIND_PYTHON_TEST_IMAGE` supplies an already loadable image. CI's existing image layer cache and per-file xdist execution are reused. `MOONMIND_INTEGRATION_WORKERS` controls the supported worker override. This host-side path is not a reason to expose Docker to a managed agent.
 
-Both disposable Compose test stacks pin the same multi-platform MinIO community
+Deployment and both disposable Compose test stacks pin the same multi-platform MinIO community
 image from `ghcr.io/coollabsio/minio` by release and digest. The original
 `quay.io/minio/minio` image is no longer publicly pullable. The replacement is
 [built from upstream MinIO source](https://github.com/coollabsio/minio); it retains
 the S3 protocol and root-credential environment interface exercised by artifact
-integration tests. This test dependency does not change the installed deployment's
-MinIO version or data volume.
+integration tests. The default first-run journey exercises that same image through
+the deployment Compose file. Existing deployment volume names and mounts remain
+unchanged; upgrading the image must preserve stored artifact bytes.
 
 ### Omnigent Conformance Selection
 

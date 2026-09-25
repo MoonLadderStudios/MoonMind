@@ -7,7 +7,7 @@
 # once per runner) plus the workflow pip cache; no custom cache subsystem.
 services:
   minio:
-    # Same source-built community release as docker-compose.test.yaml;
+    # Same source-built community release as both root Compose files;
     # the original quay.io/minio/minio image is no longer publicly pullable.
     image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
     command: server /data
