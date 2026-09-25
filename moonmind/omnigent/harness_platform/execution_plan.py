@@ -6,6 +6,7 @@ Plan digest is non-self-referential: payload bytes hashed, ref stored outside pa
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from typing import Any, Literal
@@ -652,3 +653,57 @@ def forbidden_plan_check(payload: dict[str, Any]) -> None:
             str(exc),
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
         ) from exc
+
+
+def reissue_ordinary_admission_for_saved_plan(
+    payload: dict[str, Any] | OmnigentExecutionPlanPayload,
+) -> OmnigentExecutionPlanEnvelope:
+    """Reissue fresh ordinary admission for a pre-upgrade saved plan.
+
+    MoonLadderStudios/MoonMind#4560 (R7): the next ordinary attempt of a
+    pre-upgrade recurring schedule or saved plan must preserve schedule
+    intent -- schedule ID, cadence, timezone, paused state, input, Profile
+    and account selection, model, budgets, publication intent -- while
+    obtaining fresh ordinary admission without the obsolete historical
+    certificate. Every intent field is carried over byte-identically; only
+    ``admissionAuthority`` is replaced with fresh uncertified ordinary
+    authority at the current generations. The input is never mutated, so
+    historical digests (the saved planRef, evidence refs) stay unchanged;
+    the caller keeps the old envelope as history and persists the returned
+    envelope as the new attempt.
+
+    The trusted settings boundary owns the mode: under explicit strict
+    certification this refuses instead of silently downgrading. Strict
+    saved plans keep their consumer -- re-admission through the strict
+    path with fresh evidence -- and that path is their exit condition.
+    """
+
+    from moonmind.omnigent.session_supervisor_rollback import (
+        SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    from moonmind.omnigent.settings import omnigent_requires_certification
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+    )
+
+    if omnigent_requires_certification():
+        raise ValueError(
+            "saved-plan ordinary reissue is unavailable under explicit strict "
+            "certification: re-admit through the strict path with fresh evidence"
+        )
+    data = (
+        payload.model_dump(by_alias=True, mode="json")
+        if isinstance(payload, OmnigentExecutionPlanPayload)
+        else copy.deepcopy(dict(payload))
+    )
+    data["admissionAuthority"] = AdmissionAuthority(
+        admissionMode="ordinary",
+        supportEvidenceRef="",
+        supportEvidenceDigest="",
+        supportTier="uncertified",
+        featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+        replayCompatibilityVersion=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    ).model_dump(by_alias=True, mode="json")
+    return create_execution_plan_envelope(data)
