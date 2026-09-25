@@ -11944,6 +11944,30 @@ class TemporalAgentRuntimeActivities:
                 failed=True,
                 reason="docker reference scan unavailable",
             )
+        loop = asyncio.get_running_loop()
+        initial_docker_state = docker_state
+
+        def _docker_reference_provider() -> (
+            DockerReferenceState | Mapping[str, object]
+        ):
+            nonlocal initial_docker_state
+            if initial_docker_state is not None:
+                state = initial_docker_state
+                initial_docker_state = None
+                return state
+            if self._session_controller is None or not hasattr(
+                self._session_controller,
+                "collect_managed_runtime_cleanup_docker_references",
+            ):
+                return DockerReferenceState(
+                    failed=True,
+                    reason="docker reference scan unavailable",
+                )
+            return asyncio.run_coroutine_threadsafe(
+                self._session_controller.collect_managed_runtime_cleanup_docker_references(),
+                loop,
+            ).result()
+
         # The janitor performs recursive synchronous filesystem work. Keep it
         # off this fleet's async loop so live status/control Activities remain
         # serviceable, and own heartbeats from the event-loop side. Cancellation
@@ -11963,7 +11987,7 @@ class TemporalAgentRuntimeActivities:
                     session_store=session_store,
                     config=config,
                     docker_reference_provider=(
-                        None if docker_state is None else lambda: docker_state
+                        None if docker_state is None else _docker_reference_provider
                     ),
                     progress_callback=_check_cleanup_cancellation,
                 ),

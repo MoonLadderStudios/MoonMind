@@ -567,6 +567,13 @@ Use a two-phase filesystem protocol:
 8. Emit structured pass results.
 
 The rename step narrows races: a newly launched run will recreate or use the canonical path, not a partially deleted tree.
+An owner record can outlive its workspace path. An already absent candidate is
+reported separately and does not consume the path or byte deletion budget.
+The second scan obtains fresh Docker references for each deletion. If a
+container disappears between Docker listing and inspection, the scan retries
+with a new list; if it still cannot establish a complete view, deletion fails
+closed. Canonical path and symlink checks are repeated immediately before
+deletion.
 
 ### 8.10 Result shape
 
@@ -620,6 +627,7 @@ Each candidate should receive exactly one final classification:
 
 | Classification | Meaning |
 |---|---|
+| `already_absent` | A referenced candidate path no longer exists; no deletion budget is spent. |
 | `protected_active` | At least one owner is active or has `activeTurnId`. |
 | `protected_recent` | All owners are terminal, but retention/grace has not elapsed. |
 | `protected_shared` | A shared workspace has at least one recent or active owner. |
@@ -694,6 +702,8 @@ The implementation should include tests for:
     otherwise eligible roots, while a shared ancestor mount does not protect
     every retained child;
 12. second scan prevents deletion if a new active owner appears;
+12b. a newly active Docker reference also prevents deletion, and a missing
+    workspace path does not consume deletion budget;
 13. delete path and byte budgets stop a pass cleanly;
 13b. candidates encountered after the delete-path cap do not receive recursive
    size walks;

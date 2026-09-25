@@ -6131,6 +6131,67 @@ async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_reference
     assert run_root.exists()
 
 
+async def test_agent_runtime_cleanup_refreshes_docker_references_before_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "agent_jobs"
+    run_root = runtime_root / "run-old"
+    run_root.mkdir(parents=True)
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    os.utime(run_root, (old.timestamp(), old.timestamp()))
+    run_store = ManagedRunStore(runtime_root / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="run-old",
+            workflowId="mm:workflow-old",
+            agentId="agent-1",
+            runtimeId="codex-cli",
+            status="completed",
+            startedAt=old - timedelta(hours=1),
+            finishedAt=old,
+            workspacePath=str(run_root / "repo"),
+        )
+    )
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+
+    class _Controller:
+        calls = 0
+
+        async def collect_managed_runtime_cleanup_docker_references(
+            self,
+        ) -> dict[str, object]:
+            self.calls += 1
+            return {} if self.calls == 1 else {"activeMountPaths": [str(run_root)]}
+
+    controller = _Controller()
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store,
+        session_controller=controller,
+    )
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": False,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 30,
+                "artifactRetentionDays": 30,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    assert controller.calls >= 2
+    assert result["deletedRoots"] == 0
+    assert run_root.exists()
+
+
 async def test_agent_runtime_cleanup_managed_runtime_files_fails_closed_without_docker_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

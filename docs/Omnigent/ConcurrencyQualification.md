@@ -322,9 +322,13 @@ opt-in, never required on a pull request, and never run from an untrusted fork.
 `moonmind/omnigent/control_plane/readiness.py` classifies every capability as
 `STRUCTURAL` or `TRANSIENT`.
 
-- **Structural** capabilities (schema, builds, transport, janitor, exact image,
-  protected evidence, …) fail closed on unknown, as before. Their absence means
-  the deployment is not qualified.
+- **Structural** capabilities describe stable runtime and release-support state.
+  The operational admission subset (reconciler, schema, WebSocket, worker and
+  container backends, janitor) fails closed on unknown. Prior-run observations,
+  exact-image conformance, and protected-live evidence remain visible as
+  diagnostics and support gates; they do not prevent a safe explicit first
+  launch or disable local work when release evidence expires. The selected
+  launch policy and host still validate image digests and required capabilities.
 - **Transient** capabilities (`provider_capacity`, `host_capacity`,
   `worker_capacity`) are *observed pressure*. Unknown never blocks, because an
   unmeasured layer has not been shown to be saturated. Observed saturation sets
