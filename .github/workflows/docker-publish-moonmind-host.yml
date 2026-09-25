@@ -27,7 +27,7 @@ on:
       claude_cli_version:
         description: "Claude Code CLI version to pin (must be within >=2.0.0,<3.0.0)"
         required: false
-        default: "2.1.257"
+        default: "2.1.281"
         type: string
       opencode_version:
         description: "OpenCode version to pin (must be within >=1.17.7,<1.19.0)"
@@ -63,7 +63,7 @@ jobs:
       - name: Generate image metadata
         id: meta
         run: |
-          VERSION_TAG="${{ inputs.opencode_version || '1.18.11' }}-codex${{ inputs.codex_cli_version || '0.104.0' }}-claude${{ inputs.claude_cli_version || '2.1.257' }}"
+          VERSION_TAG="${{ inputs.opencode_version || '1.18.11' }}-codex${{ inputs.codex_cli_version || '0.104.0' }}-claude${{ inputs.claude_cli_version || '2.1.281' }}"
           echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
           IMAGE_NAME="${{ env.REGISTRY_IMAGE }}"
           IMAGE_NAME="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
@@ -72,7 +72,7 @@ jobs:
         id: out
         run: |
           echo "codex_version=${{ inputs.codex_cli_version || '0.104.0' }}" >> "$GITHUB_OUTPUT"
-          echo "claude_version=${{ inputs.claude_cli_version || '2.1.257' }}" >> "$GITHUB_OUTPUT"
+          echo "claude_version=${{ inputs.claude_cli_version || '2.1.281' }}" >> "$GITHUB_OUTPUT"
           echo "opencode_version=${{ inputs.opencode_version || '1.18.11' }}" >> "$GITHUB_OUTPUT"
 
       - name: Detect upstream Omnigent drift

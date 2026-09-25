@@ -162,6 +162,37 @@ def test_validation_lease_expires_faster_than_an_execution_lease(
     assert validation_limit < execution_limit
 
 
+@pytest.mark.parametrize("credentialless", [False, True])
+def test_validation_grant_records_its_purpose_bounded_expiry(
+    credentialless: bool,
+) -> None:
+    """The durable grant must expire on the validation bound, not the run bound."""
+
+    profile = _credentialless_profile(1)
+    profile.credential_source = "none" if credentialless else "secret_ref"
+    lease_id = "opencode-model-catalog:deadbeef"
+    if credentialless:
+        assert profile.reserve_unmetered(
+            lease_id, NOW, purpose=CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+        )
+    else:
+        assert profile.reserve(
+            lease_id,
+            NOW,
+            purpose=CredentialLeasePurpose.CREDENTIAL_VALIDATION.value,
+        )
+
+    expected_expiry = NOW + timedelta(
+        seconds=profile.purpose_max_duration_seconds(
+            CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+        )
+    )
+    assert (
+        datetime.fromisoformat(profile.lease_metadata[lease_id]["expiresAt"])
+        == expected_expiry
+    )
+
+
 @pytest.mark.parametrize("capacity", CAPACITIES)
 def test_exclusive_maintenance_blocks_new_consumers_while_it_waits(
     capacity: int,
