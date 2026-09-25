@@ -458,7 +458,12 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           isLoading={result.isPending}
           loadingMessage={`Loading ${label.toLowerCase()}…`}
           isError={result.isError}
-          errorMessage={result.error?.message ?? `${label} request failed`}
+          errorMessage={result.isError ? (
+            <span className="omnigent-inventory__error">
+              <span>{result.error?.message ?? `${label} request failed`}</span>{' '}
+              <button type="button" onClick={() => void result.refetch()}>Try again</button>
+            </span>
+          ) : `${label} request failed`}
           emptyMessage={filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}
           getRowKey={(row) => row.id}
           columns={[
@@ -493,7 +498,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           rowActionsHeader="Actions"
         />
       </div>
-      {result.isError ? <div role="alert"><p>{result.error.message}</p><button type="button" onClick={() => void result.refetch()}>Try again</button></div> : null}
       {kind === 'policies' ? <p>Creating, cloning, and editing always produces an immutable new version through the policy editor API; active historical versions are never changed.</p> : null}
       {selected ? <section className="omnigent-policy-detail" aria-label="Immutable policy version">
         <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => { setSelected(null); setSelectedVersion(null); }}>Close</button></div>
@@ -599,7 +603,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         {saveAgentProfile.isError ? <p role="alert">{saveAgentProfile.error.message}</p> : null}
         <button type="submit" disabled={saveAgentProfile.isPending}>Save immutable profile version</button><button type="button" onClick={() => setAgentEditor(null)}>Cancel</button>
       </form> : null}
-      {profiles.data?.length === 0 ? <p>No persistent execution configurations are available.</p> : null}
       <div className="omnigent-inventory__table-wrap">
         <DataTable<AgentProfile>
           data={profiles.data ?? []}
@@ -608,7 +611,12 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           isLoading={profiles.isPending}
           loadingMessage="Loading execution configurations…"
           isError={profiles.isError}
-          errorMessage={profiles.error?.message ?? 'Execution configurations request failed'}
+          errorMessage={profiles.isError ? (
+            <span className="omnigent-inventory__error">
+              <span>{profiles.error?.message ?? 'Execution configurations request failed'}</span>{' '}
+              <button type="button" onClick={() => void profiles.refetch()}>Try again</button>
+            </span>
+          ) : 'Execution configurations request failed'}
           emptyMessage="No persistent execution configurations are available."
           getRowKey={(profile) => profile.profileId}
           columns={[
@@ -670,7 +678,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           rowActionsHeader="Actions"
         />
       </div>
-      {profiles.isError ? <p role="alert">{profiles.error.message}</p> : null}
       {selectedProfile ? <section className="card" aria-labelledby="agent-profile-detail-heading">
         <div className="actions"><h3 id="agent-profile-detail-heading">{selectedProfile.displayName} details</h3><button type="button" onClick={() => setSelectedProfile(null)}>Close details</button></div>
         <p><code>{selectedProfile.profileId}</code> · {selectedProfile.state} · {selectedProfile.versions.length} immutable version{selectedProfile.versions.length === 1 ? '' : 's'}</p>

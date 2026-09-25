@@ -974,6 +974,22 @@ h1 {
   min-height: 0;
 }
 
+/* MoonMind#4559: Instance/Operations share the dashboard sizing contract.
+ * Generated settings rows pair a minmax(0,1fr) description column with a
+ * control column; long mono keys, SecretRefs, and digests must wrap instead
+ * of forcing the grid (or the whole page) wider than the viewport. */
+.settings-page {
+  min-width: 0;
+  max-width: 100%;
+}
+.settings-page code,
+.settings-page dd,
+.settings-page p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .panel:has(.skills-page) {
   border: 0;
   background: transparent;

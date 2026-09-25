@@ -98,6 +98,30 @@ describe('buildProviderProfileTierPayload', () => {
     const payload = buildProviderProfileTierPayload([t], t.clientId);
     expect(payload.model_tiers[0]!.label).toBe('hello');
   });
+
+  it('carries tier policy only with no default model/effort mirror (MoonMind#4559)', () => {
+    const t1 = runtimeDefaultTierDraft();
+    t1.label = 'Plan';
+    t1.model = 'gpt-5.5';
+    t1.effort = 'medium';
+    const t2 = runtimeDefaultTierDraft();
+    t2.model = null;
+    t2.effort = null;
+    const payload = buildProviderProfileTierPayload([t1, t2], t1.clientId);
+    expect(payload.default_model_tier).toBe(1);
+    // Null tier values stay null so they resolve through the runtime default,
+    // never through a profile-level compatibility mirror.
+    expect(payload.model_tiers[1]!.model).toBeNull();
+    expect(payload.model_tiers[1]!.effort).toBeNull();
+    const keys = new Set([
+      ...payload.model_tiers.flatMap((tier) => Object.keys(tier)),
+      ...Object.keys(payload),
+    ]);
+    expect(keys.has('default_model')).toBe(false);
+    expect(keys.has('default_effort')).toBe(false);
+    expect(keys.has('clientId')).toBe(false);
+    expect(keys.has('defaultTierClientId')).toBe(false);
+  });
 });
 
 describe('add/duplicate/remove helpers', () => {
