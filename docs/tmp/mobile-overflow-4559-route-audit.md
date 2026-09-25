@@ -1,14 +1,22 @@
 # Route audit — MoonMind#4559 mobile overflow (per `frontend/src/lib/dashboardRoutes.ts` destinations)
 
-Candidate: workspace head on `moonmind-job-0bf47d38` (two commits ahead of `3dda87db`, plus uncommitted remediation pass).
+Candidate: `0c14ba7a622b565b8544467dca5eed8be3b8ec81` on `moonmind-job-98ea522a` (verified 2026-09-25).
 Method: code inspection of the complete ancestor sizing chain + targeted unit runs.
+Shared-component jsdom regression on this revision (all PASS): workflow-list
+89/89, workflow-detail 200/200, skills 27/27, remediations 8/8, schedules 51/51,
+artifacts 3/3, settings 8/8, DataTable 9/9, omnigent-inventory 7/7,
+ProviderProfilesManager.mobile4559 2/2, providerProfileTiers 14/14.
 Browser geometry (320/390/768px) is covered by
 `frontend/src/browser/mobileOverflow4559.browser.test.tsx` (6 cases: the prior 5 plus a
 production-component ProviderProfilesManager journey) but could
-not be executed in this sandbox (no Playwright browsers; CI legs
+not be executed in this sandbox (no Playwright browsers:
+`browserType.launch` fails — missing `chromium_headless_shell-1228` executable;
+`npx playwright install chromium` blocked by sandbox proxy ERR_ACCESS_DENIED to
+cdn.playwright.dev; CI legs
 `frontend-browser` + `frontend-browser-webkit-targeted` never ran for this
 revision). Rows below distinguish what code proves from what still needs the
-browser/CI run.
+browser/CI run. No CI publication was attempted from this remediation step
+(owning workflow controls PR/CI side effects).
 
 | Destination (canonical path) | Status | Evidence / remaining step |
 |---|---|---|
