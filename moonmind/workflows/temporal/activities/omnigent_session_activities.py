@@ -995,6 +995,20 @@ def _bind_request_to_execution_plan(
     )
 
 
+class _AdmissionCertificateError(ValueError):
+    """A historical certificate backing a strict plan is unusable.
+
+    Raised only by the certificate-evidence tail of
+    :func:`_validate_plan_admission_authority` (unreadable artifact, failed
+    deployment/protected validation). It subclasses :class:`ValueError` so
+    existing fail-closed contracts keep matching, while
+    :func:`_load_verified_execution_plan` can distinguish a stranded
+    pre-upgrade certificate (eligible for ordinary reissue) from integrity
+    failures such as digest conflicts or generation mismatches, which keep
+    raising plain :class:`ValueError` and never migrate.
+    """
+
+
 async def _validate_plan_admission_authority(persisted: Any) -> None:
     """Load and validate support, replay, and rollback evidence from the plan.
 
@@ -1050,7 +1064,12 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
     support_ref = admission_authority.supportEvidenceRef.removeprefix(
         "artifact:"
     )
-    support_evidence = await _read_json_artifact(support_ref)
+    try:
+        support_evidence = await _read_json_artifact(support_ref)
+    except Exception as exc:
+        raise _AdmissionCertificateError(
+            f"execution support evidence is unavailable: {exc}"
+        ) from exc
     if _digest_bytes(_json_bytes(support_evidence)) != (
         admission_authority.supportEvidenceDigest
     ):
@@ -1064,27 +1083,100 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
             validate_deployment_evidence,
         )
 
-        deployment_evidence = validate_deployment_evidence(support_evidence)
-        assert_deployment_evidence_matches_plan(
-            deployment_evidence, persisted.payload
-        )
+        try:
+            deployment_evidence = validate_deployment_evidence(support_evidence)
+            assert_deployment_evidence_matches_plan(
+                deployment_evidence, persisted.payload
+            )
+        except Exception as exc:
+            raise _AdmissionCertificateError(str(exc)) from exc
         return
     from moonmind.omnigent.execution_support_evidence import (
         assert_protected_evidence_matches_plan,
         validate_protected_execution_support_evidence,
     )
 
-    protected_evidence = validate_protected_execution_support_evidence(
-        support_evidence,
-        expected_source_commit=(
-            os.getenv("MOONMIND_SOURCE_COMMIT", "").strip() or None
-        ),
+    try:
+        protected_evidence = validate_protected_execution_support_evidence(
+            support_evidence,
+            expected_source_commit=(
+                os.getenv("MOONMIND_SOURCE_COMMIT", "").strip() or None
+            ),
+        )
+        assert_protected_evidence_matches_plan(protected_evidence, persisted.payload)
+    except Exception as exc:
+        raise _AdmissionCertificateError(str(exc)) from exc
+
+
+async def _migrate_stranded_pre_upgrade_plan(
+    persisted: Any,
+    artifact_payload: dict[str, Any],
+    *,
+    session_factory: Any,
+    certificate_error: _AdmissionCertificateError,
+) -> Any:
+    """Reissue fresh ordinary admission for a stranded pre-upgrade plan.
+
+    MoonLadderStudios/MoonMind#4560: after upgrading an ordinary deployment,
+    a queued workflow or checkpoint continuation whose pre-upgrade strict
+    authority names an expired or unavailable historical certificate must
+    preserve its saved intent instead of stranding. The saved payload is
+    re-admitted through :func:`reissue_ordinary_admission_for_saved_plan`
+    and the new envelope is persisted as the new attempt; the old envelope
+    stays untouched as history.
+
+    Migration applies only when all of these hold: the deployment selects
+    ordinary admission at the trusted settings boundary, and the verified
+    wire bytes carry a pre-upgrade authority (no ``admissionMode`` marker).
+    An explicitly strict plan is never silently downgraded -- the original
+    certificate error is re-raised. The reissue is deterministic over the
+    saved intent, so a repeated resume of the same saved plan persists the
+    identical envelope instead of accumulating divergent replacements.
+    """
+
+    import logging
+
+    from moonmind.omnigent.settings import omnigent_requires_certification
+
+    if omnigent_requires_certification():
+        raise certificate_error
+    raw_payload = artifact_payload.get("payload")
+    raw_authority = (
+        raw_payload.get("admissionAuthority")
+        if isinstance(raw_payload, Mapping)
+        else None
     )
-    assert_protected_evidence_matches_plan(protected_evidence, persisted.payload)
+    if not isinstance(raw_authority, Mapping) or "admissionMode" in raw_authority:
+        # Explicitly strict new-effect authority: only fresh evidence through
+        # the strict path can admit it. Never downgrade recorded strictness.
+        raise certificate_error
+
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        reissue_ordinary_admission_for_saved_plan,
+    )
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+
+    migrated = reissue_ordinary_admission_for_saved_plan(raw_payload)
+    await DbExecutionPlanStore(session_factory).persist(migrated)
+    logging.getLogger(__name__).warning(
+        "migrated pre-upgrade execution plan %s to ordinary uncertified "
+        "admission as %s; saved intent preserved without its historical "
+        "certificate",
+        getattr(persisted, "planRef", "?"),
+        migrated.planRef,
+    )
+    return migrated
 
 
 async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
-    """Load the DB and artifact copies and verify one exact plan envelope."""
+    """Load the DB and artifact copies and verify one exact plan envelope.
+
+    A pre-upgrade strict plan whose historical certificate is expired or
+    unavailable is migrated to fresh ordinary admission (persisted as the
+    new attempt) instead of stranding the queued workflow or checkpoint
+    continuation, but only under ordinary admission. Strict deployments,
+    explicitly strict plans, and integrity failures still fail closed.
+    """
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.harness_platform.execution_plan import (
@@ -1111,7 +1203,15 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
         raise ValueError(
             "execution plan binding conflicts with task-input snapshot authority"
         )
-    await _validate_plan_admission_authority(persisted)
+    try:
+        await _validate_plan_admission_authority(persisted)
+    except _AdmissionCertificateError as exc:
+        persisted = await _migrate_stranded_pre_upgrade_plan(
+            persisted,
+            artifact_payload,
+            session_factory=async_session_maker,
+            certificate_error=exc,
+        )
     profile_ref = str(persisted.payload.agentProfileSnapshotRef or "").strip()
     if not profile_ref.startswith("artifact:"):
         raise ValueError("execution plan lacks Agent Profile artifact authority")

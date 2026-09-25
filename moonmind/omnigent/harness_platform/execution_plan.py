@@ -220,6 +220,26 @@ class AdmissionAuthority(BaseModel):
                 raise ValueError(f"{field_name} is required")
         return self
 
+    @model_serializer(mode="wrap")
+    def serialize_authority(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Keep strict plans wire-identical to the pre-#4560 authority shape.
+
+        Retained readers predate ``admissionMode`` and reject unknown fields
+        via ``extra="forbid"``. A strict plan already carries the historical
+        meaning (certified refs + a certified tier), so omitting the default
+        ``"strict"`` marker keeps it parseable by the retained fleet during
+        a rolling upgrade. Ordinary plans keep the marker: retained readers
+        fail closed on the new shape instead of misreading uncertified
+        admission as certified.
+        """
+
+        payload = handler(self)
+        if self.admissionMode == "strict":
+            payload.pop("admissionMode", None)
+        return payload
+
 
 class RuntimeProviderRolloutRecord(BaseModel):
     """Frozen runtime-provider rollout authority for one admitted plan.

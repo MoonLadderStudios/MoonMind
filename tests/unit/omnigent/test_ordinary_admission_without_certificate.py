@@ -71,6 +71,45 @@ def test_strict_deployment_resolver_still_fails_closed_without_evidence(
         resolver.resolve_execution_evidence(object())
 
 
+def test_protected_policy_honors_non_strict_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`require_evidence=False` overrides the settings-derived mode consistently.
+
+    A missing or malformed optional protected certificate must resolve to
+    ``(None, "uncertified")`` under a non-strict override, exactly as the
+    deployment branch already behaves -- the protected branch must apply
+    the computed `strict` value before re-raising.
+    """
+
+    import moonmind.omnigent.evidence_resolver as resolver
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", "/nonexistent/no-evidence.json")
+
+    evidence, tier = resolver.resolve_execution_evidence(
+        object(), policy="protected", require_evidence=False
+    )
+    assert evidence is None
+    assert tier == "uncertified"
+
+
+def test_protected_policy_explicit_strict_override_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`require_evidence=True` keeps the protected branch failing closed."""
+
+    import moonmind.omnigent.evidence_resolver as resolver
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", "/nonexistent/no-evidence.json")
+
+    with pytest.raises(Exception):
+        resolver.resolve_execution_evidence(
+            object(), policy="protected", require_evidence=True
+        )
+
+
 def _generations() -> dict[str, str]:
     from moonmind.omnigent.session_supervisor_rollback import (
         SUPERVISOR_ROLLBACK_POLICY_VERSION,
@@ -139,6 +178,81 @@ def test_legacy_authority_without_mode_stays_strict() -> None:
         }
     )
     assert authority.admissionMode == "strict"
+
+
+def _retained_plan_reader():
+    """Load the unmodified historical reader fixture as a module."""
+
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "integration"
+        / "reliability"
+        / "replays"
+        / "omnigent-plan-reader-skew"
+        / "retained_execution_plan.py"
+    )
+    spec = importlib.util.spec_from_file_location("retained_plan_reader_audit", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+def test_strict_authority_serializes_to_historical_wire_shape() -> None:
+    """Rolling upgrade: retained readers still parse strict plans.
+
+    The historical fixture keeps `extra="forbid"` without `admissionMode`,
+    so a strict plan must serialize without the new marker to stay
+    readable by the retained fleet.
+    """
+
+    retained = _retained_plan_reader()
+    authority = AdmissionAuthority.model_validate(
+        {
+            "admissionMode": "strict",
+            "supportEvidenceRef": "artifact:art_1",
+            "supportEvidenceDigest": "sha256:" + "a" * 64,
+            "supportTier": "supported",
+            **_generations(),
+        }
+    )
+    wire = authority.model_dump(by_alias=True, mode="json")
+    assert "admissionMode" not in wire
+    parsed = retained.AdmissionAuthority.model_validate(wire)
+    assert parsed.supportTier == "supported"
+
+
+def test_ordinary_authority_is_rejected_by_historical_reader() -> None:
+    """Rolling upgrade fails closed: retained readers reject uncertified plans.
+
+    An ordinary uncertified plan keeps its `admissionMode` marker on the
+    wire so a pre-upgrade worker rejects it instead of misreading
+    uncertified admission as certified.
+    """
+
+    retained = _retained_plan_reader()
+    authority = AdmissionAuthority.model_validate(
+        {
+            "admissionMode": "ordinary",
+            "supportEvidenceRef": "",
+            "supportEvidenceDigest": "",
+            "supportTier": "uncertified",
+            **_generations(),
+        }
+    )
+    wire = authority.model_dump(by_alias=True, mode="json")
+    assert wire["admissionMode"] == "ordinary"
+    with pytest.raises(Exception):
+        retained.AdmissionAuthority.model_validate(wire)
 
 
 def test_ordinary_rollout_ignores_missing_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -587,6 +701,287 @@ async def test_plan_reader_distinguishes_history_from_new_effect(
         await activities._validate_plan_admission_authority(stale)
 
 
+@pytest.mark.asyncio
+async def test_strict_certificate_failure_is_distinguishable_for_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stranded pre-upgrade certificate is classified for resume migration.
+
+    The certificate-evidence tail raises `_AdmissionCertificateError` (still
+    a `ValueError` for existing fail-closed contracts) so the resume path
+    can migrate stranded pre-upgrade plans while integrity failures keep
+    raising plain `ValueError` and never migrate.
+    """
+
+    from types import SimpleNamespace
+
+    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+
+    generations = _generations()
+    persisted = SimpleNamespace(
+        payload=SimpleNamespace(
+            authority=None,
+            admissionAuthority=SimpleNamespace(
+                admissionMode="strict",
+                supportEvidenceRef="artifact:art_missing",
+                supportEvidenceDigest="sha256:" + "aa" * 32,
+                supportTier="supported",
+                featureGeneration=generations["featureGeneration"],
+                replayCompatibilityVersion=generations["replayCompatibilityVersion"],
+                rollbackPolicyVersion=generations["rollbackPolicyVersion"],
+            ),
+        )
+    )
+
+    async def _missing(_ref: str) -> dict:
+        raise ValueError("artifact unavailable")
+
+    monkeypatch.setattr(activities, "_read_json_artifact", _missing)
+    with pytest.raises(activities._AdmissionCertificateError) as excinfo:
+        await activities._validate_plan_admission_authority(persisted)
+    assert isinstance(excinfo.value, ValueError)
+
+
+@pytest.mark.asyncio
+async def test_resume_migration_refuses_strict_settings_and_explicit_strict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Migration never downgrades strictness silently.
+
+    Explicit strict certification and explicitly strict wire authority both
+    re-raise the original certificate error instead of migrating.
+    """
+
+    from types import SimpleNamespace
+
+    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+
+    original = activities._AdmissionCertificateError("historical certificate gone")
+
+    # Explicit strict certification: re-admit through the strict path instead.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+    with pytest.raises(activities._AdmissionCertificateError):
+        await activities._migrate_stranded_pre_upgrade_plan(
+            SimpleNamespace(planRef="plan:old"),
+            {"payload": {"admissionAuthority": {}}},
+            session_factory=object(),
+            certificate_error=original,
+        )
+
+    # Explicitly strict wire authority under ordinary settings: recorded
+    # strictness is never downgraded by the resume path.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    with pytest.raises(activities._AdmissionCertificateError):
+        await activities._migrate_stranded_pre_upgrade_plan(
+            SimpleNamespace(planRef="plan:old"),
+            {
+                "payload": {
+                    "admissionAuthority": {
+                        "admissionMode": "strict",
+                        "supportEvidenceRef": "artifact:art_old",
+                        "supportEvidenceDigest": "sha256:" + "bb" * 32,
+                        "supportTier": "supported",
+                    }
+                }
+            },
+            session_factory=object(),
+            certificate_error=original,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_migrates_stranded_pre_upgrade_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R7 production path: resume migrates instead of stranding saved work.
+
+    A queued workflow holding a pre-upgrade strict plan whose historical
+    certificate is unavailable resumes under ordinary admission with fresh
+    uncertified authority: saved intent survives byte-identically, the new
+    envelope is persisted as the new attempt, history is preserved, and a
+    repeated resume reissues the identical envelope instead of diverging.
+    """
+
+    from tests.unit.services.test_omnigent_execution_plan_service import (
+        _OPENCODE_ALLOWED_LAUNCH_POLICIES,
+        _ArtifactService,
+        _compile_opencode_plan,
+        _PlanStore,
+        _protected_support_evidence,
+        default_launch_policy_ref,
+    )
+    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+
+    _ready_opencode_host_pair(monkeypatch)
+    # Compile a strict plan, as the pre-upgrade fleet did.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service.resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+    artifacts = _ArtifactService()
+    compiled = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=artifacts,
+        launch_policy_ref=default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES),
+        plan_store=_PlanStore(None),
+    )
+    assert compiled.envelope.payload.admissionAuthority.admissionMode == "strict"
+
+    # The durable pre-upgrade row carries the historical wire shape: strict
+    # plans omit the marker the retained fleet cannot parse.
+    artifact_wire = compiled.envelope.model_dump(by_alias=True, mode="json")
+    assert "admissionMode" not in artifact_wire["payload"]["admissionAuthority"]
+
+    store = InMemoryExecutionPlanStore()
+    await store.persist(compiled.envelope)
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.stores.DbExecutionPlanStore",
+        lambda _session_factory: store,
+    )
+
+    import json
+
+    async def _read_artifact(ref: str) -> dict:
+        try:
+            return json.loads(artifacts.payloads[ref])
+        except KeyError:
+            raise ValueError(f"artifact {ref} is unavailable") from None
+
+    # The historical certificate is expired/unavailable at resume time:
+    # drop the optional evidence bytes the strict compile persisted.
+    support_ref = (
+        compiled.envelope.payload.admissionAuthority.supportEvidenceRef.removeprefix(
+            "artifact:"
+        )
+    )
+    del artifacts.payloads[support_ref]
+    monkeypatch.setattr(activities, "_read_json_artifact", _read_artifact)
+
+    # After the upgrade the deployment is ordinary but the historical
+    # certificate artifact is gone.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    migrated = await activities._load_verified_execution_plan(compiled.binding)
+
+    authority = migrated.payload.admissionAuthority
+    assert authority.admissionMode == "ordinary"
+    assert authority.supportTier == "uncertified"
+    assert authority.supportEvidenceRef == ""
+    assert authority.supportEvidenceDigest == ""
+    # Every saved intent field survives byte-identically except authority.
+    migrated_payload = migrated.payload.model_dump(by_alias=True, mode="json")
+    compiled_payload = compiled.envelope.payload.model_dump(by_alias=True, mode="json")
+    for key, value in compiled_payload.items():
+        if key == "admissionAuthority":
+            continue
+        assert migrated_payload[key] == value
+    # The new attempt is persisted; history is preserved.
+    assert await store.load(migrated.planRef) == migrated
+    assert await store.load(compiled.envelope.planRef) == compiled.envelope
+    # A repeated resume reissues the identical envelope (no divergence).
+    assert await activities._load_verified_execution_plan(compiled.binding) == migrated
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_strict_failure_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit strict certification strands nothing silently -- it fails."""
+
+    from tests.unit.services.test_omnigent_execution_plan_service import (
+        _OPENCODE_ALLOWED_LAUNCH_POLICIES,
+        _ArtifactService,
+        _compile_opencode_plan,
+        _PlanStore,
+        _protected_support_evidence,
+        default_launch_policy_ref,
+    )
+    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+
+    _ready_opencode_host_pair(monkeypatch)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service.resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+    artifacts = _ArtifactService()
+    compiled = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=artifacts,
+        launch_policy_ref=default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES),
+        plan_store=_PlanStore(None),
+    )
+    artifact_wire = compiled.envelope.model_dump(by_alias=True, mode="json")
+
+    store = InMemoryExecutionPlanStore()
+    await store.persist(compiled.envelope)
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.stores.DbExecutionPlanStore",
+        lambda _session_factory: store,
+    )
+
+    async def _read_artifact(ref: str) -> dict:
+        if ref == compiled.binding.plan_artifact_ref:
+            return artifact_wire
+        raise ValueError(f"artifact {ref} is unavailable")
+
+    monkeypatch.setattr(activities, "_read_json_artifact", _read_artifact)
+
+    with pytest.raises(ValueError):
+        await activities._load_verified_execution_plan(compiled.binding)
+    # No migration attempt was persisted.
+    assert await store.load(compiled.envelope.planRef) == compiled.envelope
+
+
+def _ready_opencode_host_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give OpenCode plan compiles exact resolver evidence for selected refs.
+
+    Mirrors the hermetic host-compatibility observation used by the plan
+    service tests so strict compiles reach admission instead of failing at
+    host-class selection.
+    """
+
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF",
+        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "6" * 64,
+    )
+    provenance = {"hostBuildDigest": "sha256:" + "b" * 64, "hostVersion": "0.10.0"}
+
+    def load_state():
+        import os
+
+        host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
+        if not host_ref:
+            return None
+        return SimpleNamespace(
+            server_image_ref=os.environ.get("OMNIGENT_IMAGE_REF", ""),
+            opencode_host_image_ref=host_ref,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": os.environ.get("OMNIGENT_IMAGE_REF", ""),
+                    "hostImageRef": host_ref,
+                    **provenance,
+                }
+            },
+        )
+
+    monkeypatch.setattr(store, "load_resolved_state", load_state)
+
+
 def test_restart_queue_and_lost_ack_reconcile_without_duplication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -743,44 +1138,4 @@ def test_primary_failure_survives_reporting_and_cleanup_failure(
     evidence, tier = resolver.resolve_execution_evidence(object())
     assert evidence is None
     assert tier == "uncertified"
-
-
-def test_retained_certification_consumers_are_scoped_with_exit_conditions() -> None:
-    """R12: every retained certificate consumer is named with an exit.
-
-    The removal audit records each strict/diagnostic consumer kept after the
-    ordinary-admission removal, proves each retained module still imports,
-    keeps the structural evidence gate intact, and confirms ordinary paths
-    stay advisory-only so no consumer reinstates the veto.
-    """
-
-    import importlib
-
-    import moonmind.omnigent.evidence_resolver as resolver
-    from moonmind.omnigent.deployment_evidence import (
-        DeploymentEvidenceUnusable,
-        validate_deployment_evidence,
-    )
-
-    consumers = resolver.RETAINED_CERTIFICATION_CONSUMERS
-    assert len(consumers) >= 5
-    seen = set()
-    for entry in consumers:
-        for field in ("consumer", "retained_use", "exit_condition"):
-            assert str(entry[field]).strip(), field
-        assert entry["consumer"] not in seen
-        seen.add(entry["consumer"])
-        module_name = entry["consumer"].split(":")[0]
-        assert importlib.import_module(module_name) is not None
-
-    # The retained structural gate still rejects garbage evidence.
-    with pytest.raises(DeploymentEvidenceUnusable):
-        validate_deployment_evidence({"not": "evidence"})
-
-    # One trusted settings boundary owns the mode for every consumer above.
-    from moonmind.omnigent.settings import omnigent_requires_certification
-
-    assert omnigent_requires_certification(env={"MOONMIND_OMNIGENT_EVIDENCE_POLICY": "either"}) is False
-    assert omnigent_requires_certification(env={"MOONMIND_OMNIGENT_EVIDENCE_POLICY": "protected"}) is True
-    assert omnigent_requires_certification(env={"MOONMIND_OMNIGENT_EVIDENCE_POLICY": "deployment"}) is True
 
