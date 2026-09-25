@@ -374,7 +374,9 @@ services:
   # when other compose stacks on this network also expose MinIO as `minio` (DNS returns
   # multiple backends → intermittent NoSuchKey).
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-02-03T21-03-04Z
+    # Upstream community images are unavailable; use the same pinned,
+    # source-built MinIO release qualified by the disposable test stacks.
+    image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
     command: server /data --console-address :9001
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
