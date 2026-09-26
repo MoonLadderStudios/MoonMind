@@ -48,13 +48,18 @@ describe('OmnigentInventoryPage', () => {
       initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
     });
 
-    expect(await screen.findByText('Codex')).toBeTruthy();
+    // Responsive DataTable renders rows twice in jsdom (table + cards, made
+    // mutually exclusive only by the CSS breakpoint in real browsers), so
+    // presence assertions use the plural queries here. The browser suite
+    // (mobileOverflow4559) proves exactly one representation is exposed per
+    // width via computed display.
+    expect((await screen.findAllByText('Codex')).length).toBeGreaterThanOrEqual(1);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch).toHaveBeenCalledWith('/api/omnigent/api/agents', { credentials: 'same-origin' });
     expect(fetch).toHaveBeenCalledWith('/api/omnigent/agent-profiles', { credentials: 'same-origin' });
-    expect(screen.getByText('Team Codex')).toBeTruthy();
+    expect(screen.getAllByText('Team Codex').length).toBeGreaterThanOrEqual(1);
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'missing' } });
-    expect(await screen.findByText('No agents match this filter.')).toBeTruthy();
+    expect((await screen.findAllByText('No agents match this filter.')).length).toBeGreaterThanOrEqual(1);
     expect(window.location.search).toContain('omnigent_agents_q=missing');
   });
 
@@ -64,7 +69,7 @@ describe('OmnigentInventoryPage', () => {
       page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
       initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
     });
-    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect((await screen.findAllByRole('alert')).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeTruthy();
   });
 
@@ -85,7 +90,7 @@ describe('OmnigentInventoryPage', () => {
       initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
     });
 
-    expect(await screen.findByRole('button', { name: 'Activate Team Codex' })).toBeTruthy();
+    expect((await screen.findAllByRole('button', { name: 'Activate Team Codex' })).length).toBeGreaterThanOrEqual(1);
   });
 
   it('creates a generic v2 profile through guided controls without client-authored authority', async () => {
@@ -93,7 +98,7 @@ describe('OmnigentInventoryPage', () => {
       page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
       initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
     });
-    await screen.findByText('Team Codex');
+    await screen.findAllByText('Team Codex');
     fireEvent.click(screen.getByRole('button', { name: 'Create Omnigent agent' }));
     expect(screen.queryByLabelText('Normalized profile document (JSON)')).toBeNull();
     expect(screen.queryByRole('option', { name: /Pi via Omnigent/ })).toBeNull();
@@ -183,11 +188,11 @@ describe('OmnigentInventoryPage', () => {
       page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: true },
       initialData: { uiEndpoints: { omnigentPolicies: '/api/omnigent/policies' } },
     });
-    expect(await screen.findByText('Static Codex')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
+    expect((await screen.findAllByText('Static Codex')).length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]!);
     expect(screen.getByRole('region', { name: 'Immutable policy version' })).toBeTruthy();
     expect(screen.getByText('Validation: Valid')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Activate / rollback' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Activate / rollback' }).length).toBeGreaterThanOrEqual(1);
     expect(await screen.findByRole('button', { name: 'codex-static@1 · superseded' })).toBeTruthy();
     expect(await screen.findByText(/default_changed/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Validate against deployment' })).toBeTruthy();

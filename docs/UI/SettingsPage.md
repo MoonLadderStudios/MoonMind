@@ -293,6 +293,24 @@ Dropdown navigation is real route navigation. When the current page has unsaved 
 4. preserve the draft when navigation is canceled; and
 5. navigate immediately when the page is clean or changes were saved.
 
+### 6.4 Responsive behavior (MoonMind#4559)
+
+Configuration pages follow the shared responsive contract in
+[DashboardDesignSystem.md](./DashboardDesignSystem.md): native
+`fieldset`/`legend` grouping is preserved, but fieldsets opt out of the
+intrinsic `min-inline-size: min-content` minimum so single-column forms stay
+inside narrow viewports. Inputs, selects, and textareas are `min-width: 0 /
+max-width: 100%`, generated-settings rows pair a `minmax(0, 1fr)` description
+column with the control column, and long mono keys, SecretRefs, and digests
+wrap (`overflow-wrap: anywhere`) instead of stretching the grid. Enrollment
+drawers, confirmations, and tier dialogs stay viewport-bounded
+(`max-width: calc(100vw - 1.5rem)`, `max-height: calc(100dvh - 2rem)`) with a
+single scroll container and wrapping footer actions.
+
+```bash
+npm run ui:test:browser -- frontend/src/browser/mobileOverflow4559.browser.test.tsx
+```
+
 ---
 
 ## 7. Page Responsibilities
