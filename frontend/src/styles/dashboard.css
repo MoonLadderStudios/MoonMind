@@ -7254,9 +7254,32 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .oauth-terminal-finalize-result {
   border-radius: 6px;
+  display: grid;
   font-size: 0.9rem;
+  gap: 4px;
   margin: 0;
   padding: 10px 14px;
+}
+
+.oauth-terminal-finalize-result p {
+  margin: 0;
+}
+
+.oauth-terminal-finalize-result__title {
+  font-weight: 700;
+}
+
+.oauth-terminal-finalize-result a {
+  color: inherit;
+  font-weight: 600;
+  justify-self: start;
+  text-decoration: underline;
+}
+
+.oauth-terminal-finalize-result--pending {
+  background: rgb(var(--mm-accent) / 0.1);
+  border: 1px solid rgb(var(--mm-accent) / 0.4);
+  color: rgb(var(--mm-ink));
 }
 
 .oauth-terminal-finalize-result--success {
@@ -10571,8 +10594,10 @@ button.workflow-workspace-sidebar-row:active {
   max-width: 100%;
 }
 @media (max-width: 720px) {
-  .provider-profile-form fieldset,
-  .provider-tier-editor fieldset {
+  /* The tier card carries the tier inset; its inner fieldset stays an
+   * unstyled grouping rather than a hidden extra padded level. */
+  .provider-profile-form fieldset:not(.provider-tier-fieldset),
+  .provider-tier-editor fieldset:not(.provider-tier-fieldset) {
     padding: 0.75rem;
   }
   /* MoonMind#4559: tier selects size to their longest option in WebKit and
@@ -11039,33 +11064,51 @@ button.workflow-workspace-sidebar-row:active {
     font-size: 1rem;
   }
 
-  /* Restrained nesting: one card level keeps its border, inner groups do
-   * not each repeat padding that consumes reading width. */
-  .provider-profiles [class~="p-6"] {
-    padding: 1rem;
-  }
-
-  .provider-profile-fieldset {
-    padding: 0.875rem;
-  }
-
-  .provider-tier-card {
-    padding: 0.875rem;
-  }
-
   .provider-profile-actions > button {
     flex: 1 1 100%;
     min-height: 2.75rem;
   }
 
-  /* Shared settings cards use the same modest gutter. */
-  .settings-page [class~="p-6"] {
-    padding: 1rem;
+  /* One page gutter on phones: the dashboard root owns the inline inset, so
+   * the settings frame adds none of its own, and sections sit closer. */
+  .settings-page {
+    padding-inline: 0;
+    padding-block: 0.75rem;
   }
 
+  .settings-page > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 1rem;
+  }
+
+  /* Restrained nesting: settings cards and the groups nested inside them
+   * (fieldsets, tier cards, detail panels, dialogs) share one compact inset
+   * instead of each level repeating desktop padding that consumes reading
+   * width. Large desktop radii shrink with the padding. */
+  .settings-page [class~="p-6"],
+  .settings-page [class~="p-5"],
+  .settings-page [class~="p-4"] {
+    padding: 0.75rem;
+  }
+
+  .settings-page [class~="px-6"],
+  .settings-page [class~="px-5"],
   .settings-page [class~="px-4"] {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
+  }
+
+  .settings-page [class~="py-6"] {
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+
+  .settings-page [class~="rounded-3xl"],
+  .settings-page [class~="rounded-[2rem]"] {
+    border-radius: 1rem;
+  }
+
+  .settings-page fieldset {
+    margin-inline: 0;
   }
 
   /* Single-column settings grids stay shrinkable so long identifiers,

@@ -271,10 +271,101 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Finalize' }));
 
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
-    expect(await screen.findByText('Provider profile registered successfully.')).toBeTruthy();
+    expect(await screen.findByText('Provider profile connected')).toBeTruthy();
     expect(storageSetItem).toHaveBeenCalledWith(
       'moonmind:provider-profile-updated',
       expect.stringContaining('codex-oauth'),
+    );
+  });
+
+  it('reports registration progress after finalize until MoonMind confirms the profile', async () => {
+    const storageSetItem = vi.spyOn(window.localStorage.__proto__, 'setItem');
+    const profileSummary = {
+      profile_id: 'claude-anthropic',
+      runtime_id: 'claude_code',
+      provider_id: 'anthropic',
+      provider_label: 'Anthropic',
+      credential_source: 'oauth_volume',
+      runtime_materialization_mode: 'oauth_home',
+      account_label: 'Claude Team',
+      enabled: true,
+      is_default: false,
+      rate_limit_policy: 'backoff',
+    };
+    let finalized = false;
+    let sessionReadsAfterFinalize = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL) => {
+        const href = String(url);
+        if (href.endsWith('/terminal/attach')) {
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-1',
+              terminal_session_id: 'terminal-1',
+              terminal_bridge_id: 'bridge-1',
+              websocket_url: '/ws/oauth/terminal',
+              attach_token: 'attach-token',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (href.endsWith('/finalize')) {
+          finalized = true;
+          // The API saves the profile, then hands host validation to the
+          // OAuth workflow, which owns the transition to succeeded.
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-1',
+              runtime_id: 'claude_code',
+              profile_id: 'claude-anthropic',
+              status: 'registering_profile',
+              profile_summary: profileSummary,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (finalized) {
+          sessionReadsAfterFinalize += 1;
+        }
+        return new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'claude_code',
+            profile_id: 'claude-anthropic',
+            status: finalized ? 'succeeded' : 'awaiting_user',
+            terminal_session_id: 'terminal-1',
+            terminal_bridge_id: 'bridge-1',
+            profile_summary: profileSummary,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    renderPage();
+    await waitForSocket();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Finalize' }));
+
+    const progress = await screen.findByText('Registering provider profile…');
+    expect(progress.closest('[role="status"]')).toBeTruthy();
+    // A confirmed request is not re-offered while MoonMind finishes it.
+    expect(screen.queryByRole('button', { name: 'Finalize' })).toBeNull();
+    expect(screen.queryByText('Provider profile connected')).toBeNull();
+
+    const success = await screen.findByText('Provider profile connected', {}, { timeout: 4000 });
+    const successRegion = success.closest('[role="status"]');
+    expect(successRegion?.textContent).toContain('claude-anthropic');
+    expect(successRegion?.textContent).toContain('Claude Team');
+    expect(
+      screen.getByRole('link', { name: 'Return to Providers & Secrets' }).getAttribute('href'),
+    ).toBe('/settings/providers-secrets');
+    expect(screen.queryByText('Registering provider profile…')).toBeNull();
+    expect(sessionReadsAfterFinalize).toBeGreaterThan(0);
+    expect(storageSetItem).toHaveBeenCalledWith(
+      'moonmind:provider-profile-updated',
+      expect.stringContaining('claude-anthropic'),
     );
   });
 
