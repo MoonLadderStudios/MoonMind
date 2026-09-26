@@ -37,11 +37,13 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_skill_models import ResolvedSkillSet, SkillSelector
     from moonmind.schemas.agent_run_progress import (
         AGENT_RUN_PROGRESS_PATCH_ID,
+        AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID,
         STEP_WAITING_REASONS,
         TERMINAL_PROGRESS_STATES,
         apply_agent_run_progress,
         assert_classified_child_signal,
         new_progress_parent_state,
+        progress_step_logical_id_for_child,
         reduce_progress_to_step,
         seal_terminal_result,
     )
@@ -25065,6 +25067,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             state,
             payload,
             terminal_sealed=self._state == STATE_COMPLETED,
+            # Histories recorded while the reducer rejected the resume
+            # edges must keep rejecting them on replay; only histories
+            # carrying the fresh patch marker apply the new transitions.
+            enable_resume_edges=bool(
+                workflow.patched(
+                    AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID
+                )
+            ),
         )
         if outcome.disposition != "accepted" or outcome.accepted_state is None:
             self._get_logger().debug(
@@ -25107,6 +25117,39 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._attention_required = True
         elif self._waiting_reason != "operator_paused":
             self._attention_required = False
+        # MoonLadderStudios/MoonMind#1088 R4: reflect accepted progress in
+        # the owning per-row Step ledger entry through the existing
+        # awaiting-external row path, so get_step_ledger/get_progress and
+        # the API surface the active child's progress. Display only:
+        # terminal authority stays with the sealed AgentRunResult (handled
+        # above), and the ledger layer already clears waits on terminal
+        # rows. A missing row keeps the workflow-level update only.
+        try:
+            progress_step_id = progress_step_logical_id_for_child(
+                self._step_ledger_rows, child_id
+            )
+        except Exception:
+            progress_step_id = None
+        if progress_step_id is not None:
+            try:
+                current_row = self._step_ledger_row_for(progress_step_id) or {}
+                # A higher revision cannot reopen a terminal Step: the
+                # sealed AgentRunResult owns the outcome, so late progress
+                # on a terminal row keeps the workflow-level fence only.
+                if str(current_row.get("status") or "") not in TERMINAL_STEP_STATUSES:
+                    self._mark_step_waiting(
+                        progress_step_id,
+                        status="awaiting_external",
+                        updated_at=workflow.now(),
+                        waiting_reason=view.waiting_reason,
+                        summary=view.summary,
+                        attention_required=view.attention_required,
+                    )
+            except Exception:
+                self._get_logger().debug(
+                    "agent_run_progress ledger reflection skipped for %s",
+                    progress_step_id,
+                )
 
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:

@@ -282,8 +282,8 @@ actor:
   verification/finalization
 - call `POST /api/v1/oauth-sessions/{session_id}/finalize` from that button
 - show `verifying` while the finalize endpoint validates durable auth material
-  and `registering_profile` while MoonMind registers or updates the Provider
-  Profile and checks the saved credentials on the bound host
+  and `registering_profile` while that same endpoint registers or updates the
+  Provider Profile
 - show the safe registered provider-profile summary on success, with a return to
   Settings or manage-profile action as a convenience rather than a required
   step
@@ -297,11 +297,7 @@ page and Settings page should call the same finalize endpoint and observe the
 same session state transitions. The finalize operation owns the transition from
 an eligible post-login state into `verifying`, then into `registering_profile`,
 then into `succeeded` or `failed`; callers only request finalization and render
-the projected session status. A successful finalize API response can still say
-`registering_profile`. Both pages keep polling until the bound-host credential
-check finishes, and only then report success or failure. If workflow signaling
-is unavailable after profile registration, Finalize can be retried without
-registering a second profile.
+the projected session status.
 
 The terminal-page finalize button must be duplicate-click and race safe. A
 second finalize request for a session already in `verifying`,
@@ -312,6 +308,18 @@ not allow changing `profile_id`, `volume_ref`, `volume_mount_path`, or provider
 identity for the active session; those values come from the OAuth session that
 Settings created.
 
+### 5.5 Mobile terminal and clipboard controls
+
+The terminal provides a native paste field for both Codex and Claude sessions.
+**Send to terminal** submits the pasted code with a carriage return, matching
+the terminal Enter key used by interactive prompts. If the connection is not
+open, the field retains the code and reports the connection problem.
+**Select terminal text** exposes a read-only, selectable snapshot of the terminal
+buffer with soft-wrapped lines rejoined, so mobile users can copy complete login
+URLs and codes using native text selection even without browser clipboard API
+permission. This snapshot stays in the page only. On narrow screens, the terminal
+uses the available page width without the dashboard card border or padding.
+
 ## 6. Provider Profile Registration
 
 After OAuth verification succeeds, MoonMind registers or updates a Provider
@@ -319,10 +327,22 @@ Profile instead of inventing a parallel auth store.
 
 Finalization may be initiated either from Settings or from the launched provider
 terminal page. In both cases the same OAuth session metadata is used, and the
-finalize operation verifies the durable auth volume and registers or updates
-the selected Provider Profile before the workflow checks the bound host. The
-provider terminal page is a completion surface for the existing session, not a
-separate profile editor or a parallel credential store.
+finalize operation only verifies the durable auth volume and registers or
+updates the selected Provider Profile. The provider terminal page is a
+completion surface for the existing session, not a separate profile editor or a
+parallel credential store.
+
+Before post-registration credential validation, MoonMind resolves missing launch
+metadata for a new or existing host binding from the persisted launch policy.
+Existing policy, execution-profile, endpoint, and applicable static-host choices
+are preserved. Bindings predating saved policy references select the persisted
+default policy for their existing runtime and static/on-demand host mode; a
+legacy substrate reference is not interpreted as a policy reference. Conflicting
+policy host modes fail before binding updates. A complete launch snapshot is reused; credential-generation,
+lease, login-status, and cleanup checks still apply. Validation errors record
+the exception type and failure code without exposing credential material.
+Binding-repair failures also retain a bounded, redacted reason and the saved
+policy/profile references so missing or inactive policies remain diagnosable.
 
 For Codex OAuth, the resulting profile should preserve:
 

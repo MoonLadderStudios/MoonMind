@@ -293,6 +293,24 @@ Dropdown navigation is real route navigation. When the current page has unsaved 
 4. preserve the draft when navigation is canceled; and
 5. navigate immediately when the page is clean or changes were saved.
 
+### 6.4 Responsive behavior (MoonMind#4559)
+
+Configuration pages follow the shared responsive contract in
+[DashboardDesignSystem.md](./DashboardDesignSystem.md): native
+`fieldset`/`legend` grouping is preserved, but fieldsets opt out of the
+intrinsic `min-inline-size: min-content` minimum so single-column forms stay
+inside narrow viewports. Inputs, selects, and textareas are `min-width: 0 /
+max-width: 100%`, generated-settings rows pair a `minmax(0, 1fr)` description
+column with the control column, and long mono keys, SecretRefs, and digests
+wrap (`overflow-wrap: anywhere`) instead of stretching the grid. Enrollment
+drawers, confirmations, and tier dialogs stay viewport-bounded
+(`max-width: calc(100vw - 1.5rem)`, `max-height: calc(100dvh - 2rem)`) with a
+single scroll container and wrapping footer actions.
+
+```bash
+npm run ui:test:browser -- frontend/src/browser/mobileOverflow4559.browser.test.tsx
+```
+
 ---
 
 ## 7. Page Responsibilities
@@ -310,15 +328,6 @@ This page contains:
 - runtime and provider binding diagnostics.
 
 The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
-
-An OAuth-backed Codex profile with a saved volume exposes **Validate OAuth**
-alongside **OAuth**. Validation checks the saved credentials again and, on
-success, reconnects and enables the profile. A failed host credential check
-remains visible with a recovery hint; the general **Enable** action stays
-unavailable until validation succeeds. After Finalize saves an OAuth profile,
-Settings shows `registering_profile` while the bound host checks the
-credentials. It reports success and applies a remembered default choice only
-when the session reaches `succeeded`.
 
 A page-local runtime filter may narrow the visible Provider Profile collection. It must not narrow global readiness counts unless the summary is explicitly labeled as filtered.
 
@@ -761,3 +770,4 @@ substitute for the per-page unit tests, which remain in
 - Account label remains visible.
 - Enabled state follows successful credential activation and policy.
 - Existing managers can be reused, but the old local section state and switcher are removed.
+- Settings pages share the dashboard responsive contract (MoonMind#4559): one modest phone gutter, restrained section padding, stacked record presentation with full-width details/actions on phones, shrinkable single-column grids, and viewport-bounded overlays. Saved Provider records keep one data/action owner; the responsive presentation is CSS on the same table, not a second list.

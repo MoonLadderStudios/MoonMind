@@ -1151,10 +1151,38 @@ async def refresh_schedule_deployment_snapshot(
         source.pop("upstreamSnapshotDigest", None)
         return result
 
-    if semantics(old.document) != semantics(active.document):
-        raise ValueError(
-            "scheduled Agent Profile semantics changed; revise the schedule explicitly"
+    old_semantics = semantics(old.document)
+    active_semantics = semantics(active.document)
+    if old_semantics != active_semantics:
+        # A schedule pins one Provider Profile. Widening or narrowing the
+        # profile's authoring choices does not change this schedule's launch
+        # when its selected provider remains allowed by both versions. Keep
+        # every other credential and execution boundary in the comparison.
+        provider_ref = previous.get("providerProfileRef")
+        provider = (
+            await session.get(ManagedAgentProviderProfile, provider_ref)
+            if isinstance(provider_ref, str) and provider_ref
+            else None
         )
+        old_slots = old_semantics.get("credentialSlots") or []
+        active_slots = active_semantics.get("credentialSlots") or []
+        if (
+            provider is not None
+            and provider.provider_id
+            and len(old_slots) == len(active_slots) == 1
+        ):
+            old_ids = old_slots[0].get("acceptedProviderIds") or []
+            active_ids = active_slots[0].get("acceptedProviderIds") or []
+            if (
+                (not old_ids or provider.provider_id in old_ids)
+                and (not active_ids or provider.provider_id in active_ids)
+            ):
+                old_slots[0].pop("acceptedProviderIds", None)
+                active_slots[0].pop("acceptedProviderIds", None)
+        if old_semantics != active_semantics:
+            raise ValueError(
+                "scheduled Agent Profile semantics changed; revise the schedule explicitly"
+            )
     old_upstream = copy.deepcopy(old.upstream_snapshot or {})
     active_upstream = copy.deepcopy(active.upstream_snapshot or {})
     old_upstream.pop("version", None)

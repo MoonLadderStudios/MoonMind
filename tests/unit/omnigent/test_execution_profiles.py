@@ -1,5 +1,6 @@
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -22,7 +23,9 @@ from moonmind.omnigent.stock_agents import (
 @pytest.fixture(autouse=True)
 def immutable_bootstrap_images(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
-    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64)
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
+    )
 
 
 def test_versioned_profile_and_policy_compile_to_stable_safe_snapshot() -> None:
@@ -103,6 +106,9 @@ def test_policy_rejects_mutable_image_before_launch() -> None:
 
 
 def test_compile_rejects_missing_or_placeholder_bootstrap_images(monkeypatch) -> None:
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
     monkeypatch.delenv("OMNIGENT_IMAGE_REF")
     with pytest.raises(OmnigentOAuthHostError) as missing:
         compile_effective_launch(
@@ -120,6 +126,53 @@ def test_compile_rejects_missing_or_placeholder_bootstrap_images(monkeypatch) ->
             provider_profile_id="codex-oauth",
         )
     assert placeholder.value.code == "OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE"
+
+
+@pytest.mark.parametrize("shared_tag", [False, True])
+def test_claude_launch_uses_deployment_resolved_images(monkeypatch, shared_tag) -> None:
+    from moonmind.omnigent.bootstrap import store
+
+    server_ref = "example.test/server@sha256:" + "3" * 64
+    shared_ref = "example.test/shared@sha256:" + "4" * 64
+    monkeypatch.delenv("OMNIGENT_IMAGE_REF")
+    # A stale legacy host alias cannot replace the deployment's shared image.
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "legacy-host:latest")
+    if shared_tag:
+        monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", "shared-host:latest")
+    else:
+        monkeypatch.delenv("OMNIGENT_SHARED_HOST_IMAGE_REF", raising=False)
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            server_image_ref=server_ref,
+            shared_host_image_ref=shared_ref,
+        ),
+    )
+
+    launch = compile_effective_launch(
+        profile_ref="omnigent-claude@1",
+        policy_ref="claude-on-demand@1",
+        provider_profile_id="claude-oauth",
+    )
+
+    assert launch["serverImageRef"] == server_ref
+    assert launch["hostImageRef"] == shared_ref
+
+
+def test_codex_launch_keeps_its_configured_host_image(monkeypatch) -> None:
+    codex_ref = "example.test/codex-host@sha256:" + "5" * 64
+    shared_ref = "example.test/shared-host@sha256:" + "6" * 64
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", codex_ref)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", shared_ref)
+
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex-oauth",
+    )
+
+    assert launch["hostImageRef"] == codex_ref
 
 
 def test_workflow_cannot_supply_host_or_credential_authority() -> None:
@@ -155,7 +208,9 @@ def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
         "opencode-on-demand@1",
     }
     codex_profile = next(
-        profile for profile in catalog["profiles"] if profile["ref"] == "omnigent-codex@1"
+        profile
+        for profile in catalog["profiles"]
+        if profile["ref"] == "omnigent-codex@1"
     )
     assert codex_profile["defaultPolicyRef"] == "codex-on-demand@1"
     assert "credential" not in str(catalog).lower()
@@ -224,9 +279,9 @@ def test_runtime_revalidates_complete_on_demand_policy_before_mutation(
         sort_keys=True,
         separators=(",", ":"),
     )
-    launch["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
-        canonical.encode()
-    ).hexdigest()
+    launch["snapshotRef"] = (
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    )
 
     with pytest.raises(OmnigentOAuthHostError) as error:
         OmnigentOAuthHostRuntime._validate_effective_launch(
