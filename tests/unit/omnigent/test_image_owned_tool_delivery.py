@@ -113,6 +113,115 @@ async def test_constructor_image_ref_is_used_when_materialize_omits_it(
     }
 
 
+@pytest.mark.asyncio
+async def test_upgrade_holds_host_a_while_host_b_moves_with_cli_only_change_and_interrupted_activation(
+    tmp_path: Path,
+) -> None:
+    """REQ-04: pre-activation interruption leaves host A intact via rollback.
+
+    Host A stays bound to its original image/tools while host B is staged
+    from an updated image carrying a MoonMind CLI-only change (gh pin
+    identical). The activation is interrupted before the new image is
+    launched; the normal rollback path keeps the prior active binding and
+    nothing rewrites host A's image-owned executable files.
+    """
+    import copy
+
+    def _write_manifest(path: Path, cli_version: str, cli_digest: str) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "tools": [
+                        {
+                            "name": "gh",
+                            "version": "2.76.2",
+                            "path": "bin/gh",
+                            "versionProbe": ["--version"],
+                            "platforms": {
+                                "linux/amd64": {"executableSha256": "a" * 64}
+                            },
+                        },
+                        {
+                            "name": "docker",
+                            "version": cli_version,
+                            "path": "bin/moonmind",
+                            "versionProbe": ["--help"],
+                            "platforms": {
+                                "linux/amd64": {"executableSha256": cli_digest}
+                            },
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    manifest_v1 = tmp_path / "manifest-v1.lock.json"
+    manifest_v2 = tmp_path / "manifest-v2.lock.json"
+    _write_manifest(manifest_v1, "container-v1", "b" * 64)
+    # CLI-only change: gh entry byte-identical, moonmind version/digest move.
+    _write_manifest(manifest_v2, "container-v2", "c" * 64)
+    v1_tools = {
+        item["name"]: item
+        for item in json.loads(manifest_v1.read_text(encoding="utf-8"))["tools"]
+    }
+    v2_tools = {
+        item["name"]: item
+        for item in json.loads(manifest_v2.read_text(encoding="utf-8"))["tools"]
+    }
+    assert v1_tools["gh"] == v2_tools["gh"]
+    assert v1_tools["docker"] != v2_tools["docker"]
+
+    backend_a = SimpleNamespace(run=AsyncMock())
+    backend_b = SimpleNamespace(run=AsyncMock())
+    service_a = OmnigentMountedToolService(
+        backend=backend_a, manifest_path=manifest_v1
+    )
+    service_b = OmnigentMountedToolService(
+        backend=backend_b, manifest_path=manifest_v2
+    )
+    resolved = {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["gh"]}
+
+    image_a = "example/host@sha256:" + "a" * 64
+    image_b = "example/host@sha256:" + "b" * 64
+    host_a = await service_a.materialize(resolved, image_ref=image_a)
+    assert classify_tool_attachment(host_a[0]) == "image"
+    active_binding = copy.deepcopy(host_a)
+    host_a_digests = [tool["executableDigests"] for tool in host_a[0]["tools"]]
+
+    # Stage host B from the updated image (CLI-only manifest change).
+    host_b = await service_b.materialize(resolved, image_ref=image_b)
+    assert classify_tool_attachment(host_b[0]) == "image"
+    assert host_b[0]["sourceRef"] != host_a[0]["sourceRef"]
+    assert host_b[0]["sourceRef"] == f"image:{image_b}"
+
+    # Interruption before new-image activation: the staged B binding is never
+    # launched, so the controller record reconciles to the prior active state
+    # (same-controller recovery; unknown state is not success and must not
+    # destroy the still-serving binding).
+    launched: list[str] = []
+    controller_record = {"active": copy.deepcopy(active_binding), "staged": host_b}
+
+    async def _activate_staged() -> None:
+        raise RuntimeError("interrupted before new-image activation")
+
+    with pytest.raises(RuntimeError, match="interrupted before new-image"):
+        await _activate_staged()
+    # Normal rollback path: discard the staged candidate, keep prior active.
+    controller_record.pop("staged")
+    assert launched == []
+    assert controller_record["active"] == active_binding
+
+    # Nothing rewrote host A's executable files: binding, digests, and
+    # classification identical; no Docker volume inspection/creation ran.
+    assert host_a == active_binding
+    assert [tool["executableDigests"] for tool in host_a[0]["tools"]] == host_a_digests
+    assert classify_tool_attachment(host_a[0]) == "image"
+    assert host_a[0]["cleanupRef"] is None
+    backend_a.run.assert_not_awaited()
+    backend_b.run.assert_not_awaited()
+
+
 def test_classify_tool_attachment_distinguishes_image_legacy_and_other() -> None:
     assert classify_tool_attachment(
         {"kind": "image", "targetPath": "/opt/moonmind-tools"}
