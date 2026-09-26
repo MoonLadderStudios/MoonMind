@@ -1058,6 +1058,10 @@ def _ready_bootstrap_record(*, agent_profile_ref: str) -> BootstrapRecord:
 async def test_credentialless_default_initializes_deployment_qualification(
     monkeypatch,
 ) -> None:
+    # MoonLadderStudios/MoonMind#4560: the per-materializer certification sweep
+    # stays mandatory under explicit strict certification; ordinary admission
+    # keeps it opportunistic and never gates readiness.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
     from api_service.db.models import (
         ProviderCredentialSource,
         ProviderProfileAuthState,
@@ -1146,6 +1150,10 @@ async def test_credentialless_default_initializes_deployment_qualification(
 async def test_non_default_materializer_initializes_when_default_is_not_launch_ready(
     monkeypatch,
 ) -> None:
+    # MoonLadderStudios/MoonMind#4560: the per-materializer certification sweep
+    # stays mandatory under explicit strict certification; ordinary admission
+    # keeps it opportunistic and never gates readiness.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
     """A broken runtime default must not prevent credentialless Zen evidence."""
 
     disabled_default = SimpleNamespace(
@@ -1306,6 +1314,10 @@ async def test_managed_agent_profile_advance_requalifies_default_deployment(
 async def test_secondary_qualification_survives_default_requalification_failure(
     monkeypatch,
 ) -> None:
+    # MoonLadderStudios/MoonMind#4560: the per-materializer certification sweep
+    # stays mandatory under explicit strict certification; ordinary admission
+    # keeps it opportunistic and never gates readiness.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
     """A drifted default cannot overwrite successful secondary evidence."""
 
     provider_profile = SimpleNamespace(
@@ -1382,6 +1394,10 @@ async def test_secondary_qualification_survives_default_requalification_failure(
 async def test_current_default_qualification_avoids_repeating_live_workload(
     monkeypatch,
 ) -> None:
+    # MoonLadderStudios/MoonMind#4560: the per-materializer certification sweep
+    # stays mandatory under explicit strict certification; ordinary admission
+    # keeps it opportunistic and never gates readiness.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
     """The maintenance cadence must not re-run qualification without drift."""
 
     provider_profile = SimpleNamespace(
@@ -1667,3 +1683,75 @@ async def test_launchable_materializer_classes_are_qualified_once(
         assert qualify.await_args.kwargs["effort"] == (
             "high" if zen_uses_tiers else "xhigh"
         )
+
+
+@pytest.mark.asyncio
+async def test_ordinary_reconciliation_ignores_missing_optional_evidence(
+    monkeypatch,
+) -> None:
+    """Ordinary readiness never waits on historical certificates (MM#4560).
+
+    With no evidence published at all, ordinary reconciliation stays ready,
+    performs no requalification, and runs no recurring certification sweep.
+    Missing certification is not evidence of incompatibility.
+    """
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default",
+        is_default=True,
+        default_model="opencode-go/muse-spark-1.2-contributor",
+        default_effort="xhigh",
+        credential_generation=1,
+    )
+    agent_profile = SimpleNamespace(
+        profile_id="omnigent-opencode-default",
+        active_version=8,
+    )
+
+    class _QualificationSession:
+        async def get(self, model, _identity):
+            return {
+                "ManagedAgentProviderProfile": provider_profile,
+                "OmnigentAgentProfile": agent_profile,
+            }.get(model.__name__)
+
+        async def scalar(self, _statement):
+            return SimpleNamespace(version=8)
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield _QualificationSession()
+
+    current = _ready_bootstrap_record(agent_profile_ref="omnigent-opencode-default@8")
+    current_images = ResolvedOmnigentDeploymentState(
+        serverImageRef=_SERVER_IMAGE_REF,
+        opencodeHostImageRef=_HOST_IMAGE_REF,
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        architecture="linux/amd64",
+    )
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: current)
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: current_images,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_evidence.load_deployment_evidence_for_support_combination",
+        lambda _key: (_ for _ in ()).throw(ValueError("no evidence")),
+    )
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+    requalify = AsyncMock()
+    monkeypatch.setattr(controller, "requalify", requalify)
+    ensure_materializers = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        controller,
+        "_ensure_launchable_materializer_qualifications",
+        ensure_materializers,
+    )
+
+    assert await controller.reconcile_deployment_qualification() is True
+    requalify.assert_not_awaited()
+    ensure_materializers.assert_not_awaited()

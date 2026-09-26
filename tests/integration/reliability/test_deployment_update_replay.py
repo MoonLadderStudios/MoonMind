@@ -177,7 +177,10 @@ if command == "images":
     raise SystemExit(0)
 
 if command == "pull":
-    state["pullServices"] = selected_services(tail)
+    policy = tail[tail.index("--policy") + 1] if "--policy" in tail else None
+    state.setdefault("pullCalls", []).append(
+        {"policy": policy, "services": selected_services(tail)}
+    )
     save_state(state)
     raise SystemExit(0)
 
@@ -222,6 +225,11 @@ if command == "run":
 
 state["orphanRemovalRequested"] = state.get("orphanRemovalRequested", False) or "--remove-orphans" in tail
 up_services = selected_services(tail)
+if PROXY_SERVICE in up_services and not any(
+    PROXY_SERVICE in call["services"] for call in state.get("pullCalls", [])
+):
+    print("No such image: newly pinned infrastructure image", file=sys.stderr)
+    raise SystemExit(1)
 if "init-db" in up_services:
     config = json.loads(Path(args[args.index("-f") + 1]).read_text())
     volume = config["services"]["init-db"]["volumes"][0]
@@ -443,9 +451,14 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
     assert result.outputs["status"] == "SUCCEEDED"
     assert bool(state.get("accessPreflightCalls", 0)) == state["orphanRemovalRequested"]
     assert state["composeConfigCalls"] >= 4
-    assert state["pullServices"] == expected["pullServices"] + (
+    assert state["pullCalls"][0]["services"] == expected["pullServices"] + (
         ["init-db"] if windows_replay else []
     )
+    assert state["pullCalls"][1] == {
+        "policy": "missing",
+        "services": ["sandbox-egress-proxy"],
+    }
+    assert len(state["pullCalls"]) == 2
     assert state["upServices"] == expected["reconciliationServices"]
     assert set(state["networks"]["restricted-egress-network"]["services"]) == set(
         expected["reconciliationServices"]
@@ -456,7 +469,8 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
         if container["State"] == "running"
     } >= set(expected["reconciliationServices"])
     assert all(
-        service not in state["pullServices"] and service not in state["upServices"]
+        all(service not in call["services"] for call in state["pullCalls"])
+        and service not in state["upServices"]
         for service in expected["excludedServices"]
     )
     if windows_replay:

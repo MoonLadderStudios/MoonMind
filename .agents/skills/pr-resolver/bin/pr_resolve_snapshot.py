@@ -29,6 +29,9 @@ from pr_resolver_core.review_providers import (  # noqa: E402
     is_low_severity_only_finding,
     resolve_automated_review_provider,
 )
+from pr_resolver_core.code_hosts import (  # noqa: E402
+    ensure_github_only_selector,
+)
 
 from pr_resolve_contract import EXIT_CODE_FAILED  # noqa: E402
 
@@ -1220,6 +1223,15 @@ def main():
     )
     args = parser.parse_args()
     snapshot_path = Path(args.snapshot_path)
+
+    # GitHub-only resolver: reject GitLab input before any paid execution.
+    # ValueError covers the portable UnsupportedCodeHostError; RuntimeError
+    # covers the MoonMind GitLabToolError contract when moonmind is installed.
+    try:
+        ensure_github_only_selector(args.pr)
+    except (ValueError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(EXIT_CODE_FAILED)
 
     # 1. Fetch PR metadata with resilient selector fallback.
     pr_data, resolved_selector, pr_errors = fetch_pr_data(args.pr)
