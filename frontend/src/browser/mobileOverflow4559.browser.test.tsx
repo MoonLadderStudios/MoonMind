@@ -351,7 +351,11 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
     // sizing contract must apply to confirmation dialog panels only. Fixed
     // inset-0 backdrops that carry role="dialog" keep full-viewport
     // coverage, the 1040px jira browser panel keeps its own sizing, and
-    // full-height enrollment drawers keep their drawer layout.
+    // full-height enrollment drawers keep their drawer layout. Assertions
+    // use computed sizing (not geometry) because the browser suite loads
+    // dashboard.css without Tailwind utilities, so utility classes such as
+    // `fixed` position nothing here -- the selectors must exclude those
+    // elements by class name regardless.
     const host = document.createElement('div');
     host.className = 'dashboard-content';
     host.innerHTML = `
@@ -370,24 +374,26 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
           <h2>Enrollment</h2>
         </div>
       </div>
+      <div role="dialog" aria-modal="true" aria-label="Remove profile confirmation">
+        <h2>Remove profile?</h2>
+        <button type="button">Cancel</button>
+      </div>
     `;
     document.body.appendChild(host);
     try {
       await page.viewport(1280, 800);
       await new Promise((resolve) => setTimeout(resolve, 50));
       const backdrop = host.querySelector('[aria-label="Remove tier backdrop"]') as HTMLElement;
-      const backdropRect = backdrop.getBoundingClientRect();
-      expect(backdropRect.width, 'backdrop must cover the viewport').toBeGreaterThanOrEqual(
-        window.innerWidth - 1,
-      );
+      expect(getComputedStyle(backdrop).maxWidth, 'backdrop keeps viewport coverage').toBe('none');
       const jiraPanel = host.querySelector('.jira-browser-panel') as HTMLElement;
       expect(getComputedStyle(jiraPanel).maxWidth, 'jira panel keeps its own sizing').toBe('none');
+      expect(jiraPanel.getBoundingClientRect().width, 'jira panel is not shrunk to 32rem').toBeGreaterThan(600);
+      // Positive control: a plain confirmation panel is still viewport-bounded.
+      const confirmation = host.querySelector('[aria-label="Remove profile confirmation"]') as HTMLElement;
+      expect(getComputedStyle(confirmation).maxWidth, 'confirmation stays bounded').not.toBe('none');
       await page.viewport(320, 568);
       await new Promise((resolve) => setTimeout(resolve, 50));
-      const narrowBackdropRect = backdrop.getBoundingClientRect();
-      expect(narrowBackdropRect.width, 'backdrop must cover narrow viewports').toBeGreaterThanOrEqual(
-        window.innerWidth - 1,
-      );
+      expect(getComputedStyle(backdrop).maxWidth, 'backdrop keeps coverage on mobile').toBe('none');
       const drawer = host.querySelector('[aria-label="Enrollment drawer"]') as HTMLElement;
       expect(getComputedStyle(drawer).maxHeight, 'drawer keeps its full-height layout').toBe('none');
     } finally {
