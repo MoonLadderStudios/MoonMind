@@ -2820,6 +2820,18 @@ def _command_plan_targeting_stack_services(
         for service_name in reconciliation_services
         if service_name not in pull_services
     )
+    # The attested egress gateway is excluded from the main update but aligned
+    # in a pre-pass with `up --pull never`. A release that newly pins its
+    # image would still fail with a missing-image error, so stage the gateway
+    # pre-pass targets alongside reconciled infrastructure without adding
+    # them to the main recreation set.
+    gateway_services = tuple(
+        service_name
+        for service_name in _attested_gateway_services(before_state)
+        if service_name not in pull_services
+        and service_name not in infrastructure_services
+    )
+    missing_services = (*infrastructure_services, *gateway_services)
     return ComposeCommandPlan(
         runner_mode=command_plan.runner_mode,
         pull_args=(*command_plan.pull_args, *pull_services),
@@ -2829,8 +2841,8 @@ def _command_plan_targeting_stack_services(
             *reconciliation_services,
         ),
         missing_pull_args=(
-            _missing_image_pull_args(command_plan.pull_args, infrastructure_services)
-            if infrastructure_services
+            _missing_image_pull_args(command_plan.pull_args, missing_services)
+            if missing_services
             else ()
         ),
     )

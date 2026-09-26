@@ -384,15 +384,22 @@ def main(argv=None):
         controller_url=args.controller_url,
         secret_file=args.controller_secret_file,
         legacy_direct=args.legacy_direct,
+        is_resume=args.resume is not None,
     )
 
 
-def _submit_release(record, repo, *, controller_url, secret_file, legacy_direct):
+def _submit_release(record, repo, *, controller_url, secret_file, legacy_direct,
+                    is_resume=False):
     """Route the recorded submission to its installed execution owner.
 
     An installed (or explicitly selected) standalone controller owns the
     update. Until a deployment installs it, the application-owned updater
     remains the supported default so a bare invocation still updates.
+
+    A resume never takes that automatic fallback on its own: the original
+    submission may still be owned by the controller, and forking the legacy
+    updater would create two deployment writers. Resume requires the owner
+    to be reconciled first via an explicit selection.
     """
     if legacy_direct:
         return _submit_legacy_direct(record, repo)
@@ -401,10 +408,20 @@ def _submit_release(record, repo, *, controller_url, secret_file, legacy_direct)
     )
     default_secret = _default_controller_secret_file(repo)
     if not explicit_controller and not default_secret.exists():
+        if is_resume:
+            raise RuntimeError(
+                "Refusing to resume with the legacy application-owned "
+                "updater: the original submission may still be owned by the "
+                "standalone controller. Reconcile controller ownership "
+                "first, then resume with --legacy-direct to confirm the "
+                "legacy path or --controller-secret-file to resume through "
+                "the controller."
+            )
+        # The notice stays free of secret material (CodeQL clear-text
+        # logging): it names no secret path or value, only the installer.
         print(
-            f"Standalone controller is not installed (no secret at "
-            f"{default_secret}); updating through the application-owned "
-            "updater. Install the controller with "
+            "Standalone controller is not installed; updating through the "
+            "application-owned updater. Install the controller with "
             "`python3 deploy/controller/bootstrap.py install` to use it.",
             flush=True,
         )
@@ -634,11 +651,23 @@ def _submit_legacy_direct(record, repo):
             "-f",
             str(path),
         ]
-        for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
-            override = repo / name
-            if override.exists():
-                command.extend(["-f", str(override)])
-                break
+        # Propagate the deployment's selected Compose file set (the same
+        # resolution the controller path carries). The release image already
+        # supplies the base file, so only the additional selected files are
+        # layered here; omitting them would reconcile without custom services
+        # while `--remove-orphans` may remove them.
+        compose_selection = os.environ.get("COMPOSE_FILE", "")
+        if compose_selection.strip():
+            for name in _resolve_compose_files(repo):
+                if name in ("docker-compose.yaml", "docker-compose.yml"):
+                    continue
+                command.extend(["-f", str(repo / name)])
+        else:
+            for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+                override = repo / name
+                if override.exists():
+                    command.extend(["-f", str(override)])
+                    break
         command.extend(
             [
                 "run",

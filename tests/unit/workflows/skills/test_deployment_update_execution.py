@@ -3154,3 +3154,44 @@ async def test_egress_gateway_is_aligned_under_the_documented_default_exclusions
     # The recorded infrastructure-reconciliation incident: the main up must
     # still reconcile the gateway, or the network it defines goes absent.
     assert "sandbox-egress-proxy" in main_up
+
+
+def test_excluded_gateway_is_staged_by_missing_pull() -> None:
+    """An excluded attested gateway with a newly pinned image must be staged.
+
+    The legacy updater excludes the egress gateway from the main update, and
+    the missing-image pull only covered reconciled infrastructure services.
+    The gateway pre-pass then runs `up --pull never` with nothing staging its
+    new image, so the update still fails with a missing-image error. The
+    gateway pre-pass targets must be staged without joining the main
+    recreation set.
+    """
+    plan = ComposeCommandPlan(
+        runner_mode="privileged_worker",
+        pull_args=("docker", "compose", "pull"),
+        up_args=("docker", "compose", "up", "-d", "--remove-orphans", "--wait"),
+    )
+    targeted = _command_plan_targeting_stack_services(
+        plan,
+        before_state={
+            "configuredServices": [
+                "temporal-worker-agent-runtime",
+                "sandbox-egress-proxy",
+            ],
+            "configuredServiceImages": {
+                "temporal-worker-agent-runtime": (
+                    "ghcr.io/moonladderstudios/moonmind:latest"
+                ),
+                "sandbox-egress-proxy": "ubuntu/squid:latest",
+            },
+        },
+        requested_repository="ghcr.io/moonladderstudios/moonmind",
+        excluded_services=(
+            "docker-proxy",
+            "sandbox-egress-proxy",
+            "postgres",
+        ),
+    )
+
+    assert "sandbox-egress-proxy" in targeted.missing_pull_args
+    assert "sandbox-egress-proxy" not in targeted.up_args
