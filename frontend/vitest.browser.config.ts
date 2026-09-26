@@ -10,11 +10,14 @@ import { playwright } from '@vitest/browser-playwright';
 // MOONMIND_BROWSER_ENGINES=webkit or in the CI webkit leg.
 const supportedEngines = ['chromium', 'firefox', 'webkit'] as const;
 type BrowserEngine = (typeof supportedEngines)[number];
+// Default matrix stays Chromium + Firefox: WebKit runs only when requested
+// via MOONMIND_BROWSER_ENGINES=webkit or in the CI webkit leg.
+const defaultEngines: readonly BrowserEngine[] = ['chromium', 'firefox'];
 const configuredEngines = process.env.MOONMIND_BROWSER_ENGINES
   ?.split(',')
   .map((engine) => engine.trim())
   .filter(Boolean);
-const engines = (configuredEngines?.length ? configuredEngines : supportedEngines) as BrowserEngine[];
+const engines = (configuredEngines?.length ? configuredEngines : [...defaultEngines]) as BrowserEngine[];
 
 for (const engine of engines) {
   if (!supportedEngines.includes(engine)) {

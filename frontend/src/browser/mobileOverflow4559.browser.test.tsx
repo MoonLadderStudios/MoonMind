@@ -346,6 +346,56 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
     }
   });
 
+  it('leaves dialog backdrops, drawers, and the wide jira panel at their own sizing (Codex P1)', async () => {
+    // Regression guard for the Codex P1 review on PR #4566: the overlay
+    // sizing contract must apply to confirmation dialog panels only. Fixed
+    // inset-0 backdrops that carry role="dialog" keep full-viewport
+    // coverage, the 1040px jira browser panel keeps its own sizing, and
+    // full-height enrollment drawers keep their drawer layout.
+    const host = document.createElement('div');
+    host.className = 'dashboard-content';
+    host.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Remove tier backdrop">
+        <div class="w-full max-w-lg">
+          <h2>Remove Tier 2?</h2>
+          <button type="button">Cancel</button>
+          <button type="button">Remove and renumber</button>
+        </div>
+      </div>
+      <section class="jira-browser-panel stack" role="dialog" aria-modal="true" aria-label="Browse Jira issue">
+        <h2>Browse Jira issue</h2>
+      </section>
+      <div class="fixed inset-0 z-50 flex justify-end">
+        <div class="h-full w-full max-w-2xl" role="dialog" aria-modal="true" aria-label="Enrollment drawer">
+          <h2>Enrollment</h2>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(host);
+    try {
+      await page.viewport(1280, 800);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const backdrop = host.querySelector('[aria-label="Remove tier backdrop"]') as HTMLElement;
+      const backdropRect = backdrop.getBoundingClientRect();
+      expect(backdropRect.width, 'backdrop must cover the viewport').toBeGreaterThanOrEqual(
+        window.innerWidth - 1,
+      );
+      const jiraPanel = host.querySelector('.jira-browser-panel') as HTMLElement;
+      expect(getComputedStyle(jiraPanel).maxWidth, 'jira panel keeps its own sizing').toBe('none');
+      await page.viewport(320, 568);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const narrowBackdropRect = backdrop.getBoundingClientRect();
+      expect(narrowBackdropRect.width, 'backdrop must cover narrow viewports').toBeGreaterThanOrEqual(
+        window.innerWidth - 1,
+      );
+      const drawer = host.querySelector('[aria-label="Enrollment drawer"]') as HTMLElement;
+      expect(getComputedStyle(drawer).maxHeight, 'drawer keeps its full-height layout').toBe('none');
+    } finally {
+      host.remove();
+      await page.viewport(1280, 800);
+    }
+  });
+
   it('keeps the production provider journey inside 320px with canonical tier payload (MoonMind#4559 AC-03/AC-04)', async () => {
     // Production-component journey: the real ProviderProfilesManager with
     // synthetic credential-free fixtures (long identity, long tier labels,
