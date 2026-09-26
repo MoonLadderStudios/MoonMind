@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -21,8 +22,8 @@ from api_service.db.models import (
 from api_service.services.omnigent_policies import (
     OmnigentPolicyService,
     PolicyConflict,
-    bootstrap_policies_ready,
     bootstrap_document,
+    bootstrap_policies_ready,
     configured_bootstrap_image_refs,
     configured_opencode_bootstrap_image_ref,
     resolve_bootstrap_image_ref,
@@ -130,9 +131,9 @@ async def test_append_only_edit_preserves_history_and_rejects_stale_parent(tmp_p
         assert second.version == 2
         assert second.parent_ref == "policy@1"
         assert first.digest != second.digest
-        assert (await service.get_version("policy", 1)).document_json[
-            "resources"
-        ]["memoryMiB"] == 4096
+        assert (await service.get_version("policy", 1)).document_json["resources"][
+            "memoryMiB"
+        ] == 4096
         with pytest.raises(PolicyConflict, match="stale policy version"):
             await service.new_version(
                 policy_id="policy",
@@ -257,8 +258,11 @@ async def test_bound_policy_version_cannot_be_retired(tmp_path):
         service = OmnigentPolicyService(session)
         await create_policy(service)
         await service.transition(
-            policy_id="policy", version=1, state=PolicyState.ACTIVE,
-            actor="operator", make_default=True,
+            policy_id="policy",
+            version=1,
+            state=PolicyState.ACTIVE,
+            actor="operator",
+            make_default=True,
         )
         changed = deepcopy(policy_document())
         changed["resources"]["cpuMillis"] = 3000
@@ -269,23 +273,35 @@ async def test_bound_policy_version_cannot_be_retired(tmp_path):
             expected_parent_ref="policy@1",
         )
         await service.transition(
-            policy_id="policy", version=2, state=PolicyState.ACTIVE,
-            actor="operator", make_default=True,
+            policy_id="policy",
+            version=2,
+            state=PolicyState.ACTIVE,
+            actor="operator",
+            make_default=True,
         )
-        session.add(OmnigentOAuthHostBindingRecord(
-            binding_ref="binding", provider_profile_id="profile",
-            endpoint_ref="default", harness="codex-native",
-            credential_mount_template_json={
-                "authVolumeRef": {
-                    "providerProfileId": "profile", "runtimeId": "codex_cli",
-                    "providerId": "openai", "volumeRef": "codex_auth_volume",
-                    "credentialGeneration": 1, "ownerUserId": "user-1",
+        session.add(
+            OmnigentOAuthHostBindingRecord(
+                binding_ref="binding",
+                provider_profile_id="profile",
+                endpoint_ref="default",
+                harness="codex-native",
+                credential_mount_template_json={
+                    "authVolumeRef": {
+                        "providerProfileId": "profile",
+                        "runtimeId": "codex_cli",
+                        "providerId": "openai",
+                        "volumeRef": "codex_auth_volume",
+                        "credentialGeneration": 1,
+                        "ownerUserId": "user-1",
+                    },
+                    "targetPath": "/home/app/.codex",
+                    "accessMode": "read_write",
+                    "runtimeUid": 1000,
+                    "runtimeGid": 1000,
                 },
-                "targetPath": "/home/app/.codex", "accessMode": "read_write",
-                "runtimeUid": 1000, "runtimeGid": 1000,
-            },
-            launch_policy_ref="policy@1",
-        ))
+                launch_policy_ref="policy@1",
+            )
+        )
         await session.commit()
 
         usage = await service.usage("policy", 1)
@@ -307,7 +323,9 @@ async def test_bound_policy_version_cannot_be_retired(tmp_path):
 
         with pytest.raises(PolicyConflict, match="bound to an active host profile"):
             await service.transition(
-                policy_id="policy", version=1, state=PolicyState.DISABLED,
+                policy_id="policy",
+                version=1,
+                state=PolicyState.DISABLED,
                 actor="operator",
             )
 
@@ -322,29 +340,33 @@ async def test_usage_projects_live_and_historical_bridge_dependents(tmp_path):
             ("bridge-live", "workflow-live", "running"),
             ("bridge-history", "workflow-history", "completed"),
         ):
-            session.add(OmnigentBridgeSession(
-                bridge_session_id=session_id,
-                provider="omnigent",
-                compatibility_profile="v1",
-                moonmind_workflow_id=workflow_id,
-                moonmind_agent_run_id=f"agent-{session_id}",
-                idempotency_key=f"key-{session_id}",
-                provider_profile_id="profile-from-session",
-                effective_launch_snapshot_json={"policyAuthority": snapshot},
-                omnigent_endpoint_ref="default",
-                host_type="static_compose",
-                status=state,
-            ))
+            session.add(
+                OmnigentBridgeSession(
+                    bridge_session_id=session_id,
+                    provider="omnigent",
+                    compatibility_profile="v1",
+                    moonmind_workflow_id=workflow_id,
+                    moonmind_agent_run_id=f"agent-{session_id}",
+                    idempotency_key=f"key-{session_id}",
+                    provider_profile_id="profile-from-session",
+                    effective_launch_snapshot_json={"policyAuthority": snapshot},
+                    omnigent_endpoint_ref="default",
+                    host_type="static_compose",
+                    status=state,
+                )
+            )
         await session.commit()
 
         usage = await service.usage("policy", 1)
 
         assert usage["dependents"]["providerProfiles"] == ["profile-from-session"]
         assert usage["dependents"]["workflows"] == [
-            "workflow-history", "workflow-live",
+            "workflow-history",
+            "workflow-live",
         ]
         assert usage["dependents"]["bridgeSessions"] == [
-            "bridge-history", "bridge-live",
+            "bridge-history",
+            "bridge-live",
         ]
         assert usage["dependents"]["activeBridgeSessions"] == ["bridge-live"]
         assert usage["unavailabilityBlockers"] == [
@@ -374,19 +396,21 @@ async def test_usage_filters_bridge_dependents_in_the_database(tmp_path):
             ("null-launch", "wf-null", "running", None),
         )
         for session_id, workflow_id, state, launch in rows:
-            session.add(OmnigentBridgeSession(
-                bridge_session_id=session_id,
-                provider="omnigent",
-                compatibility_profile="v1",
-                moonmind_workflow_id=workflow_id,
-                moonmind_agent_run_id=f"agent-{session_id}",
-                idempotency_key=f"key-{session_id}",
-                provider_profile_id="profile-x",
-                effective_launch_snapshot_json=launch,
-                omnigent_endpoint_ref="default",
-                host_type="static_compose",
-                status=state,
-            ))
+            session.add(
+                OmnigentBridgeSession(
+                    bridge_session_id=session_id,
+                    provider="omnigent",
+                    compatibility_profile="v1",
+                    moonmind_workflow_id=workflow_id,
+                    moonmind_agent_run_id=f"agent-{session_id}",
+                    idempotency_key=f"key-{session_id}",
+                    provider_profile_id="profile-x",
+                    effective_launch_snapshot_json=launch,
+                    omnigent_endpoint_ref="default",
+                    host_type="static_compose",
+                    status=state,
+                )
+            )
         await session.commit()
 
         usage = await service.usage("policy", 1)
@@ -417,19 +441,21 @@ async def test_usage_bounds_dependent_lists_but_counts_reflect_totals(
             ("s-b", "wf-b", "running"),
             ("s-c", "wf-c", "completed"),
         ):
-            session.add(OmnigentBridgeSession(
-                bridge_session_id=session_id,
-                provider="omnigent",
-                compatibility_profile="v1",
-                moonmind_workflow_id=workflow_id,
-                moonmind_agent_run_id=f"agent-{session_id}",
-                idempotency_key=f"key-{session_id}",
-                provider_profile_id="profile-x",
-                effective_launch_snapshot_json={"policyAuthority": snapshot},
-                omnigent_endpoint_ref="default",
-                host_type="static_compose",
-                status=state,
-            ))
+            session.add(
+                OmnigentBridgeSession(
+                    bridge_session_id=session_id,
+                    provider="omnigent",
+                    compatibility_profile="v1",
+                    moonmind_workflow_id=workflow_id,
+                    moonmind_agent_run_id=f"agent-{session_id}",
+                    idempotency_key=f"key-{session_id}",
+                    provider_profile_id="profile-x",
+                    effective_launch_snapshot_json={"policyAuthority": snapshot},
+                    omnigent_endpoint_ref="default",
+                    host_type="static_compose",
+                    status=state,
+                )
+            )
         await session.commit()
 
         usage = await service.usage("policy", 1)
@@ -511,9 +537,7 @@ async def test_mutable_bootstrap_image_is_refreshed_and_resolved(monkeypatch):
     )
 
     assert (
-        await resolve_bootstrap_image_ref(
-            "ghcr.io/omnigent-ai/omnigent-server:latest"
-        )
+        await resolve_bootstrap_image_ref("ghcr.io/omnigent-ai/omnigent-server:latest")
         == digest_ref
     )
     assert any(call[1] == "pull" for call in calls)
@@ -535,9 +559,7 @@ async def test_bootstrap_uses_safe_local_digest_when_latest_refresh_times_out(
     )
 
     assert (
-        await resolve_bootstrap_image_ref(
-            "ghcr.io/omnigent-ai/omnigent-host:latest"
-        )
+        await resolve_bootstrap_image_ref("ghcr.io/omnigent-ai/omnigent-host:latest")
         == digest_ref
     )
 
@@ -617,22 +639,85 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
                 "harness": "codex-native",
                 "agentIdentities": ["codex-native-ui"],
             }
-            assert by_policy[policy_id].document_json["host"]["hostImageRef"] == host_digest
+            assert (
+                by_policy[policy_id].document_json["host"]["hostImageRef"]
+                == host_digest
+            )
         for policy_id in {"omnigent-on-demand", "opencode-on-demand"}:
             assert by_policy[policy_id].document_json["execution"] == {
                 "profileRef": "omnigent-opencode@1",
                 "harness": "opencode-native",
                 "agentIdentities": ["opencode"],
             }
-            assert by_policy[policy_id].document_json["providerProfile"]["compatibleProviders"] == ["opencode-go", "opencode"]
-            assert by_policy[policy_id].document_json["host"]["hostImageRef"] == opencode_host_digest
-            snapshot = await OmnigentPolicyService(session).resolve_runtime_snapshot(f"{policy_id}@1")
+            assert by_policy[policy_id].document_json["providerProfile"][
+                "compatibleProviders"
+            ] == ["opencode-go", "opencode"]
+            assert (
+                by_policy[policy_id].document_json["host"]["hostImageRef"]
+                == opencode_host_digest
+            )
+            snapshot = await OmnigentPolicyService(session).resolve_runtime_snapshot(
+                f"{policy_id}@1"
+            )
             assert snapshot["policyRef"] == f"{policy_id}@1"
         assert await bootstrap_policies_ready(session) is True
-        assert await seed_bootstrap_policies(
-            session, env={}, image_resolver=resolver
-        ) == []
+        assert (
+            await seed_bootstrap_policies(session, env={}, image_resolver=resolver)
+            == []
+        )
         assert len(resolution_calls) == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared_image_tag", [False, True])
+async def test_qualified_claude_bootstrap_uses_installed_shared_host_image(
+    tmp_path, monkeypatch, shared_image_tag
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    shared_host_digest = (
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=shared_host_digest),
+    )
+
+    async def resolver(image_ref: str) -> str:
+        if "host-moonmind" in image_ref:
+            return shared_host_digest
+        return codex_host_digest if "host" in image_ref else server_digest
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        seeded = await seed_bootstrap_policies(
+            session,
+            env={
+                "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "true",
+                "OMNIGENT_SHARED_HOST_IMAGE_REF": (
+                    "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
+                    if shared_image_tag
+                    else shared_host_digest
+                ),
+            },
+            image_resolver=resolver,
+        )
+
+        assert "claude-on-demand" in seeded
+        snapshot = await OmnigentPolicyService(session).resolve_runtime_snapshot(
+            "claude-on-demand@1"
+        )
+        assert snapshot["boundaries"]["execution"] == {
+            "profileRef": "omnigent-claude@1",
+            "harness": "claude-native",
+            "agentIdentities": ["claude-native-ui"],
+        }
+        assert snapshot["boundaries"]["host"]["hostImageRef"] == shared_host_digest
+        assert snapshot["boundaries"]["providerProfile"]["compatibleProviders"] == [
+            "anthropic"
+        ]
+        assert await bootstrap_policies_ready(session) is True
 
 
 @pytest.mark.asyncio
@@ -680,15 +765,15 @@ async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
         policy_id = policy_ref.rpartition("@")[0]
         snapshot = await OmnigentPolicyService(
             session
-        ).resolve_default_runtime_snapshot(
-            policy_id
-        )
+        ).resolve_default_runtime_snapshot(policy_id)
 
         assert profile_ref == "omnigent-opencode@1"
         assert policy_ref == "opencode-on-demand@1"
         assert snapshot["policyRef"] == "opencode-on-demand@2"
         assert snapshot["boundaries"]["execution"]["harness"] == "opencode-native"
-        assert snapshot["boundaries"]["host"]["hostImageRef"] == next_opencode_host_digest
+        assert (
+            snapshot["boundaries"]["host"]["hostImageRef"] == next_opencode_host_digest
+        )
 
 
 @pytest.mark.asyncio
@@ -831,8 +916,7 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
             for row in defaults
         )
         assert all(
-            row.document_json["host"]["hostImageRef"] == next_host
-            for row in defaults
+            row.document_json["host"]["hostImageRef"] == next_host for row in defaults
         )
         binding = await session.get(
             OmnigentOAuthHostBindingRecord,
@@ -972,12 +1056,8 @@ async def test_bootstrap_revisits_image_binding_after_active_lease_drains(
         )
         assert binding.launch_policy_ref == "codex-on-demand@1"
         await session.execute(
-            OmnigentOAuthHostLeaseRecord.__table__
-            .update()
-            .where(
-                OmnigentOAuthHostLeaseRecord.lease_id
-                == "deferred-image-lease"
-            )
+            OmnigentOAuthHostLeaseRecord.__table__.update()
+            .where(OmnigentOAuthHostLeaseRecord.lease_id == "deferred-image-lease")
             .values(status="stopped", stopped_at=datetime.now(UTC))
         )
         await session.commit()
@@ -1136,7 +1216,9 @@ async def test_live_server_image_resolver_reads_running_compose_image(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, monkeypatch):
+async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(
+    tmp_path, monkeypatch
+):
     """Legacy bootstrap identity advances through an immutable version cutover."""
 
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
@@ -1215,12 +1297,8 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
         assert binding.launch_policy_ref == "codex-on-demand@1"
         assert binding.effective_launch_snapshot_json == {"snapshotRef": "stale"}
         await session.execute(
-            OmnigentOAuthHostLeaseRecord.__table__
-            .update()
-            .where(
-                OmnigentOAuthHostLeaseRecord.lease_id
-                == "active-bootstrap-lease"
-            )
+            OmnigentOAuthHostLeaseRecord.__table__.update()
+            .where(OmnigentOAuthHostLeaseRecord.lease_id == "active-bootstrap-lease")
             .values(status="stopped", stopped_at=datetime.now(UTC))
         )
         await session.commit()
@@ -1237,10 +1315,12 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
         assert seeded_after_drain == ["codex-on-demand"]
         policies = list((await session.execute(select(OmnigentPolicy))).scalars())
         assert all(
-            policy.default_version == (
-                2 if policy.policy_id in {
-                    "omnigent-codex", "codex-static", "codex-on-demand"
-                } else 1
+            policy.default_version
+            == (
+                2
+                if policy.policy_id
+                in {"omnigent-codex", "codex-static", "codex-on-demand"}
+                else 1
             )
             for policy in policies
         )
@@ -1288,9 +1368,12 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
 
 def test_explicit_opencode_bootstrap_pin_remains_authoritative():
     pin = "registry.test/custom-opencode@sha256:" + "a" * 64
-    assert configured_opencode_bootstrap_image_ref(
-        {
-            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": pin,
-            "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
-        }
-    ) == pin
+    assert (
+        configured_opencode_bootstrap_image_ref(
+            {
+                "OMNIGENT_OPENCODE_HOST_IMAGE_REF": pin,
+                "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+            }
+        )
+        == pin
+    )
