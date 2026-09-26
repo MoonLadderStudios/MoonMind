@@ -509,6 +509,15 @@ def _selected_author_identity(candidate: Mapping[str, Any]) -> dict[str, Any] | 
     return {"id": user_id, "login": login.strip()}
 
 
+def _sample_rank(reason: str) -> int:
+    """Owner evidence outranks retry evidence, which outranks bare reasons."""
+    if reason in CLAIM_EVIDENCE_EXCLUSIONS:
+        return 2
+    if reason in RETRY_EVIDENCE_EXCLUSIONS:
+        return 1
+    return 0
+
+
 def _record_rejection(
     counts: dict[str, Any], issue_number: int, reason: str, **details: Any
 ) -> None:
@@ -516,10 +525,11 @@ def _record_rejection(
     reasons = counts.setdefault("rejectionCounts", {})
     reasons[reason] = reasons.get(reason, 0) + 1
     samples = counts.setdefault("rejectedCandidates", [])
-    # Keep owner diagnostics visible even behind a full page of label rejects.
-    if len(samples) >= 20 and reason in CLAIM_EVIDENCE_EXCLUSIONS:
+    # Keep owner and retry diagnostics visible behind a full page of label rejects.
+    if len(samples) >= 20:
+        rank = _sample_rank(reason)
         for index, sample in enumerate(samples):
-            if sample["reasonCode"] not in CLAIM_EVIDENCE_EXCLUSIONS:
+            if _sample_rank(sample["reasonCode"]) < rank:
                 samples.pop(index)
                 break
     if len(samples) < 20:
@@ -564,6 +574,10 @@ CLAIM_EVIDENCE_EXCLUSIONS = frozenset(
     }
 )
 
+#: Exclusions derived from an issue's portable retry history, whose samples
+#: carry the allowance and the charged attempts.
+RETRY_EVIDENCE_EXCLUSIONS = frozenset({"budget_exhausted", "cooling_down"})
+
 #: Exclusions that mean "someone else is reserving this issue right now",
 #: as opposed to lifecycle, author, or prerequisite exclusions.
 RESERVATION_EXCLUSIONS = frozenset(
@@ -578,19 +592,55 @@ RESERVATION_EXCLUSIONS = frozenset(
     }
 )
 
+#: Plain-language causes as ``(singular, plural)`` phrases. Unlisted reason
+#: codes fall back to their own words.
+_EXCLUSION_PHRASES = {
+    "budget_exhausted": ("historical attempt limits", "historical attempt limits"),
+    "lifecycle_ineligible": ("lifecycle status", "lifecycle status"),
+    "blocked_prerequisite": ("a prerequisite", "prerequisites"),
+    "cooling_down": ("cooldown", "cooldown"),
+    "author_mismatch": ("author scope", "author scope"),
+    "recovery_handoff_missing": ("a missing recovery handoff", "missing recovery handoffs"),
+}
+
+
+def _exclusion_breakdown(counts: Mapping[str, Any]) -> str:
+    """One sentence: how many candidates each cause blocked, largest first."""
+    reasons = counts.get("rejectionCounts", {})
+    unfinished = int(counts.get("unfinishedAttemptAccounting") or 0)
+    parts = []
+    for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0])):
+        singular, plural = _EXCLUSION_PHRASES.get(
+            reason, (reason.replace("_", " "), reason.replace("_", " "))
+        )
+        phrase = singular if count == 1 else plural
+        if reason == "budget_exhausted" and unfinished:
+            phrase += f" ({unfinished} with attempts that never recorded an outcome)"
+        if not parts:
+            verb = "issue was" if count == 1 else "issues were"
+            parts.append(f"{count} matching {verb} blocked by {phrase}")
+        else:
+            parts.append(f"{count} by {phrase}")
+    if len(parts) > 2:
+        return ", ".join(parts[:-1]) + ", and " + parts[-1] + "."
+    return " and ".join(parts) + "."
+
 
 def _exclusion_summary(counts: Mapping[str, Any]) -> str:
     reasons = counts.get("rejectionCounts", {})
     if not reasons:
         return ""
-    summary = (
-        " Exclusions: "
-        + ", ".join(
-            f"{reason.replace('_', ' ')}: {count}"
-            for reason, count in sorted(reasons.items())
+    summary = " " + _exclusion_breakdown(counts)
+    if reasons.get("budget_exhausted"):
+        summary += (
+            " Historical attempt limits charge each issue's recorded attempts "
+            "against its retry allowance; searchEvidence.rejectedCandidates lists "
+            "the charged attempts. Removing status labels or including other "
+            "authors does not change them. An attempt that never recorded an "
+            "outcome is finished by its owning deployment's claim sweep, or an "
+            "operator can record an audited retry reset "
+            "(tools/reset_issue_retry_allowance.py)."
         )
-        + "."
-    )
     conflicts = sum(reasons.get(reason, 0) for reason in RESERVATION_EXCLUSIONS)
     if conflicts:
         samples = counts.get("rejectedCandidates", [])
@@ -1051,18 +1101,31 @@ async def resolve_issue(
                         )
                         continue
                 except ActiveIssueClaimConflict as exc:
+                    reason = exc.evidence.get("reasonCode") or "active_attempt_conflict"
                     _record_rejection(
                         counts,
                         candidate["number"],
-                        exc.evidence.get("reasonCode") or "active_attempt_conflict",
+                        reason,
                         claimEvidence=exc.evidence,
                     )
+                    retry = exc.evidence.get("retry")
+                    if (
+                        reason == "budget_exhausted"
+                        and isinstance(retry, Mapping)
+                        and retry.get("unresolvedAttempts")
+                    ):
+                        counts["unfinishedAttemptAccounting"] = (
+                            int(counts.get("unfinishedAttemptAccounting") or 0) + 1
+                        )
                     continue
                 if selected_author is not None:
                     counts["selectedIssueAuthor"] = dict(selected_author)
                 evidence["selectedIssue"] = dict(current)
                 return candidate["number"], evidence
             if len(candidates) < 100:
+                # An idle search is a completed search that selected nothing;
+                # lead with that and the operational causes, not author scope.
+                idle = "Search completed without selecting an issue."
                 if any(
                     counts.get("rejectionCounts", {}).get(reason)
                     for reason in RESERVATION_EXCLUSIONS
@@ -1070,26 +1133,30 @@ async def resolve_issue(
                     return None, {
                         **evidence,
                         "disposition": "idle",
-                        "summary": "No issue selected." + _exclusion_summary(counts),
+                        "summary": idle + _exclusion_summary(counts),
                         "reasonCode": "unresolved_issue_attempts",
                     }
                 if authenticated_user is not None:
                     return None, {
                         **evidence,
                         "disposition": "idle",
-                        "summary": (
-                            "No eligible open GitHub issue created by the authenticated "
-                            "search account was found; candidate pages exhausted. "
-                            "No other author's issue was selected."
+                        "summary": idle
+                        + (
+                            _exclusion_summary(counts)
+                            + " Only issues created by the authenticated search "
+                            "account were considered."
+                            if counts.get("rejectionCounts")
+                            else " No open issue created by the authenticated "
+                            "search account matched."
                         )
-                        + _exclusion_summary(counts),
+                        + " No other author's issue was selected.",
                         "reasonCode": "no_eligible_self_authored_issue",
                     }
                 return None, {
                     **evidence,
                     "disposition": "idle",
-                    "summary": "No eligible open GitHub issue found; candidate pages exhausted."
-                    + _exclusion_summary(counts),
+                    "summary": idle
+                    + (_exclusion_summary(counts) or " No open issue matched."),
                 }
     if authenticated_user is not None:
         return None, {

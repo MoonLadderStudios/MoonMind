@@ -6633,8 +6633,11 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
             expected_issue_number=issue_number, trusted_posters=trusted, max_attempts=handoff.retry_allowance,
             now_epoch=_time.time())
         if lineage.outcome != "reconstructed":
+            # The retry explanation (allowance, charged attempts and outcomes,
+            # unfinished accounting) is what makes a budget rejection actionable.
             raise ActiveIssueClaimConflict("retry_lineage_blocks_admission", evidence={
-                "reasonCode": lineage.reason_code, "source": "github_comments"})
+                "reasonCode": lineage.reason_code, "source": "github_comments",
+                **({"retry": lineage.retry} if lineage.retry else {})})
         comment, prior = prior_attempts[-1]
         handoff = replace(handoff, predecessor_attempt_id=prior.attempt_id,
             predecessor_comment_id=str(comment["id"]), retry_remaining=lineage.retry_remaining,
