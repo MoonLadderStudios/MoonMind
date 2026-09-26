@@ -218,41 +218,40 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
       await page.viewport(320, 568);
       await new Promise((resolve) => setTimeout(resolve, 100));
       const vw = window.innerWidth;
-      const rows: string[] = [];
+      const describe = (el: Element | null) => {
+        if (!el) return 'MISSING';
+        const h = el as HTMLElement;
+        const cs = getComputedStyle(h);
+        const rect = h.getBoundingClientRect();
+        return (
+          `${h.tagName}${h.className ? `.${String(h.className).split(' ').filter(Boolean).slice(0, 3).join('.')}` : ''}` +
+          ` rect=[${Math.round(rect.left)},${Math.round(rect.right)}]w=${Math.round(rect.width)}` +
+          ` scrollW=${h.scrollWidth} clientW=${h.clientWidth}` +
+          ` display=${cs.display} pos=${cs.position} ws=${cs.whiteSpace} ow=${cs.overflowWrap}` +
+          ` w=${cs.width} minW=${cs.minWidth} maxW=${cs.maxWidth}`
+        );
+      };
+      const spillers: string[] = [];
+      const rectOffenders: string[] = [];
       const all = [host, ...Array.from(host.querySelectorAll('*'))] as HTMLElement[];
       for (const h of all) {
         const rect = h.getBoundingClientRect();
         if (rect.right > vw + 1) {
-          const cls = (h.className?.toString() ?? '').split(' ').filter(Boolean).slice(0, 3).join('.');
-          rows.push(
-            `${h.tagName}${cls ? `.${cls}` : ''} right=${Math.round(rect.right)} w=${Math.round(rect.width)}`,
-          );
+          rectOffenders.push(describe(h));
+        }
+        if (h.scrollWidth > h.clientWidth + 1 && h.clientWidth > 0) {
+          spillers.push(describe(h));
         }
       }
-      const styleOf = (sel: string) => {
-        const el = host.querySelector(sel) as HTMLElement | null;
-        if (!el) return `${sel}: MISSING`;
-        const cs = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return `${sel}: display=${cs.display} width=${cs.width} maxW=${cs.maxWidth} minW=${cs.minWidth} rectW=${Math.round(rect.width)}`;
-      };
       console.log(
-        `DIAG viewport=${vw} docScroll=${document.documentElement.scrollWidth} offenders=${rows.length}\n` +
-          rows.slice(0, 30).join('\n') +
-          '\n' +
-          [
-            '.provider-profiles-table',
-            'td[data-label="Profile"] > div',
-            '.provider-profile-form fieldset',
-            '.provider-tier-editor legend',
-            '.provider-tier-editor legend > span',
-            '.provider-tier-editor li',
-            '.provider-tier-editor label',
-            '.provider-tier-editor select',
-            '.provider-tier-editor select option',
-          ]
-            .map(styleOf)
-            .join('\n'),
+        `DIAG2 viewport=${vw} docScroll=${document.documentElement.scrollWidth}` +
+          ` bodyScroll=${document.body.scrollWidth} hostScroll=${host.scrollWidth}` +
+          ` media720=${window.matchMedia('(max-width: 720px)').matches}` +
+          ` body=[${describe(document.body)}] html=[${describe(document.documentElement)}]` +
+          `\nRECT_OFFENDERS=${rectOffenders.length}\n` +
+          rectOffenders.slice(0, 20).join('\n') +
+          `\nSCROLL_SPILLERS=${spillers.length}\n` +
+          spillers.slice(0, 40).join('\n'),
       );
     } finally {
       host.remove();
