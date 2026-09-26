@@ -1,5 +1,5 @@
 {
-  "invariant": "Exact-host attestation executes the deployment manifest's probe as literal arguments under a cleared environment -- the probe attests the delivered build, never the host's credential configuration -- after verifying the read-only mount and executable presence, recording digest drift as advisory evidence, before publishing readiness.",
+  "invariant": "Exact-host attestation executes the deployment manifest's probe as literal arguments under a cleared environment -- the probe attests the delivered build, never the host's credential configuration -- after verifying executable presence at the image-owned path, recording digest drift as advisory evidence, before publishing readiness. Image-owned tools carry no mount and no mount evidence is fabricated; persisted pre-cutover volume bindings drain through the read-only mount check, never silently rewritten.",
   "versionProbe": [
     "--help"
   ],

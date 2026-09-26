@@ -237,57 +237,45 @@ def test_temporal_compose_topology_and_private_exposure():
         assert "control-plane-network" in temporal_networks
 
 
-def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
+def test_omnigent_hosts_use_image_owned_tools_without_tool_bundle():
+    # MoonLadderStudios/MoonMind#4558: the shared host image owns gh/moonmind.
+    # No initializer service, tools mounts, or version-named tools volume
+    # remains on the shared-host path; the manifest stays the single pin
+    # source consumed by the image build.
     compose = _load_compose()
     services = compose["services"]
-    initializer = services["omnigent-tools-init"]
+    assert "omnigent-tools-init" not in services
+    assert "omnigent-tools" not in compose.get("volumes", {})
     tool_manifest = json.loads(
         (REPO_ROOT / "services/omnigent/tools/manifest.lock.json").read_text(
             encoding="utf-8"
         )
     )
-
-    configured_version = initializer["environment"]["MOONMIND_GH_VERSION"]
-    compose_default_version = configured_version.removesuffix("}").rsplit(":-", 1)[1]
-    assert tool_manifest["bundleVersion"] == f"gh-{compose_default_version}-container-v1"
     tools_by_name = {tool["name"]: tool for tool in tool_manifest["tools"]}
-    assert tools_by_name["gh"]["version"] == compose_default_version
+    assert tools_by_name["gh"]["version"] == "2.76.2"
+    assert tool_manifest["bundleVersion"] == "gh-2.76.2-container-v1"
     assert tools_by_name["docker"]["version"] == "container-v1"
     assert tools_by_name["docker"]["path"] == "bin/moonmind"
-
-    assert initializer["image"] == (
-        "${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}"
+    dockerfile = (REPO_ROOT / "services/omnigent/moonmind-host/Dockerfile").read_text(
+        encoding="utf-8"
     )
-    assert initializer["user"] == "0:0"
-    assert initializer["restart"] == "no"
-    assert "profiles" not in initializer
-    assert initializer["environment"] == {
-        "MOONMIND_GH_SOURCE": "/usr/local/bin/gh",
-        "MOONMIND_GH_VERSION": "${OMNIGENT_GH_VERSION:-2.76.2}",
-    }
-    assert initializer["volumes"] == [
-        "omnigent-tools:/output",
-        "./services/omnigent/scripts:/opt/moonmind:ro",
-    ]
-    assert compose["volumes"]["omnigent-tools"]["name"] == (
-        "moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}"
-    )
-    assert services["temporal-worker-agent-runtime"]["depends_on"][
-        "omnigent-tools-init"
-    ] == {"condition": "service_completed_successfully"}
+    assert "install_moonmind_tools.py" in dockerfile
+    assert "services/omnigent/tools/manifest.lock.json" in dockerfile
+    assert "temporal-worker-agent-runtime" in services
+    assert "omnigent-tools-init" not in services[
+        "temporal-worker-agent-runtime"
+    ].get("depends_on", {})
 
     for service_name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
         host = services[service_name]
         environment = _env_map(host["environment"])
         assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
-        assert host["depends_on"]["omnigent-tools-init"] == {
-            "condition": "service_completed_successfully"
-        }
-        assert "omnigent-tools:/opt/moonmind-tools:ro" in host["volumes"]
+        assert "omnigent-tools-init" not in host.get("depends_on", {})
+        assert "omnigent-tools:/opt/moonmind-tools:ro" not in host["volumes"]
         assert (
             "./services/omnigent/scripts/moonmind-tools.sh:"
             "/etc/profile.d/moonmind-tools.sh:ro"
-        ) in host["volumes"]
+        ) not in host["volumes"]
 
 def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     compose = _load_compose()
@@ -830,7 +818,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
         in host_volumes
     )
-    assert "omnigent-tools:/opt/moonmind-tools:ro" in host_volumes
+    assert "omnigent-tools:/opt/moonmind-tools:ro" not in host_volumes
     assert (
         "${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:"
         "/opt/moonmind-skills:ro"
@@ -841,7 +829,6 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["depends_on"] == {
         "omnigent": {"condition": "service_started"},
         "omnigent-host-claude-init": {"condition": "service_completed_successfully"},
-        "omnigent-tools-init": {"condition": "service_completed_successfully"},
         "sandbox-egress-proxy": {"condition": "service_healthy"},
     }
     assert _network_names(host_service) == {"omnigent-egress-network"}
@@ -926,13 +913,10 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     } == {
         "omnigent-host-codex-state:/home/app/.omnigent",
         "codex_auth_volume:/home/app/.codex",
-        "omnigent-tools:/opt/moonmind-tools:ro",
         "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run",
         "omnigent-host-artifacts:/artifacts",
         "omnigent-host-cache:/home/app/.cache",
         "./services/omnigent/scripts:/opt/moonmind:ro",
-        "./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
-        "omnigent-tools:/opt/moonmind-tools:ro",
         (
             "${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:"
             "/opt/moonmind-skills:ro"
@@ -944,7 +928,6 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "omnigent-host-codex-init": {
             "condition": "service_completed_successfully"
         },
-        "omnigent-tools-init": {"condition": "service_completed_successfully"},
         "sandbox-egress-proxy": {"condition": "service_healthy"},
     }
     init_service = compose["services"]["omnigent-host-codex-init"]

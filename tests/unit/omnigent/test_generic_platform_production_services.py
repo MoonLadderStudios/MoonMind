@@ -4129,9 +4129,14 @@ async def test_janitor_recovers_binding_that_crashed_before_host_lease(owner_clo
 
 
 @pytest.mark.asyncio
-async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
+async def test_tool_delivery_uses_plan_names_and_image_owned_tools(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # MoonLadderStudios/MoonMind#4558: no tools volume is inspected or
+    # required. Retired volume settings cannot change tool selection.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_TOOLS_VOLUME_REF", "stale-volume")
+    monkeypatch.setenv("OMNIGENT_GH_VERSION", "0.0.0")
     manifest = tmp_path / "manifest.lock.json"
     manifest.write_text(
         json.dumps(
@@ -4149,24 +4154,24 @@ async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
         ),
         encoding="utf-8",
     )
-    calls: list[list[str]] = []
 
     class Backend:
-        async def run(self, argv, **_kwargs):
-            calls.append(list(argv))
-            return b""
+        async def run(self, argv, **_kwargs):  # pragma: no cover - must stay unused
+            raise AssertionError(f"image delivery must not run Docker: {argv}")
 
     service = OmnigentMountedToolService(
         backend=Backend(),
         manifest_path=manifest,
-        volume_ref="deployment-tools",
+        volume_ref="stale-volume",
     )
     result = await service.materialize(
-        {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["gh"]}
+        {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["gh"]},
+        image_ref="example/host@sha256:" + "b" * 64,
     )
 
-    assert calls == [["docker", "volume", "inspect", "deployment-tools"]]
-    assert result[0]["sourceRef"] == "deployment-tools"
+    assert result[0]["kind"] == "image"
+    assert result[0]["sourceRef"] == "image:example/host@sha256:" + "b" * 64
+    assert result[0]["targetPath"] == "/opt/moonmind-tools"
     assert result[0]["accessMode"] == "read-only"
     assert result[0]["tools"][0]["executableDigests"] == ["a" * 64]
     assert result[0]["tools"][0]["versionProbe"] == ["--version"]
