@@ -14,7 +14,7 @@ from api_service.services.settings_catalog import (
     EffectiveSettingValue,
     SettingDiagnostic,
 )
-from moonmind.config.settings import settings
+from moonmind.config.settings import FeatureFlagsSettings, settings
 
 def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
     assert (
@@ -48,7 +48,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
-    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
     monkeypatch.setattr(
         settings.temporal_dashboard, "temporal_workflow_editing_enabled", False
     )
@@ -183,25 +182,12 @@ def test_build_runtime_config_exposes_browser_safe_runtime_command_preview_metad
     assert "password" not in serialized
     assert "secret" not in serialized
 
-def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
-    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
-
-    config = dashboard_view_model.build_runtime_config("/workflows/new")
-
-    assert "jira" not in config["sources"]
-    assert "jiraIntegration" not in config["system"]
-
-def test_jira_create_page_enabled_reads_feature_flag(monkeypatch) -> None:
-    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
-    assert dashboard_view_model._jira_create_page_enabled() is False
-
-    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
-    assert dashboard_view_model._jira_create_page_enabled() is True
-
-def test_build_runtime_config_keeps_jira_ui_separate_from_trusted_tooling(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
+def test_build_runtime_config_never_exposes_jira_browser(monkeypatch) -> None:
+    # The Jira connector stays available to workflows, and a stale retired
+    # Create-page browser flag left in an operator's environment must not
+    # bring back browser endpoints or UI config.
+    monkeypatch.setenv("JIRA_CREATE_PAGE_ENABLED", "true")
+    monkeypatch.setattr(settings, "feature_flags", FeatureFlagsSettings(_env_file=None))
     monkeypatch.setattr(settings.atlassian.jira, "jira_enabled", True)
     monkeypatch.setattr(settings.atlassian.jira, "jira_tool_enabled", True)
 
@@ -209,110 +195,6 @@ def test_build_runtime_config_keeps_jira_ui_separate_from_trusted_tooling(
 
     assert "jira" not in config["sources"]
     assert "jiraIntegration" not in config["system"]
-
-def test_build_runtime_config_exposes_jira_ui_when_enabled(monkeypatch) -> None:
-    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "jira_create_page_default_project_key",
-        "",
-    )
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "jira_create_page_default_board_id",
-        "",
-    )
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "jira_create_page_remember_last_board_in_session",
-        True,
-    )
-
-    config = dashboard_view_model.build_runtime_config("/workflows/new")
-
-    assert config["sources"]["jira"] == {
-        "connections": "/api/jira/connections/verify",
-        "projects": "/api/jira/projects",
-        "boards": "/api/jira/projects/{projectKey}/boards",
-        "columns": "/api/jira/boards/{boardId}/columns",
-        "issues": "/api/jira/boards/{boardId}/issues",
-        "issue": "/api/jira/issues/{issueKey}",
-    }
-    assert config["system"]["jiraIntegration"] == {
-        "enabled": True,
-        "defaultProjectKey": "",
-        "defaultBoardId": "",
-        "rememberLastBoardInSession": True,
-    }
-    assert all(
-        value.startswith("/api/") and "://" not in value
-        for value in config["sources"]["jira"].values()
-    )
-
-def test_build_jira_sources_returns_independent_moonmind_endpoint_templates() -> None:
-    first = dashboard_view_model._build_jira_sources()
-    first["projects"] = "https://jira.example.test/rest/api/3/project"
-
-    second = dashboard_view_model._build_jira_sources()
-
-    assert second["projects"] == "/api/jira/projects"
-    assert all(
-        value.startswith("/api/") and "://" not in value
-        for value in second.values()
-    )
-
-def test_validate_jira_source_templates_rejects_non_moonmind_paths() -> None:
-    sources = {
-        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
-        "projects": "https://jira.example.test/rest/api/3/project",
-    }
-
-    with pytest.raises(ValueError, match="MoonMind API path"):
-        dashboard_view_model._validate_jira_source_templates(sources)
-
-def test_validate_jira_source_templates_rejects_blank_paths() -> None:
-    sources = {
-        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
-        "issues": " ",
-    }
-
-    with pytest.raises(ValueError, match="MoonMind API path"):
-        dashboard_view_model._validate_jira_source_templates(sources)
-
-def test_validate_jira_source_templates_rejects_trailing_whitespace() -> None:
-    sources = {
-        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
-        "projects": "/api/jira/projects ",
-    }
-
-    with pytest.raises(ValueError, match="MoonMind API path"):
-        dashboard_view_model._validate_jira_source_templates(sources)
-
-def test_build_runtime_config_exposes_jira_ui_defaults_when_configured(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "jira_create_page_default_project_key",
-        "ENG",
-    )
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "jira_create_page_default_board_id",
-        "42",
-    )
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "jira_create_page_remember_last_board_in_session",
-        False,
-    )
-
-    config = dashboard_view_model.build_runtime_config("/workflows/new")
-
-    assert config["system"]["jiraIntegration"]["defaultProjectKey"] == "ENG"
-    assert config["system"]["jiraIntegration"]["defaultBoardId"] == "42"
-    assert config["system"]["jiraIntegration"]["rememberLastBoardInSession"] is False
 
 def test_build_runtime_config_includes_dashboard_build_metadata(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")

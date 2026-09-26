@@ -2068,57 +2068,6 @@ class FeatureFlagsSettings(BaseSettings):
             "/observability/events. Disable to force merged-tail rollback."
         ),
     )
-    jira_create_page_enabled: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__JIRA_CREATE_PAGE_ENABLED",
-            "JIRA_CREATE_PAGE_ENABLED",
-        ),
-        description=(
-            "Expose the Create-page Jira browser integration in dashboard runtime "
-            "config. This is intentionally separate from trusted Jira tool enablement."
-        ),
-    )
-    jira_create_page_default_project_key: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
-            "JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
-        ),
-        description="Default Jira project key selected by the Create-page browser.",
-    )
-    jira_create_page_default_board_id: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
-            "JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
-        ),
-        description="Default Jira board ID selected by the Create-page browser.",
-    )
-    jira_create_page_remember_last_board_in_session: bool = Field(
-        True,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
-            "JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
-        ),
-        description=(
-            "Allow the Create-page Jira browser to remember the last selected "
-            "project and board in browser session storage."
-        ),
-    )
-    jira_create_page_recent_done_days: int = Field(
-        30,
-        ge=0,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__JIRA_CREATE_PAGE_RECENT_DONE_DAYS",
-            "JIRA_CREATE_PAGE_RECENT_DONE_DAYS",
-        ),
-        description=(
-            "Limit Create-page Jira board issue browsing to non-Done issues plus "
-            "Done issues updated within this many days. Set to 0 to exclude Done."
-        ),
-    )
-
     preset_catalog: bool = Field(
         True,
         validation_alias=AliasChoices(
@@ -2152,23 +2101,6 @@ class FeatureFlagsSettings(BaseSettings):
         """Return whether the session-aware timeline contract is enabled."""
 
         return self.live_logs_session_timeline_rollout != "off"
-
-    @field_validator("jira_create_page_default_project_key", mode="before")
-    @classmethod
-    def _normalize_jira_create_page_default_project_key(
-        cls, value: object
-    ) -> str:
-        raw = str(value or "").strip().upper()
-        if raw and not _JIRA_PROJECT_KEY_PATTERN.fullmatch(raw):
-            raise ValueError(
-                "JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY must match a Jira project key"
-            )
-        return raw
-
-    @field_validator("jira_create_page_default_board_id", mode="before")
-    @classmethod
-    def _normalize_jira_create_page_default_board_id(cls, value: object) -> str:
-        return str(value or "").strip()
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
