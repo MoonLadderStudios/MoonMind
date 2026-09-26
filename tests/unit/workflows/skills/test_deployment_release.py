@@ -775,7 +775,7 @@ async def test_post_update_migration_failure_marks_release_failed_without_losing
         {"authored": {"owner": "owner"}, "deadline": release.time.time() + 300},
     )
     release.write_record(
-        directory / "deployment-result.json",
+        directory / "attempt-result.json",
         {
             "owner": "owner",
             "result": {
@@ -802,6 +802,49 @@ async def test_post_update_migration_failure_marks_release_failed_without_losing
     assert "managed schedule requires an explicit revision" in result["outputs"]["finalError"]
     assert result["progress"]["state"] == "FAILED"
     assert result["progress"]["events"][-1]["state"] == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_completed_primary_receipt_stays_successful_after_finalization_error(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    directory = release.state_root() / "job"
+    directory.mkdir(parents=True)
+    request_file = directory / "request.json"
+    release.write_record(
+        request_file,
+        {"authored": {"owner": "owner"}, "deadline": release.time.time() + 300},
+    )
+    release.write_record(
+        directory / "deployment-result.json",
+        {
+            "owner": "owner",
+            "result": {
+                "status": "COMPLETED",
+                "outputs": {"fleetAndOmnigentVerified": True},
+                "progress": {"state": "SUCCEEDED", "percent": 100},
+            },
+        },
+    )
+
+    async def body(_path):
+        raise RuntimeError("terminal receipt write was interrupted")
+
+    async def no_wait(*_args):
+        pass
+
+    monkeypatch.setattr(release, "_run_job_body", body)
+    monkeypatch.setattr(release.asyncio, "sleep", no_wait)
+    await release.run_job(request_file)
+
+    result = json.loads((directory / "result.json").read_text())["result"]
+    assert result["status"] == "COMPLETED"
+    assert result["outputs"]["fleetAndOmnigentVerified"] is True
+    assert "terminal receipt write was interrupted" in result["outputs"]["finalError"]
+    assert result["progress"]["state"] == "SUCCEEDED"
 
 
 @pytest.mark.asyncio

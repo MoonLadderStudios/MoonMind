@@ -140,7 +140,9 @@ async def test_refresh_keeps_pinned_provider_when_profile_acceptance_expands(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["provider_removed", "provider_unpinned", "auth_model"])
+@pytest.mark.parametrize(
+    "change", ["provider_removed", "provider_unpinned", "auth_model", "multiple_slots"]
+)
 async def test_refresh_rejects_credential_change_affecting_pinned_provider(
     deployment_session, change,
 ):
@@ -151,8 +153,20 @@ async def test_refresh_rejects_credential_change_affecting_pinned_provider(
         session.previous["providerProfileRef"] = None
         session.usage.effective_snapshot = deepcopy(session.previous)
         session.version.document["credentialSlots"][0]["acceptedProviderIds"] = []
-    else:
+    elif change == "auth_model":
         session.version.document["credentialSlots"][0]["acceptedAuthModels"] = ["none"]
+    else:
+        # The one pinned Provider Profile does not prove the binding for a
+        # second slot; keep that schedule on its authored snapshot.
+        second = {
+            "id": "secondary",
+            "optional": True,
+            "acceptedAuthModels": ["none"],
+            "acceptedProviderIds": ["other-provider"],
+        }
+        session.old.document["credentialSlots"].append(deepcopy(second))
+        session.version.document["credentialSlots"].append(second)
+        session.version.document["credentialSlots"][0]["acceptedProviderIds"] = []
 
     with pytest.raises(ValueError, match="scheduled Agent Profile semantics changed"):
         await selection.refresh_schedule_deployment_snapshot(
