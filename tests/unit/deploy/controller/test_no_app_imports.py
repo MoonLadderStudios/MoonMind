@@ -45,12 +45,10 @@ def test_controller_modules_import_without_application_packages(tmp_path, monkey
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.syspath_prepend(str(CONTROLLER_DIR))
     # Block every application package: any such import must fail loudly.
+    # monkeypatch restores already-imported packages afterwards; popping them
+    # would orphan their loaded submodules for later tests in this process.
     for blocked in ("moonmind", "api_service", "temporalio", "omnigent"):
-        sys.modules[blocked] = None  # type: ignore[assignment]
-    try:
-        for name in ("redact", "mounts", "lock", "record", "engine"):
-            sys.modules.pop(name, None)
-            __import__(name)
-    finally:
-        for blocked in ("moonmind", "api_service", "temporalio", "omnigent"):
-            sys.modules.pop(blocked, None)
+        monkeypatch.setitem(sys.modules, blocked, None)
+    for name in ("redact", "mounts", "lock", "record", "engine"):
+        sys.modules.pop(name, None)
+        __import__(name)
