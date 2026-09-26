@@ -18,6 +18,7 @@ pytest.importorskip("temporalio")
 
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH,
     RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
     MoonMindRunWorkflow,
     _resolve_plan_json_pointer,
@@ -867,6 +868,11 @@ async def test_container_job_derives_stable_key_and_reconciles_lost_ack(
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH,
+    )
     monkeypatch.setattr(
         run_module.workflow,
         "info",
