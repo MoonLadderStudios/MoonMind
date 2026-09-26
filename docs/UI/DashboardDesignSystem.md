@@ -732,6 +732,11 @@ component/style owners — not a parallel mobile tree:
   `min-width: 0` / `min-inline-size: 0`). Fieldsets explicitly reset the
   browser `min-inline-size: min-content` default that otherwise lets one
   long identifier or select force a whole section past the viewport.
+- Phones have one page gutter: `.dashboard-root` owns the inline inset and
+  page frames such as Settings add none of their own. Each nested card level
+  (section card, fieldset, tier card, detail panel) adds one compact
+  `0.75rem` inset instead of repeating desktop padding; purely grouping
+  fieldsets (such as the tier fieldset inside its card) add none.
 - Controls are bounded to the available inline size (`max-width: 100%`).
   Labels sit above fields and metadata values below their labels on
   phones; no permanent wide left label column.
@@ -749,7 +754,9 @@ component/style owners — not a parallel mobile tree:
   fields and actions never require sideways page panning.
 
 Prove repairs with `frontend/src/browser/mobileOverflow.browser.test.tsx`
-(geometry at 320–1440px plus a narrow container in a wide viewport) and
+(geometry at 320–1440px plus a narrow container in a wide viewport),
+`frontend/src/browser/settingsMobileGutters.browser.test.tsx` (phone gutters
+on the rendered Providers & Secrets page), and
 `npm run ui:test:browser` across the Chromium/Firefox matrix and the
 targeted WebKit leg. Workflow list/detail/chat, collection rails,
 sidebars, and native chat composition are out of scope for shared-selector
