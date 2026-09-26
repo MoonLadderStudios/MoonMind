@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -55,6 +56,10 @@ class DockerPullError(RuntimeError):
     def __init__(self, message, category):
         super().__init__(message)
         self.category = category
+
+
+class ControllerUnreachableError(RuntimeError):
+    """The controller transport did not answer."""
 
 
 def _redact_diagnostics(text):
@@ -255,7 +260,8 @@ def main(argv=None):
         "release submission is recorded. The default immutable path is "
         "unchanged when this flag is absent.",
     )
-    args = parser.parse_args(argv)
+    requested_args = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(requested_args)
     if args.resume and args.operator_url:
         raise ValueError("Resume preserves the original operator URLs; omit --operator-url")
     if args.local_build and args.resume:
@@ -378,14 +384,104 @@ def main(argv=None):
     controller_rc = _try_controller_handoff(record=record)
     if controller_rc is not None:
         return controller_rc
-    if args.legacy_direct:
-        return _submit_legacy_direct(record, repo)
-    return _submit_via_controller(
+    return _submit_release(
         record,
         repo,
         controller_url=args.controller_url,
         secret_file=args.controller_secret_file,
+        legacy_direct=args.legacy_direct,
+        controller_url_explicit=(
+            bool(os.environ.get("MOONMIND_CONTROLLER_URL"))
+            or any(
+                arg == "--controller-url" or arg.startswith("--controller-url=")
+                for arg in requested_args
+            )
+        ),
+        is_resume=args.resume is not None,
     )
+
+
+def _submit_release(
+    record,
+    repo,
+    *,
+    controller_url,
+    secret_file,
+    legacy_direct,
+    controller_url_explicit=False,
+    is_resume=False,
+):
+    """Route the recorded submission to its installed execution owner.
+
+    An installed (or explicitly selected) standalone controller owns the
+    update. Until a deployment installs it, the application-owned updater
+    remains the supported default so a bare invocation still updates.
+
+    A resume never takes that automatic fallback on its own: the original
+    submission may still be owned by the controller, and forking the legacy
+    updater would create two deployment writers. Resume requires the owner
+    to be reconciled first via an explicit selection.
+    """
+    if legacy_direct:
+        return _submit_legacy_direct(record, repo)
+    explicit_controller = bool(
+        secret_file
+        or os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
+        or controller_url_explicit
+    )
+    if not controller_url_explicit:
+        identity = _controller_identity(repo)
+        port = identity.get("port") if identity else None
+        if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+            controller_url = f"http://127.0.0.1:{port}"
+    default_secret = _default_controller_secret_file(repo)
+    if not explicit_controller and not default_secret.exists():
+        _reject_automatic_resume(is_resume)
+        # The notice stays free of secret material (CodeQL clear-text
+        # logging): it names no secret path or value, only the installer.
+        print(
+            "Standalone controller is not installed; updating through the "
+            "application-owned updater. Install the controller with "
+            "`python3 deploy/controller/bootstrap.py install` to use it.",
+            flush=True,
+        )
+        return _submit_legacy_direct(record, repo)
+    if not explicit_controller:
+        secret = default_secret.read_text(encoding="utf-8").strip()
+        try:
+            _controller_call(controller_url, secret, "GET", "/v1/healthz", timeout=5)
+        except ControllerUnreachableError:
+            # Bootstrap may have written a secret and Compose file before its
+            # unpublished image could start. Fall back only if that controller
+            # never recorded an operation and owns no container; a stopped
+            # controller with durable work must retain its recovery authority.
+            if not _controller_never_started(repo):
+                raise
+            _reject_automatic_resume(is_resume)
+            print(
+                "Standalone controller bootstrap did not start a service; "
+                "updating through the application-owned updater.",
+                flush=True,
+            )
+            return _submit_legacy_direct(record, repo)
+    return _submit_via_controller(
+        record,
+        repo,
+        controller_url=controller_url,
+        secret_file=secret_file,
+    )
+
+
+def _reject_automatic_resume(is_resume):
+    if is_resume:
+        raise RuntimeError(
+            "Refusing to resume with the legacy application-owned "
+            "updater: the original submission may still be owned by the "
+            "standalone controller. Reconcile controller ownership "
+            "first, then resume with --legacy-direct to confirm the "
+            "legacy path or --controller-secret-file to resume through "
+            "the controller."
+        )
 
 
 def _default_controller_secret_file(repo):
@@ -393,6 +489,45 @@ def _default_controller_secret_file(repo):
     if override:
         return Path(override)
     return repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"
+
+
+def _controller_identity(repo):
+    """Read the installed endpoint and project without creating new state."""
+    path = repo / "deploy" / "state" / "controller" / "controller-identity.json"
+    if not path.is_file():
+        return None
+    try:
+        identity = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return identity if isinstance(identity, dict) else {}
+
+
+def _controller_never_started(repo):
+    """Prove an incomplete bootstrap owns no operation or Compose container."""
+    state_dir = repo / "deploy" / "state" / "controller"
+    operations_dir = state_dir / "operations"
+    if operations_dir.exists() and any(operations_dir.iterdir()):
+        return False
+    identity = _controller_identity(repo)
+    if identity is None:
+        return not (state_dir / "controller-compose.yaml").exists()
+    project = identity.get("project")
+    if not isinstance(project, str) or not project:
+        return False
+    containers = run(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--format",
+            "{{.ID}}",
+        ],
+        cwd=repo,
+    )
+    return not containers.strip()
 
 
 def _controller_call(controller_url, secret, method, path, payload=None, timeout=30):
@@ -417,7 +552,7 @@ def _controller_call(controller_url, secret, method, path, payload=None, timeout
             f"Controller {method} {path} failed with HTTP {exc.code}: {detail}"
         ) from None
     except urllib.error.URLError as exc:
-        raise RuntimeError(
+        raise ControllerUnreachableError(
             f"Controller at {controller_url} is unreachable ({exc.reason}); "
             "install and start it with "
             "`python3 deploy/controller/bootstrap.py install` (then `start`), "
@@ -605,11 +740,23 @@ def _submit_legacy_direct(record, repo):
             "-f",
             str(path),
         ]
-        for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
-            override = repo / name
-            if override.exists():
-                command.extend(["-f", str(override)])
-                break
+        # Propagate the deployment's selected Compose file set (the same
+        # resolution the controller path carries). The release image already
+        # supplies the base file, so only the additional selected files are
+        # layered here; omitting them would reconcile without custom services
+        # while `--remove-orphans` may remove them.
+        compose_selection = os.environ.get("COMPOSE_FILE", "")
+        if compose_selection.strip():
+            for name in _resolve_compose_files(repo):
+                if name in ("docker-compose.yaml", "docker-compose.yml"):
+                    continue
+                command.extend(["-f", str(repo / name)])
+        else:
+            for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+                override = repo / name
+                if override.exists():
+                    command.extend(["-f", str(override)])
+                    break
         command.extend(
             [
                 "run",
