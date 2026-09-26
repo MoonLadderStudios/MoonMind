@@ -10319,7 +10319,6 @@ button.workflow-workspace-sidebar-row:active {
   text-align: center;
   padding-block: 0.75rem;
 }
-}
 
 @media (max-width: 720px) {
   .data-table-slab[data-responsive="on"] {
