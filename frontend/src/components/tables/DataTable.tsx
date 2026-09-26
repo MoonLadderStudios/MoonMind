@@ -231,7 +231,40 @@ export function DataTable<T>({
   };
 
   const renderCards = () => {
-    if (isLoading || isError || !hasRows) return null;
+    // Mobile CSS hides the <table> (display:none) at narrow widths, so the
+    // card fallback must carry loading/error/empty states too. Otherwise those
+    // states vanish on phones while the table copy stays hidden (MoonMind#4559).
+    if (isLoading) {
+      return (
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state">
+            <p role="status" aria-busy="true" className="data-table-card__state">
+              {loadingMessage}
+            </p>
+          </li>
+        </ul>
+      );
+    }
+    if (isError) {
+      return (
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state">
+            <p role="alert" className="data-table-card__state data-table-error">
+              {errorMessage}
+            </p>
+          </li>
+        </ul>
+      );
+    }
+    if (!hasRows) {
+      return (
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state">
+            <p className="data-table-card__state">{emptyMessage}</p>
+          </li>
+        </ul>
+      );
+    }
     // Intentionally not aria-hidden: when the responsive breakpoint hides the
     // table (`display: none`), the table is removed from the accessibility tree
     // and these cards become the only representation of the rows for assistive

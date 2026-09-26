@@ -58,6 +58,7 @@ def test_resolve_volume_mount_env_claude():
     
     assert shaped["EXISTING"] == "var"
     assert shaped["CLAUDE_HOME"] == "/custom/mount/claude"
+    assert shaped["CLAUDE_CONFIG_DIR"] == "/custom/mount/claude"
     assert "CODEX_HOME" not in shaped
 
 def test_resolve_volume_mount_env_codex():
