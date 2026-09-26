@@ -10570,10 +10570,25 @@ button.workflow-workspace-sidebar-row:active {
   /* MoonMind#4559: tier selects size to their longest option in WebKit and
    * that intrinsic width otherwise propagates through the fieldset chain and
    * pushes the page past narrow viewports. A definite width breaks the
-   * circle: the select fills its fieldset instead of sizing it. */
+   * circle: the select fills its fieldset instead of sizing it. Labels become
+   * single-column grids (the production direction) with no automatic minimum
+   * so the inline label cannot carry the select's atomic intrinsic width
+   * upward; the legend text span wraps instead of sizing the legend. */
   .provider-profile-form select,
   .provider-tier-editor select {
     width: 100%;
+  }
+  .provider-profile-form label,
+  .provider-tier-editor label {
+    display: grid;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .provider-tier-editor legend > span {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
   .provider-tier-editor ol {
     margin: 0;
