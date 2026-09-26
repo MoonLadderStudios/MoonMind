@@ -211,5 +211,4 @@ describe('DataTable (MM-959)', () => {
     expect(card?.querySelector('.data-table-card__actions')).toBeTruthy();
     expect(card?.querySelector('.data-table-card__row .data-table-card__actions')).toBeNull();
   });
-  });
 });
