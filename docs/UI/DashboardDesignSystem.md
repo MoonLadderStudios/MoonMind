@@ -722,6 +722,39 @@ Any liquidGL-enabled surface must satisfy all of the following:
 
 ---
 
+### 13.6 shared responsive layout contract (MoonMind#4559)
+
+Non-workflow surfaces share one responsive implementation in
+`frontend/src/styles/dashboard.css`, owned by the existing
+component/style owners — not a parallel mobile tree:
+
+- Grid tracks and flex children stay shrinkable (`minmax(0, 1fr)`,
+  `min-width: 0` / `min-inline-size: 0`). Fieldsets explicitly reset the
+  browser `min-inline-size: min-content` default that otherwise lets one
+  long identifier or select force a whole section past the viewport.
+- Controls are bounded to the available inline size (`max-width: 100%`).
+  Labels sit above fields and metadata values below their labels on
+  phones; no permanent wide left label column.
+- Tables that compare on desktop become stacked records on phones (at the
+  `720px` breakpoint): the label renders as a caption above a full-width
+  value. Shared `DataTable` mirrors loading/error/empty states into its
+  card fallback so hiding the table never hides the state.
+- Long machine identifiers wrap (`overflow-wrap: anywhere`); human prose
+  wraps naturally. Action groups wrap into full-width buttons with a
+  `2.75rem` minimum touch height instead of compressing into tall pills.
+- Overlays stay viewport-bounded (`100dvh`-based max height with internal
+  scroll) with reachable close/save actions and preserved focus behavior.
+- Genuinely two-dimensional technical content (policy JSON, diffs, worker
+  health tables) may use a bounded local scroll region or wrap; ordinary
+  fields and actions never require sideways page panning.
+
+Prove repairs with `frontend/src/browser/mobileOverflow.browser.test.tsx`
+(geometry at 320–1440px plus a narrow container in a wide viewport) and
+`npm run ui:test:browser` across the Chromium/Firefox matrix and the
+targeted WebKit leg. Workflow list/detail/chat, collection rails,
+sidebars, and native chat composition are out of scope for shared-selector
+changes.
+
 ## 14. Summary
 
 The dashboard’s design system is built on a simple hierarchy:

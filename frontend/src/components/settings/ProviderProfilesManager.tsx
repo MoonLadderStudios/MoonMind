@@ -3943,7 +3943,7 @@ export function ProviderProfilesManager({
   };
 
   return (
-    <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+    <section className="provider-profiles rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
@@ -4396,7 +4396,7 @@ export function ProviderProfilesManager({
                     headers="provider-profile-header-actions"
                     role="cell"
                   >
-                    <div className="flex flex-wrap gap-2">
+                    <div className="provider-profile-actions flex flex-wrap gap-2">
                       {canWriteProviderProfiles && canStartOAuth ? (
                         <button
                           type="button"
@@ -4944,18 +4944,18 @@ export function ProviderProfilesManager({
         </div>
 
         <form
-          className="space-y-6 provider-profile-form min-w-0 max-w-full"
+          className="provider-profile-form space-y-6 min-w-0 max-w-full"
           onSubmit={(event) => {
             event.preventDefault();
             handleSaveSubmit();
           }}
         >
           {/* ── 1. Identity (Profile ID, Runtime, Provider, Account label) ── */}
-          <fieldset className="rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4 min-w-0 max-w-full">
+          <fieldset className="provider-profile-fieldset rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4 min-w-0 max-w-full">
             <legend className="px-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
               Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
             </legend>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="provider-profile-identity-grid grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
                 <input
@@ -5138,19 +5138,19 @@ export function ProviderProfilesManager({
               </ul>
             ) : null}
             <div className="sr-only" aria-live="polite" ref={tierLiveRef}>{tierLiveMessage}</div>
-            <ol className="space-y-4" aria-label="Model and effort tiers">
+            <ol className="provider-tier-list space-y-4" aria-label="Model and effort tiers">
               {tierDrafts.map((tier, index) => {
                 const tierNumber = index + 1;
                 const isDefault = tier.clientId === defaultTierClientId;
                 const isOnlyTier = tierDrafts.length === 1;
                 return (
-                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`rounded-2xl border p-4 shadow-sm min-w-0 max-w-full ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
-                    <fieldset className="space-y-3 min-w-0 max-w-full">
-                      <legend className="px-1 text-sm font-semibold text-slate-900 dark:text-white max-w-full">
-                        <span>Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</span>
+                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`provider-tier-card rounded-2xl border p-4 shadow-sm min-w-0 max-w-full ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
+                    <fieldset className="provider-tier-fieldset space-y-3 min-w-0 max-w-full">
+                      <legend className="provider-tier-legend px-1 text-sm font-semibold text-slate-900 dark:text-white max-w-full">
+                        <span className="text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</span>
                       </legend>
                       {canWriteProviderProfiles ? (
-                        <div className="flex flex-wrap items-center gap-2" aria-label={`Tier ${tierNumber} actions`}>
+                        <div className="tier-card__actions flex flex-wrap items-center gap-2" aria-label={`Tier ${tierNumber} actions`}>
                           <button type="button" className="min-h-11 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:underline max-w-full" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate tier</button>
                           <button type="button" className={`min-h-11 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium max-w-full ${isOnlyTier ? 'text-slate-400 cursor-not-allowed' : 'text-rose-600 dark:text-rose-400 hover:underline'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
                         </div>
