@@ -10581,6 +10581,7 @@ button.workflow-workspace-sidebar-row:active {
   .provider-profile-form label,
   .provider-tier-editor label {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     min-width: 0;
     max-width: 100%;
   }
@@ -10602,6 +10603,7 @@ button.workflow-workspace-sidebar-row:active {
   .provider-tier-editor legend {
     display: grid;
     gap: 0.35rem;
+    width: 100%;
     max-width: 100%;
   }
   .provider-tier-editor legend + * {
