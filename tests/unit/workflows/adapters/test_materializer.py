@@ -548,3 +548,43 @@ async def test_materializer_fails_closed_on_missing_policy_for_unknown_strategy(
 
     with pytest.raises(ValueError, match="Launch blocked"):
         await materializer.materialize(profile)
+
+@pytest.mark.asyncio
+async def test_materializer_shapes_claude_oauth_home_with_supported_config_dir():
+    """Claude OAuth launch env must steer the CLI via CLAUDE_CONFIG_DIR.
+
+    The pinned Claude Code CLI ignores CLAUDE_HOME; credentials resolve from
+    the config dir (CLAUDE_CONFIG_DIR or $HOME/.claude). The OAuth home mount
+    must therefore be exported under the supported variable or finalized
+    credentials are invisible at launch.
+    """
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        auth_mode="oauth",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        volume_ref="claude_auth_volume",
+        volume_mount_path="/home/app/.claude",
+        clear_env_keys=[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_API_KEY",
+            "OPENAI_API_KEY",
+        ],
+        command_template=["claude", "-p", "hello"],
+    )
+
+    env, cmd = await materializer.materialize(profile)
+
+    assert env["MANAGED_AUTH_VOLUME_PATH"] == "/home/app/.claude"
+    assert env["CLAUDE_HOME"] == "/home/app/.claude"
+    assert env["CLAUDE_CONFIG_DIR"] == "/home/app/.claude"
+    assert env["CLAUDE_VOLUME_PATH"] == "/home/app/.claude"
+    assert cmd == ["claude", "-p", "hello"]

@@ -2271,6 +2271,84 @@ async def test_save_from_workflow_marks_favorite_and_recent(tmp_path):
     assert listed[0]["isFavorite"] is True
     assert listed[0]["recentAppliedAt"] is not None
 
+async def test_account_free_operator_expands_favorites_and_saves_presets(tmp_path):
+    """The account-free local operator has no ``user`` row (#4346).
+
+    Expanding a preset records a recent, favoriting records a favorite, and
+    saving records the preset creator. None of these may require an account
+    row, so the write succeeds with foreign keys enforced as on PostgreSQL.
+    """
+    from sqlalchemy import event
+
+    from api_service.auth_providers import _transient_disabled_operator
+
+    operator = _transient_disabled_operator()
+    operator_ref = str(operator.id)
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/account_free.db", future=True
+    )
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_maker() as session:
+            catalog = PresetCatalogService(session)
+            await catalog.create_template(
+                slug="issue-search",
+                title="Issue Search",
+                description="Search and implement",
+                scope="personal",
+                scope_ref=operator_ref,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "find an issue"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=operator.id,
+            )
+            expanded = await catalog.expand_template(
+                slug="issue-search",
+                scope="personal",
+                scope_ref=operator_ref,
+                inputs={},
+                context={},
+                options=ExpandOptions(),
+                user_id=operator.id,
+            )
+            await catalog.set_favorite(
+                user_id=operator.id,
+                slug="issue-search",
+                scope="personal",
+                scope_ref=operator_ref,
+            )
+            await PresetSaveService(session).save_from_workflow(
+                scope="personal",
+                scope_ref=operator_ref,
+                title="Saved Preset",
+                description="Saved from task",
+                steps=[{"instructions": "run the checks"}],
+                created_by=operator.id,
+            )
+            listed = await catalog.list_templates(
+                scope="personal",
+                scope_ref=operator_ref,
+                favorites_only=True,
+                user_id=operator.id,
+            )
+    finally:
+        await engine.dispose()
+
+    assert [step["instructions"] for step in expanded["steps"]] == ["find an issue"]
+    assert sorted(item["slug"] for item in listed) == ["issue-search", "saved-preset"]
+    assert all(item["recentAppliedAt"] is not None for item in listed)
+
 async def test_recents_trimmed_to_latest_five_rows(tmp_path):
     user_id = uuid4()
     user_str = str(user_id)

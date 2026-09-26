@@ -150,4 +150,66 @@ describe('DataTable (MM-959)', () => {
     expect(document.querySelector('.data-table-cards')).toBeNull();
     expect(screen.getByText('Nothing here')).toBeTruthy();
   });
+
+  it('renders responsive state cards for loading/error/empty so mobile never hides table states (MoonMind#4559)', () => {
+    const { unmount } = render(
+      <DataTable
+        data={[]}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        isLoading
+        loadingMessage="Loading rows..."
+      />,
+    );
+    expect(document.querySelector('.data-table-cards')).toBeTruthy();
+    expect(screen.getAllByText('Loading rows...').length).toBeGreaterThanOrEqual(1);
+    unmount();
+
+    render(
+      <DataTable
+        data={[]}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        isError
+        errorMessage="Boom"
+      />,
+    );
+    expect(document.querySelector('.data-table-cards')).toBeTruthy();
+    expect(screen.getAllByRole('alert').some((node) => node.textContent?.includes('Boom'))).toBe(true);
+  });
+
+  it('renders a responsive empty card instead of hiding the table state on mobile (MoonMind#4559)', () => {
+    render(
+      <DataTable
+        data={[]}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        emptyMessage="Nothing here"
+      />,
+    );
+    const cards = document.querySelector('.data-table-cards');
+    expect(cards).toBeTruthy();
+    expect(cards?.textContent).toContain('Nothing here');
+  });
+
+  it('keeps responsive card actions in their own full-width area (MoonMind#4559)', () => {
+    render(
+      <DataTable
+        data={rows.slice(0, 1)}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        rowActions={(r) => <button type="button">Edit {r.name}</button>}
+      />,
+    );
+    const card = document.querySelector('.data-table-card');
+    expect(card).toBeTruthy();
+    // Actions must not compete inside a label/value row; they get their own area.
+    expect(card?.querySelector('.data-table-card__actions')).toBeTruthy();
+    expect(card?.querySelector('.data-table-card__row .data-table-card__actions')).toBeNull();
+  });
+  });
 });

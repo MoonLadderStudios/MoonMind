@@ -112,7 +112,7 @@ These commands cover:
 * `ui:lint` — ESLint
 * `ui:build:check` — clean rebuild plus manifest validation
 
-Run real-browser regressions locally with `npm run ui:test:browser`; it defaults to Chromium and Firefox. To reproduce one CI matrix leg, set `MOONMIND_BROWSER_ENGINES=chromium` or `MOONMIND_BROWSER_ENGINES=firefox`. For the targeted WebKit leg covering the reported form, fieldset, and overlay cases (MoonMind#4559), set `MOONMIND_BROWSER_ENGINES=webkit`. CI supplies the matching browsers from its pinned Playwright container.
+Run real-browser regressions locally with `npm run ui:test:browser`; it defaults to Chromium and Firefox. To reproduce one CI matrix leg, set `MOONMIND_BROWSER_ENGINES=chromium` or `MOONMIND_BROWSER_ENGINES=firefox`. For the targeted form/fieldset/overlay leg (MoonMind#4559), set `MOONMIND_BROWSER_ENGINES=webkit`. CI supplies the matching browsers from its pinned Playwright container and runs the targeted WebKit file in `frontend-browser-webkit-targeted`.
 
 ### Native Workflow Chat browser verification
 

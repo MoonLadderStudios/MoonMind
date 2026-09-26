@@ -3844,6 +3844,7 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
         assert existing is not None
         existing.home_path_overrides = {
             "CLAUDE_HOME": "/oauth/claude",
+            "CLAUDE_CONFIG_DIR": "/oauth/claude-config",
             "CODEX_HOME": "/oauth/codex",
             "CUSTOM_HOME": "/custom/home",
         }
@@ -3890,11 +3891,13 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
     }
     expected_home_path_overrides = {
         "CLAUDE_HOME": "/oauth/claude",
+        "CLAUDE_CONFIG_DIR": "/oauth/claude-config",
         "CODEX_HOME": "/oauth/codex",
         "CUSTOM_HOME": "/custom/home",
     }
     if runtime_id == "claude_code":
         expected_home_path_overrides.pop("CLAUDE_HOME")
+        expected_home_path_overrides.pop("CLAUDE_CONFIG_DIR")
     elif runtime_id == "codex_cli":
         expected_home_path_overrides.pop("CODEX_HOME")
     assert profile_payload["home_path_overrides"] == expected_home_path_overrides
@@ -5127,7 +5130,10 @@ async def test_claude_oauth_validate_failure_uses_unknown_reason_fallback(
             "/home/app/.claude",
             "Claude",
             "claude_credential_methods",
-            {"CLAUDE_HOME": "/home/app/.claude"},
+            {
+                "CLAUDE_HOME": "/home/app/.claude",
+                "CLAUDE_CONFIG_DIR": "/home/app/.claude",
+            },
         ),
     ],
 )

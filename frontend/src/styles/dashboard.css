@@ -974,6 +974,22 @@ h1 {
   min-height: 0;
 }
 
+/* MoonMind#4559: Instance/Operations share the dashboard sizing contract.
+ * Generated settings rows pair a minmax(0,1fr) description column with a
+ * control column; long mono keys, SecretRefs, and digests must wrap instead
+ * of forcing the grid (or the whole page) wider than the viewport. */
+.settings-page {
+  min-width: 0;
+  max-width: 100%;
+}
+.settings-page code,
+.settings-page dd,
+.settings-page p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .panel:has(.skills-page) {
   border: 0;
   background: transparent;
@@ -3121,10 +3137,14 @@ tbody tr:hover {
   }
 
   .provider-profiles-table td {
-    display: block;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+    align-items: start;
     border-bottom: 1px solid rgb(var(--mm-border) / 0.58);
     padding: 0.78rem 0.85rem;
     min-width: 0;
+    max-width: 100%;
     overflow-wrap: anywhere;
   }
 
@@ -3139,9 +3159,35 @@ tbody tr:hover {
     font-family: inherit;
     font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: 0;
+    letter-spacing: 0.02em;
     line-height: 1.35;
     text-transform: uppercase;
+  }
+
+  /* MoonMind#4559: actions use the full record width instead of competing
+   * with a label column. Buttons wrap at word boundaries with touch-sized
+   * targets rather than compressing into tall pills. */
+  .provider-profiles-table td[data-label="Actions"] {
+    gap: 0.5rem;
+  }
+
+  .provider-profiles-table td[data-label="Actions"] > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .provider-profiles-table td .flex.flex-wrap,
+  .provider-profiles-table td [class*="flex"] {
+    flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .provider-profiles-table td button {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-height: 2.75rem;
+    max-width: 100%;
   }
 
   .provider-profiles-table td:last-child {
@@ -7164,6 +7210,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .oauth-terminal-page {
   display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   padding: 24px;
 }
@@ -7246,6 +7294,60 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   min-height: 5.5rem;
   resize: vertical;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 767px) {
+  .dashboard-root:has(.oauth-terminal-page) {
+    padding-inline: 0;
+  }
+
+  .panel:has(.oauth-terminal-page) {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    min-height: 0;
+  }
+
+  .oauth-terminal-page {
+    padding: 8px 0;
+    gap: 12px;
+  }
+
+  .oauth-terminal-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .oauth-terminal-header h1 {
+    font-size: 1.25rem;
+  }
+
+  .oauth-terminal-actions {
+    justify-content: flex-start;
+  }
+
+  .oauth-terminal-header,
+  .oauth-terminal-paste-box,
+  .oauth-terminal-session-panel {
+    padding-inline: 12px;
+  }
+
+  .oauth-terminal-page .oauth-terminal-surface {
+    border-radius: 0;
+    padding: 4px;
+    height: 60svh;
+    min-height: 240px;
+  }
+
+  .oauth-terminal-paste-input {
+    /* Keep native iOS text selection usable without focus zoom. */
+    font-size: 16px;
+  }
 }
 
 .oauth-terminal-paste-controls > .primary {
@@ -10147,19 +10249,23 @@ button.workflow-workspace-sidebar-row:active {
 .data-table-card {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.6rem 0.7rem;
+  gap: 0.5rem;
+  padding: 0.75rem 0.8rem;
   border: 1px solid rgb(var(--mm-border) / 0.72);
   border-radius: 0.6rem;
   background: rgb(var(--mm-panel) / 0.86);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
-/* MoonMind#4559: stacked rows put each value below its label so narrow
- * cards never squeeze content beside a permanent label column. */
+/* MoonMind#4559: stacked label-above-value cards. The previous
+ * space-between row squeezed values/actions into a narrow column beside a
+ * wide label. Labels sit above full-width values; actions get their own
+ * wrapping area below the fields. */
 .data-table-card__row {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.15rem;
   min-width: 0;
 }
@@ -10168,21 +10274,51 @@ button.workflow-workspace-sidebar-row:active {
   color: rgb(var(--mm-muted));
   font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.35;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
+  line-height: 1.35;
 }
 
 .data-table-card__value {
   min-width: 0;
   min-inline-size: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 0.92rem;
+}
+
+.data-table-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding-top: 0.25rem;
+  border-top: 1px solid rgb(var(--mm-border) / 0.5);
+}
+
+.data-table-card__actions button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-height: 2.75rem;
+  max-width: 100%;
 }
 
 .data-table-card--state {
-  align-items: center;
+  align-items: stretch;
   text-align: center;
   color: rgb(var(--mm-muted));
+}
+
+.data-table-card__state {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
+  padding-block: 0.75rem;
+}
 }
 
 @media (max-width: 720px) {
@@ -10297,23 +10433,233 @@ button.workflow-workspace-sidebar-row:active {
   display: grid;
   gap: 1.25rem;
   padding: 1.5rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .omnigent-inventory__toolbar {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
   justify-content: space-between;
+  min-width: 0;
+}
+
+.omnigent-inventory__toolbar > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .omnigent-inventory label,
 .omnigent-inventory td strong,
 .omnigent-inventory td small { display: block; }
-.omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; }
+.omnigent-inventory__identity {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.omnigent-inventory__identity strong,
+.omnigent-inventory__identity small {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.omnigent-inventory__row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.omnigent-inventory__row-actions button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-height: 2.75rem;
+  max-width: 100%;
+}
+.omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; min-width: 0; }
+.omnigent-policy-editor { min-width: 0; max-width: 100%; }
+.omnigent-policy-editor input,
+.omnigent-policy-editor select,
+.omnigent-policy-editor textarea { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .omnigent-policy-editor textarea { display: block; font-family: monospace; margin-top: .35rem; max-width: 70rem; width: 100%; }
-.omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; }
+.omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; min-width: 0; max-width: 100%; }
+.omnigent-inventory__table-wrap .data-table-slab { max-width: 100%; }
 .omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,
 .omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+/* MoonMind#4559 inventory tables: grid sections must not inherit an automatic
+ * minimum width from the table, and inventory cells wrap instead of forcing
+ * the grid (or the whole page) wider than the viewport. The shared
+ * .data-table nowrap default suits dense desktop grids; inventory tables
+ * carry long identities, summaries, and action labels that must wrap at
+ * tablet widths so every control stays inside the viewport. */
+.omnigent-inventory > section {
+  min-width: 0;
+  max-width: 100%;
+}
+.omnigent-inventory .data-table th,
+.omnigent-inventory .data-table td {
+  white-space: normal;
+}
+.omnigent-inventory .data-table td {
+  overflow-wrap: anywhere;
+}
+.omnigent-policy-detail,
+.omnigent-policy-editor { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.omnigent-policy-detail pre { max-width: 100%; overflow: auto; min-width: 0; }
+.omnigent-policy-detail pre:focus-visible { outline: 2px solid rgb(var(--mm-accent-2)); outline-offset: 2px; }
+
+/* MoonMind#4559 shared responsive contract: fieldsets have an intrinsic
+ * minimum width (min-inline-size: min-content) that pushes single-column
+ * forms off narrow screens. Native fieldset/legend grouping is preserved;
+ * only the sizing boundary is corrected, plus modest mobile gutters. */
+.dashboard-content fieldset,
+.omnigent-inventory fieldset,
+.provider-profile-form fieldset {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+}
+.dashboard-content legend,
+.omnigent-inventory legend {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.dashboard-content input,
+.dashboard-content select,
+.dashboard-content textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 720px) {
+  .omnigent-inventory { padding: 0.75rem; gap: 1rem; }
+  .omnigent-inventory input[type='search'] { max-width: none; }
+  .omnigent-policy-editor textarea { max-width: 100%; }
+  .omnigent-inventory__toolbar { align-items: stretch; flex-direction: column; }
+  .dashboard-content input,
+  .dashboard-content select,
+  .dashboard-content textarea {
+    font-size: 16px;
+  }
+}
+
+/* MoonMind#4559 provider form + tier editor flattening. The Identity and
+ * tier sections keep native fieldset/legend semantics with restrained mobile
+ * padding; tier legends no longer act as toolbars (actions wrap below the
+ * heading); the ordered list loses its indentation on phones so fields use
+ * the full record width. */
+.provider-profile-form,
+.provider-tier-editor {
+  min-width: 0;
+  max-width: 100%;
+}
+.provider-profile-form fieldset,
+.provider-tier-editor fieldset {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.provider-tier-editor ol {
+  min-width: 0;
+  max-width: 100%;
+}
+@media (max-width: 720px) {
+  .provider-profile-form fieldset,
+  .provider-tier-editor fieldset {
+    padding: 0.75rem;
+  }
+  /* MoonMind#4559: tier selects size to their longest option in WebKit and
+   * that intrinsic width otherwise propagates through the fieldset chain and
+   * pushes the page past narrow viewports. A definite width breaks the
+   * circle: the select fills its fieldset instead of sizing it. Labels become
+   * single-column grids (the production direction) with no automatic minimum
+   * so the inline label cannot carry the select's atomic intrinsic width
+   * upward; the legend text span wraps instead of sizing the legend.
+   * DIAG2 (webkit leg) proved width:100% alone is not enough: the select's
+   * ~412px option min-content still sized the label's grid track and spilled
+   * 412->424->428->440->444px up the chain. contain:inline-size zeroes the
+   * select's intrinsic inline contribution at the source without changing its
+   * rendered size (width stays a definite 100%, block axis untouched, native
+   * popup unaffected); engines without support keep today's behavior. */
+  .provider-profile-form select,
+  .provider-tier-editor select {
+    width: 100%;
+    contain: inline-size;
+  }
+  .provider-profile-form label,
+  .provider-tier-editor label {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+    max-width: 100%;
+  }
+  .provider-tier-editor legend > span {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .provider-tier-editor ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .provider-tier-editor li {
+    min-width: 0;
+    max-width: 100%;
+    /* Backstop for the WebKit select-intrinsic spill above: clip residual
+     * track overflow at the tier record so it can never reach the page.
+     * Scoped to li (not fieldset) so legends keep rendering in the fieldset
+     * border; the li content sits behind the inner fieldset's padding, so
+     * focus outlines are unaffected. Never engages when the select
+     * containment holds. */
+    overflow-x: clip;
+  }
+  .provider-tier-editor legend {
+    display: grid;
+    gap: 0.35rem;
+    width: 100%;
+    max-width: 100%;
+  }
+  .provider-tier-editor legend + * {
+    min-width: 0;
+  }
+}
+
+/* MoonMind#4559 overlays: confirmation dialog panels stay viewport-bounded
+ * with safe-area spacing and a single scroll container. Scoped to panels
+ * only: fixed inset-0 backdrops that carry role="dialog" (e.g. the
+ * tier-removal backdrop) keep full-viewport coverage, the wide
+ * jira-browser panel keeps its own sizing, and full-height enrollment
+ * drawers keep their right-anchored drawer layout. Footer actions wrap and
+ * remain reachable at narrow widths and short heights without nested
+ * scroll traps. */
+@media (max-width: 720px) {
+  .dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel):not(.h-full),
+  .dashboard-content [data-state="open"][role="dialog"]:not(.fixed):not(.jira-browser-panel):not(.h-full) {
+    max-width: calc(100vw - 1.5rem);
+    max-height: calc(100dvh - 2rem);
+    overflow: auto;
+    margin: auto;
+  }
+}
+.dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel) {
+  min-width: 0;
+  max-width: calc(100vw - 1.5rem);
+}
+.dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel) button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
 
 /* Context retrieval (RAG) authoring controls (MoonMind#3514). */
 .context-retrieval-controls { display: grid; gap: 1rem; }
