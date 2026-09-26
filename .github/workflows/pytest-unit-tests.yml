@@ -35,7 +35,6 @@ jobs:
       frontend_static: ${{ steps.select.outputs.frontend_static }}
       frontend_browser_chromium: ${{ steps.select.outputs.frontend_browser_chromium }}
       frontend_browser_firefox: ${{ steps.select.outputs.frontend_browser_firefox }}
-      frontend_browser_webkit: ${{ steps.select.outputs.frontend_browser_webkit }}
       full_frontend: ${{ steps.select.outputs.full_frontend }}
     steps:
       - name: Check out code
@@ -1388,8 +1387,13 @@ jobs:
       HOME: /root
     strategy:
       fail-fast: false
+      # MoonMind#4559: the matrix keeps the Chromium/Firefox coverage and adds
+      # a targeted WebKit regression leg for the reported form, fieldset, and
+      # overlay cases. The Playwright container image provisions all three
+      # engines; WebKit automation is useful coverage, not a claim of testing
+      # physical iOS Safari.
       matrix:
-        engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox"]' || '["chromium"]') }}
+        engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox","webkit"]' || '["chromium","webkit"]') }}
     steps:
     - name: Check out code
       uses: actions/checkout@v7
@@ -1411,12 +1415,9 @@ jobs:
         MOONMIND_BROWSER_ENGINES: ${{ matrix.engine }}
       run: npm run ui:test:browser
 
-  frontend-browser-webkit:
-    # MoonLadderStudios/MoonMind#4559: targeted WebKit regression leg for the
-    # reported form, fieldset, and overlay cases. The Playwright container
-    # image already ships WebKit, so this needs selection — not provisioning.
+  frontend-browser-webkit-targeted:
     needs: select-test-suites
-    if: needs.select-test-suites.outputs.frontend_browser_webkit == 'true'
+    if: needs.select-test-suites.outputs.frontend_browser_chromium == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -1439,17 +1440,17 @@ jobs:
       run: npm ci --no-audit --no-fund
     - name: Report Playwright environment
       run: npx playwright --version
-    - name: Run targeted WebKit mobile-overflow journey
+    - name: Run targeted WebKit form/fieldset/overlay leg (MoonMind#4559)
       env:
         MOONMIND_BROWSER_ENGINES: webkit
-      run: npm run ui:test:browser -- src/browser/mobileOverflow.browser.test.tsx
+      run: npx vitest run --config frontend/vitest.browser.config.ts frontend/src/browser/mobileOverflow4559.browser.test.tsx
 
   test-frontend:
     needs:
       - select-test-suites
       - frontend-static
       - frontend-browser
-      - frontend-browser-webkit
+      - frontend-browser-webkit-targeted
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1463,8 +1464,7 @@ jobs:
         browser_selected="${{ needs.select-test-suites.outputs.frontend_browser_chromium }}"
         static_result="${{ needs.frontend-static.result }}"
         browser_result="${{ needs.frontend-browser.result }}"
-        webkit_selected="${{ needs.select-test-suites.outputs.frontend_browser_webkit }}"
-        webkit_result="${{ needs.frontend-browser-webkit.result }}"
+        webkit_result="${{ needs.frontend-browser-webkit-targeted.result }}"
 
         {
           echo "## Frontend validation"
@@ -1473,7 +1473,7 @@ jobs:
           echo "| Static | $static_selected | $static_result |"
           echo "| Chromium | $browser_selected | $browser_result |"
           echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
-          echo "| WebKit (mobile overflow) | $webkit_selected | $webkit_result |"
+          echo "| WebKit targeted (MoonMind#4559) | $browser_selected | $webkit_result |"
         } >> "$GITHUB_STEP_SUMMARY"
 
         if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
@@ -1488,8 +1488,8 @@ jobs:
           echo "::error::frontend-browser was selected but ended with result=$browser_result"
           exit 1
         fi
-        if [[ "$webkit_selected" == "true" && "$webkit_result" != "success" ]]; then
-          echo "::error::frontend-browser-webkit was selected but ended with result=$webkit_result"
+        if [[ "$browser_selected" == "true" && "$webkit_result" != "success" && "$webkit_result" != "skipped" ]]; then
+          echo "::error::frontend-browser-webkit-targeted was selected but ended with result=$webkit_result"
           exit 1
         fi
 

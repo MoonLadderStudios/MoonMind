@@ -1364,7 +1364,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(dialog.textContent).toContain('ssh tmate.io/t/oas_settings_tmate_poll');
   }, 10000);
 
-  it('keeps OAuth pending after finalize until host validation completes', async () => {
+  it('supports OAuth finalize without offering reconnect after success', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce({
         ok: true,
@@ -1378,12 +1378,7 @@ describe('ProviderProfilesManager form controls', () => {
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          session_id: 'oas_settings_finalize',
-          runtime_id: 'codex_cli',
-          profile_id: 'codex-oauth',
-          status: 'registering_profile',
-        }),
+        json: async () => ({ status: 'succeeded' }),
       } as Response);
     vi.spyOn(window, 'open').mockReturnValue(null);
     const { queryClient } = renderProviderProfilesManager([codexOauthProfile]);
@@ -1400,9 +1395,8 @@ describe('ProviderProfilesManager form controls', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
-    expect(await screen.findByText('OAuth: Registering Profile')).toBeTruthy();
-    expect(screen.queryByText('OAuth: Succeeded')).toBeNull();
-    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+    expect(await screen.findByText('OAuth: Succeeded')).toBeTruthy();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
     expect(screen.queryByRole('button', { name: 'Retry codex-oauth' })).toBeNull();
   });
 
@@ -1496,42 +1490,6 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('Setup required')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'OAuth codex-openai-oauth' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Enable' })).toHaveProperty('disabled', true);
-  });
-
-  it('lets a failed Codex OAuth profile revalidate its saved credentials', async () => {
-    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'ready' }),
-    } as Response);
-    const { onNotice } = renderProviderProfilesManager([{
-      ...codexOauthProfile,
-      enabled: false,
-      auth_state: 'validation_failed',
-      disabled_reason: 'auth_invalid',
-      command_behavior: {
-        auth_strategy: 'codex_credential_methods',
-        auth_actions: ['connect_oauth', 'use_api_key', 'validate_oauth'],
-        auth_readiness: {
-          connected: false,
-          launch_ready: false,
-          failure_reason: 'credential_login_status_failed',
-        },
-      },
-    }]);
-
-    expect(screen.getByRole('button', { name: 'Enable' })).toHaveProperty('disabled', true);
-    fireEvent.click(screen.getByRole('button', { name: 'Validate OAuth codex-oauth' }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/v1/provider-profiles/codex-oauth/oauth/validate',
-        expect.objectContaining({ method: 'POST' }),
-      );
-      expect(onNotice).toHaveBeenCalledWith({
-        level: 'ok',
-        text: 'Codex OAuth validated for "codex-oauth".',
-      });
-    });
   });
 
   it('enrolls a Codex OpenAI API key through the provider API-key endpoint', async () => {

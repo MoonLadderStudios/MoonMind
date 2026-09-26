@@ -231,34 +231,49 @@ export function DataTable<T>({
   };
 
   const renderStateCard = () => {
-    // MoonLadderStudios/MoonMind#4559: the responsive breakpoint hides the
-    // table that holds the loading/error/empty rows, so the card fallback
-    // must carry those states or mobile users lose them entirely.
+    // MoonMind#4559: the responsive breakpoint hides the table, so a
+    // loading/error/empty state rendered only as a table row would vanish on
+    // mobile. Mirror the state into the card fallback; CSS `display: none`
+    // keeps exactly one representation exposed per breakpoint.
+    // Mobile CSS hides the <table> (display:none) at narrow widths, so the
+    // card fallback must carry loading/error/empty states too.
     if (isLoading) {
       return (
-        <li className="data-table-card data-table-card--state" aria-busy="true">
-          {loadingMessage}
-        </li>
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state">
+            <p role="status" aria-busy="true" className="data-table-card__state">
+              {loadingMessage}
+            </p>
+          </li>
+        </ul>
       );
     }
     if (isError) {
       return (
-        <li className="data-table-card data-table-card--state data-table-error" role="alert">
-          {errorMessage}
-        </li>
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state">
+            <p role="alert" className="data-table-card__state data-table-error">
+              {errorMessage}
+            </p>
+          </li>
+        </ul>
       );
     }
     if (!hasRows) {
-      return <li className="data-table-card data-table-card--state">{emptyMessage}</li>;
+      return (
+        <ul className="data-table-cards">
+          <li className="data-table-card data-table-card--state">
+            <p className="data-table-card__state">{emptyMessage}</p>
+          </li>
+        </ul>
+      );
     }
     return null;
   };
 
   const renderCards = () => {
     const stateCard = renderStateCard();
-    if (stateCard) {
-      return <ul className="data-table-cards">{stateCard}</ul>;
-    }
+    if (stateCard) return stateCard;
     // Intentionally not aria-hidden: when the responsive breakpoint hides the
     // table (`display: none`), the table is removed from the accessibility tree
     // and these cards become the only representation of the rows for assistive
