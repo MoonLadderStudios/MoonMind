@@ -314,7 +314,11 @@ print(json.dumps({
 EOF
 )"
 echo "$SUBMIT_PAYLOAD" | redact
-SUBMIT_RESP="$(curl -fsS -X POST "$API_BASE/api/executions" -H 'Content-Type: application/json' -d "$SUBMIT_PAYLOAD" | redact | tee "$LOG_DIR/submit-response.json")"
+if ! SUBMIT_RESP="$(curl -fsS -X POST "$API_BASE/api/executions" -H 'Content-Type: application/json' -d "$SUBMIT_PAYLOAD" | redact | tee "$LOG_DIR/submit-response.json")"; then
+  JOURNEY_FAILED=1
+  echo "Error: submission failed; see $LOG_DIR/compose-logs-tail.log for the API error." >&2
+  exit 1
+fi
 echo "$SUBMIT_RESP" | head -c 2000; echo
 WORKFLOW_ID="$(python3 -c "import json;d=json.load(open('$LOG_DIR/submit-response.json'));print(d.get('workflowId') or d.get('workflow_id') or '')")"
 if [[ -z "$WORKFLOW_ID" ]]; then
