@@ -10484,6 +10484,23 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,
 .omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+/* MoonMind#4559 inventory tables: grid sections must not inherit an automatic
+ * minimum width from the table, and inventory cells wrap instead of forcing
+ * the grid (or the whole page) wider than the viewport. The shared
+ * .data-table nowrap default suits dense desktop grids; inventory tables
+ * carry long identities, summaries, and action labels that must wrap at
+ * tablet widths so every control stays inside the viewport. */
+.omnigent-inventory > section {
+  min-width: 0;
+  max-width: 100%;
+}
+.omnigent-inventory .data-table th,
+.omnigent-inventory .data-table td {
+  white-space: normal;
+}
+.omnigent-inventory .data-table td {
+  overflow-wrap: anywhere;
+}
 .omnigent-policy-detail,
 .omnigent-policy-editor { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .omnigent-policy-detail pre { max-width: 100%; overflow: auto; min-width: 0; }
@@ -10549,6 +10566,14 @@ button.workflow-workspace-sidebar-row:active {
   .provider-profile-form fieldset,
   .provider-tier-editor fieldset {
     padding: 0.75rem;
+  }
+  /* MoonMind#4559: tier selects size to their longest option in WebKit and
+   * that intrinsic width otherwise propagates through the fieldset chain and
+   * pushes the page past narrow viewports. A definite width breaks the
+   * circle: the select fills its fieldset instead of sizing it. */
+  .provider-profile-form select,
+  .provider-tier-editor select {
+    width: 100%;
   }
   .provider-tier-editor ol {
     margin: 0;
