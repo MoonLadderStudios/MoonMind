@@ -1754,3 +1754,158 @@ def test_build_v2_profile_keeps_stable_agent_source_across_model_only_bump() -> 
     src13 = v2_13.source.model_dump(by_alias=True, mode="json")
     assert src12 == src13
     assert src12["upstreamSnapshotDigest"] == stable_projection
+
+
+@pytest.mark.asyncio
+async def test_ordinary_admission_compiles_without_historical_certificate(
+    monkeypatch,
+) -> None:
+    """Ordinary work reaches execution without requalification (MM#4560).
+
+    Requested authenticated OpenCode policy with historical evidence naming
+    another revision (or no evidence at all): when the actual requested
+    policy/runtime checks pass, ordinary admission succeeds without a
+    historical certificate and never fabricates a passing one.
+    """
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", "/nonexistent/no-evidence.json"
+    )
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE",
+        "/nonexistent/no-evidence.json",
+    )
+
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref=default_launch_policy_ref(
+            _OPENCODE_ALLOWED_LAUNCH_POLICIES
+        ),
+        plan_store=_PlanStore(None),
+    )
+
+    admission = result.envelope.payload.admissionAuthority
+    assert admission is not None
+    assert admission.admissionMode == "ordinary"
+    assert admission.supportTier == "uncertified"
+    assert admission.supportEvidenceRef == ""
+    assert admission.supportEvidenceDigest == ""
+
+
+@pytest.mark.asyncio
+async def test_ordinary_evidence_persistence_failure_falls_back_to_uncertified(
+    monkeypatch,
+) -> None:
+    """An optional evidence write must not veto ordinary admission (MM#4560).
+
+    When ordinary admission finds a valid historical certificate but the
+    optional support-evidence artifact write fails, compilation falls back
+    to the already supported uncertified authority instead of aborting --
+    the same outcome as if the certificate had been absent.
+    """
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+    real_persist = service.persist_json_artifact
+
+    async def _fail_support_evidence_write(*, artifact_class, **kwargs):
+        if artifact_class == "omnigent.execution_support_evidence":
+            raise RuntimeError("artifact store unavailable")
+        return await real_persist(artifact_class=artifact_class, **kwargs)
+
+    monkeypatch.setattr(service, "persist_json_artifact", _fail_support_evidence_write)
+
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref=default_launch_policy_ref(
+            _OPENCODE_ALLOWED_LAUNCH_POLICIES
+        ),
+        plan_store=_PlanStore(None),
+    )
+
+    admission = result.envelope.payload.admissionAuthority
+    assert admission is not None
+    assert admission.admissionMode == "ordinary"
+    assert admission.supportTier == "uncertified"
+    assert admission.supportEvidenceRef == ""
+    assert admission.supportEvidenceDigest == ""
+
+
+@pytest.mark.asyncio
+async def test_strict_evidence_persistence_failure_still_fails_closed(
+    monkeypatch,
+) -> None:
+    """Explicit strict certification keeps a failed evidence write fatal."""
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+
+    real_persist = service.persist_json_artifact
+
+    async def _fail_support_evidence_write(*, artifact_class, **kwargs):
+        if artifact_class == "omnigent.execution_support_evidence":
+            raise RuntimeError("artifact store unavailable")
+        return await real_persist(artifact_class=artifact_class, **kwargs)
+
+    monkeypatch.setattr(service, "persist_json_artifact", _fail_support_evidence_write)
+
+    with pytest.raises(RuntimeError, match="artifact store unavailable"):
+        await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=_ArtifactService(),
+            launch_policy_ref=default_launch_policy_ref(
+                _OPENCODE_ALLOWED_LAUNCH_POLICIES
+            ),
+            plan_store=_PlanStore(None),
+        )
+
+
+@pytest.mark.asyncio
+async def test_strict_deployment_still_rejects_mismatched_historical_certificate(
+    tmp_path, monkeypatch
+) -> None:
+    """Explicit strict certification keeps rejecting another policy's evidence."""
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "deployment")
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    admitted_policy = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
+    unselected_policy = _OPENCODE_ALLOWED_LAUNCH_POLICIES[1]
+    assert unselected_policy != admitted_policy
+    plan_payload = await _capture_plan_payload(launch_policy_ref=admitted_policy)
+    _write_deployment_evidence(
+        tmp_path,
+        monkeypatch,
+        plan_payload=plan_payload,
+        launch_policy_ref=unselected_policy,
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=_ArtifactService(),
+            launch_policy_ref=admitted_policy,
+            plan_store=_PlanStore(None),
+        )
+    assert "execution evidence unavailable" in str(excinfo.value)
+    admission = _PlanStore.persisted
+    _ = admission

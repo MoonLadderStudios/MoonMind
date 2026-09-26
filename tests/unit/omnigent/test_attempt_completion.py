@@ -291,3 +291,126 @@ def test_cleaned_binding_reconciles_publication_receipt_without_compute():
     assert pending.failure_class == "integration_error"
     assert pending.metadata["workPreserved"]
     assert pending.metadata["unfinishedPhase"] == "finalization"
+
+
+def _finish_request(*, idempotency_key: str):
+    return AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "workflow-1",
+            "idempotencyKey": idempotency_key,
+        }
+    )
+
+
+def _finish_realizer(store, *, publish):
+    from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
+
+    realizer = object.__new__(GenericOmnigentHostRealizer)
+    realizer._runtime_bindings = store
+    realizer._publish_repository = publish
+    return realizer
+
+
+@pytest.mark.asyncio
+async def test_failed_compute_with_valid_save_is_not_upgraded():
+    """MoonLadderStudios/MoonMind#3825 REQ-04: a valid save never upgrades failed compute."""
+
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _finish_request(idempotency_key="failed-compute-saved")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "b" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    saved = {"checkpointRef": "artifact://saved-checkpoint", "archiveRef": "artifact://saved"}
+    await sink.record_phase("saved", saved)
+    published = []
+
+    async def publish(bound, result):
+        published.append(1)
+        return result
+
+    realizer = _finish_realizer(store, publish=publish)
+    failed = AgentRunResult(
+        summary="provider turn failed",
+        failure_class="execution_error",
+        provider_error_code="PROVIDER_TURN_FAILED",
+        retry_recommendation="do_not_retry",
+    )
+    finished = await realizer._finish_owned_execution(request, sink, failed)
+    assert published == []
+    assert finished.failure_class == "execution_error"
+    assert finished.provider_error_code == "PROVIDER_TURN_FAILED"
+    assert finished.metadata["workPreserved"] is True
+    assert finished.metadata["savedWorkspaceCheckpoint"] == saved
+    stored = (await store.get(binding.bindingId)).phaseResults or {}
+    assert "saved" in stored
+    assert stored["saved"] == saved
+    assert AgentRunResult.model_validate(stored["publication"]) == finished
+
+
+@pytest.mark.asyncio
+async def test_publication_exhaustion_preserves_valid_save_without_republishing(monkeypatch):
+    """MoonLadderStudios/MoonMind#3825 REQ-04/REQ-09: publication failure keeps the
+    valid save and a resume reuses recorded failures instead of republishing."""
+
+    import asyncio
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    async def no_sleep(delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    store = InMemoryStableRuntimeBindingStore()
+    request = _finish_request(idempotency_key="publication-exhaustion")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "c" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    saved = {"checkpointRef": "artifact://saved-checkpoint", "archiveRef": "artifact://saved"}
+    await sink.record_phase("saved", saved)
+    published = []
+
+    async def publish(bound, result):
+        published.append(1)
+        raise HarnessPlatformError(
+            "remote publication unavailable",
+            code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+        )
+
+    realizer = _finish_realizer(store, publish=publish)
+    finished = await realizer._finish_owned_execution(
+        request, sink, AgentRunResult(summary="verified compute")
+    )
+    assert published == [1, 1, 1]
+    assert finished.failure_class == "integration_error"
+    assert finished.provider_error_code == "OMNIGENT_REPOSITORY_PUBLICATION_FAILED"
+    assert finished.retry_recommendation == "do_not_retry"
+    assert finished.summary.startswith("Agent work is saved;")
+    assert finished.metadata["unfinishedPhase"] == "publication"
+    assert finished.metadata["workPreserved"] is True
+    assert finished.metadata["savedWorkspaceCheckpoint"] == saved
+    stored = (await store.get(binding.bindingId)).phaseResults or {}
+    assert stored["saved"] == saved
+    assert {key for key in stored if key.startswith("publication_failure:")} == {
+        "publication_failure:0",
+        "publication_failure:1",
+        "publication_failure:2",
+    }
+    assert AgentRunResult.model_validate(stored["publication"]) == finished
+    resumed = await realizer._finish_owned_execution(
+        request,
+        RuntimeBindingSessionAuthoritySink(store, await store.get(binding.bindingId)),
+        AgentRunResult(summary="verified compute"),
+    )
+    assert resumed == finished
+    assert published == [1, 1, 1]

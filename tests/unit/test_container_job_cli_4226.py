@@ -1,5 +1,7 @@
 """MoonLadderStudios/MoonMind#4226: container CLI has a documented bounded wait."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from moonmind.container_job_cli import (
@@ -49,10 +51,13 @@ def test_container_job_cli_wait_is_bounded_not_indefinite(
         ticks["t"] += 30.0
         return value
 
-    monkeypatch.setattr(
-        "moonmind.container_job_cli.time.monotonic", _fake_monotonic
+    # The callable can outlive its package attribute when another test probes
+    # import boundaries. Replace its own clock without patching global time.
+    monkeypatch.setitem(
+        run_container_job.__globals__,
+        "time",
+        SimpleNamespace(monotonic=_fake_monotonic, sleep=lambda _s: None),
     )
-    monkeypatch.setattr("moonmind.container_job_cli.time.sleep", lambda _s: None)
 
     with pytest.raises(ContainerJobCliError, match="did not reach a terminal"):
         run_container_job(

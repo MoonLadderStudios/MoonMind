@@ -2082,16 +2082,14 @@ class Preset(Base):
         nullable=False,
         default=PresetReleaseStatus.DRAFT,
     )
-    reviewed_by: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
+    # Reviewer and creator are provenance only. The account-free local
+    # operator has no ``user`` row, so neither column references it (#4350).
+    reviewed_by: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     seed_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_by: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -2120,9 +2118,8 @@ class PresetFavorite(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
-    )
+    # Instance preference key, not an account reference (#4350).
+    user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
     template_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("presets.id", ondelete="CASCADE"), nullable=False
     )
@@ -2148,9 +2145,8 @@ class PresetRecent(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
-    )
+    # Instance preference key, not an account reference (#4350).
+    user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
     template_id: Mapped[UUID] = mapped_column(
         Uuid,
         ForeignKey("presets.id", ondelete="CASCADE"),
