@@ -212,6 +212,12 @@ const recordColumns: Column<RecordRow>[] = [
 const recordRows: RecordRow[] = [{ id: LONG_ID, name: 'Team codex' }];
 
 describe('DataTable responsive states (MoonMind#4559)', () => {
+  beforeEach(() => {
+    // This suite checks DataTable's document width without the separate
+    // inventory and Provider markup mounted by the shared browser harness.
+    host.remove();
+  });
+
   afterEach(() => {
     document.body.innerHTML = '';
   });

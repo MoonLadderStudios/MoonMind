@@ -10709,7 +10709,7 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .provider-profile-actions > button {
-    flex: 1 1 10rem;
+    flex: 1 1 100%;
     min-height: 2.75rem;
   }
 
