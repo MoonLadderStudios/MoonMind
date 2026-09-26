@@ -79,7 +79,8 @@ const TERMINAL_FINALIZE_STATUSES: readonly OAuthSessionStatus[] = [
   'registering_profile',
 ];
 const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
-const TERMINAL_READY_POLL_MS = 1000;
+const PROVIDERS_SECRETS_SETTINGS_PATH = '/settings/providers-secrets';
+const TERMINAL_STATUS_POLL_MS = 1000;
 
 function copyTextWithLegacyCommand(text: string): void {
   if (typeof document === 'undefined' || !document.body) {
@@ -161,6 +162,13 @@ function oauthStatusLabel(status: OAuthSessionStatus): string {
     .join(' ');
 }
 
+function registeredProfileLabel(session: OAuthSessionResponse): string {
+  const profileId = session.profile_summary?.profile_id ?? session.profile_id ?? '';
+  const accountLabel = session.profile_summary?.account_label;
+  const label = profileId ? `Profile "${profileId}"` : 'The provider profile';
+  return accountLabel ? `${label} (${accountLabel})` : label;
+}
+
 function isTerminalAttachable(session: OAuthSessionResponse): boolean {
   return (
     TERMINAL_ATTACHABLE_STATUSES.includes(session.status) &&
@@ -231,6 +239,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const [session, setSession] = useState<OAuthSessionResponse | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
+  const [finalizeSubmitted, setFinalizeSubmitted] = useState(false);
   const [pastedInput, setPastedInput] = useState('');
   const [selectableOutput, setSelectableOutput] = useState<string | null>(null);
   const selectableOutputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -242,6 +251,13 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const showAuthenticationPasteBox = Boolean(session && isTerminalAttachable(session));
+  // Finalize saves the profile and hands host credential validation to the
+  // OAuth workflow, which owns the move to succeeded or failed.
+  const awaitingFinalizeOutcome = Boolean(
+    finalizeSubmitted && session && !TERMINAL_FINAL_STATUSES.includes(session.status),
+  );
+  const registrationInProgress =
+    session?.status === 'registering_profile' || awaitingFinalizeOutcome;
 
   const selectTerminalText = () => {
     const buffer = terminalRef.current?.buffer.active;
@@ -341,6 +357,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           window.location.href = url.toString();
           return;
         }
+        if (action === 'finalize') {
+          setFinalizeSubmitted(true);
+        }
         refreshSessionFromResponse(payload);
       } else if (action === 'cancel') {
         setSession((current) =>
@@ -356,6 +375,53 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       setActionPending(null);
     }
   };
+
+  useEffect(() => {
+    if (!awaitingFinalizeOutcome || !sessionId) {
+      return undefined;
+    }
+    let cancelled = false;
+    const followFinalizeOutcome = async () => {
+      while (!cancelled) {
+        await new Promise((resolve) => window.setTimeout(resolve, TERMINAL_STATUS_POLL_MS));
+        if (cancelled) {
+          return;
+        }
+        try {
+          const response = await fetch(
+            `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}`,
+            { headers: { Accept: 'application/json' } },
+          );
+          if (!response.ok) {
+            throw new Error(
+              await readErrorDetail(response, `Session lookup failed: ${response.status}`),
+            );
+          }
+          const nextSession = (await response.json()) as OAuthSessionResponse;
+          if (cancelled) {
+            return;
+          }
+          setActionError(null);
+          refreshSessionFromResponse(nextSession);
+          if (TERMINAL_FINAL_STATUSES.includes(nextSession.status)) {
+            return;
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setActionError(
+              `Could not refresh registration status; retrying. ${safeDisplayText(
+                error instanceof Error ? error.message : '',
+              )}`.trim(),
+            );
+          }
+        }
+      }
+    };
+    void followFinalizeOutcome();
+    return () => {
+      cancelled = true;
+    };
+  }, [awaitingFinalizeOutcome, sessionId]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -547,7 +613,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
                 ? 'Preparing terminal bridge'
                 : `OAuth ${oauthStatusLabel(session.status)}`,
             );
-            await new Promise((resolve) => window.setTimeout(resolve, TERMINAL_READY_POLL_MS));
+            await new Promise((resolve) => window.setTimeout(resolve, TERMINAL_STATUS_POLL_MS));
           }
           return false;
         };
@@ -678,7 +744,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       {session ? (
         <section className="oauth-terminal-session-panel" aria-label="OAuth session status and actions">
           <div className="oauth-terminal-session-actions">
-            {TERMINAL_FINALIZE_STATUSES.includes(session.status) ? (
+            {TERMINAL_FINALIZE_STATUSES.includes(session.status) && !awaitingFinalizeOutcome ? (
               <button
                 type="button"
                 className="primary"
@@ -716,10 +782,24 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
               {safeDisplayText(session.failure_reason)}
             </p>
           ) : null}
+          {registrationInProgress ? (
+            <div role="status" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--pending">
+              <p className="oauth-terminal-finalize-result__title">Registering provider profile…</p>
+              <p>
+                MoonMind is verifying the saved credential and registering the profile. This can
+                take a few minutes; this page confirms the result when it finishes.
+              </p>
+            </div>
+          ) : null}
           {session.status === 'succeeded' ? (
-            <p role="status" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--success">
-              Provider profile registered successfully.
-            </p>
+            <div role="status" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--success">
+              <p className="oauth-terminal-finalize-result__title">Provider profile connected</p>
+              <p>
+                {registeredProfileLabel(session)} is registered and its saved credential was
+                verified. It is ready for MoonMind workflows, and you can close this tab.
+              </p>
+              <a href={PROVIDERS_SECRETS_SETTINGS_PATH}>Return to Providers &amp; Secrets</a>
+            </div>
           ) : null}
           {actionError ? (
             <p role="alert" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--error">
