@@ -378,13 +378,42 @@ def main(argv=None):
     controller_rc = _try_controller_handoff(record=record)
     if controller_rc is not None:
         return controller_rc
-    if args.legacy_direct:
-        return _submit_legacy_direct(record, repo)
-    return _submit_via_controller(
+    return _submit_release(
         record,
         repo,
         controller_url=args.controller_url,
         secret_file=args.controller_secret_file,
+        legacy_direct=args.legacy_direct,
+    )
+
+
+def _submit_release(record, repo, *, controller_url, secret_file, legacy_direct):
+    """Route the recorded submission to its installed execution owner.
+
+    An installed (or explicitly selected) standalone controller owns the
+    update. Until a deployment installs it, the application-owned updater
+    remains the supported default so a bare invocation still updates.
+    """
+    if legacy_direct:
+        return _submit_legacy_direct(record, repo)
+    explicit_controller = bool(
+        secret_file or os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
+    )
+    default_secret = _default_controller_secret_file(repo)
+    if not explicit_controller and not default_secret.exists():
+        print(
+            f"Standalone controller is not installed (no secret at "
+            f"{default_secret}); updating through the application-owned "
+            "updater. Install the controller with "
+            "`python3 deploy/controller/bootstrap.py install` to use it.",
+            flush=True,
+        )
+        return _submit_legacy_direct(record, repo)
+    return _submit_via_controller(
+        record,
+        repo,
+        controller_url=controller_url,
+        secret_file=secret_file,
     )
 
 

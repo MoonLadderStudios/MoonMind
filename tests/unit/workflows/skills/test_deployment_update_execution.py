@@ -1062,8 +1062,9 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
     assert result.status == "COMPLETED"
     assert len(store.records) == 1
     pull_command = runner.commands[0][1]
-    one_shot_command = runner.commands[1][1]
-    up_command = runner.commands[2][1]
+    missing_pull_command = runner.commands[1][1]
+    one_shot_command = runner.commands[2][1]
+    up_command = runner.commands[3][1]
     assert pull_command[-4:] == (
         "temporal-worker-agent-runtime",
         "init-db",
@@ -1078,6 +1079,19 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
         "temporal-worker-agent-runtime",
         "api",
         "new-worker",
+    )
+    # Infrastructure the release reconciles is acquired only when absent,
+    # so `up --pull never` cannot fail on a newly pinned infrastructure image.
+    assert missing_pull_command == (
+        "docker",
+        "compose",
+        "pull",
+        "--policy",
+        "missing",
+        "--ignore-buildable",
+        "postgres",
+        "docker-proxy",
+        "temporal",
     )
     assert "temporal-worker-deployment-control" not in up_command
     assert "init-db" not in up_command
@@ -1284,7 +1298,7 @@ def test_remove_services_from_command_args_preserves_option_values() -> None:
     )
 
 
-def test_update_plan_reconciles_configured_infrastructure_without_pulling_it() -> None:
+def test_update_plan_reconciles_infrastructure_pulling_only_missing_images() -> None:
     plan = ComposeCommandPlan(
         runner_mode="privileged_worker",
         pull_args=("docker", "compose", "pull"),
@@ -1313,6 +1327,17 @@ def test_update_plan_reconciles_configured_infrastructure_without_pulling_it() -
         "compose",
         "pull",
         "temporal-worker-agent-runtime",
+    )
+    # Present infrastructure images are never refreshed; an image the release
+    # newly pins (for example a MinIO digest change) is fetched before
+    # `up --pull never` instead of failing with "No such image".
+    assert targeted.missing_pull_args == (
+        "docker",
+        "compose",
+        "pull",
+        "--policy",
+        "missing",
+        "sandbox-egress-proxy",
     )
     assert targeted.up_args == (
         "docker",

@@ -122,6 +122,66 @@ def test_submit_via_controller_requires_an_installed_controller(tmp_path):
         )
 
 
+def test_bare_invocation_without_installed_controller_uses_application_updater(
+    tmp_path, monkeypatch, capsys
+):
+    """The standalone controller is opt-in until it is installed: a bare
+    invocation on a deployment without its secret still installs the release
+    through the application-owned updater instead of refusing."""
+    monkeypatch.delenv("MOONMIND_CONTROLLER_SECRET_FILE", raising=False)
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    digest = "sha256:" + "c" * 64
+    image = f"ghcr.io/moonladderstudios/moonmind@{digest}"
+    launched = []
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [image], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = json.dumps({"name": "existing-project", "services": {"api": {}}})
+        elif args[1] == "run":
+            output = "services: {}"
+        elif args[1] == "compose":
+            launched.append(args)
+            output = ""
+        else:
+            assert args[1] == "pull"
+            output = ""
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    def no_controller(request, timeout=None):
+        raise AssertionError("an uninstalled controller must not be contacted")
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update.urllib.request, "urlopen", no_controller)
+    assert update.main(["--repo", str(repo)]) == 0
+    assert len(launched) == 1
+    assert "moonmind.workflows.skills.deployment_release" in launched[0]
+    assert "--project-name" in launched[0] and "existing-project" in launched[0]
+    assert "controller is not installed" in capsys.readouterr().out
+
+
+def test_explicit_controller_secret_file_must_exist(tmp_path, monkeypatch):
+    """An explicitly selected controller is never silently bypassed."""
+    record = {"project": "existing-project", "image": "img", "inputs": {}, "context": {}}
+    monkeypatch.setattr(update, "_submit_legacy_direct", lambda *a, **k: pytest.fail("fallback"))
+    with pytest.raises(RuntimeError, match="Controller secret is missing"):
+        update._submit_release(
+            record,
+            tmp_path,
+            controller_url="http://127.0.0.1:9",
+            secret_file=str(tmp_path / "missing-secret"),
+            legacy_direct=False,
+        )
+
+
 def _install_controller_secret(repo, secret="test-secret"):
     path = repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"
     path.parent.mkdir(parents=True, exist_ok=True)

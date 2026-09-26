@@ -154,7 +154,11 @@ docker compose up -d --pull never --no-build --remove-orphans --wait
 ```
 
 under bounded timeouts, after staging all images needed for the requested
-update and before any recreation. These are semantic commands after resolving
+update and before any recreation. In the application-owned updater, services
+built from the MoonMind image pull with `--policy always`; the other reconciled infrastructure services pull with
+`--policy missing`, so an infrastructure image the release newly pins (for
+example a MinIO digest change) is staged while present images are never
+refreshed, and `up --pull never` cannot fail with a missing image. These are semantic commands after resolving
 the correct deployment files, env overlays, project, and service set, not
 permission to operate on an arbitrary project. The deployment-owned Compose file set (including `COMPOSE_FILE` selection) passes through unchanged, and the deployment-owned `.env` layers under the controller-generated image overlay so operator authentication, bindings, and infrastructure versions are preserved. Privileged-endpoint submissions validate the safe shape of project, paths, services, and image references before persistence. Do not use routine
 `docker compose down`, force-recreate, or volume/image pruning; those are
@@ -211,7 +215,7 @@ The existing deployment-control worker is a submission/observation adapter where
 
 ### 11.2 Standalone controller project
 
-The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner.
+The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner. Until a deployment installs the controller (no deployment-owned secret and no explicit controller selection), the host entrypoint prints a notice and updates through that application-owned updater so a bare invocation still works; this fallback is removed once the entrypoint can install a published controller image itself.
 
 ### 11.3 Runner image policy
 
