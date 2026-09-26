@@ -332,6 +332,7 @@ async def test_start_terminal_bridge_container_uses_claude_home_environment(
     assert "claude_auth_volume:/home/app/.claude" in observed
     assert "HOME=/home/app" in observed
     assert "CLAUDE_HOME=/home/app/.claude" in observed
+    assert "CLAUDE_CONFIG_DIR=/home/app/.claude" in observed
     assert "CLAUDE_VOLUME_PATH=/home/app/.claude" in observed
     assert "ANTHROPIC_API_KEY=" in observed
     assert "CLAUDE_API_KEY=" in observed

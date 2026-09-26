@@ -3,7 +3,7 @@
 **Document Class:** Canonical declarative
 Status: Draft 
 Owners: MoonMind Platform 
-Last updated: 2026-08-10
+Last updated: 2026-09-26
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
@@ -218,7 +218,7 @@ Queue selection for artifact operations should come from the activity catalog, n
 
 ---
 
-## 6. Artifact store choice (MinIO default)
+## 6. Artifact store choice (S3-compatible default)
 
 ## 6.1 Options considered
 
@@ -230,22 +230,24 @@ Queue selection for artifact operations should come from the activity catalog, n
 
 ## 6.2 Decision
 
-**MoonMind’s default artifact store is MinIO (S3-compatible).**
+**MoonMind’s default artifact store is S3-compatible object storage.**
 
-- local/dev default: **MinIO**
-- default Docker Compose backend: **MinIO**
+- local/dev default: **Silo**, a MinIO-compatible server
+- default Docker Compose backend: **Silo**, using the existing artifact volume and MinIO-compatible environment variables
 - production override: AWS S3 or another compatible provider only by explicit configuration
+
+The pinned [Silo release](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-09-16T00-00-00Z) preserves the MinIO-compatible S3 API, `MINIO_*` settings, and `.minio.sys` data layout. Compose updates retain `minio-data` and must verify saved artifacts remain readable before reporting success.
 
 Postgres is used as the **Artifact Index**, not the primary blob store.
 
 ## 6.3 Docker Compose default requirement
 
-The default Compose path must treat MinIO as the standard artifact backend:
+The default Compose path must provide the same S3 artifact interface:
 
-- MinIO is provisioned by default
-- API and workers use MinIO endpoints/buckets by default
+- Silo is provisioned by default
+- API and workers use the existing S3 endpoints and buckets by default
 - external S3 is an explicit override
-- MinIO stays on the internal Docker network by default
+- the object store stays on the internal Docker network by default
 
 The deployment and disposable test Compose files pin the same multi-platform
 `ghcr.io/coollabsio/minio` community image by release and digest. This build uses

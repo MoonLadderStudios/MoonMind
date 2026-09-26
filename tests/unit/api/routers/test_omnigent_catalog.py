@@ -899,6 +899,209 @@ def test_catalog_projects_runtime_identity_for_mixed_provider_profiles(monkeypat
     }
 
 
+@pytest.mark.parametrize(
+    ("lease_state", "expired", "expected_busy"),
+    [
+        ("released", False, False),
+        ("held", True, True),
+        ("cleanup_requested", True, True),
+        ("unrecognized", True, True),
+    ],
+)
+def test_claude_catalog_capacity_uses_durable_lease_state(
+    monkeypatch, lease_state, expired, expected_busy
+):
+    profile = _profile(
+        profile_id="claude-oauth",
+        provider_id="anthropic",
+        runtime_id="claude_code",
+        rate_limit_policy=SimpleNamespace(value="backoff"),
+    )
+    lease = SimpleNamespace(
+        profile_id=profile.profile_id,
+        lease_state=lease_state,
+        expires_at=datetime.now(UTC) + timedelta(minutes=-5 if expired else 5),
+    )
+
+    body = (
+        TestClient(_app(monkeypatch, session=_Session([profile], slots=[lease])))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+
+    eligible_ids = {item["profileId"] for item in body["eligibleProviderProfiles"]}
+    assert (profile.profile_id not in eligible_ids) is expected_busy
+    claude_execution = next(
+        item for item in body["executionProfiles"] if item["ref"] == "omnigent-claude@1"
+    )
+    reason_codes = {reason["code"] for reason in claude_execution["gateReasons"]}
+    assert ("profile_capacity_unavailable" in reason_codes) is expected_busy
+    assert "no_eligible_codex_oauth_profile" not in reason_codes
+    ineligible = {
+        item["profileId"]: item for item in body["ineligibleProviderProfiles"]
+    }
+    assert (profile.profile_id in ineligible) is expected_busy
+    if expected_busy:
+        assert {
+            reason["code"] for reason in ineligible[profile.profile_id]["gateReasons"]
+        } == {"profile_capacity_unavailable"}
+
+
+def test_codex_catalog_uses_configured_host_and_resolved_server_image(monkeypatch):
+    from moonmind.omnigent.bootstrap import store
+
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.delenv("OMNIGENT_IMAGE_REF")
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64
+    )
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            server_image_ref="registry.test/server@sha256:" + "1" * 64,
+            shared_host_image_ref="registry.test/shared-host@sha256:" + "3" * 64,
+        ),
+    )
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+    codex_execution = next(
+        item for item in body["executionProfiles"] if item["ref"] == "omnigent-codex@1"
+    )
+
+    assert [policy["ref"] for policy in codex_execution["launchPolicies"]] == [
+        "codex-on-demand@1"
+    ]
+    assert "immutable_image_unavailable" not in {
+        reason["code"] for reason in codex_execution["gateReasons"]
+    }
+
+
+def test_claude_catalog_respects_generic_rollout_gate(monkeypatch):
+    profile = _profile(
+        profile_id="claude-oauth",
+        provider_id="anthropic",
+        runtime_id="claude_code",
+    )
+    monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", raising=False)
+    disabled = (
+        TestClient(_app(monkeypatch, session=_Session([profile])))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+    claude_disabled = next(
+        item
+        for item in disabled["executionProfiles"]
+        if item["ref"] == "omnigent-claude@1"
+    )
+    assert claude_disabled["available"] is False
+    assert "runtime_provider_rollout_unavailable" in {
+        reason["code"] for reason in claude_disabled["gateReasons"]
+    }
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    enabled = (
+        TestClient(_app(monkeypatch, session=_Session([profile])))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+    claude_enabled = next(
+        item
+        for item in enabled["executionProfiles"]
+        if item["ref"] == "omnigent-claude@1"
+    )
+    assert "runtime_provider_rollout_unavailable" not in {
+        reason["code"] for reason in claude_enabled["gateReasons"]
+    }
+
+
+def test_claude_catalog_requires_active_persisted_launch_policy(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    profile = _profile(
+        profile_id="claude-oauth",
+        provider_id="anthropic",
+        runtime_id="claude_code",
+    )
+
+    body = (
+        TestClient(_app(monkeypatch, session=_Session([profile])))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+    claude = next(
+        item for item in body["executionProfiles"] if item["ref"] == "omnigent-claude@1"
+    )
+
+    assert claude["available"] is False
+    assert claude["launchPolicies"] == []
+    assert "launch_policy_unavailable" in {
+        reason["code"] for reason in claude["gateReasons"]
+    }
+    assert "no_eligible_codex_oauth_profile" not in {
+        reason["code"] for reason in claude["gateReasons"]
+    }
+
+
+def test_qualified_claude_catalog_admits_ready_oauth_and_active_policy(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    identity = SimpleNamespace(
+        policy_id="claude-on-demand",
+        name="Claude on-demand host",
+        default_version=1,
+        visibility="deployment",
+        owner_user_id=None,
+    )
+    version = SimpleNamespace(
+        version=1,
+        state="active",
+        validation_json={"valid": True},
+        document_json={
+            "execution": {
+                "profileRef": "omnigent-claude@1",
+                "harness": "claude-native",
+            },
+            "host": {
+                "mode": "on_demand_docker",
+                "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+                "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
+            },
+            "network": {
+                "attachmentRef": OMNIGENT_EGRESS_NETWORK_REF,
+                "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+            },
+        },
+    )
+    profile = _profile(
+        profile_id="claude-oauth",
+        provider_id="anthropic",
+        runtime_id="claude_code",
+    )
+
+    body = (
+        TestClient(
+            _app(
+                monkeypatch, session=_Session([profile], policies=[(identity, version)])
+            )
+        )
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+    claude = next(
+        item for item in body["executionProfiles"] if item["ref"] == "omnigent-claude@1"
+    )
+
+    assert claude["available"] is True
+    assert claude["launchPolicies"] == [
+        {
+            "ref": "claude-on-demand@1",
+            "displayName": "Claude on-demand host",
+            "hostMode": "on_demand_docker",
+            "isDefault": True,
+        }
+    ]
+    assert claude["gateReasons"] == []
+
+
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):
     secret = "github_pat_SHOULD_NOT_ESCAPE"
     profile = _profile(account_label=secret)

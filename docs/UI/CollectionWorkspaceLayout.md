@@ -173,3 +173,15 @@ Representative frontend tests must prove:
 8. sidebar and detail failures remain localized;
 9. mobile removes non-rendered desktop controls from the accessibility tree;
 10. screenshots/layout assertions catch a reintroduced large left margin or centered split workspace.
+
+## 10. Relation to MoonMind#4559
+
+The mobile-overflow repair (MoonMind#4559) does not change this shared
+contract: workflow, Recurring, Skills, Remediation, and Artifacts keep their
+existing desktop workspace, list-display modes, sidebars, information
+hierarchy, and action semantics. The #4559 changes are scoped to the
+inventory/provider/settings responsive rules and the shared dialog bounds;
+regression cover for those boundaries lives in
+`frontend/src/browser/mobileOverflow4559.browser.test.tsx` (geometry) and the
+existing responsive suites (remediationResponsive, collection rails, Skills,
+workflow toolbar).

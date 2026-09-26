@@ -207,37 +207,34 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
         "playwright install" in step.get("run", "") for step in browser["steps"]
     )
 
-    # MoonLadderStudios/MoonMind#4559: targeted WebKit leg for the reported
-    # form/fieldset/overlay cases runs the mobile-overflow journey only.
-    webkit = jobs["frontend-browser-webkit"]
-    assert webkit["needs"] == "select-test-suites"
-    assert (
-        webkit["if"]
-        == "needs.select-test-suites.outputs.frontend_browser_webkit == 'true'"
-    )
-    assert "@sha256:" in webkit["container"]["image"]
-    assert webkit["env"]["HOME"] == "/root"
-    assert not any(
-        "playwright install" in step.get("run", "") for step in webkit["steps"]
-    )
-    webkit_runs = "\n".join(step.get("run", "") for step in webkit["steps"])
-    assert "MOONMIND_BROWSER_ENGINES" not in webkit_runs or "webkit" in webkit_runs
-    assert "mobileOverflow.browser.test.tsx" in webkit_runs
-
     aggregator = jobs["test-frontend"]
     assert aggregator["if"] == "always()"
     assert aggregator["needs"] == [
         "select-test-suites",
         "frontend-static",
         "frontend-browser",
-        "frontend-browser-webkit",
+        "frontend-browser-webkit-targeted",
     ]
     assert not any("uses" in step for step in aggregator["steps"])
     script = "\n".join(step.get("run", "") for step in aggregator["steps"])
     assert "frontend-static was selected" in script
     assert "frontend-browser was selected" in script
-    assert "frontend-browser-webkit was selected" in script
+    assert "frontend-browser-webkit-targeted was selected" in script
     assert "skipped intentionally" in script
+
+    webkit_targeted = jobs["frontend-browser-webkit-targeted"]
+    assert webkit_targeted["needs"] == "select-test-suites"
+    assert (
+        webkit_targeted["if"]
+        == "needs.select-test-suites.outputs.frontend_browser_chromium == 'true'"
+    )
+    assert "@sha256:" in webkit_targeted["container"]["image"]
+    assert webkit_targeted["env"]["HOME"] == "/root"
+    assert any(
+        "mobileOverflow4559.browser.test.tsx" in step.get("run", "")
+        and step.get("env", {}).get("MOONMIND_BROWSER_ENGINES") == "webkit"
+        for step in webkit_targeted["steps"]
+    )
 
 
 def test_playwright_package_and_container_versions_match() -> None:

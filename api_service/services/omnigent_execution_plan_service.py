@@ -48,6 +48,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.harness_platform.harness_registry import (
+    canonical_harness_id,
+    find_harness_registration,
+    harness_registration,
+)
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
     OmnigentHostClassSelector,
@@ -59,18 +64,16 @@ from moonmind.omnigent.harness_platform.materializers import (
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-from moonmind.omnigent.host_services.mounted_tools import (
-    deployment_mounted_tool_names,
-)
+from moonmind.omnigent.host_services.mounted_tools import deployment_mounted_tool_names
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+from moonmind.schemas.agent_skill_models import AgentSkillFormat
 from moonmind.schemas.agent_skill_models import (
-    AgentSkillFormat,
+    ResolvedSkillSet as AgentResolvedSkillSet,
+)
+from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
     SkillSelector,
     SkillSelectorEntry,
-)
-from moonmind.schemas.agent_skill_models import (
-    ResolvedSkillSet as AgentResolvedSkillSet,
 )
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
@@ -83,11 +86,6 @@ from moonmind.workflows.temporal.remediation_loop import (
     ToolDescriptor,
     tool_descriptor_selected_skill,
 )
-from moonmind.omnigent.harness_platform.harness_registry import (
-    canonical_harness_id,
-    find_harness_registration,
-    harness_registration,
-)
 from pr_resolver_core import IMPLEMENTATION_CONTRACT
 
 # Hermetic fixture digests for the approved harnesses. Every other product
@@ -96,6 +94,7 @@ from pr_resolver_core import IMPLEMENTATION_CONTRACT
 # is fixture data, because a real digest requires a synchronized catalog.
 _HARNESS_FIXTURE_IMPLEMENTATION_DIGESTS: dict[str, str] = {
     "codex-native": "sha256:" + "e" * 64,
+    "claude-native": "sha256:" + "d" * 64,
     "opencode-native": "sha256:" + "a" * 64,
     "pi-native": "sha256:" + "c" * 64,
 }
@@ -1139,6 +1138,8 @@ async def compile_and_persist_execution_plan(
     if exact_catalog is None and callable(session_factory):
         from moonmind.omnigent.harness_platform.catalog_service import (
             DbHarnessCatalogRepository,
+        )
+        from moonmind.omnigent.harness_platform.catalog_service import (
             HarnessCatalogSyncResult as _CatalogSyncResult,
         )
 
@@ -1287,11 +1288,22 @@ async def compile_and_persist_execution_plan(
         OMNIGENT_SESSION_FEATURE_GENERATION,
     )
 
-    # Execution evidence is policy-driven. The default ``either`` policy
-    # prefers protected evidence and otherwise uses local deployment
-    # qualification; ``protected`` remains the strict support-certification
-    # gate. The resolver chooses the appropriate evidence or fails closed.
+    # Execution evidence is policy-driven. MoonLadderStudios/MoonMind#4560:
+    # ordinary admission (omitted/blank/shipped ``either``) is
+    # certificate-independent: a compatible, authorized workflow must not
+    # become unrunnable merely because a historical certificate is missing,
+    # stale, or names another policy revision. Optional certificates remain
+    # a truthful observation but never veto ordinary execution. Explicit
+    # ``protected``/``deployment`` selects strict certification, chosen only
+    # at the trusted settings boundary -- workflow-authored input can never
+    # downgrade it or forge admission.
     try:
+        from moonmind.omnigent.settings import (
+            omnigent_evidence_policy,
+            omnigent_requires_certification,
+        )
+
+        strict_admission = omnigent_requires_certification()
         support_evidence, support_tier = resolve_execution_evidence(plan.payload)
         # For deployment evidence, we still want to publish same artifact class
         # but supportTier distinguishes readiness (deployment_qualified vs supported)
@@ -1303,32 +1315,82 @@ async def compile_and_persist_execution_plan(
         raise ValueError(
             f"execution evidence unavailable under policy={policy}: {exc}"
         ) from exc
-    support_evidence_ref, support_evidence_digest = await persist_json_artifact(
-        artifact_service=artifact_service,
-        principal=principal,
-        artifact_class="omnigent.execution_support_evidence",
-        payload=support_evidence,
-    )
-    plan = create_execution_plan_envelope(
-        plan.payload.model_copy(
-            update={
-                "admissionAuthority": AdmissionAuthority(
-                    supportEvidenceRef=f"artifact:{support_evidence_ref}",
-                    supportEvidenceDigest=support_evidence_digest,
-                    # The evidence resolver returns the tier that admission
-                    # actually used; workers must re-validate the same schema.
-                    supportTier=(
-                        "supported"
-                        if support_tier == "supported"
-                        else "deployment_qualified"
-                    ),
-                    featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
-                    replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
-                    rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
-                )
-            }
+    def _uncertified_ordinary_authority() -> AdmissionAuthority:
+        # Certificate-independent ordinary admission. Never fabricate an
+        # empty passing certificate, never substitute {} for evidence, and
+        # never label uncertified execution supported/deployment_qualified.
+        # Ordinary admission is not a claim execution has already succeeded.
+        return AdmissionAuthority(
+            admissionMode="ordinary",
+            supportEvidenceRef="",
+            supportEvidenceDigest="",
+            supportTier="uncertified",
+            featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+            replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
+            rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
         )
-    )
+
+    if support_evidence is None:
+        assert support_tier == "uncertified" and not strict_admission
+        support_evidence_ref = ""
+        plan = create_execution_plan_envelope(
+            plan.payload.model_copy(
+                update={"admissionAuthority": _uncertified_ordinary_authority()}
+            )
+        )
+    else:
+        try:
+            support_evidence_ref, support_evidence_digest = await persist_json_artifact(
+                artifact_service=artifact_service,
+                principal=principal,
+                artifact_class="omnigent.execution_support_evidence",
+                payload=support_evidence,
+            )
+        except Exception as exc:
+            if strict_admission:
+                raise
+            # Optional evidence persistence is advisory-only for ordinary
+            # admission: an artifact-store failure must not veto otherwise
+            # valid ordinary work. Fall back to the already supported
+            # uncertified authority -- the same outcome as if the optional
+            # certificate had been absent. The invalid/unpersisted report
+            # authorizes nothing either way.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "optional execution support evidence persistence failed; "
+                "admitting ordinary uncertified execution: %s",
+                exc,
+            )
+            support_evidence = None
+            support_evidence_ref = ""
+            plan = create_execution_plan_envelope(
+                plan.payload.model_copy(
+                    update={"admissionAuthority": _uncertified_ordinary_authority()}
+                )
+            )
+        else:
+            plan = create_execution_plan_envelope(
+                plan.payload.model_copy(
+                    update={
+                        "admissionAuthority": AdmissionAuthority(
+                            admissionMode=("strict" if strict_admission else "ordinary"),
+                            supportEvidenceRef=f"artifact:{support_evidence_ref}",
+                            supportEvidenceDigest=support_evidence_digest,
+                            # The evidence resolver returns the tier that admission
+                            # actually used; workers must re-validate the same schema.
+                            supportTier=(
+                                "supported"
+                                if support_tier == "supported"
+                                else "deployment_qualified"
+                            ),
+                            featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+                            replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
+                            rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+                        )
+                    }
+                )
+            )
     plan_store = execution_plan_store or DbExecutionPlanStore(session_factory)
     persisted = await plan_store.persist(plan)
     plan_payload = persisted.model_dump(mode="json", by_alias=True)
@@ -1347,6 +1409,9 @@ async def compile_and_persist_execution_plan(
         taskInputSnapshotDigest=task_input_snapshot_digest,
     )
     frozen_rollout = persisted.payload.runtimeProviderRollout
+    _evidence_refs: tuple[str, ...] = ()
+    if support_evidence is not None:
+        _evidence_refs = (support_evidence_ref,)
     return PersistedOmnigentExecutionPlan(
         envelope=persisted,
         binding=binding,
@@ -1359,7 +1424,7 @@ async def compile_and_persist_execution_plan(
             policy_artifact_ref,
             effective_launch_ref,
             profile_snapshot_ref,
-            support_evidence_ref,
+            *_evidence_refs,
             *skill_content_refs,
             skill_ref,
             plan_artifact_ref,

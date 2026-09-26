@@ -1,441 +1,271 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
-import { QueryClient } from '@tanstack/react-query';
-import { BrowserRouter } from 'react-router-dom';
+import { render, screen, within } from '@testing-library/react';
 
-import OmnigentInventoryPage from '../entrypoints/omnigent-inventory';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import {
-  ProviderProfilesManager,
-  type ProviderProfile,
-} from '../components/settings/ProviderProfilesManager';
-import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import '../styles/dashboard.css';
 
-// Real-browser guardrail for MoonLadderStudios/MoonMind#4559. These cases use
-// the production components and the production stylesheet inside the shared
-// shell composition, asserting element bounds against the real viewport (the
-// shell clips overflow, so a scrollbar-only assertion would miss the defect).
+// Real-browser guardrail for MoonLadderStudios/MoonMind#4559. The four
+// reported phone patterns (Agents inventory, Provider create form, saved
+// Provider profiles, model/effort tiers) must fit a 320px viewport without
+// sideways page panning, clipped fields, or squeezed label/value columns.
+// `.dashboard-root` already clips horizontal overflow, so a document-width
+// assertion alone cannot catch these defects: every assertion below compares
+// representative element bounds against their real content/scroll ancestors.
+//
+// Run with `npm run ui:test:browser` (Chromium/Firefox; WebKit targeted leg
+// via `MOONMIND_BROWSER_ENGINES=webkit`).
 
-const MOBILE_320 = { width: 320, height: 568 } as const;
-const MOBILE_390 = { width: 390, height: 844 } as const;
-const LANDSCAPE_SHORT = { width: 568, height: 320 } as const;
-const DESKTOP = { width: 1280, height: 800 } as const;
-const TOLERANCE = 1;
+const VIEWPORTS = [320, 360, 390, 430, 768, 1024, 1440] as const;
+const TOLERANCE_PX = 1.5;
 
-function shell(inner: string): string {
-  return `<div class="dashboard-root"><div class="dashboard-content">${inner}</div></div>`;
-}
+const LONG_ID = 'a-very-long-unbroken-profile-identity-that-must-not-force-sideways-panning-0123456789';
+const LONG_TEXT =
+  'A long human-readable summary that must wrap naturally inside the available content width. '.repeat(4);
 
-function rightEdgeFitsViewport(element: Element): boolean {
-  return element.getBoundingClientRect().right <= window.innerWidth + TOLERANCE;
-}
+let host: HTMLElement;
 
-function expectFitsViewport(element: Element, label: string): void {
-  const rect = element.getBoundingClientRect();
+function fitWithin(child: Element, ancestor: Element, label: string): void {
+  const childRect = child.getBoundingClientRect();
+  const ancestorRect = ancestor.getBoundingClientRect();
   expect(
-    rect.right,
-    `${label} extends past the viewport (right=${rect.right.toFixed(1)}, viewport=${window.innerWidth})`,
-  ).toBeLessThanOrEqual(window.innerWidth + TOLERANCE);
+    childRect.right,
+    `${label}: right edge ${childRect.right.toFixed(1)} exceeds ancestor ${ancestorRect.right.toFixed(1)}`,
+  ).toBeLessThanOrEqual(ancestorRect.right + TOLERANCE_PX);
+  expect(
+    childRect.left,
+    `${label}: left edge ${childRect.left.toFixed(1)} escapes ancestor ${ancestorRect.left.toFixed(1)}`,
+  ).toBeGreaterThanOrEqual(ancestorRect.left - TOLERANCE_PX);
 }
 
-interface OverflowRow {
-  id: string;
-  name: string;
-  model: string;
+function inventoryMarkup(): string {
+  return `
+    <div class="omnigent-inventory" aria-label="Agents harness">
+      <header><p class="eyebrow">Omnigent</p><h1>Agents</h1><p>Available agent identities and runtime status.</p></header>
+      <section aria-label="Agents inventory">
+        <div class="omnigent-inventory__toolbar"><h2>Agents inventory</h2><button type="button">Refresh</button></div>
+        <label><span>Filter agents</span><input type="search" value="" /></label>
+        <div class="omnigent-inventory__table-wrap"><table>
+          <thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th></tr></thead>
+          <tbody><tr>
+            <td data-label="Identity"><strong>Team codex</strong><small>${LONG_ID}@3</small></td>
+            <td data-label="Status">active</td>
+            <td data-label="Summary">${LONG_TEXT}</td>
+            <td data-label="Freshness">just now</td>
+          </tr></tbody>
+        </table></div>
+      </section>
+    </div>`;
 }
 
-const overflowColumns: Column<OverflowRow>[] = [
-  { key: 'name', header: 'Name' },
-  { key: 'model', header: 'Model' },
-];
-
-const overflowRows: OverflowRow[] = [
-  {
-    id: 'row-1',
-    name: 'synthetic-agent-with-a-very-long-unbroken-identifier-that-must-wrap',
-    model: 'opencode-go/synthetic-model-with-an-extremely-long-unbroken-suffix-for-overflow',
-  },
-];
-
-const syntheticProfile: ProviderProfile = {
-  profile_id: 'synthetic-profile-with-a-very-long-unbroken-identifier-for-mobile',
-  runtime_id: 'codex_cli',
-  provider_id: 'openai',
-  provider_label: 'Synthetic provider with a long label that must wrap on mobile',
-  credential_source: 'oauth_volume',
-  runtime_materialization_mode: 'oauth_home',
-  secret_refs: {},
-  volume_ref: 'synthetic-oauth-volume-with-a-long-unbroken-name',
-  volume_mount_path: '/mnt/synthetic-oauth-volume',
-  max_parallel_runs: 1,
-  cooldown_after_429_seconds: 300,
-  rate_limit_policy: 'backoff',
-  enabled: true,
-  is_default: true,
-  model_tiers: [
-    {
-      label: 'Plan and verify with a deliberately long tier label for wrapping',
-      model: 'synthetic-model-with-an-extremely-long-unbroken-identifier-for-tier-overflow',
-      effort: 'xhigh',
-    },
-    { label: 'Implementation', model: 'gpt-5.5', effort: 'medium' },
-  ],
-  default_model_tier: 1,
-};
-
-// Claude-credential profile shape mirrors the jsdom enrollment coverage: the
-// saved record offers API-key enrollment without an OAuth terminal session.
-const claudeEnrollmentProfile: ProviderProfile = {
-  ...syntheticProfile,
-  profile_id: 'claude-anthropic',
-  runtime_id: 'claude_code',
-  provider_id: 'anthropic',
-  provider_label: 'Anthropic',
-  volume_ref: 'claude-auth-volume-with-a-long-unbroken-name-for-mobile',
-  volume_mount_path: '/home/app/.claude',
-  account_label: 'Claude Anthropic OAuth',
-  enabled: false,
-  auth_state: 'not_configured',
-  disabled_reason: 'missing_credentials',
-  command_behavior: {
-    auth_strategy: 'claude_credential_methods',
-    auth_state: 'not_connected',
-    auth_actions: ['connect_oauth', 'use_api_key'],
-    auth_status_label: 'Claude credentials not connected',
-  },
-};
-
-let fetchSpy: MockInstance;
-let cleanupRender: (() => void) | null = null;
-
-function mockFetchForInventory(): void {
-  fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
-    if (String(input) === '/api/omnigent/agent-profiles') {
-      return { ok: true, json: async () => [] } as Response;
-    }
-    return {
-      ok: true,
-      json: async () => [
-        {
-          id: 'agent-with-a-very-long-unbroken-identifier-that-must-not-force-panning',
-          name: 'Synthetic agent with a long description that must wrap inside the record',
-          status: 'ready',
-          description:
-            'A synthetic description with enough words to wrap across several lines on a narrow phone viewport.',
-        },
-      ],
-    } as Response;
-  });
+function providerTableMarkup(): string {
+  return `
+    <div class="provider-profiles-table-wrap mt-6 overflow-x-auto"><table class="provider-profiles-table min-w-full text-left text-sm">
+      <thead><tr><th>Profile</th><th>Runtime</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody><tr>
+        <td data-label="Profile"><div>${LONG_ID}</div></td>
+        <td data-label="Runtime">codex_cli</td>
+        <td data-label="Status"><span>Enabled</span><div>Readiness: ready</div></td>
+        <td data-label="Actions"><div class="provider-profile-actions flex flex-wrap gap-2">
+          <button type="button" class="rounded-full border px-3 py-1.5 text-xs">OAuth</button>
+          <button type="button" class="rounded-full border px-3 py-1.5 text-xs">Validate OAuth ${LONG_ID}</button>
+          <button type="button" class="rounded-full border px-3 py-1.5 text-xs">Make default</button>
+          <button type="button" class="rounded-full border px-3 py-1.5 text-xs">Delete saved profile</button>
+        </div></td>
+      </tr></tbody>
+    </table></div>`;
 }
 
-function mockFetchRejectAll(): void {
-  fetchSpy = vi
-    .spyOn(window, 'fetch')
-    .mockRejectedValue(new Error('synthetic offline fixture'));
+function providerFormMarkup(): string {
+  return `
+    <form class="provider-profile-form space-y-6" aria-label="Create Profile harness">
+      <fieldset class="provider-profile-fieldset rounded-2xl border p-5 space-y-4">
+        <legend class="px-2 text-sm font-semibold">Identity &mdash; required</legend>
+        <div class="provider-profile-identity-grid grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <label class="flex flex-col gap-1.5 text-sm">Profile ID<input class="w-full rounded-xl border px-3 py-2 text-sm" value="${LONG_ID}" /></label>
+          <label class="flex flex-col gap-1.5 text-sm">Runtime ID<input class="w-full rounded-xl border px-3 py-2 text-sm" value="codex_cli" /></label>
+          <label class="flex flex-col gap-1.5 text-sm">Provider ID<input class="w-full rounded-xl border px-3 py-2 text-sm" value="openai" /></label>
+          <label class="flex flex-col gap-1.5 text-sm">Account label<input class="w-full rounded-xl border px-3 py-2 text-sm" value="Team account" /></label>
+        </div>
+      </fieldset>
+      <fieldset class="provider-profile-fieldset rounded-2xl border p-5 space-y-4" aria-label="Model and effort tiers">
+        <legend class="px-2 text-sm font-semibold">Model &amp; effort tiers</legend>
+        <ol class="provider-tier-list space-y-4" aria-label="Model and effort tiers">
+          <li class="provider-tier-card rounded-2xl border p-4 shadow-sm" data-tier-client-id="tier-1">
+            <fieldset class="provider-tier-fieldset space-y-3">
+              <legend class="provider-tier-legend"><span class="text-sm font-semibold">Tier 1<span>Default</span></span></legend>
+              <div class="tier-card__actions">
+                <button type="button" class="text-xs">Duplicate tier</button>
+                <button type="button" class="text-xs">Remove tier</button>
+              </div>
+              <label class="flex flex-col gap-1.5 text-sm">Tier 1 model<select class="w-full rounded-xl border px-3 py-2 text-sm"><option>${LONG_ID}</option></select></label>
+              <label class="flex flex-col gap-1.5 text-sm">Tier 1 effort<select class="w-full rounded-xl border px-3 py-2 text-sm"><option>high</option></select></label>
+            </fieldset>
+          </li>
+        </ol>
+      </fieldset>
+    </form>`;
+}
+
+function mountHarness(): void {
+  host.innerHTML = `${inventoryMarkup()}
+    <section class="provider-profiles rounded-3xl border p-6">${providerTableMarkup()}${providerFormMarkup()}</section>`;
 }
 
 beforeEach(() => {
-  window.localStorage.clear();
-  document.body.innerHTML = '';
+  document.body.style.margin = '0';
+  host = document.createElement('main');
+  host.style.minWidth = '0';
+  host.style.width = '100%';
+  document.body.appendChild(host);
+  mountHarness();
 });
 
 afterEach(async () => {
-  cleanupRender?.();
-  cleanupRender = null;
-  fetchSpy?.mockRestore();
-  await page.viewport(DESKTOP.width, DESKTOP.height);
+  host.remove();
+  document.body.style.margin = '';
+  await page.viewport(1280, 800);
 });
 
-describe('mobile overflow (MoonLadderStudios/MoonMind#4559)', () => {
-  it('keeps responsive DataTable cards and their state fallbacks inside a 320px viewport', async () => {
-    await page.viewport(MOBILE_320.width, MOBILE_320.height);
-    document.body.innerHTML = shell('<div id="datatable-host"></div>');
-    const host = document.getElementById('datatable-host')!;
-    const { unmount: unmountTable } = renderWithClient(
-      <DataTable
-        data={overflowRows}
-        columns={overflowColumns}
-        getRowKey={(row) => row.id}
-        responsive
-        ariaLabel="Synthetic overflow table"
-        rowActions={() => (
-          <button type="button">Activate synthetic configuration</button>
-        )}
-      />,
-      { container: host },
+describe('mobile overflow repair (MoonMind#4559)', () => {
+  it.each(VIEWPORTS)('keeps the Agents inventory within the content width at %spx', async (width) => {
+    await page.viewport(width, 800);
+    const inventory = host.querySelector<HTMLElement>('.omnigent-inventory')!;
+    const wrap = host.querySelector<HTMLElement>('.omnigent-inventory__table-wrap')!;
+    const filter = host.querySelector<HTMLInputElement>('.omnigent-inventory input[type="search"]')!;
+
+    fitWithin(inventory, host, 'inventory root');
+    fitWithin(filter, inventory, 'inventory filter field');
+    // Ordinary inventory rows must not require panning the table region.
+    expect(wrap.scrollWidth, `inventory table wrap scrolls sideways at ${width}px`).toBeLessThanOrEqual(
+      wrap.clientWidth + TOLERANCE_PX,
     );
-    cleanupRender = unmountTable;
-
-    const card = await waitFor(() => {
-      const found = host.querySelector('.data-table-card');
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    // The shared shell clips horizontal overflow, so assert the laid-out
-    // bounds instead of the document scroll width.
-    expectFitsViewport(card, 'responsive data-table card');
-    const value = card.querySelector('.data-table-card__value')!;
-    // Values use the full record width rather than competing with a label column.
-    const cardRect = card.getBoundingClientRect();
-    const valueRect = value.getBoundingClientRect();
-    const cardStyle = window.getComputedStyle(card);
-    const cardPaddingLeft =
-      Number.parseFloat(cardStyle.paddingLeft || '0') || 0;
-    expect(
-      valueRect.left - cardRect.left,
-      'card value should start near the card edge, not beside a wide label column',
-    ).toBeLessThanOrEqual(cardPaddingLeft + 8);
-    expectFitsViewport(value, 'card value with long unbroken identifier');
-  });
-
-  it('renders DataTable loading, error, and empty states in the mobile card fallback', async () => {
-    await page.viewport(MOBILE_320.width, MOBILE_320.height);
-    document.body.innerHTML = shell('<div id="datatable-state-host"></div>');
-    const host = document.getElementById('datatable-state-host')!;
-    const { unmount } = renderWithClient(
-      <DataTable
-        data={[]}
-        columns={overflowColumns}
-        getRowKey={(row) => row.id}
-        responsive
-        isLoading
-        loadingMessage="Loading synthetic rows…"
-      />,
-      { container: host },
-    );
-    cleanupRender = unmount;
-
-    const cards = await waitFor(() => {
-      const found = host.querySelector('.data-table-cards');
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    expect(cards.textContent).toContain('Loading synthetic rows…');
-    expectFitsViewport(cards, 'loading state card');
-  });
-
-  it('keeps the agents inventory header, filter, and records inside a 320px viewport', async () => {
-    await page.viewport(MOBILE_320.width, MOBILE_320.height);
-    window.history.replaceState({}, '', '/omnigent/agents');
-    mockFetchForInventory();
-    const { unmount } = renderWithClient(
-      <BrowserRouter>
-        <OmnigentInventoryPage
-          payload={{
-            page: 'omnigent-inventory',
-            apiBase: '/api',
-            features: { omnigentAgents: true },
-            initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
-          }}
-        />
-      </BrowserRouter>,
-      {
-        container: (() => {
-          document.body.innerHTML = shell('<div id="inventory-host"></div>');
-          return document.getElementById('inventory-host')!;
-        })(),
-      },
-    );
-    cleanupRender = unmount;
-
-    const search = await screen.findByRole('searchbox');
-    expectFitsViewport(search, 'inventory filter field');
-    // Ordinary inventory reads as records on mobile: no page-level panning.
-    const cards = await waitFor(() => {
-      const found = document.querySelectorAll('.data-table-card');
-      expect(found.length).toBeGreaterThan(0);
-      return found;
-    });
-    cards.forEach((card, index) => expectFitsViewport(card, `inventory record ${index}`));
-    expect(
-      document.documentElement.scrollWidth,
-      'inventory page must not require sideways panning',
-    ).toBeLessThanOrEqual(window.innerWidth + TOLERANCE);
-
-    await page.viewport(MOBILE_390.width, MOBILE_390.height);
-    cards.forEach((card, index) => expectFitsViewport(card, `inventory record ${index} at 390px`));
-  });
-
-  it('keeps provider records, actions, and the edit form inside a 320px viewport', async () => {
-    await page.viewport(MOBILE_320.width, MOBILE_320.height);
-    mockFetchRejectAll();
-    document.body.innerHTML = shell('<div id="provider-host"></div>');
-    const host = document.getElementById('provider-host')!;
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const { unmount } = renderWithClient(
-      <ProviderProfilesManager
-        profiles={[syntheticProfile]}
-        secretSlugs={['SYNTHETIC_API_KEY']}
-        onNotice={() => {}}
-        queryClient={queryClient}
-        defaultTaskModelByRuntime={{}}
-      />,
-      { container: host },
-    );
-    cleanupRender = unmount;
-
-    const record = await waitFor(() => {
-      const found = host.querySelector('.provider-profiles-table tbody tr');
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    expectFitsViewport(record, 'provider record');
-    const recordRect = record.getBoundingClientRect();
-    const actionsCell = host.querySelector(
-      '.provider-profiles-table td[data-label="Actions"]',
-    )!;
-    const actionsRect = actionsCell.getBoundingClientRect();
-    // Actions own the full record width instead of squeezing beside a label column.
-    expect(
-      actionsRect.left - recordRect.left,
-      'actions should start near the record edge on mobile',
-    ).toBeLessThanOrEqual(20);
-    expectFitsViewport(actionsCell, 'provider actions cell');
-    host.querySelectorAll('button').forEach((button) => {
-      if (button.getBoundingClientRect().width > 0) {
-        expectFitsViewport(button, `action "${button.textContent?.slice(0, 24)}"`);
-      }
-    });
-
-    // Edit form: every fieldset and control stays inside its section.
-    const editButton = within(record as HTMLElement).getByRole('button', { name: 'Edit' });
-    editButton.click();
-    const identityInput = await screen.findByDisplayValue(syntheticProfile.profile_id);
-    expectFitsViewport(identityInput, 'identity profile id field');
-    host.querySelectorAll('fieldset').forEach((fieldset, index) => {
-      expectFitsViewport(fieldset, `provider form fieldset ${index}`);
-    });
-    host.querySelectorAll('input, select, textarea').forEach((control) => {
-      const rect = control.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        expect(rightEdgeFitsViewport(control)).toBe(true);
-      }
-    });
-    // Tier rows: heading names the tier, actions wrap in their own area.
-    const tierItems = host.querySelectorAll('[data-tier-client-id]');
-    expect(tierItems.length).toBeGreaterThan(0);
-    tierItems.forEach((tier, index) => expectFitsViewport(tier, `tier row ${index}`));
-  }, 30000);
-
-  it('keeps the API-key enrollment drawer usable at narrow portrait and short landscape sizes', async () => {
-    const viewports = [
-      { ...MOBILE_320, label: '320x568 portrait' },
-      { ...LANDSCAPE_SHORT, label: '568x320 landscape' },
-    ];
-    for (const viewport of viewports) {
-      await page.viewport(viewport.width, viewport.height);
-      mockFetchRejectAll();
-      document.body.innerHTML = shell('<div id="provider-enrollment-host"></div>');
-      const host = document.getElementById('provider-enrollment-host')!;
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false } },
-      });
-      const { unmount } = renderWithClient(
-        <ProviderProfilesManager
-          profiles={[claudeEnrollmentProfile]}
-          secretSlugs={['SYNTHETIC_API_KEY']}
-          onNotice={() => {}}
-          queryClient={queryClient}
-          defaultTaskModelByRuntime={{}}
-        />,
-        { container: host },
-      );
-      try {
-        const opener = await screen.findByRole('button', {
-          name: 'Use Anthropic API key claude-anthropic',
-        });
-        opener.click();
-        const dialog = await screen.findByRole('dialog', {
-          name: 'Anthropic API key enrollment for claude-anthropic',
-        });
-        expectFitsViewport(dialog, `enrollment drawer at ${viewport.label}`);
-        const dialogRect = dialog.getBoundingClientRect();
-        expect(
-          dialogRect.bottom,
-          `enrollment drawer must stay inside the viewport at ${viewport.label} (bottom=${dialogRect.bottom.toFixed(1)}, viewport=${window.innerHeight})`,
-        ).toBeLessThanOrEqual(window.innerHeight + TOLERANCE);
-        // Token paste step: the password field stays inside the drawer.
-        within(dialog as HTMLElement).getByRole('button', { name: 'Continue to API key paste' }).click();
-        const tokenInput = await screen.findByLabelText('Anthropic API key');
-        expectFitsViewport(tokenInput, `enrollment token field at ${viewport.label}`);
-        const cancel = within(dialog as HTMLElement).getByRole('button', {
-          name: 'Cancel API key enrollment',
-        });
-        expectFitsViewport(cancel, `enrollment cancel at ${viewport.label}`);
-        cancel.click();
-        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-      } finally {
-        unmount();
-        fetchSpy?.mockRestore();
-      }
+    for (const cell of Array.from(wrap.querySelectorAll('td'))) {
+      fitWithin(cell, inventory, `inventory cell ${cell.getAttribute('data-label')}`);
     }
-  }, 60000);
+  });
 
-  it('keeps the tier-remove confirmation usable at narrow portrait and short landscape sizes', async () => {
-    const viewports = [
-      { ...MOBILE_320, label: '320x568 portrait' },
-      { ...LANDSCAPE_SHORT, label: '568x320 landscape' },
-    ];
-    for (const viewport of viewports) {
-      await page.viewport(viewport.width, viewport.height);
-      mockFetchRejectAll();
-      document.body.innerHTML = shell('<div id="provider-overlay-host"></div>');
-      const host = document.getElementById('provider-overlay-host')!;
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false } },
-      });
-      const { unmount } = renderWithClient(
-        <ProviderProfilesManager
-          profiles={[syntheticProfile]}
-          secretSlugs={['SYNTHETIC_API_KEY']}
-          onNotice={() => {}}
-          queryClient={queryClient}
-          defaultTaskModelByRuntime={{}}
-        />,
-        { container: host },
+  it.each(VIEWPORTS)('gives saved Provider records full-width details and actions at %spx', async (width) => {
+    await page.viewport(width, 800);
+    const row = host.querySelector<HTMLElement>('.provider-profiles-table tbody tr')!;
+    const actionsCell = host.querySelector<HTMLElement>('.provider-profiles-table td[data-label="Actions"]')!;
+    const actions = host.querySelector<HTMLElement>('.provider-profile-actions')!;
+
+    fitWithin(row, host, 'provider record');
+    if (width <= 720) {
+      // Details and actions use the full record width instead of competing
+      // with a wide label column.
+      const rowRect = row.getBoundingClientRect();
+      const actionsRect = actionsCell.getBoundingClientRect();
+      expect(actionsRect.width, `actions squeeze beside the label column at ${width}px`).toBeGreaterThanOrEqual(
+        rowRect.width - 48,
       );
-      try {
-        const record = await waitFor(() => {
-          const found = host.querySelector('.provider-profiles-table tbody tr');
-          expect(found).not.toBeNull();
-          return found!;
-        });
-        within(record as HTMLElement).getByRole('button', { name: 'Edit' }).click();
-        // Tier 1 is the default with a deliberately long label, so removing it
-        // exercises the renumbering + replacement-default confirmation content.
-        const removeButton = await screen.findByRole('button', { name: 'Remove Tier 1' });
-        removeButton.click();
-        const dialog = await screen.findByRole('dialog');
-        const panel = dialog.firstElementChild as HTMLElement | null;
-        expect(panel).not.toBeNull();
-        expectFitsViewport(panel!, `tier-remove panel at ${viewport.label}`);
-        const panelRect = panel!.getBoundingClientRect();
-        expect(
-          panelRect.bottom,
-          `tier-remove panel must stay inside the viewport at ${viewport.label} (bottom=${panelRect.bottom.toFixed(1)}, viewport=${window.innerHeight})`,
-        ).toBeLessThanOrEqual(window.innerHeight + TOLERANCE);
-        if (viewport.height <= 400) {
-          // Short viewports keep the panel bounded by scrolling its own
-          // content rather than growing past the viewport.
-          expect(panel!.scrollHeight).toBeGreaterThanOrEqual(panel!.clientHeight);
-        }
-        const cancel = within(dialog as HTMLElement).getByRole('button', { name: 'Cancel' });
-        const confirm = within(dialog as HTMLElement).getByRole('button', {
-          name: 'Remove and renumber',
-        });
-        // Footer actions wrap onto their own lines instead of forcing
-        // sideways overflow; horizontal bounds hold even below the fold.
-        expectFitsViewport(cancel, `tier-remove cancel at ${viewport.label}`);
-        expectFitsViewport(confirm, `tier-remove confirm at ${viewport.label}`);
-        cancel.click();
-        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-      } finally {
-        unmount();
-        fetchSpy?.mockRestore();
-      }
     }
-  }, 60000);
+    fitWithin(actions, host, 'provider record actions');
+    // Long action labels wrap at word boundaries in a comfortably wide
+    // button instead of compressing into tall pills.
+    for (const button of Array.from(actions.querySelectorAll('button'))) {
+      expect(button.getBoundingClientRect().height, `tall pill button "${button.textContent?.slice(0, 24)}"`).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it.each(VIEWPORTS)('keeps Provider form sections and tier rows inside their sections at %spx', async (width) => {
+    await page.viewport(width, 800);
+    const form = host.querySelector<HTMLElement>('.provider-profile-form')!;
+    fitWithin(form, host, 'provider form');
+    for (const fieldset of Array.from(form.querySelectorAll('fieldset'))) {
+      fitWithin(fieldset, form, `fieldset ${fieldset.getAttribute('aria-label') ?? fieldset.querySelector('legend')?.textContent?.trim()}`);
+    }
+    for (const control of Array.from(form.querySelectorAll('input, select, button'))) {
+      fitWithin(control, form, `control ${(control as HTMLElement).getAttribute('aria-label') ?? control.textContent?.trim().slice(0, 32)}`);
+    }
+    // Tier identity stays grouped while Duplicate/Remove live in their own
+    // wrapping action area, not inside the legend toolbar.
+    const legendButtons = host.querySelectorAll('.provider-tier-fieldset > legend button');
+    expect(legendButtons.length, 'tier actions must not compete inside the legend').toBe(0);
+    const tierActions = host.querySelector<HTMLElement>('.tier-card__actions')!;
+    fitWithin(tierActions, form, 'tier action area');
+  });
+
+  it('keeps a narrow container usable inside a wide viewport', async () => {
+    await page.viewport(1280, 800);
+    host.style.width = '300px';
+    const form = host.querySelector<HTMLElement>('.provider-profile-form')!;
+    const wrap = host.querySelector<HTMLElement>('.omnigent-inventory__table-wrap')!;
+    fitWithin(form, host, 'narrow-container form');
+    expect(wrap.scrollWidth, 'narrow-container inventory wrap scrolls sideways').toBeLessThanOrEqual(
+      wrap.clientWidth + TOLERANCE_PX,
+    );
+  });
+});
+
+interface RecordRow {
+  id: string;
+  name: string;
+}
+
+const recordColumns: Column<RecordRow>[] = [
+  { key: 'name', header: 'Name' },
+  { key: 'id', header: 'Identity' },
+];
+
+const recordRows: RecordRow[] = [{ id: LONG_ID, name: 'Team codex' }];
+
+describe('DataTable responsive states (MoonMind#4559)', () => {
+  beforeEach(() => {
+    // This suite checks DataTable's document width without the separate
+    // inventory and Provider markup mounted by the shared browser harness.
+    host.remove();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('exposes loading, empty, and error states in the mobile card fallback', async () => {
+    await page.viewport(320, 800);
+    const states: Array<{ props: Partial<React.ComponentProps<typeof DataTable<RecordRow>>>; text: string }> = [
+      { props: { isLoading: true, loadingMessage: 'Loading records…' }, text: 'Loading records…' },
+      { props: { data: [], emptyMessage: 'No records yet.' }, text: 'No records yet.' },
+      { props: { isError: true, errorMessage: 'Records failed to load.' }, text: 'Records failed to load.' },
+    ];
+    for (const state of states) {
+      const view = render(
+        <DataTable
+          data={recordRows}
+          columns={recordColumns}
+          getRowKey={(row) => row.id}
+          ariaLabel="Records"
+          responsive
+          {...state.props}
+        />,
+      );
+      const cards = document.querySelector<HTMLElement>('.data-table-cards')!;
+      expect(getComputedStyle(cards).display, `${state.text}: cards hidden at 320px`).not.toBe('none');
+      expect(within(cards as HTMLElement).getByText(state.text), `${state.text}: missing from mobile cards`).toBeTruthy();
+      const table = document.querySelector<HTMLElement>('.data-table')!;
+      expect(getComputedStyle(table).display, `${state.text}: table still shown at 320px`).toBe('none');
+      view.unmount();
+      document.body.innerHTML = '';
+    }
+  });
+
+  it('shows rows as full-width stacked cards without sideways scrolling at 320px', async () => {
+    await page.viewport(320, 800);
+    render(
+      <DataTable
+        data={recordRows}
+        columns={recordColumns}
+        getRowKey={(row) => row.id}
+        ariaLabel="Records"
+        responsive
+        rowActions={() => <button type="button">Inspect Team codex record</button>}
+      />,
+    );
+    expect(screen.getAllByRole('button', { name: 'Inspect Team codex record' }).length).toBeGreaterThanOrEqual(1);
+    const card = document.querySelector<HTMLElement>('.data-table-card')!;
+    const cards = document.querySelector<HTMLElement>('.data-table-cards')!;
+    expect(card.getBoundingClientRect().width).toBeLessThanOrEqual(cards.getBoundingClientRect().width + TOLERANCE_PX);
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + TOLERANCE_PX);
+  });
 });

@@ -68,7 +68,7 @@ The platform has the following goals:
 8. **Immutable Skills.** Agent Profile Skill intent resolves to one per-run Skill snapshot and delivery descriptor before plan commitment.
 9. **Safe extension.** Built-in and community harnesses can be discovered without granting an untrusted plugin secrets, host authority, or production support.
 10. **Local-first operation.** Docker Compose remains the normal local deployment. On-demand hosts add no permanent container footprint.
-11. **Objective support claims.** A combination is supported only when evidence proves its exact model configuration and execution realizer.
+11. **Objective support claims.** A certified-supported claim for a combination requires evidence proving its exact model configuration and execution realizer. Ordinary execution instead requires actual request authority, credential ownership, runtime compatibility, required capabilities, and security policy at their enforcing boundaries; a missing historical certificate is not evidence of incompatibility (MoonLadderStudios/MoonMind#4560).
 12. **Durable recovery.** Retry, continuation, branch, remediation, cancellation, credential rotation, and janitor behavior use the same fenced authority model for every harness.
 
 ## 3. Non-goals
@@ -229,6 +229,19 @@ Omnigent server and host build
 ```
 
 Two runs that differ by selected model, normalized model options, reasoning effort, or `executionRealizerRef` have different support keys. Evidence for one does not qualify the other.
+
+### 4.9 Ordinary admission is certificate-independent; retained certification consumers
+
+Ordinary execution requires actual request authority, credential ownership, runtime compatibility, required capabilities, and security policy at their enforcing boundaries; a missing, expired, malformed, or unavailable historical certificate never vetoes ordinary admission (MoonLadderStudios/MoonMind#4560). Only an explicit `protected` or `deployment` evidence policy selects strict certification for new admission, chosen at the trusted settings boundary. The removal audit below names every retained certificate consumer kept after the ordinary-admission removal, with the condition that retires each. Ordinary paths treat these consumers as advisory-only; no retained consumer reinstates the veto.
+
+| Retained consumer | Retained strict/diagnostic use | Exit condition |
+| --- | --- | --- |
+| `moonmind.omnigent.bootstrap.qualification:run_qualification` | Strict certification report tail behind `BootstrapController._publish_certification_report`; diagnostic observation for ordinary readiness | Retire when explicit strict certification (`protected`/`deployment`) is removed, or when no strict or diagnostic consumer reads its report |
+| `moonmind.omnigent.bootstrap.controller` materializer qualification sweep + deployment-evidence freshness reconciliation | Mandatory sweep only under explicit strict certification; best-effort truthful observation otherwise | Remove the strict branch when strict certification is retired; keep the advisory observation while schedules report certification state |
+| `moonmind.omnigent.deployment_evidence` expiry/max-age gates + `assert_deployment_evidence_matches_plan` host-image gate | Strict admission enforcement and history-vs-new-effect diagnosis; ordinary admission never consults this module for a veto | Re-scope to diagnostic-only when strict certification is retired; host-image integrity stays with the runtime adapter/launch-preflight owners |
+| `moonmind.omnigent.harness_platform.execution_plan` `AdmissionAuthority` strict validator (default strict) | Preserves the in-flight interpretation of plans persisted before `admissionMode` existed; missing metadata never silently bypasses validation | Default may become ordinary only after every pre-upgrade strict plan has drained or migrated via `reissue_ordinary_admission_for_saved_plan` |
+| `moonmind.omnigent.runtime_provider_rollout:_readiness_denials` strict branch + `harness_platform.planner` freshness observation | Strict row demotion for missing/stale/non-pass evidence; advisory observation for ordinary rows and operator migration views | Remove the strict demotion branch when strict certification is retired; keep the observation while readiness reporting names evidence state |
+| `moonmind.workflows.temporal.activities.omnigent_session_activities:_validate_plan_admission_authority` strict branch | Explicit strict new-effect enforcement at the plan-reader boundary; ordinary plans return before any certificate read | Remove when strict admission is retired and no strict plan remains loadable |
 
 ## 5. System topology
 

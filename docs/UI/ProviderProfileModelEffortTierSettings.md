@@ -469,10 +469,16 @@ Rules:
 Each card exposes:
 
 - `Remove tier`,
-- `Duplicate as new last tier`, in a secondary action menu or button, and
+- `Duplicate tier` (accessible name `Duplicate Tier N as new last tier`), in a secondary action area or button, and
 - optional `Reset model and effort to runtime defaults`.
 
 Duplicate behavior copies label, model, effort, parameters, and annotations, appends the copy, and does not make it the default. The copied label may gain `copy` in draft state to reduce ambiguity.
+
+Duplicate and Remove live in their own wrapping action area below the tier
+heading (MoonMind#4559), not inside the legend competing with the tier name
+and default badge. The legend names the group only. On phones the tier list
+uses restrained nesting (one card border, unstyled inner fieldset) with
+stacked label/model/effort fields.
 
 ---
 
@@ -1070,6 +1076,19 @@ Rules:
 4. Do not use horizontal scrolling for the tier editor.
 5. Keep destructive actions labeled with text.
 6. The bottom `Add tier` action remains full width.
+
+Mobile implementation note (MoonMind#4559): tier legends hold the group
+name only — `Duplicate tier` / `Remove tier` live in a separate wrapping
+action area below the heading so long labels no longer compete with actions
+inside the legend. The ordered list drops its indentation on phones
+(`margin: 0; padding: 0; list-style: none` at `max-width: 720px`), tier
+fieldsets opt out of the intrinsic `min-inline-size: min-content` minimum,
+and the tier save payload still carries only `model_tiers` plus one-based
+`default_model_tier` (see `frontend/src/utils/providerProfileTiers.test.ts`).
+
+```bash
+npm run ui:test:browser -- frontend/src/browser/mobileOverflow4559.browser.test.tsx
+```
 
 ---
 

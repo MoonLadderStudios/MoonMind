@@ -1616,7 +1616,7 @@ function isActiveOAuthStatus(status: OAuthSessionStatus): boolean {
 }
 
 function canFinalizeOAuthStatus(status: OAuthSessionStatus): boolean {
-  return status === 'awaiting_user' || status === 'verifying' || status === 'registering_profile';
+  return status === 'awaiting_user' || status === 'verifying';
 }
 
 function canRetryOAuthStatus(status: OAuthSessionStatus): boolean {
@@ -3732,30 +3732,21 @@ export function ProviderProfilesManager({
             : 'Failed to finalize OAuth session.';
         throw new Error(detail);
       }
-      const session = (await response.json()) as OAuthSessionResponse;
-      return { profileId, session };
+      return { profileId, sessionId };
     },
-    onSuccess: async ({ profileId, session }) => {
-      const sessionId = session.session_id;
-      const sessionState = oauthSessionStateFromResponse(session, profileId);
+    onSuccess: async ({ profileId, sessionId }) => {
       setOauthSessions((current) => ({
         ...current,
-        [profileId]: sessionState,
+        [profileId]: { ...current[profileId], sessionId, profileId, status: 'succeeded' },
       }));
       setTmateOAuthSession((current) =>
-        current?.sessionId === sessionId ? sessionState : current,
+        current?.sessionId === sessionId ? { ...current, status: 'succeeded' } : current,
       );
-      if (session.status === 'succeeded') {
-        queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-        const defaultNoticePosted = await applyPendingDefaultIntent(profileId);
-        if (!defaultNoticePosted) {
-          onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
-        }
-      } else if (session.status === 'failed') {
-        queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-        onNotice({ level: 'error', text: session.failure_reason || `OAuth session for "${profileId}" failed.` });
-      } else {
-        onNotice({ level: 'ok', text: `OAuth credentials saved for "${profileId}". Validating the host.` });
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      // The deferred default intent owns the final notice when it fires.
+      const defaultNoticePosted = await applyPendingDefaultIntent(profileId);
+      if (!defaultNoticePosted) {
+        onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
       }
     },
     onError: (error: Error) => {
@@ -3789,15 +3780,13 @@ export function ProviderProfilesManager({
     },
   });
 
-  const oauthLifecycleMutation = useMutation({
+  const claudeOAuthLifecycleMutation = useMutation({
     mutationFn: async ({
       profileId,
       actionId,
-      labelPrefix,
     }: {
       profileId: string;
       actionId: 'validate_oauth' | 'disconnect_oauth';
-      labelPrefix: 'Claude' | 'Codex';
     }) => {
       const endpointAction = actionId === 'validate_oauth' ? 'validate' : 'disconnect';
       const response = await fetch(
@@ -3806,18 +3795,18 @@ export function ProviderProfilesManager({
       );
       const payload: unknown = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)) ?? `${labelPrefix} OAuth action failed.`);
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)) ?? 'Claude OAuth action failed.');
       }
-      return { profileId, actionId, labelPrefix };
+      return { profileId, actionId };
     },
-    onSuccess: ({ profileId, actionId, labelPrefix }) => {
+    onSuccess: ({ profileId, actionId }) => {
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
         text:
           actionId === 'validate_oauth'
-            ? `${labelPrefix} OAuth validated for "${profileId}".`
-            : `${labelPrefix} OAuth disconnected for "${profileId}".`,
+            ? `Claude OAuth validated for "${profileId}".`
+            : `Claude OAuth disconnected for "${profileId}".`,
       });
     },
     onError: (error: Error) => {
@@ -3887,25 +3876,8 @@ export function ProviderProfilesManager({
         return oauthSessionStatesEqual(current, sessionState) ? current : sessionState;
       });
 
-      const terminalUpdates = appliedUpdates.filter(({ profileId, session }) => {
-        const previous = oauthSessions[profileId];
-        return previous?.sessionId === session.session_id
-          && previous.status !== session.status
-          && (session.status === 'succeeded' || session.status === 'failed');
-      });
-      if (terminalUpdates.length > 0) {
+      if (appliedUpdates.some(({ session }) => session.status === 'succeeded')) {
         queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      }
-      for (const { profileId, session } of terminalUpdates) {
-        if (session.status === 'succeeded') {
-          void applyPendingDefaultIntent(profileId).then((defaultNoticePosted) => {
-            if (!defaultNoticePosted) {
-              onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
-            }
-          });
-        } else {
-          onNotice({ level: 'error', text: session.failure_reason || `OAuth session for "${profileId}" failed.` });
-        }
       }
     };
 
@@ -3971,7 +3943,7 @@ export function ProviderProfilesManager({
   };
 
   return (
-    <section className="rounded-3xl border border-mm-border/80 bg-transparent p-4 sm:p-6 shadow-sm min-w-0">
+    <section className="provider-profiles rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
@@ -4089,9 +4061,6 @@ export function ProviderProfilesManager({
                 const oauthSession = oauthSessions[profile.profile_id];
                 const authModel = providerAuthModel(profile);
                 const canStartOAuth = authModel.kind === 'codex_oauth';
-                const canValidateCodexOAuth = canStartOAuth &&
-                  profile.credential_source === 'oauth_volume' &&
-                  Boolean(profile.volume_ref && profile.volume_mount_path);
                 const canUseGenericApiKey = Boolean(
                   ((profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
                     hasGuidedApiKeySetup(profile)) &&
@@ -4316,11 +4285,6 @@ export function ProviderProfilesManager({
                           {authModel.statusLabel}
                         </div>
                       ) : null}
-                      {canValidateCodexOAuth && profile.disabled_reason === 'auth_invalid' ? (
-                        <div className="text-xs text-rose-600 dark:text-rose-400">
-                          Codex OAuth validation failed. Validate the saved credentials or reconnect OAuth.
-                        </div>
-                      ) : null}
                       {oauthSession ? (
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
                           OAuth: {oauthStatusLabel(oauthSession.status)}
@@ -4436,7 +4400,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && canStartOAuth ? (
                         <button
                           type="button"
-                          className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                           onClick={() => startOAuthMutation.mutate(profile)}
                           disabled={startOAuthMutation.isPending}
                           aria-label={`OAuth ${profile.profile_id}`}
@@ -4444,27 +4408,12 @@ export function ProviderProfilesManager({
                           OAuth
                         </button>
                       ) : null}
-                      {canWriteProviderProfiles && canValidateCodexOAuth ? (
-                        <button
-                          type="button"
-                          className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
-                          onClick={() => oauthLifecycleMutation.mutate({
-                            profileId: profile.profile_id,
-                            actionId: 'validate_oauth',
-                            labelPrefix: 'Codex',
-                          })}
-                          disabled={oauthLifecycleMutation.isPending}
-                          aria-label={`Validate OAuth ${profile.profile_id}`}
-                        >
-                          Validate OAuth
-                        </button>
-                      ) : null}
                       {canWriteProviderProfiles && authModel.kind === 'claude_credentials'
                         ? authModel.actions.map((action) => (
                             <button
                               key={action.id}
                               type="button"
-                              className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                               onClick={() => {
                                 if (action.id === 'connect_oauth') {
                                   startOAuthMutation.mutate(profile);
@@ -4475,14 +4424,13 @@ export function ProviderProfilesManager({
                                   return;
                                 }
                                 if (action.id === 'validate_oauth' || action.id === 'disconnect_oauth') {
-                                  oauthLifecycleMutation.mutate({
+                                  claudeOAuthLifecycleMutation.mutate({
                                     profileId: profile.profile_id,
                                     actionId: action.id,
-                                    labelPrefix: 'Claude',
                                   });
                                 }
                               }}
-                              disabled={oauthLifecycleMutation.isPending}
+                              disabled={claudeOAuthLifecycleMutation.isPending}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
@@ -4494,7 +4442,7 @@ export function ProviderProfilesManager({
                             <button
                               key={action.id}
                               type="button"
-                              className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                               onClick={() => {
                                 if (action.id === 'use_api_key') {
                                   openOpencodeEnrollment(profile);
@@ -4511,7 +4459,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && canUseGenericApiKey ? (
                         <button
                           type="button"
-                          className="rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                           onClick={() => openOpencodeEnrollment(profile)}
                           disabled={opencodeEnrollmentMutation.isPending}
                           aria-label={`Use ${apiKeyEnrollmentCopy(profile).credentialLabel} ${profile.profile_id}`}
@@ -4522,7 +4470,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
-                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                           onClick={() =>
                             cancelOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4538,7 +4486,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && oauthSession && canFinalizeOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
-                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                           onClick={() =>
                             finalizeOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4554,7 +4502,7 @@ export function ProviderProfilesManager({
                       {canWriteProviderProfiles && oauthSession && canRetryOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
-                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                           onClick={() =>
                             retryOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4571,7 +4519,7 @@ export function ProviderProfilesManager({
                         <>
                           <button
                             type="button"
-                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() => {
                               beginEditingProfile(profile);
                             }}
@@ -4580,7 +4528,7 @@ export function ProviderProfilesManager({
                           </button>
                           <button
                             type="button"
-                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() => handleEditTiers(profile)}
                             aria-label={`Edit tiers ${profile.profile_id}`}
                           >
@@ -4588,7 +4536,7 @@ export function ProviderProfilesManager({
                           </button>
                           <button
                             type="button"
-                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() =>
                               toggleMutation.mutate({
                                 profileId: profile.profile_id,
@@ -4644,7 +4592,7 @@ export function ProviderProfilesManager({
             role="dialog"
             aria-modal="true"
             aria-labelledby="tmate-oauth-session-title"
-            className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-2xl outline-none dark:border-slate-800 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto"
+            className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-2xl outline-none dark:border-slate-800 dark:bg-slate-900"
           >
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -4669,7 +4617,7 @@ export function ProviderProfilesManager({
             <dl className="mt-4 space-y-3 text-sm">
               <div>
                 <dt className="font-medium text-slate-700 dark:text-slate-300">Session</dt>
-                <dd className="mt-1 break-all font-mono text-xs text-slate-600 dark:text-slate-400">
+                <dd className="mt-1 font-mono text-xs text-slate-600 dark:text-slate-400">
                   {tmateOAuthSession.sessionId}
                 </dd>
               </div>
@@ -4996,18 +4944,18 @@ export function ProviderProfilesManager({
         </div>
 
         <form
-          className="provider-profile-form space-y-6 min-w-0"
+          className="provider-profile-form space-y-6 min-w-0 max-w-full"
           onSubmit={(event) => {
             event.preventDefault();
             handleSaveSubmit();
           }}
         >
           {/* ── 1. Identity (Profile ID, Runtime, Provider, Account label) ── */}
-          <fieldset className="min-w-0 max-w-full rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-4 sm:p-5 space-y-4">
+          <fieldset className="provider-profile-fieldset rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4 min-w-0 max-w-full">
             <legend className="px-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
               Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
             </legend>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="provider-profile-identity-grid grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
                 <input
@@ -5060,7 +5008,7 @@ export function ProviderProfilesManager({
             </div>
           </fieldset>
 
-          <fieldset className="min-w-0 max-w-full rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-4 sm:p-5 space-y-4">
+          <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
               Authentication and readiness
             </legend>
@@ -5145,7 +5093,7 @@ export function ProviderProfilesManager({
 
 
           {/* ── Model & effort tiers ── */}
-          <fieldset ref={tierSectionRef as unknown as React.RefObject<HTMLFieldSetElement>} className="min-w-0 max-w-full rounded-2xl border border-slate-200 dark:border-slate-700 p-4 sm:p-5 space-y-4" aria-labelledby="tier-section-title">
+          <fieldset ref={tierSectionRef as unknown as React.RefObject<HTMLFieldSetElement>} className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4 provider-tier-editor min-w-0 max-w-full" aria-labelledby="tier-section-title">
             <legend id="tier-section-title" className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Model &amp; effort tiers</legend>
             <p className="text-sm text-slate-600 dark:text-slate-400">Map workflow tier requests to a model and effort for this profile. Future launches use the saved policy. Historical runs keep their record.</p>
             {canWriteProviderProfiles ? (
@@ -5190,19 +5138,21 @@ export function ProviderProfilesManager({
               </ul>
             ) : null}
             <div className="sr-only" aria-live="polite" ref={tierLiveRef}>{tierLiveMessage}</div>
-            <ol className="m-0 list-none space-y-4 p-0" aria-label="Model and effort tiers">
+            <ol className="provider-tier-list space-y-4" aria-label="Model and effort tiers">
               {tierDrafts.map((tier, index) => {
                 const tierNumber = index + 1;
                 const isDefault = tier.clientId === defaultTierClientId;
                 const isOnlyTier = tierDrafts.length === 1;
                 return (
-                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`min-w-0 rounded-2xl border p-3 sm:p-4 shadow-sm ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
-                    <fieldset className="min-w-0 space-y-3">
-                      <legend className="px-1 text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</legend>
+                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`provider-tier-card rounded-2xl border p-4 shadow-sm min-w-0 max-w-full ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
+                    <fieldset className="provider-tier-fieldset space-y-3 min-w-0 max-w-full">
+                      <legend className="provider-tier-legend px-1 text-sm font-semibold text-slate-900 dark:text-white max-w-full">
+                        <span className="text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</span>
+                      </legend>
                       {canWriteProviderProfiles ? (
-                        <div className="provider-tier-actions flex flex-wrap items-center gap-2">
-                          <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-400 transition hover:border-slate-400 dark:hover:border-slate-500" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate tier</button>
-                          <button type="button" className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${isOnlyTier ? 'border-slate-200 text-slate-400 cursor-not-allowed dark:border-slate-800' : 'border-slate-300 text-rose-600 hover:border-rose-400 dark:border-slate-700 dark:text-rose-400'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
+                        <div className="tier-card__actions flex flex-wrap items-center gap-2" aria-label={`Tier ${tierNumber} actions`}>
+                          <button type="button" className="min-h-11 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:underline max-w-full" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate tier</button>
+                          <button type="button" className={`min-h-11 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium max-w-full ${isOnlyTier ? 'text-slate-400 cursor-not-allowed' : 'text-rose-600 dark:text-rose-400 hover:underline'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
                         </div>
                       ) : null}
                       {canWriteProviderProfiles ? (
@@ -5352,12 +5302,12 @@ export function ProviderProfilesManager({
             <p className="text-xs text-slate-500 dark:text-slate-400">Future launches use the saved policy. Historical runs keep their record.</p>
             {tierRemoveDialog ? (
               <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }}>
-                <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
+                <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
                   <h4 id="tier-remove-title" className="text-sm font-semibold text-slate-900 dark:text-white">Remove Tier {tierRemoveDialog.index + 1}?</h4>
                   {tierRemoveDialog.isMiddle ? (
                     <div className="mt-3 text-sm text-slate-600 dark:text-slate-400">
                       <p>This changes future tier-number resolution for this profile:</p>
-                        <ul className="mt-2 list-disc space-y-1 break-words pl-5">
+                      <ul className="mt-2 list-disc pl-5">
                         {computeTierRenumberingImpact(tierDrafts, tierRemoveDialog.index).map((item) => (
                           <li key={`${item.from}-${item.to}`}>Tier {item.from}: {item.label} → becomes Tier {item.to}</li>
                         ))}
@@ -5372,8 +5322,8 @@ export function ProviderProfilesManager({
                         {tierDrafts.filter((_, i) => i !== tierRemoveDialog.index).map((t) => {
                           const originalIndex = tierDrafts.findIndex((x) => x.clientId === t.clientId);
                           return (
-                            <label key={t.clientId} className="flex min-w-0 items-start gap-2 break-words text-sm">
-                              <input type="radio" name="replacement-default-tier" value={t.clientId} checked={tierRemoveReplacementId === t.clientId} onChange={() => setTierRemoveReplacementId(t.clientId)} className="mt-1 shrink-0" />
+                            <label key={t.clientId} className="flex items-center gap-2 text-sm">
+                              <input type="radio" name="replacement-default-tier" value={t.clientId} checked={tierRemoveReplacementId === t.clientId} onChange={() => setTierRemoveReplacementId(t.clientId)} />
                               Tier {originalIndex + 1}{originalIndex >= tierRemoveDialog.index ? ` → Tier ${originalIndex}` : ''}: {t.label || `Tier ${originalIndex + 1}`}
                             </label>
                           );
@@ -5381,9 +5331,9 @@ export function ProviderProfilesManager({
                       </div>
                     </div>
                   ) : null}
-                  <div className="mt-5 flex flex-wrap justify-end gap-2 sm:gap-3">
-                    <button type="button" className="max-w-full break-words rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm min-h-[2.75rem]" onClick={() => setTierRemoveDialog(null)}>Cancel</button>
-                    <button type="button" className="max-w-full break-words rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white min-h-[2.75rem]" onClick={confirmRemoveTier}>Remove and renumber</button>
+                  <div className="mt-5 flex justify-end gap-3">
+                    <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm" onClick={() => setTierRemoveDialog(null)}>Cancel</button>
+                    <button type="button" className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white" onClick={confirmRemoveTier}>Remove and renumber</button>
                   </div>
                 </div>
               </div>

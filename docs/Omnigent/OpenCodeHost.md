@@ -689,7 +689,9 @@ including the API and worker consumers of those refs.
 
 ## 15. Qualification and support
 
-OpenCode support remains combination-specific. Qualification binds at least:
+Ordinary execution is certificate-independent (MoonLadderStudios/MoonMind#4560): a compatible, authorized workflow must not become unrunnable merely because a historical qualification certificate is missing, stale, or names another policy revision. Certification below is a separate truthful observation, or an additional requirement when the operator deliberately selects strict certification (`protected` or `deployment`). Bootstrap qualification reporting is best-effort for ordinary readiness and never a synchronous launch prerequisite.
+
+Certified support remains combination-specific. Qualification binds at least:
 
 ```text
 MoonMind commit

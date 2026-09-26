@@ -33,7 +33,10 @@ def test_generic_tool_uses_logical_workspace_and_declared_outputs() -> None:
         name=CONTAINER_RUN_JOB_TOOL
     )
     schema = definition["inputs"]["schema"]
-    assert schema["required"] == ["idempotencyKey", "spec"]
+    # PR #4557: omitted keys derive the stable step-execution identity at
+    # runtime, so only spec is required at admission; explicit keys are still
+    # validated when supplied.
+    assert schema["required"] == ["spec"]
     spec = schema["properties"]["spec"]
     assert "workspaceRef" in spec["properties"]
     assert "workspaceRef" not in spec["required"]

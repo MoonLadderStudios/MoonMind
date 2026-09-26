@@ -298,11 +298,14 @@ def _build_rollout_selection_context(
 
     Every value is derived from the immutable objects this compilation already
     resolved. Support-evidence provenance is read through the same tiers and the
-    same matching identity admission uses, so a promoted row is demoted here for
-    exactly the evidence admission will refuse to accept -- missing, expired,
-    older than the tier's maximum age, or recorded as a non-pass outcome --
-    instead of being frozen into the plan as promoted and failing later without
-    a rollout reason.
+    same matching identity admission uses, so under explicit strict
+    certification a promoted row is demoted here for exactly the evidence
+    admission will refuse to accept -- missing, expired, older than the
+    tier's maximum age, or recorded as a non-pass outcome -- instead of being
+    frozen into the plan as promoted and failing later without a rollout
+    reason. Under ordinary certificate-independent admission
+    (MoonLadderStudios/MoonMind#4560) the freshness observation stays
+    advisory and never demotes the row.
 
     The remaining dimensions restate gates this compiler has already enforced by
     raising. They are supplied so the frozen rollout decision names the same
