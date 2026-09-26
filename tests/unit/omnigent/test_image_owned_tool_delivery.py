@@ -1,0 +1,248 @@
+"""Image-owned tool delivery behavior (MoonLadderStudios/MoonMind#4558)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.host_classes import HostClass, get_launch_policy
+from moonmind.omnigent.host_ports import HostLaunchSpec
+from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
+from moonmind.omnigent.host_services.mounted_tools import (
+    OmnigentMountedToolService,
+    classify_tool_attachment,
+)
+
+
+def _manifest(tmp_path: Path) -> Path:
+    manifest = tmp_path / "manifest.lock.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "gh",
+                        "version": "2.76.2",
+                        "path": "bin/gh",
+                        "versionProbe": ["--version"],
+                        "platforms": {"linux/amd64": {"executableSha256": "a" * 64}},
+                    },
+                    {
+                        "name": "docker",
+                        "version": "container-v1",
+                        "path": "bin/moonmind",
+                        "versionProbe": ["--help"],
+                        "platforms": {"linux/amd64": {"executableSha256": "b" * 64}},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+@pytest.mark.asyncio
+async def test_runs_without_tool_capability_are_not_rejected(tmp_path: Path) -> None:
+    backend = SimpleNamespace(run=AsyncMock())
+    service = OmnigentMountedToolService(backend=backend, manifest_path=_manifest(tmp_path))
+
+    assert await service.materialize(
+        {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": []}
+    ) == []
+
+    backend.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unknown_tools_still_fail_before_launch(tmp_path: Path) -> None:
+    backend = SimpleNamespace(run=AsyncMock())
+    service = OmnigentMountedToolService(backend=backend, manifest_path=_manifest(tmp_path))
+
+    with pytest.raises(HarnessPlatformError, match="absent from the deployment bundle"):
+        await service.materialize(
+            {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["gh", "nope"]}
+        )
+
+    backend.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hosts_on_different_images_bind_different_tool_sources(
+    tmp_path: Path,
+) -> None:
+    """Upgrade semantics: each host binds its own image; nothing is shared mutable."""
+    backend = SimpleNamespace(run=AsyncMock())
+    service = OmnigentMountedToolService(backend=backend, manifest_path=_manifest(tmp_path))
+    resolved = {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["gh"]}
+
+    host_a = await service.materialize(resolved, image_ref="example/host-a@sha256:" + "a" * 64)
+    host_b = await service.materialize(resolved, image_ref="example/host-b@sha256:" + "b" * 64)
+
+    assert host_a[0]["sourceRef"] == "image:example/host-a@sha256:" + "a" * 64
+    assert host_b[0]["sourceRef"] == "image:example/host-b@sha256:" + "b" * 64
+    assert host_a[0]["sourceRef"] != host_b[0]["sourceRef"]
+    assert host_a[0]["cleanupRef"] is None
+    backend.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_constructor_image_ref_is_used_when_materialize_omits_it(
+    tmp_path: Path,
+) -> None:
+    service = OmnigentMountedToolService(
+        backend=SimpleNamespace(run=AsyncMock()),
+        manifest_path=_manifest(tmp_path),
+        image_ref="example/host@sha256:" + "c" * 64,
+    )
+    result = await service.materialize(
+        {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["docker"]}
+    )
+    assert result[0]["sourceRef"] == "image:example/host@sha256:" + "c" * 64
+    assert result[0]["tools"][0] == {
+        "name": "docker",
+        "version": "container-v1",
+        "path": "bin/moonmind",
+        "versionProbe": ["--help"],
+        "executableDigests": ["b" * 64],
+    }
+
+
+def test_classify_tool_attachment_distinguishes_image_legacy_and_other() -> None:
+    assert classify_tool_attachment(
+        {"kind": "image", "targetPath": "/opt/moonmind-tools"}
+    ) == "image"
+    # Persisted pre-cutover bindings stay readable as legacy drain candidates.
+    assert classify_tool_attachment(
+        {
+            "kind": "volume",
+            "sourceRef": "moonmind-omnigent-tools-gh-2.76.2",
+            "targetPath": "/opt/moonmind-tools",
+        }
+    ) == "legacy-volume-drain"
+    assert classify_tool_attachment({"kind": "volume", "targetPath": "/data"}) == "unsupported"
+    assert classify_tool_attachment({"kind": "bind", "targetPath": "/opt/moonmind-tools"}) == (
+        "unsupported"
+    )
+    assert classify_tool_attachment({}) == "unsupported"
+    assert classify_tool_attachment(None) == "unsupported"  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_launcher_mounts_no_overlay_for_image_tools_but_drains_legacy() -> None:
+    """REQ-02/REQ-06: image tools create no mount; legacy volume still drains."""
+    calls: list[list[str]] = []
+
+    class Backend:
+        async def run(self, argv, **_kwargs):
+            calls.append(list(argv))
+            return (0, "container-id" if argv[1] == "create" else "", "")
+
+    class Scripts:
+        def build_entrypoint(self, **_kwargs):
+            return "exec true", {}
+
+    launcher = DockerOmnigentHostLauncher(
+        backend=Backend(),
+        runtime_scripts=Scripts(),
+        server_url="http://omnigent:8000",
+    )
+    host_class = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+            "omnigentVersion": "0.11.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {"readOnlyRoot": True},
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+
+    def _spec(tool_attachments: list[dict]) -> HostLaunchSpec:
+        return HostLaunchSpec.model_validate(
+            {
+                "executionPlanRef": "plan:one",
+                "stepExecutionId": "step-1",
+                "runtimeBindingId": "binding-1",
+                "hostLeaseRef": "host-lease:one",
+                "hostLeaseGeneration": 1,
+                "hostClassRef": host_class.ref,
+                "imageRef": host_class.imageRef,
+                "serverEndpointRef": "default",
+                "serverUrl": "http://omnigent:8000",
+                "networkRef": "moonmind_default",
+                "limits": {"cpuMillis": 2000},
+                "runtime": {},
+                "correlationName": "mm-host-tools",
+                "workspaceAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "workspace-vol",
+                    "targetPath": "/workspaces/run",
+                    "accessMode": "read-write",
+                },
+                "skillAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "skills-vol",
+                    "targetPath": "/opt/moonmind-skills",
+                    "accessMode": "read-only",
+                },
+                "toolAttachments": tool_attachments,
+                "stateAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "mm-host-state-test",
+                    "targetPath": "/home/app/.omnigent",
+                    "accessMode": "read-write",
+                },
+                "labels": {},
+            }
+        )
+
+    image_attachment = {
+        "kind": "image",
+        "sourceRef": "image:ghcr.io/example/opencode@sha256:" + "f" * 64,
+        "targetPath": "/opt/moonmind-tools",
+        "accessMode": "read-only",
+        "cleanupRef": None,
+        "toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64,
+        "tools": [],
+    }
+    await launcher.launch(
+        spec=_spec([image_attachment]),
+        host_class=host_class,
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+    create = next(argv for argv in calls if argv[:2] == ["docker", "create"])
+    assert not any("/opt/moonmind-tools" in item for item in create)
+
+    calls.clear()
+    legacy_attachment = {
+        "kind": "volume",
+        "sourceRef": "moonmind-omnigent-tools-gh-2.76.2",
+        "targetPath": "/opt/moonmind-tools",
+        "accessMode": "read-only",
+        "cleanupRef": None,
+        "toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64,
+        "tools": [],
+    }
+    await launcher.launch(
+        spec=_spec([legacy_attachment]),
+        host_class=host_class,
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+    create = next(argv for argv in calls if argv[:2] == ["docker", "create"])
+    assert (
+        "type=volume,src=moonmind-omnigent-tools-gh-2.76.2,"
+        "dst=/opt/moonmind-tools,readonly" in create
+    )

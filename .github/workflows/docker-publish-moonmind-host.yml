@@ -12,6 +12,9 @@ on:
     branches: [ main ]
     paths:
       - "services/omnigent/moonmind-host/**"
+      - "services/omnigent/tools/manifest.lock.json"
+      - "services/omnigent/scripts/moonmind-container-cli.py"
+      - "services/omnigent/scripts/moonmind-tools.sh"
       - "services/omnigent/opencode-host/verify-warm-plugin-cache.sh"
       - "tools/omnigent_host_release_drift.sh"
       - "moonmind/omnigent/harness_platform/host_classes.py"
@@ -33,6 +36,11 @@ on:
         description: "OpenCode version to pin (must be within >=1.17.7,<1.19.0)"
         required: false
         default: "1.18.11"
+        type: string
+      gh_version:
+        description: "gh CLI version to bake in (must match services/omnigent/tools/manifest.lock.json)"
+        required: false
+        default: "2.76.2"
         type: string
 
 concurrency:
@@ -56,6 +64,7 @@ jobs:
       codex_version: ${{ steps.out.outputs.codex_version }}
       claude_version: ${{ steps.out.outputs.claude_version }}
       opencode_version: ${{ steps.out.outputs.opencode_version }}
+      gh_version: ${{ steps.out.outputs.gh_version }}
       rebuild_required: ${{ steps.drift.outputs.rebuild_required }}
     steps:
       - name: Checkout repository
@@ -74,6 +83,15 @@ jobs:
           echo "codex_version=${{ inputs.codex_cli_version || '0.104.0' }}" >> "$GITHUB_OUTPUT"
           echo "claude_version=${{ inputs.claude_cli_version || '2.1.281' }}" >> "$GITHUB_OUTPUT"
           echo "opencode_version=${{ inputs.opencode_version || '1.18.11' }}" >> "$GITHUB_OUTPUT"
+          # gh remains pinned by the manifest single source; the explicit
+          # input only selects the build and the build fails on drift.
+          GH_PINNED="$(python3 -c "import json; print(next(t['version'] for t in json.load(open('services/omnigent/tools/manifest.lock.json'))['tools'] if t['name'] == 'gh'))")"
+          GH_REQUESTED="${{ inputs.gh_version || '2.76.2' }}"
+          if [ "${GH_REQUESTED}" != "${GH_PINNED}" ]; then
+            echo "::error::gh_version input ${GH_REQUESTED} does not match manifest.lock.json pin ${GH_PINNED}" >&2
+            exit 1
+          fi
+          echo "gh_version=${GH_REQUESTED}" >> "$GITHUB_OUTPUT"
 
       - name: Detect upstream Omnigent drift
         id: drift
@@ -182,6 +200,7 @@ jobs:
             OPENCODE_VERSION=${{ needs.metadata.outputs.opencode_version }}
             OPENCODE_MIN_VERSION=1.17.7
             OPENCODE_MAX_VERSION=1.19.0
+            OMNIGENT_GH_VERSION=${{ needs.metadata.outputs.gh_version }}
           outputs: type=image,name=${{ steps.meta.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=moonmind-host-${{ steps.meta.outputs.pair }}
           cache-to: type=gha,scope=moonmind-host-${{ steps.meta.outputs.pair }},mode=max
@@ -202,6 +221,26 @@ jobs:
         run: |
           image="${{ steps.meta.outputs.image_name }}@${{ steps.build.outputs.digest }}"
           sh ./services/omnigent/opencode-host/verify-warm-plugin-cache.sh "${image}"
+
+      - name: Verify image-owned helper tools without network or volumes
+        run: |
+          image="${{ steps.meta.outputs.image_name }}@${{ steps.build.outputs.digest }}"
+          gh_version="${{ needs.metadata.outputs.gh_version }}"
+          echo "Verifying image-owned gh/moonmind in ${image}"
+          # No tools volume is mounted: the selected image owns its tools.
+          docker run --rm --network none --user 1000:1000 "${image}" \
+            sh -c 'test -x /opt/moonmind-tools/bin/gh && test -x /opt/moonmind-tools/bin/moonmind && test -r /opt/moonmind-tools/manifest.json'
+          docker run --rm --network none --user 1000:1000 "${image}" \
+            sh -c "gh --version | grep -F '${gh_version}'"
+          docker run --rm --network none --user 1000:1000 "${image}" moonmind --help
+          # Ordinary and login shells resolve the image-owned executables.
+          docker run --rm --network none --user 1000:1000 "${image}" \
+            sh -c 'command -v gh && command -v moonmind'
+          docker run --rm --network none --user 1000:1000 "${image}" \
+            bash -lc 'command -v gh && command -v moonmind'
+          # Runtime user cannot rewrite image-owned tools.
+          docker run --rm --network none --user 1000:1000 "${image}" \
+            sh -c 'test ! -w /opt/moonmind-tools/bin/gh && test ! -w /opt/moonmind-tools/bin/moonmind'
 
       - name: Export digest
         run: |

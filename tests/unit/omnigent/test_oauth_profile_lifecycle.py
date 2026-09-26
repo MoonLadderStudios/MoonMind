@@ -265,10 +265,9 @@ async def test_oauth_host_egress_attestation_invokes_docker_cli(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_required_tool_bundle_probe_uses_remote_daemon_named_volume(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("OMNIGENT_GH_VERSION", "2.76.2")
+async def test_required_tool_probe_uses_image_owned_gh_without_volume() -> None:
+    # MoonLadderStudios/MoonMind#4558: no tools volume is mounted, inspected,
+    # or version-gated. A stale OMNIGENT_GH_VERSION cannot change the outcome.
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         image="omnigent-host:test",
@@ -281,8 +280,8 @@ async def test_required_tool_bundle_probe_uses_remote_daemon_named_volume(
         "docker",
         "run",
         "--rm",
-        "--volume",
-        "moonmind-omnigent-tools-gh-2.76.2:/opt/moonmind-tools:ro",
+        "--network",
+        "none",
         "--entrypoint",
         "/opt/moonmind-tools/bin/gh",
         "omnigent-host:test",
@@ -292,7 +291,7 @@ async def test_required_tool_bundle_probe_uses_remote_daemon_named_volume(
 
 
 @pytest.mark.asyncio
-async def test_required_tool_bundle_probe_fails_with_stable_readiness_evidence() -> None:
+async def test_required_tool_probe_fails_with_stable_readiness_evidence() -> None:
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         image="omnigent-host:test",
@@ -306,8 +305,7 @@ async def test_required_tool_bundle_probe_fails_with_stable_readiness_evidence()
     assert failure.value.evidence == {
         "tool": "gh",
         "phase": "deployment_initialization",
-        "bundleVolume": "moonmind-omnigent-tools-gh-2.76.2",
-        "expectedVersion": "2.76.2",
+        "image": "omnigent-host:test",
     }
 
 
@@ -1941,14 +1939,13 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert environment_image not in commands[2]
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
     assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
-    assert (
-        "type=volume,src=moonmind-omnigent-tools-gh-2.76.2,"
-        "dst=/opt/moonmind-tools,readonly"
-    ) in commands[2]
-    assert (
-        f"type=bind,src={tmp_path / 'moonmind-tools.sh'},"
-        "dst=/etc/profile.d/moonmind-tools.sh,readonly"
-    ) in commands[2]
+    # MoonLadderStudios/MoonMind#4558: no tools-volume or profile mount
+    # overlays hide the image-owned executables.
+    assert not any(
+        "/opt/moonmind-tools" in item and ("type=volume" in item or "type=bind" in item)
+        for item in commands[2]
+        if isinstance(item, str)
+    )
     assert (
         f"type=bind,src={tmp_path / 'moonmind-execution.sh'},"
         "dst=/etc/profile.d/moonmind-execution.sh,readonly"
@@ -2850,7 +2847,12 @@ def test_static_codex_compose_separates_authorized_mount_classes() -> None:
 
     assert "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run" in service
     assert "${OMNIGENT_ACTIVE_SKILLS_DIR" in service
-    assert "omnigent-tools:/opt/moonmind-tools:ro" in service
+    # MoonLadderStudios/MoonMind#4558: the selected image owns its tools; no
+    # tools-volume mount overlay may hide them (PATH still leads with the
+    # image-owned tools directory).
+    assert "omnigent-tools:/opt/moonmind-tools:ro" not in service
+    assert "moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh" not in service
+    assert "PATH: /opt/moonmind-tools/bin:" in service
     assert "omnigent-host-artifacts:/artifacts" in service
     assert "omnigent-host-cache:/home/app/.cache" in service
 
@@ -2990,62 +2992,21 @@ async def test_static_host_rejects_lore_workspace_before_host_mutation(tmp_path)
     runtime._compose_static_check.assert_not_awaited()
 
 
-def test_projection_scripts_install_real_gh_and_resolve_login_shell(tmp_path) -> None:
-    scripts = Path(__file__).resolve().parents[3] / "services" / "omnigent" / "scripts"
-    fake_bin = tmp_path / "source"
-    fake_bin.mkdir()
-    fake_gh = fake_bin / "gh"
-    fake_gh.write_text("#!/bin/sh\necho 'gh version 2.76.2 (fixture)'\n", encoding="utf-8")
-    fake_gh.chmod(0o755)
-    output = tmp_path / "bundle"
-    env = {
-        **os.environ,
-        "MOONMIND_GH_SOURCE": str(fake_gh),
-        "MOONMIND_GH_VERSION": "2.76.2",
-        "MOONMIND_TOOL_BUNDLE_OUTPUT": str(output),
-    }
-
-    installed = subprocess.run(
-        ["sh", str(scripts / "init-mounted-tools.sh")],
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
+def test_image_owned_tools_layout_contract() -> None:
+    # MoonLadderStudios/MoonMind#4558: the shell initializer is retired. The
+    # image build owns installation; this test pins the layout contract host
+    # launch relies on (paths probed by _exec_tools_check and the login
+    # shell), with build behavior covered by test_install_moonmind_tools.py.
+    repo = Path(__file__).resolve().parents[3]
+    dockerfile = (repo / "services/omnigent/moonmind-host/Dockerfile").read_text(
+        encoding="utf-8"
     )
-    assert installed.returncode == 0, installed.stderr
-    assert json.loads((output / "manifest.json").read_text())["tools"][0]["name"] == "gh"
-    assert (output / "bin" / "moonmind").is_file()
-    assert (output / "bin" / "moonmind").stat().st_mode & 0o222 == 0
-    assert (output / "bin" / "gh").stat().st_mode & 0o222 == 0
-    fake_gh.write_text("#!/bin/sh\necho 'gh version 2.77.0 (fixture)'\n", encoding="utf-8")
-    env["MOONMIND_GH_VERSION"] = "2.77.0"
-    upgraded = subprocess.run(
-        ["sh", str(scripts / "init-mounted-tools.sh")],
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert upgraded.returncode == 0, upgraded.stderr
-    assert json.loads((output / "manifest.json").read_text())["tools"][0]["version"] == "2.77.0"
-    login_home = tmp_path / "home"
-    login_home.mkdir()
-    (login_home / ".bash_profile").write_text(
-        f"export PATH={output / 'bin'}:$PATH\n", encoding="utf-8"
-    )
-    login = subprocess.run(
-        ["bash", "-lc", "command -v gh && gh --version"],
-        env={
-            **os.environ,
-            "HOME": str(login_home),
-            "PATH": f"{output / 'bin'}:{os.environ.get('PATH', '')}",
-        },
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert login.returncode == 0, login.stderr
-    assert "2.77.0" in login.stdout
+    assert "/opt/moonmind-tools/bin/gh" in dockerfile
+    assert "/opt/moonmind-tools/bin/moonmind" in dockerfile
+    assert "/etc/profile.d/moonmind-tools.sh" in dockerfile
+    assert "/opt/moonmind-tools/manifest.json" in dockerfile
+    assert "services/omnigent/scripts/init-mounted-tools.sh" not in dockerfile
+    assert not (repo / "services/omnigent/scripts/init-mounted-tools.sh").exists()
 
 
 def test_stale_host_daemon_cleanup_removes_only_runtime_markers(tmp_path) -> None:

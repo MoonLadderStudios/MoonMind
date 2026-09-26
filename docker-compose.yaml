@@ -181,7 +181,6 @@ services:
       - MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE=${MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE:-/workspace/omnigent-evidence/deployment-execution-evidence.json}
       - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
       - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
-      - MOONMIND_OMNIGENT_TOOLS_VOLUME_REF=${MOONMIND_OMNIGENT_TOOLS_VOLUME_REF:-moonmind-omnigent-tools-gh-2.76.2}
       # MoonLadderStudios/MoonMind#3931: retired phase switches removed; new work
       # uses the one shared selection boundary.
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
@@ -855,7 +854,6 @@ services:
       - MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE=${MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE:-/workspace/omnigent-evidence/deployment-execution-evidence.json}
       - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
       - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
-      - MOONMIND_OMNIGENT_TOOLS_VOLUME_REF=${MOONMIND_OMNIGENT_TOOLS_VOLUME_REF:-moonmind-omnigent-tools-gh-2.76.2}
       - MOONMIND_AGENT_WORKSPACES_VOLUME_NAME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
       # Optional prebuilt override. Empty selects the deployment-owned local
       # recipe, which is built lazily by the first Python-test job.
@@ -946,8 +944,6 @@ services:
       codex-auth-init:
         condition: service_completed_successfully
       claude-auth-init:
-        condition: service_completed_successfully
-      omnigent-tools-init:
         condition: service_completed_successfully
       omnigent-runtime-bootstrap:
         condition: service_completed_successfully
@@ -1165,18 +1161,6 @@ services:
         condition: service_started
     restart: "no"
 
-  omnigent-tools-init:
-    image: ${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}
-    user: "0:0"
-    entrypoint: ["/opt/moonmind/init-mounted-tools.sh"]
-    environment:
-      MOONMIND_GH_SOURCE: /usr/local/bin/gh
-      MOONMIND_GH_VERSION: ${OMNIGENT_GH_VERSION:-2.76.2}
-    volumes:
-      - omnigent-tools:/output
-      - ./services/omnigent/scripts:/opt/moonmind:ro
-    restart: "no"
-
   omnigent-host:
     profiles: ["omnigent-host"]
     image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
@@ -1197,17 +1181,13 @@ services:
       - omnigent-host-state:/root/.omnigent
       - omnigent-host-artifacts:/artifacts
       - omnigent-host-cache:/root/.cache
-      - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
-      - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
       # The owning worker supplies the canonical daemon-visible source.
       - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
     depends_on:
       omnigent:
         condition: service_started
-      omnigent-tools-init:
-        condition: service_completed_successfully
     networks:
       - control-plane-network
     restart: unless-stopped
@@ -1269,9 +1249,7 @@ services:
       - omnigent-host-claude-state:/home/app/.omnigent
       - omnigent-host-artifacts:/artifacts
       - omnigent-host-cache:/home/app/.cache
-      - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
-      - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - claude_auth_volume:/home/app/.claude
       - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
@@ -1279,8 +1257,6 @@ services:
       omnigent:
         condition: service_started
       omnigent-host-claude-init:
-        condition: service_completed_successfully
-      omnigent-tools-init:
         condition: service_completed_successfully
       sandbox-egress-proxy:
         condition: service_healthy
@@ -1426,9 +1402,7 @@ services:
       - omnigent-host-codex-state:/home/app/.omnigent
       - omnigent-host-artifacts:/artifacts
       - omnigent-host-cache:/home/app/.cache
-      - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
-      - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - codex_auth_volume:/home/app/.codex
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
@@ -1436,8 +1410,6 @@ services:
       omnigent:
         condition: service_started
       omnigent-host-codex-init:
-        condition: service_completed_successfully
-      omnigent-tools-init:
         condition: service_completed_successfully
       sandbox-egress-proxy:
         condition: service_healthy
@@ -1707,8 +1679,6 @@ volumes:
   omnigent-host-claude-state:
   omnigent-host-claude-home:
   omnigent-host-codex-state:
-  omnigent-tools:
-    name: moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}
   postgres-data:
   minio-data:
   workflow_workspaces:
