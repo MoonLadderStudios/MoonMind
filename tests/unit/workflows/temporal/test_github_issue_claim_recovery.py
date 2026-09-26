@@ -102,11 +102,7 @@ async def test_scheduled_recovery_releases_failed_claim_and_next_search_selects_
         (WorkflowExecutionStatus.CONTINUED_AS_NEW, 10000, "owner_or_child_running"),
         (WorkflowExecutionStatus.FAILED, 4, "cleanup_grace"),
         (WorkflowExecutionStatus.CANCELED, 10000, "cancellation_hold"),
-        (
-            WorkflowExecutionStatus.COMPLETED,
-            10000,
-            "successful_owner_requires_finalization",
-        ),
+        (WorkflowExecutionStatus.COMPLETED, 4, "cleanup_grace"),
     ],
 )
 async def test_age_never_substitutes_for_terminal_authority(status, minutes, reason):
@@ -123,6 +119,25 @@ async def test_age_never_substitutes_for_terminal_authority(status, minutes, rea
     with pytest.raises(ValueError, match=reason):
         await recovery._closed_execution_tree(
             client, SimpleNamespace(owner="default/old-run"), now
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_completed_owner_with_a_recorded_outcome_is_skipped_before_history():
+    now = datetime.now(UTC)
+    # No fetch_history_events: reading history here would fail the test.
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(
+                status=WorkflowExecutionStatus.COMPLETED,
+                close_time=now - timedelta(minutes=10000),
+            )
+        )
+    )
+    client = SimpleNamespace(get_workflow_handle=lambda *args, **kwargs: handle)
+    with pytest.raises(ValueError, match="successful_owner_recorded_outcome"):
+        await recovery._closed_execution_tree(
+            client, SimpleNamespace(owner="default/done"), now, outcome_recorded=True
         )
 
 
@@ -350,7 +365,9 @@ async def test_a_launcher_outage_does_not_burn_the_issue_allowance(journey):
     assert await store.get("default/launch-fail-1") is None
 
 
-async def persist_saved_binding(sessions, *, agent_id, run_id, saved, state="cleaned"):
+async def persist_saved_binding(
+    sessions, *, agent_id, run_id, saved, state="cleaned", workspace=True
+):
     from api_service.db.models import (
         OmnigentExecutionPlanRecord,
         OmnigentRuntimeBindingRecord,
@@ -381,8 +398,7 @@ async def persist_saved_binding(sessions, *, agent_id, run_id, saved, state="cle
         provider_leases={},
         initial_phase_results={
             "owner": {"namespace": "default", "workflowId": agent_id, "runId": run_id},
-            "workspace": {"workspaceSpec": {}},
-            "saved": saved,
+            **({"workspace": {"workspaceSpec": {}}, "saved": saved} if workspace else {}),
         },
     )
     binding = await store.update(
@@ -545,10 +561,11 @@ async def test_continue_as_new_chain_visits_prior_run_children():
         ("parent", "terminal-run"),
         ("parent", "prev-run"),
     ]
-    agents = await recovery._closed_execution_tree(
+    agents, completed = await recovery._closed_execution_tree(
         client, SimpleNamespace(owner="default/parent"), now
     )
     assert agents == {("child-agent", "child-run")}
+    assert completed is False
 
 
 @pytest.mark.asyncio
@@ -649,3 +666,207 @@ async def test_missing_binding_falls_back_to_slot_lease_ledger(
     else:
         with pytest.raises(ValueError, match="runtime_cleanup_pending"):
             _ = await call
+
+
+def _closed(status, workflow_type, run_id):
+    return SimpleNamespace(
+        status=status,
+        close_time=datetime.now(UTC) - timedelta(minutes=6),
+        workflow_type=workflow_type,
+        run_id=run_id,
+    )
+
+
+async def _announce(service, owner):
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED" and brief.completion_disposition != "idle"
+
+
+@pytest.mark.asyncio
+async def test_a_launch_failure_after_the_claim_became_active_keeps_the_allowance(journey):
+    """The claim is promoted to ``active``, then the runtime never starts.
+
+    AgentRun renews the claim (promoting it to active) before it launches a
+    host. A typed launch failure then leaves a cleaned runtime binding with no
+    provider session and no workspace: no agent could have worked on the
+    issue. That is a deployment fault, recorded as ``runtime_unavailable``,
+    not a ``no_work`` outcome that spends the issue's allowance.
+    """
+    from temporalio.api.common.v1 import WorkflowExecution
+    from temporalio.api.history.v1 import (
+        ChildWorkflowExecutionStartedEventAttributes,
+        HistoryEvent,
+        StartChildWorkflowExecutionInitiatedEventAttributes,
+    )
+
+    from moonmind.workflows.temporal.github_issue_claim_lease import renew_owned_claim
+
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/launch-after-active"
+    await _announce(service, owner)
+    await renew_owned_claim(store=store, service=service, owner=owner)
+    assert parse_attempt_comment(state["comments"][0]["body"]).handoff.activity == "active"
+    await persist_saved_binding(
+        sessions, agent_id="agent-launch", run_id="agent-run", saved={}, workspace=False
+    )
+
+    initiated = HistoryEvent(event_id=2)
+    initiated.start_child_workflow_execution_initiated_event_attributes.CopyFrom(
+        StartChildWorkflowExecutionInitiatedEventAttributes(
+            namespace="default", workflow_id="agent-launch"
+        )
+    )
+    started = HistoryEvent(event_id=3)
+    started.child_workflow_execution_started_event_attributes.CopyFrom(
+        ChildWorkflowExecutionStartedEventAttributes(
+            workflow_execution=WorkflowExecution(
+                workflow_id="agent-launch", run_id="agent-run"
+            ),
+            initiated_event_id=2,
+        )
+    )
+
+    async def _launch_failed():
+        raise RuntimeError(
+            "Child workflow failed: Provider request failed with provider error "
+            "OMNIGENT_HOST_LAUNCH_FAILED: host container failed to start"
+        )
+
+    parent = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=_closed(
+                WorkflowExecutionStatus.FAILED, "MoonMind.UserWorkflow", "parent-run"
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events([initiated, started]),
+        result=_launch_failed,
+    )
+    child = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=_closed(
+                WorkflowExecutionStatus.FAILED, "MoonMind.AgentRun", "agent-run"
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events([]),
+        result=_launch_failed,
+    )
+    client = SimpleNamespace(
+        get_workflow_handle=lambda workflow_id, **kwargs: (
+            child if workflow_id == "agent-launch" else parent
+        )
+    )
+
+    recovered = await recovery.reconcile_local_claims(
+        state={}, store=store, service=service, client_factory=AsyncMock(return_value=client)
+    )
+
+    assert recovered["released"] == 1, recovered
+    handoff = parse_attempt_comment((await store.get(owner)).comment_body).handoff
+    assert handoff.outcome == "runtime_unavailable"
+    assert handoff.cooldown_until
+    assert compute_effective_retry([handoff], max_attempts=3).remaining == 3
+
+
+@pytest.mark.asyncio
+async def test_a_completed_owner_that_never_recorded_its_outcome_is_reconciled(journey):
+    """A closed successful owner has no finalizer left; the sweep records it.
+
+    Before, the sweep skipped every completed owner, so a run that finished
+    without its success-path status update left an ``active`` comment that no
+    one would ever finalize -- and that selection charged forever.
+    """
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/completed-without-outcome"
+    await _announce(service, owner)
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=_closed(
+                WorkflowExecutionStatus.COMPLETED, "MoonMind.UserWorkflow", "done-run"
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events([]),
+        result=AsyncMock(return_value={"status": "completed"}),
+    )
+    client = SimpleNamespace(get_workflow_handle=lambda *args, **kwargs: handle)
+
+    recovered = await recovery.reconcile_local_claims(
+        state={}, store=store, service=service, client_factory=AsyncMock(return_value=client)
+    )
+
+    assert recovered["released"] == 1, recovered
+    body = state["comments"][0]["body"]
+    handoff = parse_attempt_comment(body).handoff
+    assert handoff.activity == "released"
+    assert handoff.outcome == "no_work"
+    assert "completed" in body
+    assert "status: in-progress" not in state["labels"]
+
+
+@pytest.mark.asyncio
+async def test_a_completed_owner_with_a_recorded_handoff_keeps_its_journey(journey):
+    from dataclasses import replace
+
+    from moonmind.workflows.temporal.github_issue_attempts import render_attempt_comment
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/completed-with-pr"
+    await _announce(service, owner)
+    receipt = await store.get(owner)
+    review = replace(
+        parse_attempt_comment(receipt.comment_body).handoff,
+        activity="awaiting-review",
+        outcome="implemented",
+        next_action="continue_review",
+        pr_url="https://github.com/example/repo/pull/7",
+    )
+    await publish_claim_comment(store, receipt, service, render_attempt_comment(review))
+    before = state["comments"][0]["body"]
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=_closed(
+                WorkflowExecutionStatus.COMPLETED, "MoonMind.UserWorkflow", "done-run"
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events([]),
+        result=AsyncMock(return_value={"status": "completed"}),
+    )
+    client = SimpleNamespace(get_workflow_handle=lambda *args, **kwargs: handle)
+
+    recovered = await recovery.reconcile_local_claims(
+        state={}, store=store, service=service, client_factory=AsyncMock(return_value=client)
+    )
+
+    assert recovered["released"] == 0
+    assert recovered["results"][0]["reasonCode"] == "successful_owner_recorded_outcome"
+    assert state["comments"][0]["body"] == before
+
+
+@pytest.mark.asyncio
+async def test_missing_temporal_history_is_reported_as_unrecoverable_evidence(journey):
+    """Retention or a reset Temporal store is named, not an opaque RPC error."""
+    from temporalio.service import RPCError, RPCStatusCode
+
+    _state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    await _announce(service, "default/history-gone")
+
+    async def _gone():
+        raise RPCError("workflow not found", RPCStatusCode.NOT_FOUND, b"")
+
+    handle = SimpleNamespace(describe=_gone)
+    client = SimpleNamespace(get_workflow_handle=lambda *args, **kwargs: handle)
+
+    recovered = await recovery.reconcile_local_claims(
+        state={}, store=store, service=service, client_factory=AsyncMock(return_value=client)
+    )
+
+    assert recovered["released"] == 0
+    assert recovered["results"][0]["reasonCode"] == "execution_history_unavailable"

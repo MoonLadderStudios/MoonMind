@@ -16,6 +16,7 @@ from urllib.parse import quote
 import httpx
 from sqlalchemy import select
 from temporalio.client import WorkflowExecutionStatus
+from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import (
     GitHubIssueClaim,
@@ -94,7 +95,15 @@ async def _continue_as_new_chain(client, workflow_id):
     return chain
 
 
-async def _closed_execution_tree(client, receipt, now):
+async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False):
+    """Return ``(started agents, terminal run completed)`` for a closed owner tree.
+
+    Raises while any execution is still running, inside the cleanup grace, or
+    held by cancellation, and whenever the history cannot prove every child
+    start and shared mutation settled. A completed owner whose attempt already
+    recorded its outcome (*outcome_recorded*) is left to that journey before
+    any history is read.
+    """
     namespace, workflow_id = receipt.owner.split("/", 1)
     chain = await _continue_as_new_chain(client, workflow_id)
     chain_ids = set(chain)
@@ -102,6 +111,7 @@ async def _closed_execution_tree(client, receipt, now):
     pending = list(chain)
     executions = set()
     agents = set()
+    completed = False
     total_events = 0
     while pending:
         identity = pending.pop()
@@ -143,9 +153,13 @@ async def _closed_execution_tree(client, receipt, now):
                 if described.status == WorkflowExecutionStatus.CANCELED:
                     raise ValueError("cancellation_hold")
                 if described.status == WorkflowExecutionStatus.COMPLETED:
-                    # Success may still own PR review/finalization. Its ordinary
-                    # completion owner retains authority; this repairs failed runs.
-                    raise ValueError("successful_owner_requires_finalization")
+                    if outcome_recorded:
+                        # The successful owner recorded its outcome (for
+                        # example awaiting review); that journey owns it.
+                        raise ValueError("successful_owner_recorded_outcome")
+                    # Otherwise, once every descendant is closed, no finalizer
+                    # is left to record this attempt's outcome.
+                    completed = True
         if described.workflow_type == "MoonMind.AgentRun":
             agents.add((identity[0], described.run_id))
         initiated = {}
@@ -236,7 +250,7 @@ async def _closed_execution_tree(client, receipt, now):
             raise ValueError("child_start_unsettled")
         if shared_effects:
             raise ValueError("shared_mutation_outcome_unknown")
-    return agents
+    return agents, completed
 
 
 #: MoonMind's own low-cardinality harness codes that mean the deployment could
@@ -340,11 +354,12 @@ async def _runtime_provisioning_failed(client, receipt) -> bool:
 def recovery_disposition_evidence(*, agent_started: bool, remaining: int, runtime_unavailable: bool = False) -> dict[str, Any]:
     """Build the terminal disposition evidence for one recovered claim.
 
-    A typed host-provisioning failure with no agent child started means the
-    deployment could not run this attempt and nothing was learned about the
-    issue. That is a runtime fault, not an exhausted issue budget: reporting it
-    as exhaustion escalated whole backlogs to needs-attention during a single
-    launcher outage.
+    A typed host-provisioning failure with no agent runtime started (no child,
+    or children that never received a provider session or workspace) means
+    the deployment could not run this attempt and nothing was learned about
+    the issue. That is a runtime fault, not an exhausted issue budget:
+    reporting it as exhaustion escalated whole backlogs to needs-attention
+    during a single launcher outage.
     """
     if runtime_unavailable and not agent_started:
         return {
@@ -533,8 +548,19 @@ async def reconcile_local_claims(
                 unannounced = (
                     not receipt.announcement_started and not receipt.comment_id
                 )
+                recorded = parse_attempt_comment(receipt.comment_body).handoff
+                completed = False
                 try:
-                    agents = await _closed_execution_tree(client, receipt, now)
+                    agents, completed = await _closed_execution_tree(
+                        client,
+                        receipt,
+                        now,
+                        outcome_recorded=recorded is not None
+                        and (
+                            recorded.outcome != "in_progress"
+                            or recorded.activity not in {"preparing", "active"}
+                        ),
+                    )
                 except ValueError as exc:
                     if (
                         not unannounced
@@ -561,13 +587,17 @@ async def reconcile_local_claims(
                 if capacity_backoff:
                     agents = []
                 checkpoints = await _runtime_no_work(store, agents, receipt, service)
-                # Only asked when no agent child started (including the
-                # capacity-blocked case above): the narrow case where the run
-                # may have died before any runtime existed.
+                # ``_runtime_no_work`` returns a checkpoint for every started
+                # agent that had a provider session or workspace and raises for
+                # any it cannot account for, so no checkpoint means no agent
+                # runtime ever existed -- including an AgentRun that promoted
+                # the claim to active and then failed to launch its host. Only
+                # then is a typed provisioning failure a deployment fault.
+                runtime_started = bool(checkpoints)
                 if capacity_backoff:
                     runtime_unavailable = True
                 else:
-                    runtime_unavailable = (not agents) and await _runtime_provisioning_failed(
+                    runtime_unavailable = (not runtime_started) and await _runtime_provisioning_failed(
                         client, receipt
                     )
                 if unannounced:
@@ -581,7 +611,7 @@ async def reconcile_local_claims(
                         else "announcement_changed",
                     )
                 else:
-                    handoff = parse_attempt_comment(receipt.comment_body).handoff
+                    handoff = recorded
                     if (
                         handoff is None
                         or handoff.operator_hold
@@ -609,15 +639,24 @@ async def reconcile_local_claims(
                             == receipt.actor_id
                         ],
                         max_attempts=handoff.retry_allowance,
+                        # The same clock and reset authority admission uses,
+                        # so a lapsed announcement or an audited reset is read
+                        # the same way here as when the next attempt is admitted.
+                        now_epoch=now.timestamp(),
+                        reset_authorizer_id=receipt.actor_id,
                     )
-                    if lineage.reason_code not in {"allowed", "budget_exhausted"}:
+                    if lineage.reason_code not in {
+                        "allowed",
+                        "budget_exhausted",
+                        "cooling_down",
+                    }:
                         raise ValueError("retry_lineage_requires_recovery")
                     remaining = min(handoff.retry_remaining, lineage.retry_remaining)
                     result.update(
                         await finalize_failed_attempt(
                             repository=receipt.repository,
                             issue_number=receipt.issue_number,
-                            execution_event="failed",
+                            execution_event="completed" if completed else "failed",
                             from_settled="in_progress",
                             writer_evidence={
                                 "writersStopped": True,
@@ -634,12 +673,16 @@ async def reconcile_local_claims(
                                 "trustworthyNoWork": True,
                             },
                             disposition_evidence=recovery_disposition_evidence(
-                                agent_started=bool(agents),
+                                agent_started=runtime_started,
                                 remaining=remaining,
                                 runtime_unavailable=runtime_unavailable,
                             ),
-                            reason="Automatic recovery: controlling run stopped without new repository work; saved checkpoints: "
-                            + (", ".join(checkpoints) or "no agent started"),
+                            reason=(
+                                "Automatic recovery: controlling run completed without recording this attempt's outcome and left no unpublished repository work; saved checkpoints: "
+                                if completed
+                                else "Automatic recovery: controlling run stopped without new repository work; saved checkpoints: "
+                            )
+                            + (", ".join(checkpoints) or "no agent runtime started"),
                             next_action="fresh_retry"
                             if remaining or runtime_unavailable
                             else "obtain_attention",
@@ -652,12 +695,18 @@ async def reconcile_local_claims(
             # Exact owner/issue and typed disposition survive serialization;
             # credential/transport messages never enter the result or GitHub.
             code = str(exc).split(":", 1)[0]
-            result["reasonCode"] = (
-                code
-                if isinstance(exc, ValueError)
-                and re.fullmatch(r"[a-z][a-z0-9_]{0,80}", code)
-                else type(exc).__name__
-            )
+            if isinstance(exc, RPCError) and exc.status == RPCStatusCode.NOT_FOUND:
+                # Retention expiry or a replaced Temporal store: the execution
+                # evidence this sweep needs is gone and will not come back, so
+                # only an audited retry reset can finish this attempt's accounting.
+                result["reasonCode"] = "execution_history_unavailable"
+            else:
+                result["reasonCode"] = (
+                    code
+                    if isinstance(exc, ValueError)
+                    and re.fullmatch(r"[a-z][a-z0-9_]{0,80}", code)
+                    else type(exc).__name__
+                )
         results.append(
             {
                 key: result[key]
