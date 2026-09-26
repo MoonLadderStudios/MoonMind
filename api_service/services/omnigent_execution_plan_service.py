@@ -48,6 +48,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.harness_platform.harness_registry import (
+    canonical_harness_id,
+    find_harness_registration,
+    harness_registration,
+)
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
     OmnigentHostClassSelector,
@@ -59,18 +64,16 @@ from moonmind.omnigent.harness_platform.materializers import (
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-from moonmind.omnigent.host_services.mounted_tools import (
-    deployment_mounted_tool_names,
-)
+from moonmind.omnigent.host_services.mounted_tools import deployment_mounted_tool_names
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+from moonmind.schemas.agent_skill_models import AgentSkillFormat
 from moonmind.schemas.agent_skill_models import (
-    AgentSkillFormat,
+    ResolvedSkillSet as AgentResolvedSkillSet,
+)
+from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
     SkillSelector,
     SkillSelectorEntry,
-)
-from moonmind.schemas.agent_skill_models import (
-    ResolvedSkillSet as AgentResolvedSkillSet,
 )
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
@@ -83,11 +86,6 @@ from moonmind.workflows.temporal.remediation_loop import (
     ToolDescriptor,
     tool_descriptor_selected_skill,
 )
-from moonmind.omnigent.harness_platform.harness_registry import (
-    canonical_harness_id,
-    find_harness_registration,
-    harness_registration,
-)
 from pr_resolver_core import IMPLEMENTATION_CONTRACT
 
 # Hermetic fixture digests for the approved harnesses. Every other product
@@ -96,6 +94,7 @@ from pr_resolver_core import IMPLEMENTATION_CONTRACT
 # is fixture data, because a real digest requires a synchronized catalog.
 _HARNESS_FIXTURE_IMPLEMENTATION_DIGESTS: dict[str, str] = {
     "codex-native": "sha256:" + "e" * 64,
+    "claude-native": "sha256:" + "d" * 64,
     "opencode-native": "sha256:" + "a" * 64,
     "pi-native": "sha256:" + "c" * 64,
 }
@@ -1139,6 +1138,8 @@ async def compile_and_persist_execution_plan(
     if exact_catalog is None and callable(session_factory):
         from moonmind.omnigent.harness_platform.catalog_service import (
             DbHarnessCatalogRepository,
+        )
+        from moonmind.omnigent.harness_platform.catalog_service import (
             HarnessCatalogSyncResult as _CatalogSyncResult,
         )
 

@@ -84,9 +84,7 @@ def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) ->
     harness_raw = document.get("harness")
     if harness_raw:
         harness_id = canonical_harness_id(harness_raw)
-        expected = _expected_harness_for_runtime(
-            getattr(provider, "runtime_id", None)
-        )
+        expected = _expected_harness_for_runtime(getattr(provider, "runtime_id", None))
         if harness_id and expected and harness_id != expected:
             return False
     return True
@@ -114,6 +112,25 @@ def profile_has_native_inventory_route(
             for _, version in configurations
         )
     )
+
+
+def _is_managed_claude_fallback(
+    row: Any, version: Any, builtin_profile_id: str
+) -> bool:
+    """Mirror the bootstrap reconciler's managed-stock ownership check.
+
+    The stock Claude configuration is a fallback only while its active
+    version is still managed (reconciliation-owned, carrying the
+    managedBuiltin marker). An operator-edited active version is an authored
+    configuration: it stays a candidate (or forces explicit selection)
+    instead of being silently discarded from ambiguity.
+    """
+    if getattr(row, "profile_id", None) != builtin_profile_id:
+        return False
+    if getattr(version, "created_by", None) is not None:
+        return False
+    metadata = getattr(version, "rollout_metadata", None) or {}
+    return isinstance(metadata, Mapping) and metadata.get("managedBuiltin") == "claude"
 
 
 async def load_execution_configurations(
@@ -147,10 +164,7 @@ async def load_execution_configurations(
         )
         .where(OmnigentAgentProfile.state == "active", or_(*selected_versions))
     )
-    return [
-        (row, version)
-        for row, version in (await session.execute(statement)).all()
-    ]
+    return [(row, version) for row, version in (await session.execute(statement)).all()]
 
 
 def select_execution_configuration(
@@ -185,6 +199,22 @@ def select_execution_configuration(
         ]
         if preferred:
             candidates = preferred
+        elif str(getattr(provider, "runtime_id", "")) == "claude_code":
+            from api_service.services.omnigent_agent_bootstrap_service import (
+                CLAUDE_BUILTIN_PROFILE_ID,
+            )
+
+            authored_candidates = [
+                (row, version)
+                for row, version in candidates
+                if not _is_managed_claude_fallback(
+                    row, version, CLAUDE_BUILTIN_PROFILE_ID
+                )
+            ]
+            if authored_candidates:
+                # The managed stock configuration is a fallback, not a reason
+                # to make an existing operator configuration ambiguous.
+                candidates = authored_candidates
     if len(candidates) != 1:
         raise HTTPException(
             409,
