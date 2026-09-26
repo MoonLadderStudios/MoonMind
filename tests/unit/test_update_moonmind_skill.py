@@ -51,6 +51,9 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
 
     def fake_urlopen(request, timeout=None):
         url = request.full_url
+        if request.method == "GET" and url.endswith("/v1/healthz"):
+            assert request.get_header("Authorization") == "Bearer test-secret"
+            return FakeResponse(200, {"status": "ok"})
         if request.method == "POST" and url.endswith("/v1/operations"):
             payload = json.loads(request.data.decode("utf-8"))
             assert payload["stack"] == "moonmind"
@@ -122,15 +125,21 @@ def test_submit_via_controller_requires_an_installed_controller(tmp_path):
         )
 
 
-def test_bare_invocation_without_installed_controller_uses_application_updater(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize("partial_install", [False, True])
+def test_bare_invocation_without_running_controller_uses_application_updater(
+    tmp_path, monkeypatch, capsys, partial_install
 ):
-    """The standalone controller is opt-in until it is installed: a bare
-    invocation on a deployment without its secret still installs the release
-    through the application-owned updater instead of refusing."""
+    """A bare update works even if bootstrap left a secret but never started."""
     monkeypatch.delenv("MOONMIND_CONTROLLER_SECRET_FILE", raising=False)
     repo = tmp_path / "installed"
     repo.mkdir()
+    if partial_install:
+        _install_controller_secret(repo)
+        controller_state = repo / "deploy/state/controller"
+        (controller_state / "controller-identity.json").write_text(
+            json.dumps({"project": "moonmind-controller-test", "port": 8472})
+        )
+        (controller_state / "controller-compose.yaml").write_text("services: {}\n")
     git = _init_repo(repo)
     revision = git("rev-parse", "HEAD")
     git("remote", "add", "origin", str(repo))
@@ -148,6 +157,8 @@ def test_bare_invocation_without_installed_controller_uses_application_updater(
             output = json.dumps({"name": "existing-project", "services": {"api": {}}})
         elif args[1] == "run":
             output = "services: {}"
+        elif args[1] == "ps":
+            output = ""
         elif args[1] == "compose":
             launched.append(args)
             output = ""
@@ -157,6 +168,10 @@ def test_bare_invocation_without_installed_controller_uses_application_updater(
         return SimpleNamespace(returncode=0, stdout=output)
 
     def no_controller(request, timeout=None):
+        if partial_install:
+            assert request.method == "GET"
+            assert request.full_url.endswith("/v1/healthz")
+            raise update.urllib.error.URLError("connection refused")
         raise AssertionError("an uninstalled controller must not be contacted")
 
     monkeypatch.setattr(update.subprocess, "run", command)
@@ -165,7 +180,7 @@ def test_bare_invocation_without_installed_controller_uses_application_updater(
     assert len(launched) == 1
     assert "moonmind.workflows.skills.deployment_release" in launched[0]
     assert "--project-name" in launched[0] and "existing-project" in launched[0]
-    assert "controller is not installed" in capsys.readouterr().out
+    assert "application-owned updater" in capsys.readouterr().out
 
 
 def test_explicit_controller_secret_file_must_exist(tmp_path, monkeypatch):
@@ -180,6 +195,98 @@ def test_explicit_controller_secret_file_must_exist(tmp_path, monkeypatch):
             secret_file=str(tmp_path / "missing-secret"),
             legacy_direct=False,
         )
+
+
+@pytest.mark.parametrize("owned_state", ["record", "container"])
+def test_unreachable_controller_with_owned_state_keeps_recovery_authority(
+    tmp_path, monkeypatch, owned_state
+):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _install_controller_secret(repo)
+    state = repo / "deploy/state/controller"
+    (state / "controller-identity.json").write_text(
+        json.dumps({"project": "moonmind-controller-test", "port": 8472})
+    )
+    if owned_state == "record":
+        operations = state / "operations"
+        operations.mkdir()
+        (operations / "pending.json").write_text("{}")
+
+    def unreachable(*args, **kwargs):
+        raise update.ControllerUnreachableError("controller unavailable")
+
+    monkeypatch.setattr(update, "_controller_call", unreachable)
+    monkeypatch.setattr(
+        update, "_submit_legacy_direct", lambda *a, **k: pytest.fail("fallback")
+    )
+    monkeypatch.setattr(
+        update, "run", lambda *a, **k: "container-id" if owned_state == "container" else ""
+    )
+    with pytest.raises(update.ControllerUnreachableError):
+        update._submit_release(
+            {"project": "moonmind", "image": "image"},
+            repo,
+            controller_url="http://127.0.0.1:8472",
+            secret_file=None,
+            legacy_direct=False,
+        )
+
+
+def test_explicit_controller_url_never_falls_back(tmp_path, monkeypatch):
+    (tmp_path / "deploy/state/controller").mkdir(parents=True)
+    (tmp_path / "deploy/state/controller/controller-identity.json").write_text(
+        json.dumps({"project": "moonmind-controller-test", "port": 8533})
+    )
+    submitted_urls = []
+
+    def submit(_record, _repo, *, controller_url, secret_file):
+        submitted_urls.append(controller_url)
+        return 42
+
+    monkeypatch.setattr(
+        update, "_submit_legacy_direct", lambda *a, **k: pytest.fail("fallback")
+    )
+    monkeypatch.setattr(update, "_submit_via_controller", submit)
+    assert update._submit_release(
+        {"project": "moonmind", "image": "image"},
+        tmp_path,
+        controller_url="http://127.0.0.1:9",
+        secret_file=None,
+        legacy_direct=False,
+        controller_url_explicit=True,
+    ) == 42
+    assert submitted_urls == ["http://127.0.0.1:9"]
+
+
+def test_bare_update_uses_installed_controller_port(tmp_path, monkeypatch):
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _install_controller_secret(repo)
+    (repo / "deploy/state/controller/controller-identity.json").write_text(
+        json.dumps({"project": "moonmind-controller-test", "port": 8533})
+    )
+    observed_urls = []
+
+    def health(url, *_args, **_kwargs):
+        observed_urls.append(url)
+        return 200, {"status": "ok"}
+
+    def submit(_record, _repo, *, controller_url, secret_file):
+        observed_urls.append(controller_url)
+        return 0
+
+    monkeypatch.setattr(update, "_controller_call", health)
+    monkeypatch.setattr(update, "_submit_via_controller", submit)
+    assert update._submit_release(
+        {"project": "moonmind", "image": "image"},
+        repo,
+        controller_url="http://127.0.0.1:8472",
+        secret_file=None,
+        legacy_direct=False,
+    ) == 0
+    assert observed_urls == ["http://127.0.0.1:8533"] * 2
 
 
 def _install_controller_secret(repo, secret="test-secret"):
