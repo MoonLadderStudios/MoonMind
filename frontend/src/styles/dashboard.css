@@ -10573,10 +10573,17 @@ button.workflow-workspace-sidebar-row:active {
    * circle: the select fills its fieldset instead of sizing it. Labels become
    * single-column grids (the production direction) with no automatic minimum
    * so the inline label cannot carry the select's atomic intrinsic width
-   * upward; the legend text span wraps instead of sizing the legend. */
+   * upward; the legend text span wraps instead of sizing the legend.
+   * DIAG2 (webkit leg) proved width:100% alone is not enough: the select's
+   * ~412px option min-content still sized the label's grid track and spilled
+   * 412->424->428->440->444px up the chain. contain:inline-size zeroes the
+   * select's intrinsic inline contribution at the source without changing its
+   * rendered size (width stays a definite 100%, block axis untouched, native
+   * popup unaffected); engines without support keep today's behavior. */
   .provider-profile-form select,
   .provider-tier-editor select {
     width: 100%;
+    contain: inline-size;
   }
   .provider-profile-form label,
   .provider-tier-editor label {
@@ -10599,6 +10606,13 @@ button.workflow-workspace-sidebar-row:active {
   .provider-tier-editor li {
     min-width: 0;
     max-width: 100%;
+    /* Backstop for the WebKit select-intrinsic spill above: clip residual
+     * track overflow at the tier record so it can never reach the page.
+     * Scoped to li (not fieldset) so legends keep rendering in the fieldset
+     * border; the li content sits behind the inner fieldset's padding, so
+     * focus outlines are unaffected. Never engages when the select
+     * containment holds. */
+    overflow-x: clip;
   }
   .provider-tier-editor legend {
     display: grid;
