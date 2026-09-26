@@ -343,12 +343,6 @@ export const BranchInputField = memo(function BranchInputField({
   );
 });
 
-const JIRA_LAST_PROJECT_SESSION_KEY =
-  "moonmind.workflow-start.jira.last-project-key";
-const JIRA_LAST_BOARD_SESSION_KEY =
-  "moonmind.workflow-start.jira.last-board-id";
-const JIRA_MANUAL_CONTINUATION_MESSAGE =
-  "You can continue creating the workflow manually.";
 const DEPENDENCY_LIMIT = 10;
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
@@ -453,27 +447,6 @@ function writeLocalPreference(key: string, value: string): void {
   }
 }
 
-function readSessionPreference(key: string): string {
-  try {
-    return String(window.sessionStorage.getItem(key) || "").trim();
-  } catch {
-    return "";
-  }
-}
-
-function writeSessionPreference(key: string, value: string): void {
-  try {
-    const normalized = value.trim();
-    if (normalized) {
-      window.sessionStorage.setItem(key, normalized);
-    } else {
-      window.sessionStorage.removeItem(key);
-    }
-  } catch {
-    // Keep Jira browser preferences best-effort and local to this session.
-  }
-}
-
 type RepositoryOption = {
   value: string;
   label: string;
@@ -544,14 +517,6 @@ interface DashboardConfig {
       branchMetadata?: string;
       issues?: string;
     };
-    jira?: {
-      connections?: string;
-      projects?: string;
-      boards?: string;
-      columns?: string;
-      issues?: string;
-      issue?: string;
-    };
   };
   features?: {
     temporalDashboard?: {
@@ -612,12 +577,6 @@ interface DashboardConfig {
       allowedContentTypes?: string[];
     };
     runtimeCommandPreview?: RuntimeCommandPreviewConfig;
-    jiraIntegration?: {
-      enabled?: boolean;
-      defaultProjectKey?: string;
-      defaultBoardId?: string;
-      rememberLastBoardInSession?: boolean;
-    };
   };
 }
 
@@ -660,115 +619,6 @@ interface RuntimeCommandPreviewState {
   label: string;
   description: string;
   source: "derived" | "snapshot";
-}
-
-interface JiraIntegrationConfig {
-  enabled: boolean;
-  defaultProjectKey: string;
-  defaultBoardId: string;
-  rememberLastBoardInSession: boolean;
-  endpoints: {
-    connections: string;
-    projects: string;
-    boards: string;
-    columns: string;
-    issues: string;
-    issue: string;
-  };
-}
-
-type JiraEndpointTemplates = JiraIntegrationConfig["endpoints"];
-
-interface JiraProject {
-  projectKey: string;
-  name: string;
-  id?: string | null;
-}
-
-interface JiraBoard {
-  id: string;
-  name: string;
-  projectKey?: string | null;
-}
-
-interface JiraColumn {
-  id: string;
-  name: string;
-  count?: number | null;
-}
-
-interface JiraIssueSummary {
-  issueKey: string;
-  summary: string;
-  issueType?: string | null;
-  statusName?: string | null;
-  assignee?: string | null;
-  updatedAt?: string | null;
-}
-
-interface JiraBoardIssues {
-  columns: JiraColumn[];
-  itemsByColumn: Record<string, JiraIssueSummary[]>;
-}
-
-function isJiraColumn(value: unknown): value is JiraColumn {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const column = value as Record<string, unknown>;
-  return (
-    typeof column.id === "string" &&
-    typeof column.name === "string" &&
-    (column.count === undefined ||
-      column.count === null ||
-      typeof column.count === "number")
-  );
-}
-
-function parseJiraColumns(value: unknown): JiraColumn[] {
-  return Array.isArray(value) ? value.filter(isJiraColumn) : [];
-}
-
-interface JiraIssueDetail extends JiraIssueSummary {
-  url?: string | null;
-  column?: JiraColumn | null;
-  status?: {
-    id?: string | null;
-    name?: string | null;
-  } | null;
-  descriptionText?: string | null;
-  acceptanceCriteriaText?: string | null;
-  recommendedImports?: {
-    presetInstructions?: string | null;
-    stepInstructions?: string | null;
-  } | null;
-  attachments?: JiraIssueAttachment[];
-}
-
-interface JiraIssueAttachment {
-  id: string;
-  filename: string;
-  contentType: string;
-  sizeBytes?: number | null;
-  downloadUrl: string;
-}
-
-type JiraImportTarget =
-  | { kind: "preset"; attachmentsOnly?: boolean }
-  | { kind: "step"; localId: string; attachmentsOnly?: boolean };
-
-type JiraImportMode =
-  | "preset-brief"
-  | "execution-brief"
-  | "description-only"
-  | "acceptance-only";
-
-interface JiraImportProvenance {
-  issueKey: string;
-  boardId: string;
-  columnId: string;
-  importMode: JiraImportMode;
-  targetType: JiraImportTarget["kind"];
 }
 
 interface ProviderProfile {
@@ -2047,17 +1897,6 @@ export function buildEditParametersPatch({
   return parametersPatch;
 }
 
-function readJiraItems<T>(data: unknown): T[] {
-  if (Array.isArray(data)) {
-    return data as T[];
-  }
-  if (!data || typeof data !== "object") {
-    return [];
-  }
-  const items = (data as { items?: unknown }).items;
-  return Array.isArray(items) ? (items as T[]) : [];
-}
-
 function normalizeMoonMindApiPath(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -2072,191 +1911,6 @@ function normalizeMoonMindApiPath(value: unknown): string | null {
     return null;
   }
   return normalized;
-}
-
-function readJiraEndpointTemplates(sourceConfig: {
-  [key: string]: unknown;
-}): JiraEndpointTemplates | null {
-  const connections = normalizeMoonMindApiPath(sourceConfig.connections);
-  const projects = normalizeMoonMindApiPath(sourceConfig.projects);
-  const boards = normalizeMoonMindApiPath(sourceConfig.boards);
-  const columns = normalizeMoonMindApiPath(sourceConfig.columns);
-  const issues = normalizeMoonMindApiPath(sourceConfig.issues);
-  const issue = normalizeMoonMindApiPath(sourceConfig.issue);
-  if (!connections || !projects || !boards || !columns || !issues || !issue) {
-    return null;
-  }
-  return { connections, projects, boards, columns, issues, issue };
-}
-
-function jiraTargetLabel(
-  target: JiraImportTarget | null,
-  steps: StepState[],
-): string {
-  if (!target) {
-    return "No target selected";
-  }
-  if (target.kind === "preset") {
-    return target.attachmentsOnly
-      ? "Instructions attachments (Preset)"
-      : "Instructions (Preset)";
-  }
-  const index = steps.findIndex((step) => step.localId === target.localId);
-  if (target.attachmentsOnly) {
-    return index >= 0 ? `Step ${index + 1} attachments` : "Step attachments";
-  }
-  return index >= 0 ? `Step ${index + 1} Instructions` : "Step Instructions";
-}
-
-function defaultJiraImportMode(target: JiraImportTarget): JiraImportMode {
-  return target.kind === "preset" ? "preset-brief" : "execution-brief";
-}
-
-function jiraTargetValue(target: JiraImportTarget | null): string {
-  if (!target) {
-    return "";
-  }
-  if (target.kind === "preset") {
-    return target.attachmentsOnly ? "preset-attachments" : "preset-text";
-  }
-  return target.attachmentsOnly
-    ? `step-attachments:${target.localId}`
-    : `step-text:${target.localId}`;
-}
-
-function jiraTargetFromValue(value: string): JiraImportTarget | null {
-  if (value === "preset-text") {
-    return { kind: "preset" };
-  }
-  if (value === "preset-attachments") {
-    return { kind: "preset", attachmentsOnly: true };
-  }
-  if (value.startsWith("step-text:")) {
-    return { kind: "step", localId: value.slice("step-text:".length) };
-  }
-  if (value.startsWith("step-attachments:")) {
-    return {
-      kind: "step",
-      localId: value.slice("step-attachments:".length),
-      attachmentsOnly: true,
-    };
-  }
-  return null;
-}
-
-/**
- * Rebinds a parsed import target to a step that still exists, so a selection
- * read from the DOM can only ever name a live step. A stale option (its step was
- * removed while the browser was open) resolves to null instead of binding an
- * import to a step id that no longer has a draft.
- */
-function resolveJiraImportTarget(
-  target: JiraImportTarget,
-  steps: readonly { localId: string }[],
-): JiraImportTarget | null {
-  if (target.kind === "preset") {
-    return target;
-  }
-  const step = steps.find((candidate) => candidate.localId === target.localId);
-  if (!step) {
-    return null;
-  }
-  return target.attachmentsOnly
-    ? { kind: "step", localId: step.localId, attachmentsOnly: true }
-    : { kind: "step", localId: step.localId };
-}
-
-function joinJiraText(parts: Array<string | null | undefined>): string {
-  return parts
-    .map((part) => String(part || "").trim())
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function jiraImportTextForMode(
-  issue: JiraIssueDetail,
-  mode: JiraImportMode,
-): string {
-  const issueKey = String(issue.issueKey || "").trim();
-  const summary = String(issue.summary || "").trim();
-  const description = String(issue.descriptionText || "").trim();
-  const acceptanceCriteria = String(issue.acceptanceCriteriaText || "").trim();
-
-  if (mode === "description-only") {
-    return description;
-  }
-  if (mode === "acceptance-only") {
-    return acceptanceCriteria;
-  }
-  if (mode === "preset-brief") {
-    const recommended = String(
-      issue.recommendedImports?.presetInstructions || "",
-    ).trim();
-    if (recommended) {
-      return recommended;
-    }
-    return joinJiraText([
-      [issueKey, summary].filter(Boolean).join(": "),
-      description,
-    ]);
-  }
-
-  const recommended = String(
-    issue.recommendedImports?.stepInstructions || "",
-  ).trim();
-  if (recommended) {
-    return recommended;
-  }
-  const issueTitle =
-    [issueKey, summary].filter(Boolean).join(": ") || "(unnamed)";
-  return joinJiraText([
-    `Complete Jira issue ${issueTitle}`,
-    description ? `Description\n${description}` : "",
-    acceptanceCriteria ? `Acceptance criteria\n${acceptanceCriteria}` : "",
-  ]);
-}
-
-function writeJiraImportedText(
-  currentText: string,
-  importedText: string,
-  writeMode: "replace" | "append",
-): string {
-  const normalizedImport = importedText.trim();
-  if (writeMode === "replace" || !currentText.trim()) {
-    return normalizedImport;
-  }
-  return `${currentText.trimEnd()}\n\n---\n\n${normalizedImport}`;
-}
-
-function createJiraProvenance(
-  issue: JiraIssueDetail,
-  boardId: string,
-  importMode: JiraImportMode,
-  target: JiraImportTarget,
-): JiraImportProvenance | null {
-  const issueKey = String(issue.issueKey || "").trim();
-  if (!issueKey) {
-    return null;
-  }
-  return {
-    issueKey,
-    boardId: String(boardId || "").trim(),
-    columnId: String(issue.column?.id || "").trim(),
-    importMode,
-    targetType: target.kind,
-  };
-}
-
-function jiraProjectKeyFromIssueKey(issueKey: string): string {
-  return (
-    String(issueKey || "")
-      .trim()
-      .split("-")
-      .slice(0, -1)
-      .join("-")
-      .trim()
-      .toUpperCase() || ""
-  );
 }
 
 const JIRA_ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)*-\d+\b/;
@@ -2279,16 +1933,8 @@ function jiraIssueKeyFromValue(value: unknown): string {
   return extractJiraIssueKeyFromText(String(value || ""));
 }
 
-function jiraIssuePickerValueFromKey(
-  issueKey: string,
-  issue?: Pick<JiraIssueDetail, "summary" | "url" | "issueKey"> | null,
-): Record<string, unknown> {
-  const key = String(issueKey || issue?.issueKey || "").trim();
-  return {
-    key,
-    ...(issue?.summary ? { summary: issue.summary } : {}),
-    ...(issue?.url ? { url: issue.url } : {}),
-  };
+function jiraIssuePickerValueFromKey(issueKey: string): Record<string, unknown> {
+  return { key: String(issueKey || "").trim() };
 }
 
 function normalizeJiraIssuePickerValue(value: unknown): unknown {
@@ -2302,74 +1948,6 @@ function normalizeJiraIssuePickerValue(value: unknown): unknown {
       : {}),
     key: issueKey,
   };
-}
-
-function presetJiraIssueInputValuesFromIssue(
-  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "inputs"> | null | undefined,
-  currentValues: Record<string, unknown>,
-  issue: JiraIssueDetail,
-): { values: Record<string, unknown>; changedNames: string[] } {
-  const issueKey = String(issue.issueKey || "").trim();
-  if (!issueKey || !detail) {
-    return { values: currentValues, changedNames: [] };
-  }
-  const values = { ...currentValues };
-  const changedNames: string[] = [];
-  const issueValue = jiraIssuePickerValueFromKey(issueKey, issue);
-
-  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
-    const fieldSchema = recordValue(rawSchema);
-    const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
-    if (capabilityWidgetName(fieldSchema, uiSchema) !== "jira.issue-picker") {
-      continue;
-    }
-    values[name] = {
-      ...recordValue(values[name]),
-      ...issueValue,
-    };
-    changedNames.push(name);
-  }
-
-  for (const definition of detail.inputs || []) {
-    const name = String(definition.name || "").trim();
-    const normalized = normalizeTemplateInputKey(name);
-    if (!name || (normalized !== "jiraissuekey" && normalized !== "issuekey")) {
-      continue;
-    }
-    values[name] = issueKey;
-    changedNames.push(name);
-  }
-
-  return { values, changedNames };
-}
-
-function JiraProvenanceChip({
-  label,
-  provenance,
-}: {
-  label: string;
-  provenance: JiraImportProvenance | null | undefined;
-}) {
-  if (!provenance?.issueKey) {
-    return null;
-  }
-  return (
-    <span
-      className="jira-provenance-chip"
-      aria-label={`Jira import provenance for ${label}`}
-      title={[
-        `Jira issue ${provenance.issueKey}`,
-        provenance.boardId ? `board ${provenance.boardId}` : "",
-        provenance.columnId ? `column ${provenance.columnId}` : "",
-        `mode ${provenance.importMode}`,
-        `target ${provenance.targetType}`,
-      ]
-        .filter(Boolean)
-        .join(" / ")}
-    >
-      {`Jira: ${provenance.issueKey}`}
-    </span>
-  );
 }
 
 function createStepStateEntry(
@@ -3277,16 +2855,6 @@ function attachmentSignature(items: Array<StepAttachmentRef | File>): string {
   return items.map(attachmentIdentity).sort().join("|");
 }
 
-function isTemplateBoundStepForInstructions(
-  step: StepState | null | undefined,
-): boolean {
-  return Boolean(
-    step?.templateStepId &&
-      step.id === step.templateStepId &&
-      step.instructions === step.templateInstructions,
-  );
-}
-
 function isTemplateBoundStepForAttachments(
   step: StepState | null | undefined,
   attachments: Array<StepAttachmentRef | File>,
@@ -3624,47 +3192,6 @@ function attachmentLimitMessage(policy: AttachmentPolicy): string {
 // instead of a hard-coded display-name map. `../runtime/runtimeTargets` owns
 // the derivation, including the offline fallback.
 
-function validateAttachmentFiles(
-  files: File[],
-  policy: AttachmentPolicy,
-  persistedRefs: StepAttachmentRef[] = [],
-): {
-  ok: boolean;
-  errors: string[];
-  totalBytes: number;
-} {
-  const errors: string[] = [];
-  const totalCount = files.length + persistedRefs.length;
-  if (totalCount > policy.maxCount) {
-    errors.push(`Too many attachments (${totalCount}/${policy.maxCount}).`);
-  }
-  let totalBytes = 0;
-  persistedRefs.forEach((attachment) => {
-    totalBytes += Math.max(0, Number(attachment.sizeBytes) || 0);
-  });
-  files.forEach((file) => {
-    const type = String(file.type || "")
-      .trim()
-      .toLowerCase();
-    if (!policy.allowedContentTypes.includes(type)) {
-      errors.push(`Unsupported file type for ${file.name || "attachment"}.`);
-    }
-    const sizeBytes = Math.max(0, Number(file.size) || 0);
-    if (sizeBytes > policy.maxBytes) {
-      errors.push(
-        `${file.name || "attachment"} exceeds ${formatAttachmentBytes(policy.maxBytes)}.`,
-      );
-    }
-    totalBytes += sizeBytes;
-  });
-  if (totalBytes > policy.totalBytes) {
-    errors.push(
-      `Total attachment size exceeds ${formatAttachmentBytes(policy.totalBytes)}.`,
-    );
-  }
-  return { ok: errors.length === 0, errors, totalBytes };
-}
-
 function validateAttachmentTargets(
   targets: Array<{ key: string; label: string; files: File[] }>,
   policy: AttachmentPolicy,
@@ -3721,25 +3248,6 @@ function validateAttachmentTargets(
   }
 
   return { ok: messages.length === 0, errors, messages };
-}
-
-function validateJiraImageAttachment(
-  attachment: JiraIssueAttachment,
-  policy: AttachmentPolicy,
-): string | null {
-  const type = String(attachment.contentType || "")
-    .trim()
-    .toLowerCase();
-  if (!policy.allowedContentTypes.includes(type)) {
-    return `${attachment.filename || "Jira image"} uses an unsupported image type.`;
-  }
-  const sizeBytes = Math.max(0, Number(attachment.sizeBytes) || 0);
-  if (sizeBytes > policy.maxBytes) {
-    return `${attachment.filename || "Jira image"} exceeds ${formatAttachmentBytes(
-      policy.maxBytes,
-    )}.`;
-  }
-  return null;
 }
 
 function deriveRequiredCapabilities(args: {
@@ -5125,16 +4633,6 @@ async function readBranchMetadata(
   return { defaultBranch: String(payload.defaultBranch || "").trim() };
 }
 
-function localJiraErrorMessage(error: unknown, fallback: string): string {
-  const detail = error instanceof Error ? error.message.trim() : "";
-  const suffix = detail && detail !== fallback ? ` ${detail}` : "";
-  return `${fallback} ${JIRA_MANUAL_CONTINUATION_MESSAGE}${suffix}`;
-}
-
-function localJiraEmptyStateMessage(message: string): string {
-  return `${message} ${JIRA_MANUAL_CONTINUATION_MESSAGE}`;
-}
-
 async function readTemporalInputArtifact(
   artifactDownloadEndpoint: string,
   artifactId: string,
@@ -6297,30 +5795,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     presetCatalog?.saveFromWorkflow ||
       "/api/presets/save-from-workflow",
   );
-  const jiraIntegration = useMemo<JiraIntegrationConfig | null>(() => {
-    const systemConfig = dashboardConfig.system?.jiraIntegration;
-    const sourceConfig = dashboardConfig.sources?.jira;
-    if (!systemConfig?.enabled || !sourceConfig) {
-      return null;
-    }
-    const endpoints = readJiraEndpointTemplates(sourceConfig);
-    if (!endpoints) {
-      return null;
-    }
-    return {
-      enabled: true,
-      defaultProjectKey: String(systemConfig.defaultProjectKey || "").trim(),
-      defaultBoardId: String(systemConfig.defaultBoardId || "").trim(),
-      rememberLastBoardInSession: Boolean(
-        systemConfig.rememberLastBoardInSession,
-      ),
-      endpoints,
-    };
-  }, [
-    dashboardConfig.sources?.jira,
-    dashboardConfig.system?.jiraIntegration,
-  ]);
-
   const attachmentPolicy = useMemo<AttachmentPolicy>(() => {
     const config = dashboardConfig.system?.attachmentPolicy;
     const allowedContentTypes =
@@ -6480,7 +5954,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [scheduleCron, setScheduleCron] = useState("");
   const [scheduleTimezone, setScheduleTimezone] = useState("UTC");
   const [scheduleName, setScheduleName] = useState("");
-  const [templateFeatureRequest, setTemplateFeatureRequest] = useState("");
+  const [templateFeatureRequest] = useState("");
   const [selectedDependencyWorkflowId, setSelectedDependencyWorkflowId] = useState("");
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [remediationDraft, setRemediationDraft] = useState<RemediationCreateDraft | null>(null);
@@ -6504,29 +5978,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [appliedTemplates, setAppliedTemplates] = useState<
     AppliedTemplateState[]
   >([]);
-  const [jiraBrowserOpen, setJiraBrowserOpen] = useState(false);
-  const [jiraImportTarget, setJiraImportTarget] =
-    useState<JiraImportTarget | null>(null);
-  const [selectedJiraProjectKey, setSelectedJiraProjectKey] = useState("");
-  const [selectedJiraBoardId, setSelectedJiraBoardId] = useState("");
-  const [activeJiraColumnId, setActiveJiraColumnId] = useState("");
-  const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
-  const [pendingJiraImportIssueKey, setPendingJiraImportIssueKey] =
-    useState("");
   const [toolSearchTextByStep, setToolSearchTextByStep] = useState<
     Record<string, string>
   >({});
   const [jiraTransitionStateByStep, setJiraTransitionStateByStep] = useState<
     Record<string, JiraTransitionState>
-  >({});
-  const [jiraImportMode, setJiraImportMode] =
-    useState<JiraImportMode>("preset-brief");
-  const [jiraWriteMode, setJiraWriteMode] =
-    useState<"append" | "replace">("append");
-  const [presetJiraProvenance, setPresetJiraProvenance] =
-    useState<JiraImportProvenance | null>(null);
-  const [stepJiraProvenance, setStepJiraProvenance] = useState<
-    Record<string, JiraImportProvenance>
   >({});
   const [selectedObjectiveAttachmentFiles, setSelectedObjectiveAttachmentFiles] =
     useState<File[]>([]);
@@ -6587,8 +6043,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const prevProviderProfileRef = useRef(providerProfile);
   const temporalDraftAppliedRef = useRef<string | null>(null);
   const remediationDraftAppliedRef = useRef<string | null>(null);
-  const jiraProjectSelectionInitializedRef = useRef(false);
-  const jiraBoardSelectionInitializedRef = useRef(false);
   const routeGuardDirtyRef = useRef(false);
   const approvedNavigationHrefRef = useRef<string | null>(null);
 
@@ -7654,285 +7108,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
-  const jiraProjectsQuery = useQuery({
-    ...configQueryDefaults,
-    queryKey: ["workflow-start", "jira", "projects", jiraIntegration?.endpoints.projects],
-    enabled: Boolean(jiraIntegration?.enabled && jiraBrowserOpen),
-    queryFn: async (): Promise<JiraProject[]> => {
-      const endpoint = jiraIntegration?.endpoints.projects || "";
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load Jira projects."),
-        );
-      }
-      return readJiraItems<JiraProject>(await response.json());
-    },
-  });
-
-  const jiraBoardsQuery = useQuery({
-    ...configQueryDefaults,
-    queryKey: [
-      "workflow-start",
-      "jira",
-      "boards",
-      jiraIntegration?.endpoints.boards,
-      selectedJiraProjectKey,
-    ],
-    enabled: Boolean(
-      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraProjectKey,
-    ),
-    queryFn: async (): Promise<JiraBoard[]> => {
-      const endpoint = interpolatePath(
-        jiraIntegration?.endpoints.boards || "",
-        { projectKey: selectedJiraProjectKey },
-      );
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load Jira boards."),
-        );
-      }
-      return readJiraItems<JiraBoard>(await response.json());
-    },
-  });
-
-  const jiraColumnsQuery = useQuery({
-    ...configQueryDefaults,
-    queryKey: [
-      "workflow-start",
-      "jira",
-      "columns",
-      jiraIntegration?.endpoints.columns,
-      selectedJiraBoardId,
-      selectedJiraProjectKey,
-    ],
-    enabled: Boolean(
-      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
-    ),
-    queryFn: async (): Promise<JiraColumn[]> => {
-      const endpoint = withQueryParams(
-        interpolatePath(jiraIntegration?.endpoints.columns || "", {
-          boardId: selectedJiraBoardId,
-        }),
-        { projectKey: selectedJiraProjectKey },
-      );
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load Jira columns."),
-        );
-      }
-      const data = (await response.json()) as { columns?: unknown } | null;
-      return parseJiraColumns(data?.columns);
-    },
-  });
-
-  const jiraIssuesQuery = useQuery({
-    ...configQueryDefaults,
-    queryKey: [
-      "workflow-start",
-      "jira",
-      "issues",
-      jiraIntegration?.endpoints.issues,
-      selectedJiraBoardId,
-      selectedJiraProjectKey,
-    ],
-    enabled: Boolean(
-      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
-    ),
-    queryFn: async (): Promise<JiraBoardIssues> => {
-      const endpoint = withQueryParams(
-        interpolatePath(jiraIntegration?.endpoints.issues || "", {
-          boardId: selectedJiraBoardId,
-        }),
-        { projectKey: selectedJiraProjectKey },
-      );
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load Jira issues."),
-        );
-      }
-      const data = (await response.json()) as {
-        columns?: unknown;
-        itemsByColumn?: Record<string, JiraIssueSummary[]>;
-      } | null;
-      return {
-        columns: parseJiraColumns(data?.columns),
-        itemsByColumn: data?.itemsByColumn || {},
-      };
-    },
-  });
-
-  const jiraIssueDetailQuery = useQuery({
-    ...configQueryDefaults,
-    queryKey: [
-      "workflow-start",
-      "jira",
-      "issue",
-      jiraIntegration?.endpoints.issue,
-      selectedJiraIssueKey,
-      selectedJiraBoardId,
-      selectedJiraProjectKey,
-    ],
-    enabled: Boolean(
-      jiraIntegration?.enabled &&
-        jiraBrowserOpen &&
-        selectedJiraIssueKey,
-    ),
-    queryFn: async (): Promise<JiraIssueDetail> => {
-      const endpoint = withQueryParams(
-        interpolatePath(jiraIntegration?.endpoints.issue || "", {
-          issueKey: selectedJiraIssueKey,
-        }),
-        {
-          boardId: selectedJiraBoardId,
-          projectKey: selectedJiraProjectKey,
-        },
-      );
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load Jira issue."),
-        );
-      }
-      return (await response.json()) as JiraIssueDetail;
-    },
-  });
-
-  const jiraBrowserColumns = useMemo(() => {
-    const configuredColumns = jiraColumnsQuery.data || [];
-    const countedColumns = jiraIssuesQuery.data?.columns || [];
-    if (countedColumns.length === 0) {
-      return configuredColumns;
-    }
-    const countedById = new Map(
-      countedColumns.map((column) => [column.id, column]),
-    );
-    const mergedColumns =
-      configuredColumns.length > 0
-        ? configuredColumns.map((column) => {
-            const counted = countedById.get(column.id);
-            if (!counted) {
-              return column;
-            }
-            return {
-              ...column,
-              count: counted.count ?? 0,
-            };
-          })
-        : countedColumns;
-    const mergedIds = new Set(mergedColumns.map((column) => column.id));
-    return [
-      ...mergedColumns,
-      ...countedColumns.filter((column) => !mergedIds.has(column.id)),
-    ];
-  }, [jiraColumnsQuery.data, jiraIssuesQuery.data?.columns]);
-
   const templateItems = templateOptionsQuery.data?.items || [];
-
-  useEffect(() => {
-    if (!jiraBrowserOpen || !jiraIntegration) {
-      return;
-    }
-    const projects = jiraProjectsQuery.data || [];
-    if (selectedJiraProjectKey) {
-      const selectedProjectExists = projects.some(
-        (project) => project.projectKey === selectedJiraProjectKey,
-      );
-      if (jiraProjectsQuery.data && !selectedProjectExists) {
-        if (jiraIntegration.rememberLastBoardInSession) {
-          writeSessionPreference(JIRA_LAST_PROJECT_SESSION_KEY, "");
-          writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, "");
-        }
-        setSelectedJiraProjectKey("");
-        setSelectedJiraBoardId("");
-        setActiveJiraColumnId("");
-        setSelectedJiraIssueKey("");
-        jiraProjectSelectionInitializedRef.current = false;
-        jiraBoardSelectionInitializedRef.current = false;
-        return;
-      }
-      jiraProjectSelectionInitializedRef.current = true;
-      return;
-    }
-    if (projects.length === 0 || jiraProjectSelectionInitializedRef.current) {
-      return;
-    }
-    const configured = projects.find(
-      (project) => project.projectKey === jiraIntegration.defaultProjectKey,
-    );
-    setSelectedJiraProjectKey((configured || projects[0])?.projectKey || "");
-    jiraProjectSelectionInitializedRef.current = true;
-    jiraBoardSelectionInitializedRef.current = false;
-  }, [
-    jiraBrowserOpen,
-    jiraIntegration,
-    jiraProjectsQuery.data,
-    selectedJiraProjectKey,
-  ]);
-
-  useEffect(() => {
-    if (!jiraBrowserOpen || !jiraIntegration) {
-      return;
-    }
-    const boards = jiraBoardsQuery.data || [];
-    if (selectedJiraBoardId) {
-      const selectedBoardExists = boards.some(
-        (board) => board.id === selectedJiraBoardId,
-      );
-      if (jiraBoardsQuery.data && !selectedBoardExists) {
-        if (jiraIntegration.rememberLastBoardInSession) {
-          writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, "");
-        }
-        setSelectedJiraBoardId("");
-        setActiveJiraColumnId("");
-        setSelectedJiraIssueKey("");
-        jiraBoardSelectionInitializedRef.current = false;
-        return;
-      }
-      jiraBoardSelectionInitializedRef.current = true;
-      return;
-    }
-    if (boards.length === 0 || jiraBoardSelectionInitializedRef.current) {
-      return;
-    }
-    const configured = boards.find(
-      (board) => board.id === jiraIntegration.defaultBoardId,
-    );
-    setSelectedJiraBoardId((configured || boards[0])?.id || "");
-    jiraBoardSelectionInitializedRef.current = true;
-  }, [
-    jiraBoardsQuery.data,
-    jiraBrowserOpen,
-    jiraIntegration,
-    selectedJiraBoardId,
-  ]);
-
-  useEffect(() => {
-    if (!jiraBrowserOpen) {
-      return;
-    }
-    const columns = jiraBrowserColumns;
-    const activeStillExists = columns.some(
-      (column) => column.id === activeJiraColumnId,
-    );
-    if (activeStillExists) {
-      return;
-    }
-    setActiveJiraColumnId(columns[0]?.id || "");
-  }, [activeJiraColumnId, jiraBrowserOpen, jiraBrowserColumns]);
 
   useEffect(() => {
     if (!presetCatalogEnabled || !selectedPresetKey) {
@@ -8011,216 +7187,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     [dependencyOptionsQuery.data, selectedDependencies],
   );
 
-  const activeJiraIssues =
-    (activeJiraColumnId &&
-      jiraIssuesQuery.data?.itemsByColumn[activeJiraColumnId]) ||
-    [];
-  const selectedJiraIssue = jiraIssueDetailQuery.isError
-    ? null
-    : jiraIssueDetailQuery.data || null;
-  const selectedJiraImportText = useMemo(() => {
-    if (!selectedJiraIssue) {
-      return "";
-    }
-    return jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
-  }, [jiraImportMode, selectedJiraIssue]);
-  const jiraProjectsError = jiraProjectsQuery.isError
-    ? localJiraErrorMessage(
-        jiraProjectsQuery.error,
-        "Failed to load Jira projects.",
-      )
-    : null;
-  const jiraBoardsError = jiraBoardsQuery.isError
-    ? localJiraErrorMessage(
-        jiraBoardsQuery.error,
-        "Failed to load Jira boards.",
-      )
-    : null;
-  const jiraBoardIssuesError =
-    jiraColumnsQuery.isError || jiraIssuesQuery.isError
-      ? localJiraErrorMessage(
-          jiraColumnsQuery.error || jiraIssuesQuery.error,
-          "Failed to load Jira issues.",
-        )
-      : null;
-  const jiraIssueError = jiraIssueDetailQuery.isError
-    ? localJiraErrorMessage(
-        jiraIssueDetailQuery.error,
-        "Failed to load Jira issue.",
-      )
-    : null;
-  const jiraProjectsEmpty =
-    jiraProjectsQuery.isSuccess && (jiraProjectsQuery.data || []).length === 0
-      ? localJiraEmptyStateMessage("No Jira projects are available.")
-      : null;
-  const jiraBoardsEmpty =
-    selectedJiraProjectKey &&
-    jiraBoardsQuery.isSuccess &&
-    (jiraBoardsQuery.data || []).length === 0
-      ? localJiraEmptyStateMessage("No Jira boards are available for this project.")
-      : null;
-  const jiraColumnsEmpty =
-    selectedJiraBoardId &&
-    jiraColumnsQuery.isSuccess &&
-    (jiraColumnsQuery.data || []).length === 0
-      ? localJiraEmptyStateMessage("No Jira columns are available for this board.")
-      : null;
-  const jiraActiveColumnEmpty =
-    selectedJiraBoardId &&
-    activeJiraColumnId &&
-    jiraIssuesQuery.isSuccess &&
-    activeJiraIssues.length === 0
-      ? localJiraEmptyStateMessage("No Jira issues are available in this column.")
-      : null;
-  const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
-  const jiraTargetStep =
-    jiraImportTarget?.kind === "step"
-      ? steps.find((step) => step.localId === jiraImportTarget.localId) || null
-      : null;
-  const jiraImportWillCustomizeTemplateStep =
-    jiraImportTarget?.attachmentsOnly
-      ? isTemplateBoundStepForAttachments(
-          jiraTargetStep,
-          jiraTargetStep
-            ? selectedStepAttachmentFiles[jiraTargetStep.localId] || []
-            : [],
-        )
-      : isTemplateBoundStepForInstructions(jiraTargetStep);
-
-  useEffect(() => {
-    if (
-      !jiraBrowserOpen ||
-      !pendingJiraImportIssueKey ||
-      selectedJiraIssueKey !== pendingJiraImportIssueKey
-    ) {
-      return;
-    }
-    if (jiraIssueDetailQuery.isError) {
-      setPendingJiraImportIssueKey("");
-      return;
-    }
-    if (jiraIssueDetailQuery.isFetching || !selectedJiraIssue) {
-      return;
-    }
-    setPendingJiraImportIssueKey("");
-    void importSelectedJiraIssue();
-  }, [
-    jiraIssueDetailQuery.isError,
-    jiraIssueDetailQuery.isFetching,
-    jiraBrowserOpen,
-    pendingJiraImportIssueKey,
-    selectedJiraIssue,
-    selectedJiraIssueKey,
-  ]);
-
-  function jiraProvenanceForTarget(
-    target: JiraImportTarget,
-  ): JiraImportProvenance | null {
-    if (target.kind === "preset") {
-      return presetJiraProvenance;
-    }
-    return stepJiraProvenance[target.localId] || null;
-  }
-
-  function openJiraBrowser(target: JiraImportTarget) {
-    const provenance = jiraProvenanceForTarget(target);
-    const rememberedProjectKey =
-      jiraIntegration?.rememberLastBoardInSession && !selectedJiraProjectKey
-        ? readSessionPreference(JIRA_LAST_PROJECT_SESSION_KEY)
-        : "";
-    const rememberedBoardId =
-      jiraIntegration?.rememberLastBoardInSession && !selectedJiraBoardId
-        ? readSessionPreference(JIRA_LAST_BOARD_SESSION_KEY)
-        : "";
-    const provenanceProjectKey = jiraProjectKeyFromIssueKey(
-      provenance?.issueKey || "",
-    );
-    const nextProjectKey =
-      provenanceProjectKey ||
-      rememberedProjectKey ||
-      selectedJiraProjectKey ||
-      jiraIntegration?.defaultProjectKey ||
-      "";
-    const nextBoardId =
-      provenance?.boardId ||
-      rememberedBoardId ||
-      selectedJiraBoardId ||
-      jiraIntegration?.defaultBoardId ||
-      "";
-    if (nextProjectKey) {
-      setSelectedJiraProjectKey(nextProjectKey);
-    }
-    if (nextBoardId) {
-      setSelectedJiraBoardId(nextBoardId);
-    }
-    if (provenance?.columnId) {
-      setActiveJiraColumnId(provenance.columnId);
-    }
-    jiraProjectSelectionInitializedRef.current = Boolean(
-      nextProjectKey,
-    );
-    jiraBoardSelectionInitializedRef.current = Boolean(
-      nextBoardId,
-    );
-    setJiraImportTarget(target);
-    setJiraImportMode(defaultJiraImportMode(target));
-    setJiraWriteMode("append");
-    setJiraBrowserOpen(true);
-    setSelectedJiraIssueKey(provenance?.issueKey || "");
-    setPendingJiraImportIssueKey("");
-  }
-
-  function selectJiraImportTarget(value: string) {
-    const parsed = jiraTargetFromValue(value);
-    if (!parsed) {
-      return;
-    }
-    const target = resolveJiraImportTarget(parsed, steps);
-    if (!target) {
-      return;
-    }
-    setJiraImportTarget(target);
-    setJiraImportMode(defaultJiraImportMode(target));
-  }
-
-  function closeJiraBrowser() {
-    setJiraBrowserOpen(false);
-  }
-
-  function selectJiraProject(projectKey: string) {
-    jiraProjectSelectionInitializedRef.current = true;
-    jiraBoardSelectionInitializedRef.current = false;
-    if (jiraIntegration?.rememberLastBoardInSession) {
-      writeSessionPreference(JIRA_LAST_PROJECT_SESSION_KEY, projectKey);
-      writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, "");
-    }
-    setSelectedJiraProjectKey(projectKey);
-    setSelectedJiraBoardId("");
-    setActiveJiraColumnId("");
-    setSelectedJiraIssueKey("");
-  }
-
-  function selectJiraBoard(boardId: string) {
-    jiraBoardSelectionInitializedRef.current = true;
-    if (jiraIntegration?.rememberLastBoardInSession) {
-      writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, boardId);
-    }
-    setSelectedJiraBoardId(boardId);
-    setActiveJiraColumnId("");
-    setSelectedJiraIssueKey("");
-  }
-
-  function selectJiraColumn(columnId: string) {
-    setActiveJiraColumnId(columnId);
-    setSelectedJiraIssueKey("");
-    setPendingJiraImportIssueKey("");
-  }
-
-  function selectJiraIssue(issueKey: string) {
-    setPendingJiraImportIssueKey(issueKey);
-    setSelectedJiraIssueKey(issueKey);
-  }
-
   function resetTemplateStepIdForAttachmentChange(
     localId: string,
     attachments: Array<StepAttachmentRef | File>,
@@ -8238,273 +7204,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         return { ...step, id: "" };
       }),
     );
-  }
-
-  async function importSelectedJiraImages(
-    issue: JiraIssueDetail,
-    target: JiraImportTarget,
-    objectiveTextForReapply?: string,
-  ): Promise<void> {
-    const attachments = Array.isArray(issue.attachments) ? issue.attachments : [];
-    if (!attachmentPolicy.enabled || attachments.length === 0) {
-      return;
-    }
-    const eligible = attachments.filter(
-      (attachment) => !validateJiraImageAttachment(attachment, attachmentPolicy),
-    );
-    if (eligible.length === 0) {
-      setSubmitMessage(
-        "Jira images are not supported by the current attachment policy.",
-      );
-      return;
-    }
-    const existingFiles =
-      target.kind === "preset"
-        ? selectedObjectiveAttachmentFiles
-        : selectedStepAttachmentFiles[target.localId] || [];
-    const existingKeys = new Set(
-      existingFiles.map((file) => `${file.name}:${file.size}:${file.type}`),
-    );
-    const room = Math.max(
-      0,
-      attachmentPolicy.maxCount -
-        (selectedObjectiveAttachmentFiles.length +
-          Object.values(selectedStepAttachmentFiles).flat().length +
-          persistedAttachmentRefs.length),
-    );
-    const toDownload = eligible.slice(0, room);
-    if (toDownload.length === 0) {
-      setSubmitMessage("Attachment limit reached before Jira images could be added.");
-      return;
-    }
-    try {
-      const downloaded = await Promise.allSettled(
-        toDownload.map(async (attachment) => {
-          const response = await fetch(attachment.downloadUrl);
-          if (!response.ok) {
-            throw new Error(
-              await responseErrorMessage(response, "Failed to download Jira image."),
-            );
-          }
-          const blob = await response.blob();
-          const type = String(
-            blob.type || attachment.contentType || "",
-          ).toLowerCase();
-          const file = new File([blob], attachment.filename, { type });
-          return existingKeys.has(`${file.name}:${file.size}:${file.type}`)
-            ? null
-            : file;
-        }),
-      );
-      const files = downloaded
-        .filter(
-          (result): result is PromiseFulfilledResult<File | null> =>
-            result.status === "fulfilled",
-        )
-        .map((result) => result.value)
-        .filter((file): file is File => file !== null);
-      const failures = downloaded
-        .filter(
-          (result): result is PromiseRejectedResult =>
-            result.status === "rejected",
-        )
-        .map((result) =>
-          result.reason instanceof Error
-            ? result.reason.message
-            : "Failed to download Jira image.",
-        );
-      if (files.length > 0) {
-        const nextObjectiveFiles =
-          target.kind === "preset"
-            ? [...existingFiles, ...files]
-            : selectedObjectiveAttachmentFiles;
-        const nextFilesByStep: Record<string, File[]> =
-          target.kind === "step"
-            ? {
-                ...selectedStepAttachmentFiles,
-                [target.localId]: [...existingFiles, ...files],
-              }
-            : selectedStepAttachmentFiles;
-        const validation = validateAttachmentFiles(
-          [...nextObjectiveFiles, ...Object.values(nextFilesByStep).flat()],
-          attachmentPolicy,
-          persistedAttachmentRefs,
-        );
-        if (!validation.ok) {
-          setSubmitMessage(validation.errors.join(" "));
-          return;
-        }
-        if (target.kind === "preset") {
-          setSelectedObjectiveAttachmentFiles(nextObjectiveFiles);
-          updatePresetReapplyStateForObjective(
-            objectiveTextForReapply ?? templateFeatureRequest,
-            nextObjectiveFiles,
-          );
-        } else {
-          resetTemplateStepIdForAttachmentChange(
-            target.localId,
-            nextFilesByStep[target.localId] || [],
-          );
-          setSelectedStepAttachmentFiles(nextFilesByStep);
-        }
-      }
-      const messages: string[] = [];
-      if (eligible.length > toDownload.length) {
-        messages.push(
-          "Some Jira images were skipped because the attachment limit was reached.",
-        );
-      }
-      if (failures.length > 0) {
-        const uniqueFailures = Array.from(new Set(failures));
-        messages.push(
-          uniqueFailures.length === 1
-            ? (uniqueFailures[0] ?? "Failed to download Jira image.")
-            : `${failures.length} Jira images failed to download. ${uniqueFailures
-                .slice(0, 3)
-                .join(" ")}`,
-        );
-      }
-      if (messages.length > 0) {
-        setSubmitMessage(messages.join(" "));
-      }
-    } catch (error) {
-      const failure =
-        error instanceof Error
-          ? error
-          : new Error("Failed to download Jira images.");
-      setSubmitMessage(failure.message);
-    }
-  }
-
-  async function importSelectedJiraImagesWithReporting(
-    issue: JiraIssueDetail,
-    target: JiraImportTarget,
-    objectiveTextForReapply?: string,
-  ): Promise<void> {
-    try {
-      await importSelectedJiraImages(issue, target, objectiveTextForReapply);
-    } catch (error) {
-      const failure =
-        error instanceof Error
-          ? error
-          : new Error("Failed to download Jira images.");
-      setSubmitMessage(failure.message);
-    }
-  }
-
-  async function importSelectedJiraIssue() {
-    closeJiraBrowser();
-    const issue = selectedJiraIssue;
-    const importTarget = jiraImportTarget;
-    if (!issue || !importTarget) {
-      return;
-    }
-    if (importTarget.attachmentsOnly) {
-      const provenance = createJiraProvenance(
-        issue,
-        selectedJiraBoardId,
-        jiraImportMode,
-        importTarget,
-      );
-      if (importTarget.kind === "preset") {
-        setPresetJiraProvenance(provenance);
-      } else {
-        setStepJiraProvenance((current) => {
-          if (provenance) {
-            return { ...current, [importTarget.localId]: provenance };
-          }
-          if (!current[importTarget.localId]) {
-            return current;
-          }
-          const { [importTarget.localId]: _removed, ...rest } = current;
-          return rest;
-        });
-        updateStep(importTarget.localId, { id: "" });
-      }
-      await importSelectedJiraImagesWithReporting(issue, importTarget);
-      return;
-    }
-    if (!selectedJiraImportText.trim()) {
-      return;
-    }
-    if (importTarget.kind === "preset") {
-      const nextText = writeJiraImportedText(
-        templateFeatureRequest,
-        selectedJiraImportText,
-        jiraWriteMode,
-      );
-      const provenance = createJiraProvenance(
-        issue,
-        selectedJiraBoardId,
-        jiraImportMode,
-        importTarget,
-      );
-      if (nextText.trim() !== templateFeatureRequest.trim()) {
-        setTemplateFeatureRequest(nextText);
-        updatePresetReapplyStateForObjective(
-          nextText,
-          selectedObjectiveAttachmentFiles,
-        );
-      }
-      setPresetJiraProvenance(provenance);
-      await importSelectedJiraImagesWithReporting(issue, importTarget, nextText);
-      return;
-    }
-
-    const targetStep = steps.find((step) => step.localId === importTarget.localId);
-    if (!targetStep) {
-      return;
-    }
-    const nextInstructions = writeJiraImportedText(
-      targetStep.instructions,
-      selectedJiraImportText,
-      jiraWriteMode,
-    );
-    const presetInputUpdate =
-      targetStep.stepType === "preset"
-        ? presetJiraIssueInputValuesFromIssue(
-            targetStep.presetDetail,
-            targetStep.presetInputValues,
-            issue,
-          )
-        : { values: targetStep.presetInputValues, changedNames: [] };
-    const nextPresetInputErrors =
-      presetInputUpdate.changedNames.length > 0
-        ? Object.fromEntries(
-            Object.entries(targetStep.presetInputErrors).filter(
-              ([name]) => !presetInputUpdate.changedNames.includes(name),
-            ),
-          ) as Record<string, string>
-        : targetStep.presetInputErrors;
-    updateStep(importTarget.localId, {
-      instructions: nextInstructions,
-      ...(presetInputUpdate.changedNames.length > 0
-        ? {
-            presetInputValues: presetInputUpdate.values,
-            presetInputErrors: nextPresetInputErrors,
-          }
-        : {}),
-    });
-    const provenance = createJiraProvenance(
-      issue,
-      selectedJiraBoardId,
-      jiraImportMode,
-      importTarget,
-    );
-    setStepJiraProvenance((current) => {
-      if (provenance) {
-        return {
-          ...current,
-          [importTarget.localId]: provenance,
-        };
-      }
-      if (!current[importTarget.localId]) {
-        return current;
-      }
-      const { [importTarget.localId]: _removed, ...rest } = current;
-      return rest;
-    });
-    await importSelectedJiraImagesWithReporting(issue, importTarget);
   }
 
   function updatePresetReapplyStateForObjective(
@@ -9366,13 +8065,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
   function handleStepInstructionsChange(localId: string, value: string) {
     updateStep(localId, { instructions: value });
-    setStepJiraProvenance((current) => {
-      if (!current[localId]) {
-        return current;
-      }
-      const { [localId]: _removed, ...rest } = current;
-      return rest;
-    });
   }
 
   function selectTrustedTool(localId: string, toolId: string) {
@@ -9401,13 +8093,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         };
       }),
     );
-    setStepJiraProvenance((current) => {
-      if (!current[localId]) {
-        return current;
-      }
-      const { [localId]: _removed, ...rest } = current;
-      return rest;
-    });
     setJiraTransitionStateByStep((current) => {
       if (!current[localId]) {
         return current;
@@ -9673,13 +8358,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   function removeStep(index: number) {
     const removedStep = steps[index];
     if (removedStep) {
-      setStepJiraProvenance((provenance) => {
-        if (!provenance[removedStep.localId]) {
-          return provenance;
-        }
-        const { [removedStep.localId]: _removed, ...rest } = provenance;
-        return rest;
-      });
       setSelectedStepAttachmentFiles((current) => {
         if (!current[removedStep.localId]) {
           return current;
@@ -9842,14 +8520,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const explicit = step.presetInputValues[definition.name];
     if (explicit !== undefined) {
       return String(explicit);
-    }
-    if (definition.type === "jira_board") {
-      return String(definition.default || jiraIntegration?.defaultBoardId || "").trim();
-    }
-    if (isJiraProjectInputKey(definition.name)) {
-      return String(
-        definition.default || jiraIntegration?.defaultProjectKey || "",
-      ).trim();
     }
     if (isRepositoryInputKey(definition.name)) {
       return String(definition.default || repository || defaultRepository || "").trim();
@@ -12581,230 +11251,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         </p>
       ) : null}
 
-      {jiraIntegration?.enabled && jiraBrowserOpen ? (
-        <div className="jira-browser-backdrop">
-          <section
-            className="jira-browser-panel stack"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="jira-browser-title"
-          >
-            <div className="queue-step-header">
-              <div>
-                <h3 id="jira-browser-title">Browse Jira issue</h3>
-                <p className="small">{`Target: ${jiraTargetText}`}</p>
-                {jiraImportWillCustomizeTemplateStep ? (
-                  <p className="notice small">
-                    Importing into this template-bound step will make it manually
-                    customized.
-                  </p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                className="queue-step-icon-button"
-                aria-label="Close Jira browser"
-                title="Close Jira browser"
-                onClick={closeJiraBrowser}
-              >
-                <CloseIcon />
-                <span className="sr-only">Close Jira browser</span>
-              </button>
-            </div>
-
-            <div className="grid-2">
-              <label>
-                Project
-                <select
-                  value={selectedJiraProjectKey}
-                  disabled={
-                    jiraProjectsQuery.isLoading || jiraProjectsQuery.isError
-                  }
-                  onChange={(event) => selectJiraProject(event.target.value)}
-                >
-                  <option value="">Select project...</option>
-                  {(jiraProjectsQuery.data || []).map((project) => (
-                    <option key={project.projectKey} value={project.projectKey}>
-                      {project.name
-                        ? `${project.name} (${project.projectKey})`
-                        : project.projectKey}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Board
-                <select
-                  value={selectedJiraBoardId}
-                  disabled={
-                    !selectedJiraProjectKey ||
-                    jiraBoardsQuery.isLoading ||
-                    jiraBoardsQuery.isError
-                  }
-                  onChange={(event) => selectJiraBoard(event.target.value)}
-                >
-                  <option value="">Select board...</option>
-                  {(jiraBoardsQuery.data || []).map((board) => (
-                    <option key={board.id} value={board.id}>
-                      {board.name || board.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="grid-2">
-              <label>
-                Import target
-                <select
-                  value={jiraTargetValue(jiraImportTarget)}
-                  onChange={(event) => selectJiraImportTarget(event.target.value)}
-                >
-                  <option value="preset-text">
-                    Instructions (Preset)
-                  </option>
-                  {attachmentPolicy.enabled ? (
-                    <option value="preset-attachments">
-                      Instructions attachments (Preset)
-                    </option>
-                  ) : null}
-                  {steps.map((step, index) => (
-                    <option
-                      key={`jira-target-step-text-${step.localId}`}
-                      value={`step-text:${step.localId}`}
-                    >
-                      {`Step ${index + 1} Instructions`}
-                    </option>
-                  ))}
-                  {attachmentPolicy.enabled
-                    ? steps.map((step, index) => (
-                        <option
-                          key={`jira-target-step-attachments-${step.localId}`}
-                          value={`step-attachments:${step.localId}`}
-                        >
-                          {`Step ${index + 1} attachments`}
-                        </option>
-                      ))
-                    : null}
-                </select>
-              </label>
-
-              {!jiraImportTarget?.attachmentsOnly ? (
-                <label>
-                  Text import
-                  <select
-                    value={jiraWriteMode}
-                    onChange={(event) =>
-                      setJiraWriteMode(
-                        event.target.value === "replace" ? "replace" : "append",
-                      )
-                    }
-                  >
-                    <option value="append">Append to target text</option>
-                    <option value="replace">Replace target text</option>
-                  </select>
-                </label>
-              ) : null}
-            </div>
-
-            {jiraProjectsError ? (
-              <p className="notice small">{jiraProjectsError}</p>
-            ) : null}
-            {jiraProjectsEmpty ? (
-              <p className="notice small">{jiraProjectsEmpty}</p>
-            ) : null}
-            {jiraBoardsError ? (
-              <p className="notice small">{jiraBoardsError}</p>
-            ) : null}
-            {jiraBoardsEmpty ? (
-              <p className="notice small">{jiraBoardsEmpty}</p>
-            ) : null}
-            {jiraBoardIssuesError ? (
-              <p className="notice small">{jiraBoardIssuesError}</p>
-            ) : null}
-            {jiraColumnsEmpty ? (
-              <p className="notice small">{jiraColumnsEmpty}</p>
-            ) : null}
-
-            <div className="jira-browser-layout">
-              <div className="stack">
-                <div
-                  className="jira-column-tabs"
-                  aria-label="Jira board columns"
-                >
-                  {jiraBrowserColumns.map((column) => (
-                    <button
-                      key={column.id}
-                      type="button"
-                      className={
-                        column.id === activeJiraColumnId
-                          ? "secondary jira-column-tab active"
-                          : "secondary jira-column-tab"
-                      }
-                      aria-pressed={column.id === activeJiraColumnId}
-                      title={`Show Jira issues in ${column.name}`}
-                      onClick={() => selectJiraColumn(column.id)}
-                    >
-                      {`${column.name} ${Number(column.count || 0)}`}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="jira-issue-list" aria-live="polite">
-                  {jiraColumnsQuery.isLoading || jiraIssuesQuery.isLoading ? (
-                    <p className="small">Loading Jira issues...</p>
-                  ) : jiraBoardIssuesError ? (
-                    <p className="small">Jira issues are unavailable right now.</p>
-                  ) : activeJiraIssues.length > 0 ? (
-                    activeJiraIssues.map((issue) => (
-                      <button
-                        key={issue.issueKey}
-                        type="button"
-                        className={
-                          issue.issueKey === selectedJiraIssueKey
-                            ? "jira-issue-button active"
-                            : "jira-issue-button"
-                        }
-                        disabled={Boolean(pendingJiraImportIssueKey)}
-                        title={`Import Jira issue ${issue.issueKey} into ${jiraTargetText}`}
-                        onClick={() => selectJiraIssue(issue.issueKey)}
-                      >
-                        <strong>{issue.issueKey}</strong>
-                        <span>{issue.summary}</span>
-                        <span className="small">
-                          {[issue.issueType, issue.statusName, issue.assignee]
-                            .filter(Boolean)
-                            .join(" / ")}
-                        </span>
-                      </button>
-                    ))
-                  ) : jiraActiveColumnEmpty ? (
-                    <p className="small">{jiraActiveColumnEmpty}</p>
-                  ) : (
-                    <p className="small">
-                      Select a Jira board column to view issues.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <aside className="jira-issue-action stack">
-                {jiraIssueError ? (
-                  <p className="notice small">{jiraIssueError}</p>
-                ) : selectedJiraIssueKey && jiraIssueDetailQuery.isLoading ? (
-                  <p className="small">Adding Jira issue to instructions...</p>
-                ) : (
-                  <p className="small">
-                    Select an issue to append it to {jiraTargetText}.
-                  </p>
-                )}
-              </aside>
-            </div>
-          </section>
-        </div>
-      ) : null}
-
       <form
         id="queue-submit-form"
         className="queue-submit-form"
@@ -13463,7 +11909,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     }))
                   : []),
                 // Objective-scoped files that have not been uploaded yet preview
-                // from the same chip row as step files; a newly imported Jira
+                // from the same chip row as step files; a newly added
                 // screenshot must not wait for persistence to become visible.
                 ...(isPrimaryStep
                   ? selectedObjectiveAttachmentFiles.map((file) => ({
@@ -14316,26 +12762,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           ? "Instructions"
                           : `Step ${index + 1} Instructions`}
                       </label>
-                      <JiraProvenanceChip
-                        label={`Step ${index + 1} instructions`}
-                        provenance={stepJiraProvenance[step.localId]}
-                      />
-                      {jiraIntegration?.enabled ? (
-                        <button
-                          type="button"
-                          className="secondary jira-browse-button"
-                          aria-label={`Browse Jira issues for Step ${index + 1} instructions`}
-                          title={`Browse Jira issues for Step ${index + 1} instructions`}
-                          onClick={() =>
-                            openJiraBrowser({
-                              kind: "step",
-                              localId: step.localId,
-                            })
-                          }
-                        >
-                          Browse Jira issue
-                        </button>
-                      ) : null}
                     </div>
                     <textarea
                       id={`queue-step-instructions-${step.localId}`}
@@ -15244,9 +13670,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         </fieldset>
       </form>
       {presetDialogMode ? (
-        <div className="jira-browser-backdrop">
+        <div className="queue-dialog-backdrop">
           <section
-            className="jira-browser-panel stack queue-preset-dialog"
+            className="queue-dialog-panel stack queue-preset-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="queue-preset-dialog-title"

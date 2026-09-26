@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any
 from urllib import error, request
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 DEFAULT_RUNTIME = "codex_cli"
@@ -144,57 +144,15 @@ def expand_issue_implement(*, base_url: str, provider: str, issue: str, reposito
         return json.loads(response.read().decode("utf-8"))
 
 
-def fetch_board_issues(*, base_url: str, board_id: str, project_key: str | None, timeout: float) -> dict[str, Any]:
-    """Fetch a Jira board's issues grouped by column from the MoonMind API."""
-    url = f"{base_url.rstrip('/')}/api/jira/boards/{quote(board_id)}/issues"
-    if project_key:
-        url += f"?projectKey={quote(project_key)}"
-    req = request.Request(url, headers={"Accept": "application/json"}, method="GET")
-    with request.urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def extract_column_issue_keys(board_issues: dict[str, Any], column_name: str) -> list[str]:
-    """Return the issue keys in the column whose human-readable name matches ``column_name``.
-
-    Matching is case-insensitive and whitespace-trimmed. Column ids are slugified
-    server-side (e.g. ``"To Do"`` -> ``"to-do"``) so we resolve ids by name and then
-    collect the keys from ``itemsByColumn`` for every matching column, preserving order
-    and de-duplicating.
-    """
-    target = column_name.strip().casefold()
-    columns = board_issues.get("columns") or []
-    matching_ids = [
-        str(column.get("id"))
-        for column in columns
-        if isinstance(column, dict) and str(column.get("name") or "").strip().casefold() == target
-    ]
-    items_by_column = board_issues.get("itemsByColumn") or {}
-    keys: list[str] = []
-    seen: set[str] = set()
-    for column_id in matching_ids:
-        for item in items_by_column.get(column_id) or []:
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get("issueKey") or "").strip()
-            if key and key not in seen:
-                seen.add(key)
-                keys.append(key)
-    return keys
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create issue implementation preset workflows with PR merge automation enabled.")
-    parser.add_argument("issues", nargs="*", help="Jira keys, GitHub issue URLs, owner/repo#123, or #123 with --repository. Optional when --board-id is given.")
+    parser.add_argument("issues", nargs="*", help="Jira keys, GitHub issue URLs, owner/repo#123, or #123 with --repository.")
     parser.add_argument("--provider", choices=sorted(PROVIDER_PRESETS), default="jira")
     parser.add_argument("--base-url", default=os.environ.get("MOONMIND_URL", "http://api:8000"))
     parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
     parser.add_argument("--runtime", default=DEFAULT_RUNTIME)
     parser.add_argument("--model", default=None, help="Runtime model override, e.g. claude-opus-4-8 (passed through task.runtime.model).")
     parser.add_argument("--effort", default=None, help="Runtime effort override, e.g. xhigh (passed through task.runtime.effort).")
-    parser.add_argument("--board-id", default=None, help="Discover issues from this Jira board id instead of (or in addition to) positional args.")
-    parser.add_argument("--column", default="To Do", help="Board column name to pull issues from when --board-id is set (default: 'To Do').")
-    parser.add_argument("--project-key", default=None, help="Optional Jira project key passed as the projectKey query param for board discovery.")
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -204,28 +162,8 @@ def main() -> int:
     args = parse_args()
 
     issues: list[str] = list(args.issues)
-    discovery: dict[str, Any] | None = None
-    if args.board_id:
-        try:
-            board_issues = fetch_board_issues(base_url=args.base_url, board_id=args.board_id, project_key=args.project_key, timeout=args.timeout)
-            if not isinstance(board_issues, dict):
-                raise TypeError(f"Expected API response to be a dictionary, got {type(board_issues).__name__}")
-            discovered = extract_column_issue_keys(board_issues, args.column)
-        except Exception as exc:
-            print(json.dumps({"error": f"Failed to fetch board {args.board_id} issues: {exc}"}, indent=2))
-            return 1
-        merged: list[str] = []
-        seen: set[str] = set()
-        for key in [*discovered, *issues]:
-            if key and key not in seen:
-                seen.add(key)
-                merged.append(key)
-        issues = merged
-        discovery = {"boardId": args.board_id, "column": args.column, "discoveredIssues": discovered}
-
     if not issues:
-        target = f"column {args.column!r} of board {args.board_id}" if args.board_id else "the provided arguments"
-        print(json.dumps({"error": f"No issues to queue from {target}.", "discovery": discovery}, indent=2))
+        print(json.dumps({"error": "No issues to queue. Pass one or more Jira keys or GitHub issue references."}, indent=2))
         return 1
 
     results: list[dict[str, Any]] = []
@@ -255,7 +193,7 @@ def main() -> int:
         if response.get("status") != 201:
             record["error"] = response.get("error", ""); failures.append(record)
         results.append(record)
-    print(json.dumps({"submittedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "apiBase": args.base_url, "repository": args.repository, "targetRuntime": args.runtime, "model": args.model, "effort": args.effort, "discovery": discovery, "preset": {"slug": PROVIDER_PRESETS[args.provider]}, "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}}, "results": results, "failures": failures}, indent=2))
+    print(json.dumps({"submittedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "apiBase": args.base_url, "repository": args.repository, "targetRuntime": args.runtime, "model": args.model, "effort": args.effort, "preset": {"slug": PROVIDER_PRESETS[args.provider]}, "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}}, "results": results, "failures": failures}, indent=2))
     return 1 if failures else 0
 
 
