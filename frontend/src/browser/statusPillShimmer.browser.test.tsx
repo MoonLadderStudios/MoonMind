@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -37,10 +37,6 @@ function shimmerLayerStyles(pill: HTMLElement) {
   const letterWave = pill.querySelector<HTMLElement>('.status-letter-wave');
   const letterAfter = letterWave ? getComputedStyle(letterWave, '::after') : null;
   return { before, after, letterAfter };
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Every color stop in a computed background-image, with its alpha channel.
@@ -114,9 +110,9 @@ describe('status pill shimmer computed styles', () => {
       // The light field actually travels: the computed background position
       // must change over time.
       const initialPosition = before.backgroundPosition;
-      await sleep(400);
-      const laterPosition = getComputedStyle(pill, '::before').backgroundPosition;
-      expect(laterPosition).not.toBe(initialPosition);
+      await vi.waitFor(() => {
+        expect(getComputedStyle(pill, '::before').backgroundPosition).not.toBe(initialPosition);
+      }, { timeout: 2200, interval: 100 });
 
       // The label text remains visible on top of the effect.
       const letterWave = pill.querySelector<HTMLElement>('.status-letter-wave')!;
