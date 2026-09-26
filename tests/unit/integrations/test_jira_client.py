@@ -89,54 +89,6 @@ async def test_request_json_sends_headers_and_decodes_json() -> None:
 
     assert payload == {"key": "ENG-1", "ok": True}
 
-async def test_request_json_maps_agile_paths_for_site_base_url() -> None:
-    connection = _build_connection()
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/rest/agile/1.0/board/42/configuration"
-        return httpx.Response(
-            200,
-            json={"ok": True},
-            headers={"content-type": "application/json"},
-        )
-
-    injected = _build_injected_client(connection, _handler)
-    client = JiraClient(connection=connection, client=injected)
-    try:
-        payload = await client.request_json(
-            method="GET",
-            path="agile:/board/42/configuration",
-            action="jira_browser.list_columns",
-        )
-    finally:
-        await injected.aclose()
-
-    assert payload == {"ok": True}
-
-async def test_request_json_maps_agile_paths_for_cloud_api_base_url() -> None:
-    connection = _build_cloud_connection()
-
-    def _handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/ex/jira/cloud-abc/rest/agile/1.0/board"
-        return httpx.Response(
-            200,
-            json={"values": []},
-            headers={"content-type": "application/json"},
-        )
-
-    injected = _build_injected_client(connection, _handler)
-    client = JiraClient(connection=connection, client=injected)
-    try:
-        payload = await client.request_json(
-            method="GET",
-            path="agile:/board",
-            action="jira_browser.list_boards",
-        )
-    finally:
-        await injected.aclose()
-
-    assert payload == {"values": []}
-
 async def test_request_json_maps_auth_failures_to_sanitized_error() -> None:
     connection = _build_connection()
 

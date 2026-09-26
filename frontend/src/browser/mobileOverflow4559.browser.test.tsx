@@ -399,12 +399,12 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
     }
   });
 
-  it('leaves dialog backdrops, drawers, and the wide jira panel at their own sizing (Codex P1)', async () => {
+  it('leaves dialog backdrops, drawers, and queue-dialog panels at their own sizing (Codex P1)', async () => {
     // Regression guard for the Codex P1 review on PR #4566: the overlay
     // sizing contract must apply to confirmation dialog panels only. Fixed
     // inset-0 backdrops that carry role="dialog" keep full-viewport
-    // coverage, the 1040px jira browser panel keeps its own sizing, and
-    // full-height enrollment drawers keep their drawer layout. Assertions
+    // coverage, the Create-page preset dialog panel keeps its own sizing,
+    // and full-height enrollment drawers keep their drawer layout. Assertions
     // use computed sizing (not geometry) because the browser suite loads
     // dashboard.css without Tailwind utilities, so utility classes such as
     // `fixed` position nothing here -- the selectors must exclude those
@@ -419,8 +419,9 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
           <button type="button">Remove and renumber</button>
         </div>
       </div>
-      <section class="jira-browser-panel stack" role="dialog" aria-modal="true" aria-label="Browse Jira issue">
-        <h2>Browse Jira issue</h2>
+      <section class="queue-dialog-panel stack queue-preset-dialog" role="dialog" aria-modal="true" aria-label="Save preset">
+        <h3>Save preset</h3>
+        <button type="button">Cancel</button>
       </section>
       <div class="fixed inset-0 z-50 flex justify-end">
         <div class="h-full w-full max-w-2xl" role="dialog" aria-modal="true" aria-label="Enrollment drawer">
@@ -438,9 +439,9 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       const backdrop = host.querySelector('[aria-label="Remove tier backdrop"]') as HTMLElement;
       expect(getComputedStyle(backdrop).maxWidth, 'backdrop keeps viewport coverage').toBe('none');
-      const jiraPanel = host.querySelector('.jira-browser-panel') as HTMLElement;
-      expect(getComputedStyle(jiraPanel).maxWidth, 'jira panel keeps its own sizing').toBe('none');
-      expect(jiraPanel.getBoundingClientRect().width, 'jira panel is not shrunk to 32rem').toBeGreaterThan(600);
+      const presetPanel = host.querySelector('[aria-label="Save preset"]') as HTMLElement;
+      expect(getComputedStyle(presetPanel).maxWidth, 'preset dialog keeps its own sizing').toBe('none');
+      expect(presetPanel.getBoundingClientRect().width, 'preset dialog keeps its 440px width').toBeCloseTo(440, 0);
       // Positive control: a plain confirmation panel is still viewport-bounded.
       const confirmation = host.querySelector('[aria-label="Remove profile confirmation"]') as HTMLElement;
       expect(getComputedStyle(confirmation).maxWidth, 'confirmation stays bounded').not.toBe('none');
