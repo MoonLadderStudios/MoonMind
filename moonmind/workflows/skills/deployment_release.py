@@ -1109,6 +1109,7 @@ async def run_job(request_file):
                     min(2**attempts, max(0, record["deadline"] - time.time()))
                 )
         primary_file = request_file.parent / "deployment-result.json"
+        incomplete_attempt = False
         if primary_file.exists():
             outcome = json.loads(primary_file.read_text())
             if outcome.get("owner") != owner:
@@ -1125,12 +1126,13 @@ async def run_job(request_file):
                 outcome = json.loads(attempt_file.read_text())
                 if outcome.get("owner") != owner:
                     raise ValueError("Release attempt receipt owner differs")
+                incomplete_attempt = True
                 outcome["result"]["outputs"].update(
                     recoveryOwner=owner, finalError=error
                 )
             else:
                 outcome = {"owner": owner, "error": error}
-        if "result" in outcome:
+        if incomplete_attempt:
             # Fleet recreation can succeed while a required post-update step
             # fails. Retain the verified fleet receipt, but make the terminal
             # release result and CLI exit status reflect the whole operation.
