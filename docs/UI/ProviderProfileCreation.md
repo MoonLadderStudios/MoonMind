@@ -54,6 +54,7 @@ The creation experience must:
 9. fail closed when no valid creation preset exists for a runtime, provider, and authentication combination;
 10. let users select supported runtimes and providers without memorizing internal IDs; and
 11. distinguish recommended policy, unsaved overrides, credential connection, and launch readiness in the language shown to users.
+12. keep every field, label, helper, and validation message inside its section at 320px widths: one mobile column, fieldsets with `min-inline-size: 0`, tier legends holding only the group name with Duplicate/Remove in a separate wrapping action area (MoonMind#4559).
 
 ---
 

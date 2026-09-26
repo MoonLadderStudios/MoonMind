@@ -1077,6 +1077,19 @@ Rules:
 5. Keep destructive actions labeled with text.
 6. The bottom `Add tier` action remains full width.
 
+Mobile implementation note (MoonMind#4559): tier legends hold the group
+name only — `Duplicate tier` / `Remove tier` live in a separate wrapping
+action area below the heading so long labels no longer compete with actions
+inside the legend. The ordered list drops its indentation on phones
+(`margin: 0; padding: 0; list-style: none` at `max-width: 720px`), tier
+fieldsets opt out of the intrinsic `min-inline-size: min-content` minimum,
+and the tier save payload still carries only `model_tiers` plus one-based
+`default_model_tier` (see `frontend/src/utils/providerProfileTiers.test.ts`).
+
+```bash
+npm run ui:test:browser -- frontend/src/browser/mobileOverflow4559.browser.test.tsx
+```
+
 ---
 
 ## 20. Accessibility

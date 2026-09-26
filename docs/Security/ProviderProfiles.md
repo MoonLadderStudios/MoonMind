@@ -526,8 +526,6 @@ This is the runtime-default counterpart of `disabled_reason = user_disabled` for
 
 This field protects user intent. Background repair, migration, or passive validation must not convert `user_disabled` to enabled. A direct user-initiated Settings action such as **Connect OAuth**, **Reconnect OAuth**, or **Add API key** may enable the profile by default because that action expresses setup intent.
 
-**Validate OAuth** is also a user-initiated recovery action for a saved OAuth volume. Successful validation changes `auth_invalid` to `connected` and enables the profile; failed validation leaves diagnostics and the profile disabled.
-
 #### `secret_refs`
 
 Maps secret roles to `SecretRef` values.

@@ -235,11 +235,15 @@ export function DataTable<T>({
     // loading/error/empty state rendered only as a table row would vanish on
     // mobile. Mirror the state into the card fallback; CSS `display: none`
     // keeps exactly one representation exposed per breakpoint.
+    // Mobile CSS hides the <table> (display:none) at narrow widths, so the
+    // card fallback must carry loading/error/empty states too.
     if (isLoading) {
       return (
         <ul className="data-table-cards">
-          <li className="data-table-card data-table-card--state" aria-busy="true">
-            {loadingMessage}
+          <li className="data-table-card data-table-card--state">
+            <p role="status" aria-busy="true" className="data-table-card__state">
+              {loadingMessage}
+            </p>
           </li>
         </ul>
       );
@@ -247,8 +251,10 @@ export function DataTable<T>({
     if (isError) {
       return (
         <ul className="data-table-cards">
-          <li className="data-table-card data-table-card--state data-table-error" role="alert">
-            {errorMessage}
+          <li className="data-table-card data-table-card--state">
+            <p role="alert" className="data-table-card__state data-table-error">
+              {errorMessage}
+            </p>
           </li>
         </ul>
       );
@@ -256,7 +262,9 @@ export function DataTable<T>({
     if (!hasRows) {
       return (
         <ul className="data-table-cards">
-          <li className="data-table-card data-table-card--state">{emptyMessage}</li>
+          <li className="data-table-card data-table-card--state">
+            <p className="data-table-card__state">{emptyMessage}</p>
+          </li>
         </ul>
       );
     }

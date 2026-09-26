@@ -3,6 +3,7 @@
 Also covers which MoonMind-managed profile holds ``default_for_runtime``
 (MoonLadderStudios/MoonMind#3877).
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -14,11 +15,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.api.routers.omnigent_agent_profiles import (
-    AgentProfileDocument,
-    _digest as router_digest,
-    _normalized,
-)
+from api_service.api.routers.omnigent_agent_profiles import AgentProfileDocument
+from api_service.api.routers.omnigent_agent_profiles import _digest as router_digest
+from api_service.api.routers.omnigent_agent_profiles import _normalized
 from api_service.db.models import (
     Base,
     OmnigentAgentProfile,
@@ -28,21 +27,28 @@ from api_service.db.models import (
     OmnigentHarnessTrustRecord,
     OmnigentPolicy,
     OmnigentPolicyVersion,
+    OmnigentUpstreamAgentProjection,
 )
 from api_service.services.omnigent_agent_bootstrap_service import (
     BOOTSTRAP_PROFILE_ID,
+    CLAUDE_BUILTIN_PROFILE_ID,
     OPENCODE_BUILTIN_PROFILE_ID,
     BootstrapDefaultConflictError,
     build_bootstrap_document,
     default_agent_profile_ready,
     reconcile_bootstrap_agent_profile,
+    reconcile_builtin_claude_agent_profile,
     reconcile_managed_default_agent_profile,
     resolve_default_agent_selection,
     seed_bootstrap_agent_profile,
 )
 from api_service.services.omnigent_agent_profile_service import (
+    projection_identity,
+    projection_readiness,
     synchronize_upstream_inventory,
 )
+from api_service.services.omnigent_policies import seed_bootstrap_policies
+from api_service.services.profile_execution_selection import profile_execution_selection
 
 TRUST_CORE_TRUSTED = "core_trusted"
 
@@ -50,12 +56,14 @@ pytestmark = [pytest.mark.asyncio]
 
 
 def _inventory(agent_id: str, *, name: str | None = None):
-    return [{
-        "id": agent_id,
-        "name": name or agent_id,
-        "harness": "codex-native",
-        "capabilities": ["session.start"],
-    }]
+    return [
+        {
+            "id": agent_id,
+            "name": name or agent_id,
+            "harness": "codex-native",
+            "capabilities": ["session.start"],
+        }
+    ]
 
 
 @pytest_asyncio.fixture()
@@ -91,9 +99,11 @@ async def _add_default_profile(
         version=1,
         digest=router_digest(document),
         document=document,
-        upstream_snapshot={"id": upstream_id, "name": upstream_name}
-        if upstream_name
-        else {"id": upstream_id},
+        upstream_snapshot=(
+            {"id": upstream_id, "name": upstream_name}
+            if upstream_name
+            else {"id": upstream_id}
+        ),
     )
     session.add_all([profile, version])
     await session.commit()
@@ -206,9 +216,7 @@ async def test_seed_is_idempotent(session):
     )
     assert first == BOOTSTRAP_PROFILE_ID
     assert second is None
-    count = await session.scalar(
-        select(func.count()).select_from(OmnigentAgentProfile)
-    )
+    count = await session.scalar(select(func.count()).select_from(OmnigentAgentProfile))
     assert count == 1
 
 
@@ -222,14 +230,15 @@ async def test_seed_skipped_when_durable_state_exists(session):
 
 
 async def test_seed_uses_builtin_codex_when_env_absent(session):
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
-    count = await session.scalar(
-        select(func.count()).select_from(OmnigentAgentProfile)
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
     )
+    count = await session.scalar(select(func.count()).select_from(OmnigentAgentProfile))
     assert count == 1
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert profile is not None
@@ -243,17 +252,171 @@ async def test_seed_uses_builtin_codex_when_env_absent(session):
     assert version.rollout_metadata["origin"] == "builtin_default"
 
 
+async def test_connected_claude_resolves_managed_omnigent_configuration(
+    session, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    server_image = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    codex_image = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    shared_image = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
+
+    async def resolver(image_ref: str) -> str:
+        if "host-moonmind" in image_ref:
+            return shared_image
+        return codex_image if "host" in image_ref else server_image
+
+    await seed_bootstrap_policies(
+        session,
+        env={
+            "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "true",
+            "OMNIGENT_SHARED_HOST_IMAGE_REF": shared_image,
+        },
+        image_resolver=resolver,
+    )
+    inventory = [
+        {
+            "id": "ag_codex",
+            "name": "codex-native-ui",
+            "version": "3",
+            "harness": "codex-native",
+            "capabilities": ["session.start"],
+        },
+        {
+            "id": "ag_claude",
+            "name": "claude-native-ui",
+            "version": "2",
+            "harness": "claude-native",
+            "capabilities": ["session.start"],
+        },
+    ]
+
+    assert await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+    claude = await session.get(OmnigentAgentProfile, CLAUDE_BUILTIN_PROFILE_ID)
+    assert claude is not None
+    assert claude.state == "active"
+    assert claude.default_for_runtime is False
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == claude.active_version,
+        )
+    )
+    assert version.validation_result["ready"] is True
+    assert version.document["source"] == {
+        "upstreamId": "ag_claude",
+        "upstreamVersion": "2",
+    }
+    assert version.document["harness"] == "claude-native"
+    assert version.document["policyRef"] == "claude-on-demand@1"
+    assert version.document["providerRequirements"] == {
+        "credentialSource": "oauth_volume",
+        "materializationMode": "oauth_home",
+        "providerIds": ["anthropic"],
+        "runtimeId": "claude_code",
+    }
+    provider = SimpleNamespace(
+        profile_id="claude_anthropic_oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        execution_configuration=None,
+    )
+    selection = await profile_execution_selection(session, provider, None)
+    assert selection["profileId"] == CLAUDE_BUILTIN_PROFILE_ID
+    assert selection["harnessId"] == "claude-native"
+    assert selection["launchPolicyRef"] == "claude-on-demand@1"
+
+    assert await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+    assert (
+        await session.scalar(
+            select(func.count())
+            .select_from(OmnigentAgentProfileVersion)
+            .where(OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID)
+        )
+        == 1
+    )
+
+    next_shared_image = (
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "4" * 64
+    )
+    await seed_bootstrap_policies(
+        session,
+        env={
+            "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "true",
+            "OMNIGENT_SHARED_HOST_IMAGE_REF": next_shared_image,
+        },
+        image_resolver=resolver,
+    )
+    assert await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+    assert claude.active_version == 2
+    assert version.document["policyRef"] == "claude-on-demand@1"
+    assert (await profile_execution_selection(session, provider, None))[
+        "launchPolicyRef"
+    ] == "claude-on-demand@2"
+    policy_cutover = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == claude.active_version,
+        )
+    )
+    assert policy_cutover.rollout_metadata["origin"] == "bootstrap_policy_cutover"
+    assert policy_cutover.rollout_metadata["managedBuiltin"] == "claude"
+
+    inventory[1] = {**inventory[1], "version": "3"}
+    assert await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+    projection = await session.get(
+        OmnigentUpstreamAgentProjection,
+        projection_identity("default", "ag_claude", "3"),
+    )
+    assert projection is not None
+    assert (
+        projection_readiness(
+            projection,
+            bridge_mode="proxy",
+            harness="claude-native",
+            required_capabilities=["session.start"],
+        )["ready"]
+        is True
+    )
+    active = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == claude.active_version,
+        )
+    )
+    assert active.rollout_metadata["origin"] == "builtin_claude"
+    assert active.rollout_metadata["managedBuiltin"] == "claude"
+    assert active.created_by is None
+    assert await reconcile_builtin_claude_agent_profile(session, inventory=inventory)
+    assert claude.active_version == 3
+    assert version.document["source"]["upstreamVersion"] == "2"
+    assert (await profile_execution_selection(session, provider, None))["version"] == 3
+
+    claude.state = "disabled"
+    await session.commit()
+    inventory[1] = {**inventory[1], "version": "4"}
+    assert not await reconcile_builtin_claude_agent_profile(
+        session, inventory=inventory
+    )
+    assert claude.active_version == 3
+
+
 async def test_seed_does_not_claim_ready_before_upstream_identity_is_observed(session):
     assert await seed_bootstrap_agent_profile(session, env={}) is None
     assert await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID) is None
 
 
 async def test_reconcile_uses_stable_upstream_id_when_selector_matches_name(session):
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("agent-1", name="codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("agent-1", name="codex-native-ui"),
+        )
+        is True
+    )
     version = await session.scalar(
         select(OmnigentAgentProfileVersion).where(
             OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID
@@ -266,11 +429,14 @@ async def test_reconcile_preserves_numeric_stock_agent_version(session):
     inventory = _inventory("agent-1", name="codex-native-ui")
     inventory[0]["version"] = 2
 
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=inventory,
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=inventory,
+        )
+        is True
+    )
 
     version = await session.scalar(
         select(OmnigentAgentProfileVersion).where(
@@ -283,12 +449,65 @@ async def test_reconcile_preserves_numeric_stock_agent_version(session):
     }
 
 
-async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
-    assert await reconcile_bootstrap_agent_profile(
+async def test_reconcile_builtin_claude_allows_versionless_stock_entry(session):
+    """A stock Claude entry without `version` must still materialize (#4546)."""
+
+    shared_image = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
+    env = {
+        "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "true",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF": shared_image,
+    }
+
+    async def resolver(image_ref: str) -> str:
+        if "host-moonmind" in image_ref:
+            return shared_image
+        return (
+            "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+            if "host" in image_ref
+            else "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+        )
+
+    await seed_bootstrap_policies(session, env=env, image_resolver=resolver)
+    inventory = [
+        {
+            "id": "ag_claude",
+            "name": "claude-native-ui",
+            "harness": "claude-native",
+            "capabilities": ["session.start"],
+        }
+    ]
+    await synchronize_upstream_inventory(
         session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+        endpoint_ref="default",
+        bridge_mode="proxy",
+        inventory=inventory,
+    )
+    await session.commit()
+
+    assert (
+        await reconcile_builtin_claude_agent_profile(
+            session, inventory=inventory, env=env
+        )
+        is True
+    )
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID
+        )
+    )
+    assert version is not None
+    assert version.document["source"] == {"upstreamId": "ag_claude"}
+
+
+async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
 
     session.add_all(
         [
@@ -313,11 +532,14 @@ async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
     )
     await session.commit()
 
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
 
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert profile is not None
@@ -326,10 +548,7 @@ async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
         (
             await session.execute(
                 select(OmnigentAgentProfileVersion)
-                .where(
-                    OmnigentAgentProfileVersion.profile_id
-                    == BOOTSTRAP_PROFILE_ID
-                )
+                .where(OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID)
                 .order_by(OmnigentAgentProfileVersion.version)
             )
         )
@@ -343,8 +562,7 @@ async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
     assert versions[1].parent_version == 1
     cutover = await session.scalar(
         select(OmnigentAgentProfileAuditEvent).where(
-            OmnigentAgentProfileAuditEvent.action
-            == "bootstrap_launch_policy_cutover"
+            OmnigentAgentProfileAuditEvent.action == "bootstrap_launch_policy_cutover"
         )
     )
     assert cutover is not None
@@ -514,11 +732,14 @@ async def test_managed_default_moves_to_the_launch_ready_opencode_builtin(
 ):
     """MoonLadderStudios/MoonMind#3877: the OpenCode built-in is the deployment default."""
 
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
     codex = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert codex is not None and codex.default_for_runtime is True
 
@@ -561,9 +782,7 @@ async def test_managed_default_reconciliation_is_idempotent(session, monkeypatch
         await session.scalar(
             select(func.count())
             .select_from(OmnigentAgentProfileAuditEvent)
-            .where(
-                OmnigentAgentProfileAuditEvent.action == "managed_default_selected"
-            )
+            .where(OmnigentAgentProfileAuditEvent.action == "managed_default_selected")
         )
         == 1
     )
@@ -574,11 +793,14 @@ async def test_disabled_opencode_support_keeps_the_codex_bootstrap_default(
 ):
     """A kill switch is an explicit disable, so the fallback default stays."""
 
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
     # Catalog synchronization records ``support-qualification: not ready`` in the
     # built-in version when the OpenCode kill switch is off.
     await _add_ready_opencode_builtin_profile(session, monkeypatch, ready=False)
@@ -596,11 +818,14 @@ async def test_losing_opencode_readiness_returns_the_default_to_the_fallback(
 ):
     """A managed default must never remain on a profile that cannot launch."""
 
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
     await _add_ready_opencode_builtin_profile(session, monkeypatch)
     assert (
         await reconcile_managed_default_agent_profile(session, env={})
@@ -628,11 +853,14 @@ async def test_losing_opencode_readiness_returns_the_default_to_the_fallback(
 async def test_env_agent_override_preserves_the_current_managed_default(
     session, monkeypatch
 ):
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"},
-        inventory=_inventory("codex-default"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"},
+            inventory=_inventory("codex-default"),
+        )
+        is True
+    )
     await _add_ready_opencode_builtin_profile(session, monkeypatch)
 
     selected = await reconcile_managed_default_agent_profile(
@@ -646,11 +874,14 @@ async def test_env_agent_override_preserves_the_current_managed_default(
 
 
 async def test_operator_made_default_is_never_displaced(session, monkeypatch):
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
     session.add(
         OmnigentAgentProfileAuditEvent(
             profile_id=BOOTSTRAP_PROFILE_ID,
@@ -695,11 +926,14 @@ async def test_superseded_operator_selection_no_longer_pins_the_default(
     automatic reconciliation had fallen back to it.
     """
 
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
     await _add_ready_opencode_builtin_profile(session, monkeypatch)
     selected_at = datetime.now(timezone.utc)
     session.add_all(
@@ -751,11 +985,14 @@ async def test_no_launch_ready_managed_profile_clears_the_stale_default(
     instead of reporting that no default is available.
     """
 
-    assert await reconcile_bootstrap_agent_profile(
-        session,
-        env={},
-        inventory=_inventory("codex-native-ui"),
-    ) is True
+    assert (
+        await reconcile_bootstrap_agent_profile(
+            session,
+            env={},
+            inventory=_inventory("codex-native-ui"),
+        )
+        is True
+    )
     bootstrap = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert bootstrap is not None
     assert bootstrap.default_for_runtime is True

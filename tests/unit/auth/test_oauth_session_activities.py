@@ -476,12 +476,37 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
 
 
 @pytest.mark.asyncio
-async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
+@pytest.mark.parametrize(
+    ("binding_shape", "host_mode"),
+    [
+        ("new", "on_demand_docker"),
+        ("saved_policy", "on_demand_docker"),
+        ("saved_policy", "static_compose"),
+        ("legacy", "on_demand_docker"),
+        ("legacy", "static_compose"),
+    ],
+)
+@pytest.mark.parametrize("runtime_id", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("policy_available", [True, False])
+async def test_revalidate_bound_host_resolves_missing_launch_metadata(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    binding_shape: str,
+    host_mode: str,
+    runtime_id: str,
+    policy_available: bool,
 ) -> None:
+    provider = "claude" if runtime_id == "claude_code" else "codex"
+    mode = "static" if host_mode == "static_compose" else "on-demand"
+    policy_id = f"{provider}-{mode}"
+    policy_ref = f"{policy_id}@15"
+    execution_profile_ref = f"omnigent-{provider}@1"
+    legacy_binding = binding_shape != "new"
+    endpoint_ref = "chosen-endpoint" if legacy_binding else "default"
+    monkeypatch.setenv("OAUTH_TEST_SECRET", "private-environment-value")
     launch = {
         "snapshotRef": "omnigent-launch:sha256:first-enrollment",
-        "hostMode": "on_demand_docker",
+        "hostMode": host_mode,
     }
     binding = SimpleNamespace(
         host_launch_profile_ref="codex-on-demand@1",
@@ -500,6 +525,27 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
             pass
 
         async def refresh_binding_generation(self, _profile_id: str):
+            if legacy_binding:
+                return SimpleNamespace(
+                    effective_launch_snapshot=None,
+                    execution_profile_ref=(
+                        execution_profile_ref
+                        if binding_shape == "saved_policy"
+                        else None
+                    ),
+                    launch_policy_ref=(
+                        policy_ref if binding_shape == "saved_policy" else None
+                    ),
+                    host_launch_profile_ref=(
+                        "bootstrap-substrate"
+                        if host_mode == "on_demand_docker"
+                        else None
+                    ),
+                    endpoint_ref=endpoint_ref,
+                    static_host_id=(
+                        "chosen-static-host" if host_mode == "static_compose" else None
+                    ),
+                )
             return None
 
         async def create_or_update_static_binding(self, **kwargs):
@@ -520,8 +566,22 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
         def __init__(self, _session) -> None:
             pass
 
-        async def resolve_runtime_snapshot(self, policy_ref: str):
-            assert policy_ref == "codex-on-demand@1"
+        async def resolve_runtime_snapshot(self, selected_policy_ref: str):
+            assert binding_shape == "saved_policy"
+            assert selected_policy_ref == policy_ref
+            if not policy_available:
+                raise ValueError(
+                    f"policy {policy_ref} unavailable token=private-token private-environment-value"
+                )
+            return {"policyRef": selected_policy_ref}
+
+        async def resolve_default_runtime_snapshot(self, selected_policy_id: str):
+            assert binding_shape != "saved_policy"
+            assert selected_policy_id == policy_id
+            if not policy_available:
+                raise ValueError(
+                    f"policy {policy_id} unavailable token=private-token private-environment-value"
+                )
             return {"policyRef": policy_ref}
 
     class Runtime:
@@ -530,6 +590,7 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
 
         async def validate_credential_mount(self, **kwargs):
             observed["probe"] = kwargs
+            assert kwargs["binding"].effective_launch_snapshot == launch
             return {"validationMode": "credential_only"}
 
         async def stop_host(self, **_kwargs):
@@ -543,7 +604,7 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
     async def session_maker():
         class Database:
             async def get(self, _model, _profile_id):
-                return SimpleNamespace(runtime_id="codex_cli")
+                return SimpleNamespace(runtime_id=runtime_id)
 
         yield Database()
 
@@ -556,9 +617,7 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
     monkeypatch.setattr(
         "moonmind.workflows.adapters.omnigent_client.OmnigentHttpClient", Client
     )
-    monkeypatch.setattr(
-        "api_service.db.base.async_session_maker", session_maker
-    )
+    monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
     monkeypatch.setattr(
         "api_service.services.omnigent_policies.OmnigentPolicyService", PolicyService
     )
@@ -584,17 +643,52 @@ async def test_revalidate_bound_host_creates_binding_for_first_enrollment(
         }
     )
 
+    if not policy_available:
+        assert result["status"] == "validation_unavailable"
+        assert observed == {}
+        assert lease.status == "allocating"
+        assert f"policy {policy_id}" in caplog.text
+        assert "unavailable" in caplog.text
+        assert "private-token" not in caplog.text
+        assert "private-environment-value" not in caplog.text
+        return
     assert result["status"] == "ready"
     assert observed["binding"] == {
         "profile_id": "codex_openai_oauth",
-        "endpoint_ref": "default",
-        "host_launch_profile_ref": "codex-on-demand@1",
-        "execution_profile_ref": "omnigent-codex@1",
-        "launch_policy_ref": "codex-on-demand@1",
+        "endpoint_ref": endpoint_ref,
+        "static_host_id": (
+            "chosen-static-host"
+            if legacy_binding and host_mode == "static_compose"
+            else None
+        ),
+        "host_launch_profile_ref": (
+            policy_ref if host_mode == "on_demand_docker" else None
+        ),
+        "execution_profile_ref": execution_profile_ref,
+        "launch_policy_ref": policy_ref,
         "effective_launch_snapshot": launch,
     }
     assert observed["probe"]["binding"] is binding
     assert lease.status == "stopped"
+
+    if legacy_binding:
+        # Even a saved/default policy must not silently change the bound mode.
+        observed.clear()
+        launch["hostMode"] = (
+            "static_compose" if host_mode == "on_demand_docker" else "on_demand_docker"
+        )
+        result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": "oas-first-enrollment",
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-first-enrollment",
+            }
+        )
+        assert result["status"] == "validation_unavailable"
+        assert observed == {}
+        assert (
+            f"OAuth policy {policy_ref} conflicts with bound host mode" in caplog.text
+        )
 
 
 @pytest.mark.asyncio

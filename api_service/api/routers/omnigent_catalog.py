@@ -66,7 +66,11 @@ from moonmind.omnigent.exact_artifact_conformance import (
     ExactArtifactConformanceError,
     assert_exact_artifact_evidence,
 )
-from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
+from moonmind.omnigent.execution_profiles import (
+    POLICIES,
+    PROFILES,
+    resolve_policy_image_refs,
+)
 from moonmind.omnigent.harness_platform.harness_registry import harness_registration
 from moonmind.omnigent.live_verification_health import (
     LiveVerificationHealthError,
@@ -79,6 +83,7 @@ from moonmind.omnigent.settings import (
     opencode_support_enabled,
     resolved_server_url,
 )
+from moonmind.provider_profiles.lease_client import DurableLeaseState
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import _compatibility_diagnostics, get_bridge_config
@@ -374,6 +379,11 @@ _REASONS: dict[str, tuple[str, str]] = {
     ),
     "execution_profile_unavailable": (
         "Enable a compatible Omnigent execution profile.",
+        "/settings#omnigent",
+    ),
+    "launch_policy_unavailable": (
+        "The selected Omnigent launch policy has not been activated. Retry after "
+        "deployment policy reconciliation completes.",
         "/settings#omnigent",
     ),
     "on_demand_backend_unavailable": (
@@ -982,22 +992,8 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
     )
 
 
-def _resolved_policy_images(policy: Any) -> tuple[str, str]:
-    values = []
-    for value, variable in (
-        (policy.server_image_ref, "OMNIGENT_IMAGE_REF"),
-        (policy.host_image_ref, "OMNIGENT_HOST_IMAGE_REF"),
-    ):
-        values.append(
-            os.getenv(variable, "").strip()
-            if value.startswith("bootstrap://")
-            else value
-        )
-    return values[0], values[1]
-
-
 def _policy_images_ready(policy: Any) -> bool:
-    values = _resolved_policy_images(policy)
+    values = resolve_policy_image_refs(policy)
     placeholder_digest = "0" * 64
     return all(
         _DIGEST_IMAGE.fullmatch(value)
@@ -1131,13 +1127,19 @@ async def get_omnigent_codex_catalog_readiness(
     )
     active_slot_counts: dict[str, int] = {}
     for slot in active_slots:
-        if slot.expires_at is None or slot.expires_at > now:
-            active_slot_counts[slot.profile_id] = (
-                active_slot_counts.get(slot.profile_id, 0) + 1
-            )
+        # The durable lease state owns capacity. Released rows remain as
+        # fencing tombstones, sometimes until after their original expiry.
+        # Conversely, an expired held/cleanup row still spends its slot until
+        # cleanup is confirmed. Unknown and pre-contract states fail closed.
+        if getattr(slot, "lease_state", None) == DurableLeaseState.RELEASED.value:
+            continue
+        active_slot_counts[slot.profile_id] = (
+            active_slot_counts.get(slot.profile_id, 0) + 1
+        )
 
     eligible: list[EligibleProviderProfile] = []
     eligible_by_runtime: dict[str, int] = {}
+    saturated_by_runtime: set[str] = set()
     ineligible: list[IneligibleProviderProfile] = []
     saturated_by_profile: dict[str, bool] = {}
     for row in rows:
@@ -1185,6 +1187,8 @@ async def get_omnigent_codex_catalog_readiness(
             # A busy profile that queues can still accept new work, so it is
             # not saturated from the admission surface's point of view.
             saturated_by_profile[row.profile_id] = busy and not queue_when_busy
+            if saturated_by_profile[row.profile_id]:
+                saturated_by_runtime.add(runtime_id)
         # MoonLadderStudios/MoonMind#4021 req-4/req-5: the credentialless free
         # route additionally needs the recorded per-policy-version data-use
         # authorization from the existing Settings authority, the exact
@@ -1362,6 +1366,17 @@ async def get_omnigent_codex_catalog_readiness(
         else None
     )
 
+    from moonmind.omnigent.runtime_provider_rollout import RuntimeProviderPathClass
+    from moonmind.workflows.executions.runtime_target_selection import (
+        resolve_runtime_target_catalog,
+    )
+
+    claude_generic_admitted = any(
+        target.harness_id == "claude-native"
+        and target.path_class is RuntimeProviderPathClass.generic_omnigent
+        and target.explicit_selection_allowed
+        for target in resolve_runtime_target_catalog()
+    )
     profile_views: list[ExecutionProfileReadiness] = []
     available_modes: list[str] = []
     for profile in PROFILES.values():
@@ -1371,6 +1386,11 @@ async def get_omnigent_codex_catalog_readiness(
         if profile.provider_runtime == "opencode":
             continue
         profile_reasons = list(deployment_reasons)
+        rollout_available = (
+            profile.provider_runtime != "claude_code" or claude_generic_admitted
+        )
+        if not rollout_available:
+            profile_reasons.append(_reason("runtime_provider_rollout_unavailable"))
         provider_slug = (
             "claude" if profile.provider_runtime == "claude_code" else "codex"
         )
@@ -1380,6 +1400,11 @@ async def get_omnigent_codex_catalog_readiness(
         persisted_default_ref: str | None = None
         unavailable_policy_reasons: list[GateReason] = []
         for policy in POLICIES.values():
+            if profile.provider_runtime == "claude_code":
+                # Claude executes through the persisted generic planner. A
+                # code-level template cannot substitute for active policy
+                # authority when the rollout gate is enabled.
+                continue
             if not policy.policy_id.startswith(provider_slug + "-"):
                 continue
             policy_reasons: list[GateReason] = []
@@ -1486,14 +1511,23 @@ async def get_omnigent_codex_catalog_readiness(
             for reason in unavailable_policy_reasons:
                 if reason.code not in {existing.code for existing in profile_reasons}:
                     profile_reasons.append(reason)
+            if profile.provider_runtime == "claude_code":
+                profile_reasons.append(_reason("launch_policy_unavailable"))
         if not eligible_by_runtime.get(profile.provider_runtime):
-            profile_reasons.append(_reason("no_eligible_codex_oauth_profile"))
+            profile_reasons.append(
+                _reason(
+                    "profile_capacity_unavailable"
+                    if profile.provider_runtime in saturated_by_runtime
+                    else "no_eligible_codex_oauth_profile"
+                )
+            )
         profile_views.append(
             ExecutionProfileReadiness(
                 ref=profile.ref,
                 displayName=profile.display_name,
                 available=(
                     profile.enabled
+                    and rollout_available
                     and bool(launch_policies)
                     and bool(eligible_by_runtime.get(profile.provider_runtime))
                     and not deployment_reasons
@@ -1536,7 +1570,7 @@ async def get_omnigent_codex_catalog_readiness(
         and (
             any(
                 _images_match_observed(
-                    *_resolved_policy_images(policy), observed_deployment
+                    *resolve_policy_image_refs(policy), observed_deployment
                 )
                 for policy in POLICIES.values()
                 if _policy_images_ready(policy)

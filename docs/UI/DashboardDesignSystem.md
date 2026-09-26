@@ -474,6 +474,14 @@ Rules:
 - preserve horizontal space for comparison instead of collapsing into stacked cards on desktop
 - use cards only for narrow/mobile layouts
 
+Mobile record cards (MoonMind#4559) stack label above value at full record
+width; actions get their own wrapping area below the fields instead of
+competing inside a label column. The shared `DataTable` responsive cards carry
+loading/error/empty states because mobile CSS hides the table that holds those
+states on desktop. Fieldsets keep native grouping with `min-inline-size: 0` so
+single-column forms fit narrow screens; tier legends hold only the group name
+while Duplicate/Remove wrap in a separate action area.
+
 ### 10.6 Column economics
 
 Desktop tables should prioritize comparison.
