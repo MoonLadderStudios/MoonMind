@@ -243,6 +243,171 @@ def test_classify_tool_attachment_distinguishes_image_legacy_and_other() -> None
 
 
 @pytest.mark.asyncio
+async def test_launcher_mounts_bind_workspace_and_skills_while_skipping_image_tools() -> None:
+    """P1: local-daemon bind projections must still mount; only image tools skip."""
+    calls: list[list[str]] = []
+
+    class Backend:
+        async def run(self, argv, **_kwargs):
+            calls.append(list(argv))
+            return (0, "container-id" if argv[1] == "create" else "", "")
+
+    class Scripts:
+        def build_entrypoint(self, **_kwargs):
+            return "exec true", {}
+
+    launcher = DockerOmnigentHostLauncher(
+        backend=Backend(),
+        runtime_scripts=Scripts(),
+        server_url="http://omnigent:8000",
+    )
+    host_class = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+            "omnigentVersion": "0.11.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {"readOnlyRoot": True},
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+    spec = HostLaunchSpec.model_validate(
+        {
+            "executionPlanRef": "plan:one",
+            "stepExecutionId": "step-1",
+            "runtimeBindingId": "binding-1",
+            "hostLeaseRef": "host-lease:one",
+            "hostLeaseGeneration": 1,
+            "hostClassRef": host_class.ref,
+            "imageRef": host_class.imageRef,
+            "serverEndpointRef": "default",
+            "serverUrl": "http://omnigent:8000",
+            "networkRef": "moonmind_default",
+            "limits": {"cpuMillis": 2000},
+            "runtime": {},
+            "correlationName": "mm-host-bind-tools",
+            "workspaceAttachment": {
+                "kind": "bind",
+                "sourceRef": "/workspaces/run",
+                "targetPath": "/workspaces/run",
+                "accessMode": "read-write",
+            },
+            "skillAttachment": {
+                "kind": "bind",
+                "sourceRef": "/opt/moonmind-skills",
+                "targetPath": "/opt/moonmind-skills",
+                "accessMode": "read-only",
+            },
+            "toolAttachments": [
+                {
+                    "kind": "image",
+                    "sourceRef": "image:ghcr.io/example/opencode@sha256:" + "f" * 64,
+                    "targetPath": "/opt/moonmind-tools",
+                    "accessMode": "read-only",
+                    "cleanupRef": None,
+                    "toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64,
+                    "tools": [],
+                }
+            ],
+            "stateAttachment": {
+                "kind": "volume",
+                "sourceRef": "mm-host-state-test",
+                "targetPath": "/home/app/.omnigent",
+                "accessMode": "read-write",
+            },
+            "labels": {},
+        }
+    )
+    await launcher.launch(
+        spec=spec,
+        host_class=host_class,
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+    create = next(argv for argv in calls if argv[:2] == ["docker", "create"])
+    assert "type=bind,src=/workspaces/run,dst=/workspaces/run" in create
+    assert (
+        "type=bind,src=/opt/moonmind-skills,dst=/opt/moonmind-skills,readonly"
+        in create
+    )
+    assert not any("/opt/moonmind-tools" in item for item in create)
+
+
+@pytest.mark.asyncio
+async def test_materialize_binds_manifest_bundle_version_to_selected_image(
+    tmp_path: Path,
+) -> None:
+    """P1: attachment binds manifest bundle version to the selected image."""
+    backend = SimpleNamespace(run=AsyncMock())
+    service = OmnigentMountedToolService(backend=backend, manifest_path=_manifest(tmp_path))
+    result = await service.materialize(
+        {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["gh"]},
+        image_ref="example/host@sha256:" + "a" * 64,
+    )
+    assert result[0]["sourceRef"] == "image:example/host@sha256:" + "a" * 64
+    assert result[0]["manifestBundleVersion"] == ""  # fixture has no bundleVersion
+    backend.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_materialize_prefers_plan_snapshotted_tool_manifest(tmp_path: Path) -> None:
+    """P1: in-flight plans keep their snapshotted metadata, not the new manifest."""
+    manifest = tmp_path / "manifest.lock.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "bundleVersion": "gh-2.76.2-container-v1",
+                "tools": [
+                    {
+                        "name": "gh",
+                        "version": "2.76.2",
+                        "path": "bin/gh",
+                        "versionProbe": ["--version"],
+                        "platforms": {"linux/amd64": {"executableSha256": "a" * 64}},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = OmnigentMountedToolService(
+        backend=SimpleNamespace(run=AsyncMock()), manifest_path=manifest
+    )
+    snapshotted = {
+        "toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64,
+        "tools": ["gh"],
+        "toolManifest": {
+            "bundleVersion": "gh-2.0.0-container-v0",
+            "tools": {
+                "gh": {
+                    "version": "2.0.0",
+                    "path": "bin/gh",
+                    "versionProbe": ["--version"],
+                    "platforms": {"linux/amd64": {"executableSha256": "0" * 64}},
+                }
+            },
+        },
+    }
+    result = await service.materialize(
+        snapshotted, image_ref="example/host@sha256:" + "a" * 64
+    )
+    assert result[0]["manifestBundleVersion"] == "gh-2.0.0-container-v0"
+    assert result[0]["tools"][0]["version"] == "2.0.0"
+    assert result[0]["tools"][0]["executableDigests"] == ["0" * 64]
+    current = await service.materialize(
+        {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["gh"]},
+        image_ref="example/host@sha256:" + "a" * 64,
+    )
+    assert current[0]["manifestBundleVersion"] == "gh-2.76.2-container-v1"
+    assert current[0]["tools"][0]["version"] == "2.76.2"
+
+
+@pytest.mark.asyncio
 async def test_launcher_mounts_no_overlay_for_image_tools_but_drains_legacy() -> None:
     """REQ-02/REQ-06: image tools create no mount; legacy volume still drains."""
     calls: list[list[str]] = []

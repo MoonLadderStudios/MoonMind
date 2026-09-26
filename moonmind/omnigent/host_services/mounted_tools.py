@@ -60,6 +60,66 @@ def load_mounted_tool_manifest(
     }
 
 
+def _load_manifest_bundle(
+    manifest_path: str | Path,
+) -> tuple[dict[str, dict[str, Any]], str]:
+    """Return (tools, bundleVersion) from the deployment manifest file."""
+
+    path = Path(manifest_path).resolve()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rows = payload["tools"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise HarnessPlatformError(
+            "deployment mounted-tool manifest is unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        ) from exc
+    if not isinstance(rows, list):
+        raise HarnessPlatformError(
+            "deployment mounted-tool manifest is malformed",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    tools = {
+        str(row.get("name") or "").strip().lower(): dict(row)
+        for row in rows
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    }
+    bundle_version = ""
+    try:
+        bundle_version = str(payload.get("bundleVersion") or "").strip()
+    except Exception:
+        bundle_version = ""
+    return tools, bundle_version
+
+
+def _snapshot_manifest_bundle(resolved_tools: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], str] | None:
+    """Return plan-snapshotted tool metadata when the plan carries it.
+
+    In-flight plans created before a tool upgrade keep the metadata they were
+    planned against; combining their retained image reference with the current
+    deployment manifest would otherwise attest the old image against the new
+    manifest version. A snapshot binds versions, probes, and digests to the
+    selected image at plan time instead.
+    """
+
+    snapshot = resolved_tools.get("toolManifest")
+    if not isinstance(snapshot, dict):
+        return None
+    raw_tools = snapshot.get("tools")
+    if not isinstance(raw_tools, dict) or not raw_tools:
+        return None
+    tools: dict[str, dict[str, Any]] = {}
+    for key, value in raw_tools.items():
+        if not isinstance(value, dict):
+            return None
+        name = str(key or "").strip().lower()
+        if not name:
+            return None
+        tools[name] = dict(value)
+    bundle_version = str(snapshot.get("bundleVersion") or "").strip()
+    return tools, bundle_version
+
+
 def deployment_mounted_tool_names(
     manifest_path: str | Path | None = None,
 ) -> tuple[str, ...]:
@@ -135,7 +195,11 @@ class OmnigentMountedToolService:
         )
         if not names:
             return []
-        manifest = self._manifest()
+        snapshotted = _snapshot_manifest_bundle(resolved_tools)
+        if snapshotted is not None:
+            manifest, bundle_version = snapshotted
+        else:
+            manifest, bundle_version = _load_manifest_bundle(self._manifest_path)
         unknown = sorted(set(names) - set(manifest))
         if unknown:
             raise HarnessPlatformError(
@@ -162,6 +226,7 @@ class OmnigentMountedToolService:
                 "accessMode": "read-only",
                 "cleanupRef": None,
                 "toolDeliveryRef": delivery_ref,
+                "manifestBundleVersion": bundle_version,
                 "tools": [
                     {
                         "name": name,
