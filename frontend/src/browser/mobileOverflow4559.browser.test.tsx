@@ -243,10 +243,16 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
           spillers.push(describe(h));
         }
       }
+      const select = host.querySelector('.provider-tier-editor select') as HTMLElement | null;
+      const selectRect = select?.getBoundingClientRect();
+      const label = host.querySelector('.provider-tier-editor label') as HTMLElement | null;
       console.log(
         `DIAG2 viewport=${vw} docScroll=${document.documentElement.scrollWidth}` +
           ` bodyScroll=${document.body.scrollWidth} hostScroll=${host.scrollWidth}` +
           ` media720=${window.matchMedia('(max-width: 720px)').matches}` +
+          ` selectRect=${selectRect ? `${Math.round(selectRect.left)}/${Math.round(selectRect.right)}w=${Math.round(selectRect.width)}` : 'MISSING'}` +
+          ` selectScroll=${select ? `${select.scrollWidth}/${select.clientWidth}` : '?'}` +
+          ` labelScroll=${label ? `${label.scrollWidth}/${label.clientWidth}` : '?'}` +
           ` body=[${describe(document.body)}] html=[${describe(document.documentElement)}]` +
           `\nRECT_OFFENDERS=${rectOffenders.length}\n` +
           rectOffenders.slice(0, 20).join('\n') +
