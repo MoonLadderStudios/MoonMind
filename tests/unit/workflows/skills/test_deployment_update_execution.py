@@ -2969,11 +2969,15 @@ async def test_update_skips_substrate_stage_when_already_converged(monkeypatch) 
     result = await executor.execute(_inputs())
 
     assert result.status == "COMPLETED"
-    # Converged substrate still runs no staged pass. The egress gateway is
-    # recreated unconditionally before the main up, with no pull of its own;
-    # Compose leaves it alone when it already matches the incoming
-    # configuration.
-    assert [command[0] for command in runner.commands] == ["pull", "up", "up"]
+    # Converged substrate still runs no staged pass. The gateway image is
+    # staged with the missing policy before the unconditional pre-pass
+    # alignment: a no-op when already present, and the missing-image
+    # guarantee when the release newly pins it. Compose leaves an
+    # already-matching gateway alone during the alignment itself.
+    assert [command[0] for command in runner.commands] == ["pull", "pull", "up", "up"]
+    missing_pull = runner.commands[1][1]
+    assert "sandbox-egress-proxy" in tuple(missing_pull)
+    assert "missing" in tuple(missing_pull)
     gateway_up, main_up = (command[1] for command in runner.commands if command[0] == "up")
     assert "sandbox-egress-proxy" in tuple(gateway_up)
     assert "sandbox-egress-proxy" not in tuple(main_up)
