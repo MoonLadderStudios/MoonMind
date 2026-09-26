@@ -780,7 +780,8 @@ async def finalize_oauth_session(
 
     if (
         _oauth_session_is_expired(session_obj)
-        and session_obj.status != OAuthSessionStatus.SUCCEEDED
+        and session_obj.status
+        not in {OAuthSessionStatus.SUCCEEDED, OAuthSessionStatus.REGISTERING_PROFILE}
     ):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -813,10 +814,8 @@ async def finalize_oauth_session(
                 session_obj=session_obj,
                 profile_obj=profile,
             )
-            session_obj.status = OAuthSessionStatus.SUCCEEDED
-            session_obj.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-            await db.refresh(session_obj)
+            await _stop_oauth_auth_runner(session_obj)
+            await _complete_oauth_session_workflow(session_obj.session_id)
             return _oauth_session_response(session_obj, profile=profile)
         skip_verification = True
 
@@ -1029,11 +1028,6 @@ async def finalize_oauth_session(
 
     await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
 
-    session_obj.status = OAuthSessionStatus.SUCCEEDED
-    session_obj.completed_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(session_obj)
-
     await _stop_oauth_auth_runner(session_obj)
     await _complete_oauth_session_workflow(session_obj.session_id)
 
@@ -1100,7 +1094,13 @@ async def _complete_oauth_session_workflow(session_id: str) -> None:
         complete_oauth_session_workflow,
     )
 
-    await complete_oauth_session_workflow(session_id)
+    try:
+        await complete_oauth_session_workflow(session_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Profile saved, but host validation could not be scheduled. Retry Finalize.",
+        ) from exc
 
 
 async def _fail_oauth_session_workflow(session_id: str, reason: str) -> None:

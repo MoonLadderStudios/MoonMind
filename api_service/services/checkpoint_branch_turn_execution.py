@@ -42,10 +42,18 @@ from api_service.services.omnigent_agent_profile_selection import (
 )
 from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.config.settings import settings
-from moonmind.omnigent.checkpoints import validate_restore_material
+from moonmind.omnigent.checkpoints import (
+    materialize_cold_restore_inputs,
+    validate_restore_material,
+)
 from moonmind.omnigent.profile_bound_execution import (
     compile_follow_up_retrieval_policy,
     enforce_required_follow_up_retrieval,
+)
+from moonmind.omnigent.workspace_publication import (
+    BranchPublishModeError,
+    branch_publish_mode_for_destination,
+    compile_branch_publish_mode,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.checkpoint_branch_models import CheckpointBranchTurnLaunchRequest
@@ -184,6 +192,49 @@ def _sha256(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _normalize_publish_mode_spellings(node: Any) -> Any:
+    """Canonicalize every ``publishMode`` spelling in a decoded payload."""
+
+    if isinstance(node, Mapping):
+        normalized: dict[Any, Any] = {}
+        for key, value in node.items():
+            if key == "publishMode" and isinstance(value, str):
+                try:
+                    normalized[key] = compile_branch_publish_mode(value)
+                except BranchPublishModeError:
+                    normalized[key] = value
+            else:
+                normalized[key] = _normalize_publish_mode_spellings(value)
+        return normalized
+    if isinstance(node, list):
+        return [_normalize_publish_mode_spellings(item) for item in node]
+    return node
+
+
+def _launch_retry_payloads_equivalent(existing: bytes, candidate: bytes) -> bool:
+    """Decide whether a retry payload reattaches to an owned artifact.
+
+    Turns launched before the destination-spelling handoff stored the
+    canonical ``pull_request`` spelling in their owned launch artifacts;
+    retries running the new code serialize ``pr`` for the same authorized
+    intent. The bytes differ but the publication grant is identical, so an
+    idempotent retry must reattach to the already-owned artifact instead of
+    raising ``launch_artifact_conflict``. Any other difference still fails
+    closed.
+    """
+
+    if existing == candidate:
+        return True
+    try:
+        old_doc = json.loads(existing)
+        new_doc = json.loads(candidate)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return _normalize_publish_mode_spellings(old_doc) == (
+        _normalize_publish_mode_spellings(new_doc)
+    )
+
+
 def _canonical_follow_up_retrieval(value: Any) -> dict[str, Any] | None:
     """Normalize legacy budget spelling before compiling the runtime request."""
 
@@ -242,6 +293,11 @@ class CheckpointBranchTurnExecutionOwner:
         self._artifacts = artifact_service
         self._artifact_link: dict[str, Any] | None = None
         self._turn_commands = turn_command_service
+        # Tolerances granted by the destination-authority boundary during the
+        # current launch (for example an authorized credential rotation).
+        # Reset on every _validate_source_authority call; the launch embeds
+        # them in its diagnostics artifact.
+        self._destination_authority_notes: list[str] = []
 
     def _bound_session_factory(self) -> Any:
         return (
@@ -349,15 +405,35 @@ class CheckpointBranchTurnExecutionOwner:
                     )
                 ).scalar_one_or_none()
             if artifact is not None:
-                if (
-                    artifact.sha256 not in {None, digest}
-                    or artifact.size_bytes not in {None, len(payload)}
-                    or artifact.content_type not in {None, content_type}
-                ):
-                    raise CheckpointBranchTurnLaunchError(
-                        "launch_artifact_conflict",
-                        f"owned branch-turn artifact {kind} changed across retry",
+                metadata_matches = (
+                    artifact.sha256 in {None, digest}
+                    and artifact.size_bytes in {None, len(payload)}
+                    and artifact.content_type in {None, content_type}
+                )
+                if not metadata_matches:
+                    if getattr(artifact.status, "value", artifact.status) != (
+                        "complete"
+                    ):
+                        raise CheckpointBranchTurnLaunchError(
+                            "launch_artifact_conflict",
+                            f"owned branch-turn artifact {kind} changed across retry",
+                        )
+                    _stored, existing_payload = await artifacts.read(
+                        artifact_id=artifact.artifact_id,
+                        principal=self._principal,
+                        allow_restricted_raw=True,
                     )
+                    if not _launch_retry_payloads_equivalent(
+                        existing_payload, payload
+                    ):
+                        raise CheckpointBranchTurnLaunchError(
+                            "launch_artifact_conflict",
+                            f"owned branch-turn artifact {kind} changed across retry",
+                        )
+                    # Retain the historical serialization for already-owned
+                    # artifacts: the retry carries the same grant under the
+                    # current spelling, so reattach without rewriting history.
+                    return f"artifact://{artifact.artifact_id}"
                 if getattr(artifact.status, "value", artifact.status) == "complete":
                     _stored, existing_payload = await artifacts.read(
                         artifact_id=artifact.artifact_id,
@@ -465,7 +541,43 @@ class CheckpointBranchTurnExecutionOwner:
         ManagedAgentProviderProfile,
         dict[str, Any],
     ]:
-        """Reject changed authority before a lease, host, session, or message."""
+        """Validate saved source content before live destination authority."""
+
+        self._destination_authority_notes = []
+        checkpoint, follow_up_retrieval = await self._validate_source_content(
+            branch=branch,
+            turn=turn,
+            binding=binding,
+            source=source,
+            expected_head_version=expected_head_version,
+        )
+        profile, policy_snapshot = await self._validate_destination_authority(
+            branch=branch,
+            turn=turn,
+            binding=binding,
+            checkpoint=checkpoint,
+            follow_up_retrieval=follow_up_retrieval,
+        )
+        return checkpoint, profile, policy_snapshot
+
+    async def _validate_source_content(
+        self,
+        *,
+        branch: WorkflowCheckpointBranch,
+        turn: WorkflowCheckpointBranchTurn,
+        binding: WorkflowCheckpointBranchGitBinding,
+        source: TemporalExecutionCanonicalRecord,
+        expected_head_version: int | None,
+    ) -> tuple[StepExecutionCheckpointModel, dict[str, Any] | None]:
+        """Reject changed saved content before any live authority is consulted.
+
+        Only immutable persisted inputs are compared here: the source
+        workflow/run/step/boundary pinning, artifact digests, the exact
+        predecessor output, the instruction digest, and the stored runtime
+        selection against the saved checkpoint. Saved content is not a live
+        session, credential lease, or permission, so nothing here consults
+        current provider, host, or policy state.
+        """
 
         parent_turn_id = turn.parent_turn_id or branch.parent_turn_id
         if parent_turn_id is None and source.run_id != branch.source_run_id:
@@ -747,11 +859,12 @@ class CheckpointBranchTurnExecutionOwner:
                     f"{field_name}_selection_invalid",
                     f"stored {field_name} selection is invalid",
                 )
-        publish_mode = str(selection.get("publishMode") or "none").strip().lower()
-        if publish_mode not in {"none", "branch", "pull_request"}:
+        try:
+            compile_branch_publish_mode(selection.get("publishMode"))
+        except BranchPublishModeError as exc:
             raise CheckpointBranchTurnLaunchError(
                 "publish_intent_unsupported", "stored publish intent is unsupported"
-            )
+            ) from exc
         selected_launch_policy = str(
             selection.get("launchPolicyRef") or ""
         ).strip()
@@ -826,6 +939,34 @@ class CheckpointBranchTurnExecutionOwner:
                     "agent_profile_snapshot_unavailable",
                     "immutable Agent Profile snapshot authority is unavailable",
                 )
+        return checkpoint, follow_up_retrieval
+
+    async def _validate_destination_authority(
+        self,
+        *,
+        branch: WorkflowCheckpointBranch,
+        turn: WorkflowCheckpointBranchTurn,
+        binding: WorkflowCheckpointBranchGitBinding,
+        checkpoint: StepExecutionCheckpointModel,
+        follow_up_retrieval: dict[str, Any] | None,
+    ) -> tuple[ManagedAgentProviderProfile, dict[str, Any]]:
+        """Admit the fresh branch against current destination authority.
+
+        Runs after _validate_source_content. The separately authorized fresh
+        branch uses ordinary destination admission: the live Provider Profile
+        row, the current runtime/policy resolver, and the actual supported
+        restore/capability path. Rotation of a still-authorized Profile does
+        not by itself invalidate saved content, but current revocation or
+        incompatible live-session authority still rejects. Old credentials
+        are never restored from the checkpoint: the launch manifest already
+        carries runtimeSessionReset with no source session or OAuth lease
+        reuse.
+        """
+
+        omnigent = checkpoint.omnigent
+        assert omnigent is not None
+        source_identity = checkpoint.source
+        selection = dict((branch.diagnostics or {}).get("runtimeSelection") or {})
         profile = await self._session.get(
             ManagedAgentProviderProfile, omnigent.provider_profile_id
         )
@@ -841,11 +982,12 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "provider_profile_not_ready", "Provider Profile is not launch ready"
             )
-        if profile.credential_generation != omnigent.credential_generation:
-            raise CheckpointBranchTurnLaunchError(
-                "credential_generation_changed",
-                "Provider Profile credential generation changed",
-            )
+        # Credential generation drift is not rejected here. Readiness above
+        # already established the live Profile is still authorized, so a
+        # rotation alone does not invalidate saved content. The drift is
+        # tolerated below only when the actual restore/capability path is
+        # otherwise fully valid; current revocation (rejected above) or any
+        # other incompatible live-session authority still rejects.
         selected_runtime = str(selection.get("runtimeId") or "").strip()
         current_runtime = str(
             getattr(profile.runtime_id, "value", profile.runtime_id)
@@ -925,12 +1067,42 @@ class CheckpointBranchTurnExecutionOwner:
             policy_snapshot=policy_snapshot,
         )
         if not validation.valid or not validation.branch_creation_available:
-            reason = validation.reasons[0] if validation.reasons else "unknown"
+            if validation.reasons == ["credential_generation_mismatch"]:
+                # The live Profile above is still authorized (enabled and
+                # connected), so this sole drift is an authorized credential
+                # rotation, not revoked or incompatible authority. Tolerate
+                # it and record the grant for launch diagnostics. Any
+                # additional reason still rejects below.
+                self._destination_authority_notes.append(
+                    "credential_generation_rotated"
+                )
+                # Carry the live generation into the restore contract: the
+                # launch embeds this checkpoint copy in the AgentRun request,
+                # and the downstream branch_from_checkpoint boundary compares
+                # its generation with the then-current one. Leaving the stale
+                # value would fail one boundary later.
+                omnigent.credential_generation = profile.credential_generation
+                validation = validation.model_copy(
+                    update={
+                        "valid": True,
+                        "workspace_cold_restore_available": True,
+                        "branch_creation_available": True,
+                    }
+                )
+            else:
+                reason = validation.reasons[0] if validation.reasons else "unknown"
+                raise CheckpointBranchTurnLaunchError(
+                    "checkpoint_restore_validation_failed",
+                    f"checkpoint branch restore is unavailable: {reason}",
+                )
+        try:
+            materialize_cold_restore_inputs(omnigent, validation)
+        except ValueError as exc:
             raise CheckpointBranchTurnLaunchError(
                 "checkpoint_restore_validation_failed",
-                f"checkpoint branch restore is unavailable: {reason}",
-            )
-        return checkpoint, profile, policy_snapshot
+                f"checkpoint branch restore is unavailable: {exc}",
+            ) from exc
+        return profile, policy_snapshot
 
     async def launch(
         self,
@@ -1096,7 +1268,19 @@ class CheckpointBranchTurnExecutionOwner:
         )
         model = runtime_selection.get("model") or profile.default_model
         effort = runtime_selection.get("effort") or profile.default_effort
-        publish_mode = str(runtime_selection.get("publishMode") or "none")
+        try:
+            publish_mode = compile_branch_publish_mode(
+                runtime_selection.get("publishMode")
+            )
+        except BranchPublishModeError as exc:
+            raise CheckpointBranchTurnLaunchError(
+                "publish_intent_unsupported", "stored publish intent is unsupported"
+            ) from exc
+        # The branch-canonical spelling stays in runtime selection, manifests,
+        # and API projections. The AgentExecutionRequest parameters carry the
+        # destination spelling the shared workspace publisher acts on, so an
+        # authorized pull_request intent is not silently skipped downstream.
+        destination_publish_mode = branch_publish_mode_for_destination(publish_mode)
         repository_branch = binding.work_branch
         runtime_selection = {
             **runtime_selection,
@@ -1278,7 +1462,7 @@ class CheckpointBranchTurnExecutionOwner:
                 "repository": binding.repository,
                 "startingBranch": binding.base_branch,
                 "targetBranch": binding.work_branch,
-                "publishMode": publish_mode,
+                "publishMode": destination_publish_mode,
                 "model": model,
                 "effort": effort,
                 "omnigent": {
@@ -1335,6 +1519,15 @@ class CheckpointBranchTurnExecutionOwner:
             "sourceAuthorityValidatedBeforeMutation": True,
             "sourceSessionReused": False,
             "sourceOAuthLeaseReused": False,
+            **(
+                {
+                    "destinationAuthorityTolerances": list(
+                        self._destination_authority_notes
+                    )
+                }
+                if self._destination_authority_notes
+                else {}
+            ),
         }
         diagnostics_ref = await self._write_artifact(
             content_type="application/json",

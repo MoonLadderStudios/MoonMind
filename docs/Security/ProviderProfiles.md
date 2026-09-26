@@ -1019,6 +1019,11 @@ request (Cancel validation) or hitting the client timeout only stops the
 browser from waiting: the server may still commit the credential, so the
 drawer reports the outcome as uncertain and the retry reuses the same key
 to reattach to the same operation rather than starting a conflicting one.
+The API waits for its fenced validation-lease release when a background
+revalidation task is cancelled during shutdown. Validation grants record their
+purpose-specific maximum lifetime so a missing release reaches cleanup at the
+validation bound rather than the longer execution bound. Expiry still requests
+verified cleanup; it does not free a credential slot on its own.
 
 ### 9.4 Recommended first-party API-key mappings
 

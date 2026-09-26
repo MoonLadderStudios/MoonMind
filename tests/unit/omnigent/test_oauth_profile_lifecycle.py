@@ -59,6 +59,7 @@ from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
+    HostPreflightFailure,
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
@@ -615,12 +616,67 @@ async def test_credential_mount_preflight_runs_provider_login_without_execution_
     assert "none" in command
     assert "type=volume,src=codex_auth_volume,dst=/home/app/.codex,readonly" in command
     assert "/workspaces/run" not in command
-    assert command[-4:] == (
-        launch["hostImageRef"],
-        "codex",
-        "login",
-        "status",
+    image_index = command.index(launch["hostImageRef"])
+    assert command[image_index - 2 : image_index] == ("--entrypoint", "/usr/bin/env")
+    assert command[-3:] == ("codex", "login", "status")
+    assert command[image_index + 1 : image_index + 3] == ("-u", "OPENAI_API_KEY")
+    assert all(index > image_index for index, item in enumerate(command) if item == "-u")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exit_code", "expected_code"),
+    [
+        (1, HostPreflightFailure.LOGIN_STATUS_FAILED),
+        (125, HostPreflightFailure.VALIDATION_UNAVAILABLE),
+        (127, HostPreflightFailure.VALIDATION_UNAVAILABLE),
+        (None, HostPreflightFailure.VALIDATION_UNAVAILABLE),
+    ],
+)
+async def test_credential_mount_preflight_separates_login_failure_from_docker_failure(
+    exit_code: int | None, expected_code: HostPreflightFailure
+) -> None:
+    launch = {
+        "hostImageRef": "example.invalid/omnigent-host@sha256:" + "a" * 64,
+        "providerRuntime": "codex_cli",
+        "harness": "codex-native",
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+        "limits": {
+            "cpuMillis": 1000,
+            "memoryMiB": 512,
+            "processes": 128,
+            "temporaryStorageMiB": 64,
+        },
+    }
+    binding = _binding().model_copy(update={
+        "static_host_id": None,
+        "host_launch_profile_ref": "codex-on-demand@1",
+        "effective_launch_snapshot": launch,
+    })
+    lease = _host_lease().model_copy(update={
+        "omnigent_host_id": None,
+        "status": "starting",
+        "effective_launch_snapshot": launch,
+    })
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._validate_effective_launch = MagicMock(return_value=launch)
+    runtime._container_present = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/local/bin:/usr/bin")
+    runtime._run = (
+        AsyncMock(side_effect=TimeoutError())
+        if exit_code is None
+        else AsyncMock(return_value=(exit_code, "", ""))
     )
+
+    with pytest.raises(OmnigentOAuthHostError) as failure:
+        await runtime.validate_credential_mount(
+            binding=binding,
+            host_lease=lease,
+            effective_launch=launch,
+        )
+
+    assert failure.value.code == expected_code.value
 
 
 @pytest.mark.asyncio

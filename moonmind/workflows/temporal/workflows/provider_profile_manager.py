@@ -147,6 +147,7 @@ LEASE_CLEANUP_REDRIVE_PATCH = "provider-profile-manager-lease-cleanup-redrive-v1
 ORPHANED_VALIDATION_CLEANUP_PATCH = (
     "provider-profile-manager-orphaned-validation-cleanup-v1"
 )
+VALIDATION_LEASE_EXPIRY_PATCH = "provider-profile-manager-validation-lease-expiry-v1"
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -671,6 +672,7 @@ class ProfileSlotState:
         purpose: str = "execution_direct",
         metadata: dict[str, Any] | None = None,
         allow_unready: bool = False,
+        purpose_bounded_expiry: bool = True,
     ) -> bool:
         if allow_unready:
             if self.execution_lease_count >= self.max_parallel_runs:
@@ -687,7 +689,11 @@ class ProfileSlotState:
             "expiresAt": (
                 now
                 + timedelta(
-                    seconds=self.lease_max_duration_seconds(requester_workflow_id)
+                    seconds=(
+                        self.purpose_max_duration_seconds(purpose)
+                        if purpose_bounded_expiry
+                        else self.max_lease_duration_seconds
+                    )
                 )
             ).isoformat(),
             **dict(metadata or {}),
@@ -701,6 +707,7 @@ class ProfileSlotState:
         *,
         purpose: str,
         metadata: dict[str, Any] | None = None,
+        purpose_bounded_expiry: bool = True,
     ) -> bool:
         """Record a lease that consumes no execution slot (single-flight validation).
 
@@ -724,7 +731,11 @@ class ProfileSlotState:
             "expiresAt": (
                 now
                 + timedelta(
-                    seconds=self.lease_max_duration_seconds(requester_workflow_id)
+                    seconds=(
+                        self.purpose_max_duration_seconds(purpose)
+                        if purpose_bounded_expiry
+                        else self.max_lease_duration_seconds
+                    )
                 )
             ).isoformat(),
             **dict(metadata or {}),
@@ -2459,6 +2470,7 @@ class MoonMindProviderProfileManagerWorkflow:
             workflow.now(),
             purpose=purpose,
             metadata=grant_metadata,
+            purpose_bounded_expiry=workflow.patched(VALIDATION_LEASE_EXPIRY_PATCH),
         ):
             # The identity is already held by an in-flight validator.
             return {
@@ -2656,6 +2668,11 @@ class MoonMindProviderProfileManagerWorkflow:
                         purpose=purpose,
                         metadata=grant_metadata,
                         allow_unready=True,
+                        purpose_bounded_expiry=(
+                            purpose
+                            != CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+                            or workflow.patched(VALIDATION_LEASE_EXPIRY_PATCH)
+                        ),
                     ):
                         # The in-memory reservation is tentative until the
                         # grant activity commits it. Rollover must not
