@@ -35,9 +35,9 @@ describe('DataTable (MM-959)', () => {
         loadingMessage="Loading rows..."
       />,
     );
-    const cell = screen.getByText('Loading rows...');
-    expect(cell).toBeTruthy();
-    expect(cell.getAttribute('aria-busy')).toBe('true');
+    const cells = screen.getAllByText('Loading rows...');
+    expect(cells.length).toBeGreaterThanOrEqual(1);
+    expect(cells[0]!.getAttribute('aria-busy')).toBe('true');
   });
 
   it('renders an error state with an alert role', () => {
@@ -50,8 +50,9 @@ describe('DataTable (MM-959)', () => {
         errorMessage="Boom"
       />,
     );
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain('Boom');
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts.length).toBeGreaterThanOrEqual(1);
+    expect(alerts[0]!.textContent).toContain('Boom');
   });
 
   it('sorts rows when a sortable header is activated', () => {
@@ -109,6 +110,45 @@ describe('DataTable (MM-959)', () => {
     // The cards replace the table at narrow widths, so they must remain exposed
     // to assistive tech rather than being aria-hidden.
     expect(cards?.getAttribute('aria-hidden')).toBeNull();
+  });
+
+  // MoonMind#4559: the responsive breakpoint hides the table, so states
+  // rendered only as table rows would vanish on mobile. Each state is
+  // mirrored into the card fallback (CSS keeps exactly one representation
+  // exposed per breakpoint).
+  it.each([
+    { props: { isLoading: true, loadingMessage: 'Loading rows...' }, text: 'Loading rows...' },
+    { props: { isError: true, errorMessage: 'Boom cards' }, text: 'Boom cards' },
+    { props: { data: [], emptyMessage: 'Nothing here cards' }, text: 'Nothing here cards' },
+  ])('mirrors the "$text" state into the responsive card fallback', ({ props, text }) => {
+    render(
+      <DataTable
+        data={rows}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        {...props}
+      />,
+    );
+    const cards = document.querySelector('.data-table-cards');
+    expect(cards).toBeTruthy();
+    expect(cards?.getAttribute('aria-hidden')).toBeNull();
+    const stateCard = document.querySelector('.data-table-card--state');
+    expect(stateCard).toBeTruthy();
+    expect(stateCard?.textContent).toContain(text);
+  });
+
+  it('renders no card fallback when responsive is off', () => {
+    render(
+      <DataTable
+        data={[]}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        emptyMessage="Nothing here"
+      />,
+    );
+    expect(document.querySelector('.data-table-cards')).toBeNull();
+    expect(screen.getByText('Nothing here')).toBeTruthy();
   });
 
   it('renders responsive state cards for loading/error/empty so mobile never hides table states (MoonMind#4559)', () => {
