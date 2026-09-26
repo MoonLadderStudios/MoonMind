@@ -369,9 +369,10 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs"))
         ).resolve()
-        self._tool_bundle_volume = os.getenv(
-            "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
-        )
+        # MoonLadderStudios/MoonMind#4558: the version-named tools volume is
+        # retired. The selected shared host image owns gh/moonmind at
+        # /opt/moonmind-tools; OMNIGENT_TOOL_BUNDLE_VOLUME and related stale
+        # settings are ignored so they cannot change tool selection.
         self._workspace_volume = os.getenv(
             "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"
         ).strip()
@@ -1767,7 +1768,6 @@ class OmnigentOAuthHostRuntime:
         source = self._scripts_dir.resolve()
         required_scripts = (
             "init-oauth-host.sh",
-            "moonmind-tools.sh",
             "start-codex-oauth-host.sh",
             "start-claude-oauth-host.sh",
         )
@@ -2411,14 +2411,12 @@ class OmnigentOAuthHostRuntime:
             f"type=bind,src={runtime_scripts},dst=/opt/moonmind,readonly",
             "--mount",
             "type=bind,"
-            f"src={runtime_scripts / 'moonmind-tools.sh'},"
-            "dst=/etc/profile.d/moonmind-tools.sh,readonly",
-            "--mount",
-            "type=bind,"
             f"src={runtime_scripts / 'moonmind-execution.sh'},"
             "dst=/etc/profile.d/moonmind-execution.sh,readonly",
-            "--mount",
-            f"type=volume,src={self._tool_bundle_volume},dst=/opt/moonmind-tools,readonly",
+            # MoonLadderStudios/MoonMind#4558: no tools-volume or profile
+            # mount overlays. The selected image owns /opt/moonmind-tools and
+            # /etc/profile.d/moonmind-tools.sh; mounting over them would hide
+            # the image-owned executables.
             "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
             "--mount",
@@ -3654,13 +3652,16 @@ class OmnigentOAuthHostRuntime:
         }
 
     async def _initialize_required_tools(self) -> None:
-        expected_version = os.getenv("OMNIGENT_GH_VERSION", "2.76.2")
+        # MoonLadderStudios/MoonMind#4558: probe the image-owned tools without
+        # a tools volume and without an exact-version gate. A missing or
+        # broken executable remains an actionable failure for affected runs;
+        # ordinary tool upgrades never require requalification here.
         return_code, stdout, _stderr = await self._run(
             "docker",
             "run",
             "--rm",
-            "--volume",
-            f"{self._tool_bundle_volume}:/opt/moonmind-tools:ro",
+            "--network",
+            "none",
             "--entrypoint",
             "/opt/moonmind-tools/bin/gh",
             self._image,
@@ -3668,15 +3669,14 @@ class OmnigentOAuthHostRuntime:
             check=False,
         )
         first_line = stdout.splitlines()[0] if stdout.splitlines() else ""
-        if return_code != 0 or f" {expected_version} " not in f" {first_line} ":
+        if return_code != 0 or "gh version" not in first_line:
             raise MountedToolPreflightError(
-                "The deployment-owned Omnigent tool bundle is not ready",
+                "The selected host image does not provide a working gh tool",
                 code="tool_bundle_unavailable",
                 evidence={
                     "tool": "gh",
                     "phase": "deployment_initialization",
-                    "bundleVolume": self._tool_bundle_volume,
-                    "expectedVersion": expected_version,
+                    "image": self._image,
                 },
             )
 

@@ -404,6 +404,13 @@ class DockerOmnigentHostLauncher:
         ]
         for attachment in attachments:
             kind = str(attachment["kind"])
+            if kind != "volume":
+                # Image-owned tools (MoonLadderStudios/MoonMind#4558): the
+                # selected image already carries /opt/moonmind-tools, so no
+                # mount overlay is created. Mounting anything over that path
+                # would hide the image-owned executables. PATH projection and
+                # exact-host probes still resolve them.
+                continue
             source = str(attachment["sourceRef"])
             target = str(attachment["targetPath"])
             readonly = str(attachment.get("accessMode")) == "read-only"
