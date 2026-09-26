@@ -1130,6 +1130,19 @@ async def run_job(request_file):
                 )
             else:
                 outcome = {"owner": owner, "error": error}
+        if "result" in outcome:
+            # Fleet recreation can succeed while a required post-update step
+            # fails. Retain the verified fleet receipt, but make the terminal
+            # release result and CLI exit status reflect the whole operation.
+            result = outcome["result"]
+            result["status"] = "FAILED"
+            progress = dict(result.get("progress") or {})
+            progress.update(state="FAILED", percent=100, message=error)
+            progress["events"] = [
+                *list(progress.get("events") or []),
+                {"state": "FAILED", "message": error},
+            ]
+            result["progress"] = progress
         write_record(result_file, outcome)
 
 
