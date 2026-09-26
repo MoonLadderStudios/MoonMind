@@ -122,6 +122,46 @@ async def test_refresh_resolves_real_profile_and_preserves_authored_nulls(deploy
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [[], ["opencode-go", "other-provider"]])
+async def test_refresh_keeps_pinned_provider_when_profile_acceptance_expands(
+    deployment_session, accepted,
+):
+    session = deployment_session
+    session.version.document["credentialSlots"][0]["acceptedProviderIds"] = accepted
+
+    refreshed = await selection.refresh_schedule_deployment_snapshot(
+        session, parameters=session.parameters(), consumer_id="schedule", user=None,
+    )
+
+    assert refreshed["agentProfileSnapshot"]["version"] == 2
+    assert refreshed["agentProfileSnapshot"]["providerProfileRef"] == session.provider.profile_id
+    assert refreshed["omnigent"]["launchPolicyRef"] == "omnigent-on-demand@2"
+    assert session.usage.version == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["provider_removed", "provider_unpinned", "auth_model"])
+async def test_refresh_rejects_credential_change_affecting_pinned_provider(
+    deployment_session, change,
+):
+    session = deployment_session
+    if change == "provider_removed":
+        session.version.document["credentialSlots"][0]["acceptedProviderIds"] = ["other-provider"]
+    elif change == "provider_unpinned":
+        session.previous["providerProfileRef"] = None
+        session.usage.effective_snapshot = deepcopy(session.previous)
+        session.version.document["credentialSlots"][0]["acceptedProviderIds"] = []
+    else:
+        session.version.document["credentialSlots"][0]["acceptedAuthModels"] = ["none"]
+
+    with pytest.raises(ValueError, match="scheduled Agent Profile semantics changed"):
+        await selection.refresh_schedule_deployment_snapshot(
+            session, parameters=session.parameters(), consumer_id="schedule", user=None,
+        )
+    assert session.usage.version == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("selection_values", [
     {"model": "example/selected", "effort": "xhigh"},
     {"model": None, "effort": None},
