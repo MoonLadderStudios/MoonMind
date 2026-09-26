@@ -160,6 +160,8 @@ A new profile begins with one tier whose model and effort use backend-reported r
 
 The standard form must not restore the superseded `default_model` and `default_effort` fields.
 
+On narrow viewports the form stays single-column: sections use restrained padding, fieldsets shrink to their section, and every field, label, helper message, and validation message remains inside its section (MoonLadderStudios/MoonMind#4559). Model and effort stack on phones and share a row only in sufficiently wide containers.
+
 ### 4.6 Max parallel runs
 
 `max_parallel_runs` remains visible.

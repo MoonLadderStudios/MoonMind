@@ -1226,6 +1226,8 @@ Rules:
 - Mobile layout stacks controls without horizontal scrolling.
 - Tier number and default remain visible at every breakpoint.
 - The trailing Add action remains reachable after a long tier list.
+- The tier group heading names the tier (legend holds the group name only); Duplicate/Remove live in a separate wrapping action area, never inside the legend as a toolbar.
+- Tier cards use restrained nesting and padding so fields keep usable width on phones.
 
 ---
 
