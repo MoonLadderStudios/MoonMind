@@ -212,59 +212,6 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
     }
   });
 
-  it('diagnoses webkit provider overflow (TEMPORARY DIAGNOSTIC)', async () => {
-    const host = renderProviderComposition();
-    try {
-      await page.viewport(320, 568);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const vw = window.innerWidth;
-      const describe = (el: Element | null) => {
-        if (!el) return 'MISSING';
-        const h = el as HTMLElement;
-        const cs = getComputedStyle(h);
-        const rect = h.getBoundingClientRect();
-        return (
-          `${h.tagName}${h.className ? `.${String(h.className).split(' ').filter(Boolean).slice(0, 3).join('.')}` : ''}` +
-          ` rect=[${Math.round(rect.left)},${Math.round(rect.right)}]w=${Math.round(rect.width)}` +
-          ` scrollW=${h.scrollWidth} clientW=${h.clientWidth}` +
-          ` display=${cs.display} pos=${cs.position} ws=${cs.whiteSpace} ow=${cs.overflowWrap}` +
-          ` w=${cs.width} minW=${cs.minWidth} maxW=${cs.maxWidth}`
-        );
-      };
-      const spillers: string[] = [];
-      const rectOffenders: string[] = [];
-      const all = [host, ...Array.from(host.querySelectorAll('*'))] as HTMLElement[];
-      for (const h of all) {
-        const rect = h.getBoundingClientRect();
-        if (rect.right > vw + 1) {
-          rectOffenders.push(describe(h));
-        }
-        if (h.scrollWidth > h.clientWidth + 1 && h.clientWidth > 0) {
-          spillers.push(describe(h));
-        }
-      }
-      const select = host.querySelector('.provider-tier-editor select') as HTMLElement | null;
-      const selectRect = select?.getBoundingClientRect();
-      const label = host.querySelector('.provider-tier-editor label') as HTMLElement | null;
-      console.log(
-        `DIAG2 viewport=${vw} docScroll=${document.documentElement.scrollWidth}` +
-          ` bodyScroll=${document.body.scrollWidth} hostScroll=${host.scrollWidth}` +
-          ` media720=${window.matchMedia('(max-width: 720px)').matches}` +
-          ` selectRect=${selectRect ? `${Math.round(selectRect.left)}/${Math.round(selectRect.right)}w=${Math.round(selectRect.width)}` : 'MISSING'}` +
-          ` selectScroll=${select ? `${select.scrollWidth}/${select.clientWidth}` : '?'}` +
-          ` labelScroll=${label ? `${label.scrollWidth}/${label.clientWidth}` : '?'}` +
-          ` body=[${describe(document.body)}] html=[${describe(document.documentElement)}]` +
-          `\nRECT_OFFENDERS=${rectOffenders.length}\n` +
-          rectOffenders.slice(0, 20).join('\n') +
-          `\nSCROLL_SPILLERS=${spillers.length}\n` +
-          spillers.slice(0, 40).join('\n'),
-      );
-    } finally {
-      host.remove();
-      await page.viewport(1280, 800);
-    }
-  });
-
   it('stacks provider cards and tier fields at 320px without squeezed label columns', async () => {
     const host = renderProviderComposition();
     try {
