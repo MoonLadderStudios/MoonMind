@@ -90,6 +90,50 @@ describe('DataTable (MM-959)', () => {
     expect(screen.getByRole('cell', { name: 'Edit Beta' }).getAttribute('data-column-key')).toBe('actions');
   });
 
+  it('renders loading, error, and empty states in the responsive card fallback', () => {
+    // MoonLadderStudios/MoonMind#4559: mobile CSS hides the table that holds
+    // the state rows, so the card fallback must carry those states too.
+    const { unmount } = render(
+      <DataTable
+        data={[]}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        isLoading
+        loadingMessage="Loading rows..."
+      />,
+    );
+    expect(document.querySelector('.data-table-cards')).not.toBeNull();
+    expect(document.querySelector('.data-table-cards')!.textContent).toContain('Loading rows...');
+    unmount();
+
+    const { unmount: unmountError } = render(
+      <DataTable
+        data={[]}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        isError
+        errorMessage="Boom"
+      />,
+    );
+    expect(document.querySelector('.data-table-cards')).not.toBeNull();
+    expect(document.querySelector('.data-table-cards')!.textContent).toContain('Boom');
+    unmountError();
+
+    render(
+      <DataTable
+        data={[]}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        responsive
+        emptyMessage="Nothing here"
+      />,
+    );
+    expect(document.querySelector('.data-table-cards')).not.toBeNull();
+    expect(document.querySelector('.data-table-cards')!.textContent).toContain('Nothing here');
+  });
+
   it('renders a row actions column and responsive card fallback', () => {
     render(
       <DataTable

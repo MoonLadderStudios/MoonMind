@@ -114,6 +114,8 @@ These commands cover:
 
 Run real-browser regressions locally with `npm run ui:test:browser`; it defaults to Chromium and Firefox. To reproduce one CI matrix leg, set `MOONMIND_BROWSER_ENGINES=chromium` or `MOONMIND_BROWSER_ENGINES=firefox`. For the targeted form/fieldset/overlay leg (MoonMind#4559), set `MOONMIND_BROWSER_ENGINES=webkit`. CI supplies the matching browsers from its pinned Playwright container and runs the targeted WebKit file in `frontend-browser-webkit-targeted`.
 
+Layout-overflow regressions for narrow phones live in `frontend/src/browser/mobileOverflow.browser.test.tsx` (MoonLadderStudios/MoonMind#4559). Those cases render the production components with the production stylesheet inside the shared shell composition and assert element bounds against the real content and clip ancestors at 320px and representative wider widths — a scrollbar-only assertion would miss defects hidden by the shell's `overflow-x: clip`. A targeted WebKit leg runs that file with `MOONMIND_BROWSER_ENGINES=webkit` (the `frontend-browser-webkit` CI job, selected through `tools/select_test_suites.py` for form/fieldset/overlay surface changes); the guard in `frontend/vitest.browser.config.ts` accepts `chromium`, `firefox`, and `webkit`.
+
 ### Native Workflow Chat browser verification
 
 The product requirements are owned by [Workflow Chat Panel](../UI/WorkflowChatPanel.md#41-application-readiness-and-failure-containment). The [Omnigent Bridge](../Omnigent/OmnigentBridge.md#browser-transport-api-preservation) owns browser transport and scoped network compatibility. A binding response or iframe load is not proof that the conversation rendered.

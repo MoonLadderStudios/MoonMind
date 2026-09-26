@@ -225,4 +225,24 @@ describe('SecretManager', () => {
 
     expect(screen.queryByRole('button', { name: /re-enable github-pat-main/i })).toBeNull();
   });
+
+  // MoonLadderStudios/MoonMind#4559: the stored-secrets table degrades to
+  // stacked cards below 720px, so every row cell must expose the card label
+  // and the row actions must own a wrapping area instead of one unwrapped row.
+  it('exposes stacked-card labels and wrapping action areas for narrow viewports', () => {
+    renderSecretManager();
+
+    const row = screen.getByText('github-pat-main').closest('tr');
+    expect(row).not.toBeNull();
+    const cells = Array.from(row!.querySelectorAll('td'));
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells) {
+      expect(cell.getAttribute('data-label')).toBeTruthy();
+    }
+    const actionsCell = row!.querySelector('td[data-label="Actions"]');
+    expect(actionsCell).not.toBeNull();
+    const actionsArea = actionsCell!.querySelector('div');
+    expect(actionsArea).not.toBeNull();
+    expect(actionsArea!.className).toContain('flex-wrap');
+  });
 });

@@ -334,7 +334,8 @@ export function GithubTokenProbePanel({
             <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
               Permission checklist
             </h4>
-            <table className="mt-2 w-full text-xs">
+            <div className="mt-2 min-w-0 overflow-x-auto">
+            <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-slate-500 dark:text-slate-400">
                   <th scope="col" className="py-1 pr-3 font-medium">Permission</th>
@@ -361,6 +362,7 @@ export function GithubTokenProbePanel({
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
 
           {(result.diagnostics ?? []).length > 0 ? (

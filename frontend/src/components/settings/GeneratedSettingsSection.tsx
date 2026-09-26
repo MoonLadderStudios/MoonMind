@@ -809,7 +809,7 @@ export function GeneratedSettingsSection({
               const currentValue = pendingChange?.value ?? descriptor.effective_value;
               return (
                 <div key={descriptor.key} className="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
-                  <div className="space-y-2">
+                  <div className="min-w-0 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <h5 className="text-sm font-semibold text-slate-950 dark:text-white">{descriptor.title}</h5>
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
@@ -872,10 +872,10 @@ export function GeneratedSettingsSection({
                       ))}
                     </div>
                   </div>
-                  <div className="space-y-3">
+                  <div className="min-w-0 space-y-3">
                     {renderControl(descriptor, currentValue, updatePending)}
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-mono text-xs text-slate-500 dark:text-slate-500">{descriptor.key}</span>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span className="min-w-0 break-all font-mono text-xs text-slate-500 dark:text-slate-500">{descriptor.key}</span>
                       <div className="flex flex-wrap justify-end gap-2">
                         {canReadAudit ? (
                           <button
