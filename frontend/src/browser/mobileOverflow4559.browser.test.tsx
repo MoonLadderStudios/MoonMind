@@ -212,6 +212,54 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
     }
   });
 
+  it('diagnoses webkit provider overflow (TEMPORARY DIAGNOSTIC)', async () => {
+    const host = renderProviderComposition();
+    try {
+      await page.viewport(320, 568);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const vw = window.innerWidth;
+      const rows: string[] = [];
+      const all = [host, ...Array.from(host.querySelectorAll('*'))] as HTMLElement[];
+      for (const h of all) {
+        const rect = h.getBoundingClientRect();
+        if (rect.right > vw + 1) {
+          const cls = (h.className?.toString() ?? '').split(' ').filter(Boolean).slice(0, 3).join('.');
+          rows.push(
+            `${h.tagName}${cls ? `.${cls}` : ''} right=${Math.round(rect.right)} w=${Math.round(rect.width)}`,
+          );
+        }
+      }
+      const styleOf = (sel: string) => {
+        const el = host.querySelector(sel) as HTMLElement | null;
+        if (!el) return `${sel}: MISSING`;
+        const cs = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return `${sel}: display=${cs.display} width=${cs.width} maxW=${cs.maxWidth} minW=${cs.minWidth} rectW=${Math.round(rect.width)}`;
+      };
+      console.log(
+        `DIAG viewport=${vw} docScroll=${document.documentElement.scrollWidth} offenders=${rows.length}\n` +
+          rows.slice(0, 30).join('\n') +
+          '\n' +
+          [
+            '.provider-profiles-table',
+            'td[data-label="Profile"] > div',
+            '.provider-profile-form fieldset',
+            '.provider-tier-editor legend',
+            '.provider-tier-editor legend > span',
+            '.provider-tier-editor li',
+            '.provider-tier-editor label',
+            '.provider-tier-editor select',
+            '.provider-tier-editor select option',
+          ]
+            .map(styleOf)
+            .join('\n'),
+      );
+    } finally {
+      host.remove();
+      await page.viewport(1280, 800);
+    }
+  });
+
   it('stacks provider cards and tier fields at 320px without squeezed label columns', async () => {
     const host = renderProviderComposition();
     try {
