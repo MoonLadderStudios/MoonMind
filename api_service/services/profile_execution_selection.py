@@ -114,6 +114,25 @@ def profile_has_native_inventory_route(
     )
 
 
+def _is_managed_claude_fallback(
+    row: Any, version: Any, builtin_profile_id: str
+) -> bool:
+    """Mirror the bootstrap reconciler's managed-stock ownership check.
+
+    The stock Claude configuration is a fallback only while its active
+    version is still managed (reconciliation-owned, carrying the
+    managedBuiltin marker). An operator-edited active version is an authored
+    configuration: it stays a candidate (or forces explicit selection)
+    instead of being silently discarded from ambiguity.
+    """
+    if getattr(row, "profile_id", None) != builtin_profile_id:
+        return False
+    if getattr(version, "created_by", None) is not None:
+        return False
+    metadata = getattr(version, "rollout_metadata", None) or {}
+    return isinstance(metadata, Mapping) and metadata.get("managedBuiltin") == "claude"
+
+
 async def load_execution_configurations(
     session: Any,
     user: Any,
@@ -188,7 +207,9 @@ def select_execution_configuration(
             authored_candidates = [
                 (row, version)
                 for row, version in candidates
-                if row.profile_id != CLAUDE_BUILTIN_PROFILE_ID
+                if not _is_managed_claude_fallback(
+                    row, version, CLAUDE_BUILTIN_PROFILE_ID
+                )
             ]
             if authored_candidates:
                 # The managed stock configuration is a fallback, not a reason

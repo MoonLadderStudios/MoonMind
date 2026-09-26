@@ -200,6 +200,8 @@ def test_custom_claude_configuration_keeps_priority_over_managed_fallback():
         runtime_materialization_mode="oauth_home",
     )
     stock = configuration("omnigent-claude-default", providers=["anthropic"])
+    stock[1].created_by = None
+    stock[1].rollout_metadata = {"managedBuiltin": "claude"}
     custom = configuration("claude-team", providers=["anthropic"])
     for _, version in (stock, custom):
         version.document["harness"] = "claude-native"
@@ -226,6 +228,61 @@ def test_custom_claude_configuration_keeps_priority_over_managed_fallback():
         select_execution_configuration(pinned, [stock, custom])["profileId"]
         == "omnigent-claude-default"
     )
+
+
+def _claude_provider():
+    return provider(
+        profile_id="claude_anthropic_oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+    )
+
+
+def _claude_configuration(name, *, created_by=None, rollout_metadata=None):
+    row, version = configuration(name, providers=["anthropic"])
+    version.document["harness"] = "claude-native"
+    requirements = version.document["providerRequirements"]
+    requirements.update(
+        runtimeId="claude_code",
+        credentialSource="oauth_volume",
+        materializationMode="oauth_home",
+    )
+    version.created_by = created_by
+    version.rollout_metadata = rollout_metadata
+    return row, version
+
+
+def test_operator_edited_builtin_claude_profile_requires_explicit_selection():
+    edited = _claude_configuration(
+        "omnigent-claude-default", created_by="operator-id"
+    )
+    custom = _claude_configuration("claude-team")
+    with pytest.raises(HTTPException) as error:
+        select_execution_configuration(_claude_provider(), [edited, custom])
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "profile_execution_configuration_required"
+
+
+def test_operator_edited_builtin_claude_profile_alone_still_selects():
+    edited = _claude_configuration(
+        "omnigent-claude-default", created_by="operator-id"
+    )
+    selected = select_execution_configuration(_claude_provider(), [edited])
+    assert selected["profileId"] == "omnigent-claude-default"
+
+
+def test_builtin_claude_profile_without_managed_marker_requires_explicit_selection():
+    unmanaged = _claude_configuration(
+        "omnigent-claude-default",
+        rollout_metadata={"origin": "operator"},
+    )
+    custom = _claude_configuration("claude-team")
+    with pytest.raises(HTTPException) as error:
+        select_execution_configuration(_claude_provider(), [unmanaged, custom])
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "profile_execution_configuration_required"
 
 
 def test_automatic_and_explicit_configuration_resolve_same_identity():
