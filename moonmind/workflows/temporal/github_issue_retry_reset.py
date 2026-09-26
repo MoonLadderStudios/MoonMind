@@ -7,14 +7,23 @@ that accounting. The repair is an explicit operator decision: one
 GitHub-visible reset record, posted by the authenticated operator account,
 that names who authorized it, when, why, and which attempts it supersedes.
 Those attempts stay in lineage for prior-work assessment; they stop counting
-against the allowance (see ``compute_effective_retry``).
+against the allowance (see ``compute_effective_retry``). Admission honors a
+reset only when that authenticated account posted it.
+
+When the exhausted allowance is what sent the issue to Needs attention (its
+latest attempt was finalized there with no allowance left), the same
+authorized decision resolves that attention: ``needs_attention -> available``
+through the shared lifecycle guard, confirmed by read-back, before the reset
+is posted. A failed resolution posts nothing, so the operator can re-run.
+Attention the retry history does not explain is left for its own resolution.
 
 What it deliberately does not do: it never deletes or rewrites a comment,
-never changes labels, never acts over a live reservation, an explicit hold,
-or conflicting or unreadable evidence, and never resets an issue whose history
-does not currently exhaust the allowance. By default it only resets issues
-where at least one charged attempt never recorded a terminal outcome; recorded
-failures stay charged unless the operator explicitly includes them.
+never touches labels other than that resolution, never acts over a live
+reservation, an explicit hold, or conflicting or unreadable evidence, and
+never resets an issue whose history does not currently exhaust the allowance.
+By default it only resets issues where at least one charged attempt never
+recorded a terminal outcome; recorded failures stay charged unless the
+operator explicitly includes them.
 """
 
 from __future__ import annotations
@@ -24,8 +33,10 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 
+from moonmind.workflows.temporal import github_issue_lifecycle as lifecycle
 from moonmind.workflows.temporal.github_issue_attempts import (
     INSTALLATION_ID_ENV_VAR,
+    AttemptHandoff,
     build_retry_reset_handoff,
     new_attempt_id,
     parse_attempt_comment,
@@ -63,6 +74,19 @@ def trusted_attempt_posters(
         if _string((comment.get("user") or {}).get("id")) == _string(actor_id)
         or comment.get("author_association") in _COLLABORATOR_ASSOCIATIONS
     ]
+
+
+def _attention_from_retry_budget(handoff: AttemptHandoff | None) -> bool:
+    """True when this attempt's finalization sent the issue to Needs attention
+    because no retry allowance remained."""
+    return bool(
+        handoff is not None
+        and handoff.activity == "released"
+        and handoff.writers_stopped
+        and handoff.pending_disposition == lifecycle.TO_NEEDS_ATTENTION
+        and handoff.retry_remaining <= 0
+        and not handoff.operator_hold
+    )
 
 
 def plan_retry_reset(
@@ -105,6 +129,7 @@ def plan_retry_reset(
         "retry": None,
         "supersedes": [],
         "predecessor": None,
+        "resolvesAttention": False,
     }
     if _string(issue.get("state")) != "open":
         return {**plan, "reasonCode": "issue_closed"}
@@ -131,6 +156,7 @@ def plan_retry_reset(
         ),
         max_attempts=allowance,
         now_epoch=now.timestamp(),
+        reset_authorizer_id=actor_id,
     )
     plan["retry"] = lineage.retry
     if lineage.reason_code != "budget_exhausted":
@@ -139,11 +165,28 @@ def plan_retry_reset(
     retry = lineage.retry or {}
     if not retry.get("unresolvedAttempts") and not include_recorded_outcomes:
         return {**plan, "reasonCode": "recorded_outcomes_only"}
+    if retry.get("chargedAttemptsTruncated"):
+        # A reset clears only the attempts it can name.
+        return {
+            **plan,
+            "action": ACTION_REFUSE,
+            "reasonCode": "too_many_charged_attempts",
+        }
     comment, latest = marked[-1]
+    attention = (
+        lifecycle.interpret_issue(issue).settled == lifecycle.SETTLED_NEEDS_ATTENTION
+    )
+    if attention and not _attention_from_retry_budget(latest.handoff):
+        return {
+            **plan,
+            "action": ACTION_REFUSE,
+            "reasonCode": "attention_not_from_retry_budget",
+        }
     return {
         **plan,
         "action": ACTION_RESET,
         "reasonCode": "budget_exhausted",
+        "resolvesAttention": attention,
         "supersedes": [
             item["attemptId"] for item in retry.get("chargedAttempts") or []
         ],
@@ -151,6 +194,76 @@ def plan_retry_reset(
             "attemptId": latest.attempt_id,
             "commentId": _string(comment.get("id")),
         },
+    }
+
+
+async def _resolve_retry_attention(
+    *,
+    service: Any,
+    repository: str,
+    issue_number: int,
+    issue: Mapping[str, Any],
+    authorized_by: str,
+    terminal_attempt_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Resolve retry-exhaustion attention to Available through the lifecycle guard."""
+    from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+        _fetch_issue,
+    )
+
+    decision = lifecycle.plan_transition(
+        from_settled=lifecycle.SETTLED_NEEDS_ATTENTION,
+        to_target=lifecycle.TO_AVAILABLE,
+        evidence={
+            "authorized_resolution": f"audited retry reset authorized by {authorized_by}",
+            "preserved_work_disposition": "retained_in_attempt_lineage",
+            "terminal_proof": (
+                f"attempt {terminal_attempt_id} released with writers stopped; "
+                "no live reservation"
+            ),
+        },
+        reason=reason,
+    )
+    if not decision.allowed:
+        return {
+            "resolved": False,
+            "reasonCode": decision.reason_code,
+            "summary": decision.summary,
+        }
+    mutation = lifecycle.plan_label_mutation(
+        from_settled=lifecycle.SETTLED_NEEDS_ATTENTION,
+        to_target=lifecycle.TO_AVAILABLE,
+        current_labels=issue.get("labels") or [],
+    )
+    # Available adds no status label; it only removes the attention statuses.
+    for label in mutation.labels_to_remove:
+        removed = await service.remove_issue_label(
+            repo=repository, issue_number=issue_number, label=label
+        )
+        # A lost acknowledgement is settled by the read-back below.
+        if not removed.get("ok") and removed.get("reasonCode") != "outcome_unknown":
+            return {
+                "resolved": False,
+                "reasonCode": _string(removed.get("reasonCode"))
+                or "label_remove_failed",
+                "summary": _string(removed.get("summary")),
+            }
+    reread = await _fetch_issue(
+        service=service, repository=repository, issue_number=issue_number
+    )
+    outcome = lifecycle.classify_mutation_outcome(
+        plan=mutation, read_back=reread.get("issue") if reread.get("ok") else None
+    )
+    resolved = outcome.outcome in {
+        lifecycle.OUTCOME_APPLIED,
+        lifecycle.OUTCOME_ALREADY_APPLIED,
+    }
+    return {
+        "resolved": resolved,
+        "reasonCode": "attention_resolved" if resolved else outcome.outcome,
+        "summary": outcome.detail,
+        "mutation": mutation.to_dict(),
     }
 
 
@@ -287,8 +400,10 @@ async def apply_retry_reset(
     """Re-verify one planned reset against fresh GitHub evidence, then record it.
 
     The reset is posted only if a fresh plan still supersedes exactly the
-    reviewed attempts. A lost write acknowledgement is an unknown result:
-    the readback by stable attempt marker decides whether it was recorded.
+    reviewed attempts. Retry-exhaustion attention is resolved first, so a
+    failed resolution records nothing and a re-run starts over. A lost write
+    acknowledgement is an unknown result: the readback by stable attempt
+    marker decides whether it was recorded.
     """
     from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
         _fetch_issue,
@@ -331,6 +446,7 @@ async def apply_retry_reset(
         fresh["action"] != ACTION_RESET
         or fresh["supersedes"] != list(plan.get("supersedes") or [])
         or fresh["predecessor"] != plan.get("predecessor")
+        or fresh["resolvesAttention"] != bool(plan.get("resolvesAttention"))
     ):
         return {
             "applied": False,
@@ -338,6 +454,22 @@ async def apply_retry_reset(
             "currentAction": fresh["action"],
             "currentReasonCode": fresh["reasonCode"],
         }
+    if fresh["resolvesAttention"]:
+        resolution = await _resolve_retry_attention(
+            service=service,
+            repository=repository,
+            issue_number=number,
+            issue=issue["issue"],
+            authorized_by=operator["login"],
+            terminal_attempt_id=fresh["predecessor"]["attemptId"],
+            reason=reason,
+        )
+        if not resolution["resolved"]:
+            return {
+                "applied": False,
+                "reasonCode": "attention_resolution_failed",
+                "attentionResolution": resolution,
+            }
     handoff = build_retry_reset_handoff(
         attempt_id=new_attempt_id(repository=repository, issue_number=number),
         deployment_id=resolve_installation_id(os.getenv(INSTALLATION_ID_ENV_VAR))
@@ -381,6 +513,7 @@ async def apply_retry_reset(
         "commentId": reconciliation.comment_id,
         "authorizedBy": operator["login"],
         "supersedes": list(fresh["supersedes"]),
+        "attentionResolved": bool(fresh["resolvesAttention"]),
     }
 
 

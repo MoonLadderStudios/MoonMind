@@ -175,6 +175,8 @@ async def test_idle_summary_names_the_operational_causes(http_plan):
 
     assert selected is None
     assert result["disposition"] == "idle"
+    # Every candidate passed author scope; retry history is the blocker.
+    assert result["reasonCode"] == "retry_history_exclusions"
     evidence = result["searchEvidence"]
     assert evidence["rejectionCounts"] == {
         "budget_exhausted": 65,

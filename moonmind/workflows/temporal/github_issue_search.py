@@ -1137,6 +1137,12 @@ async def resolve_issue(
                         "reasonCode": "unresolved_issue_attempts",
                     }
                 if authenticated_user is not None:
+                    # Retry history, not author scope, blocked candidates that
+                    # already passed the author check.
+                    retry_blocked = any(
+                        counts.get("rejectionCounts", {}).get(reason)
+                        for reason in RETRY_EVIDENCE_EXCLUSIONS
+                    )
                     return None, {
                         **evidence,
                         "disposition": "idle",
@@ -1150,7 +1156,9 @@ async def resolve_issue(
                             "search account matched."
                         )
                         + " No other author's issue was selected.",
-                        "reasonCode": "no_eligible_self_authored_issue",
+                        "reasonCode": "retry_history_exclusions"
+                        if retry_blocked
+                        else "no_eligible_self_authored_issue",
                     }
                 return None, {
                     **evidence,

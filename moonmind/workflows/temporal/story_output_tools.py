@@ -6629,9 +6629,11 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
         # A real clock here enforces the portable back-off a runtime-unavailable
         # attempt recorded, so a deployment that cannot launch rotates past the
         # candidate instead of re-announcing on it every scheduled tick.
+        # Only this deployment's authenticated account can post a retry reset
+        # that counts; collaborators are trusted for provenance, not resets.
         lineage = reconstruct_from_comments(comments, expected_repository=repository,
             expected_issue_number=issue_number, trusted_posters=trusted, max_attempts=handoff.retry_allowance,
-            now_epoch=_time.time())
+            now_epoch=_time.time(), reset_authorizer_id=actor["actorId"])
         if lineage.outcome != "reconstructed":
             # The retry explanation (allowance, charged attempts and outcomes,
             # unfinished accounting) is what makes a budget rejection actionable.

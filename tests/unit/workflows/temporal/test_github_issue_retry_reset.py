@@ -23,6 +23,7 @@ from moonmind.workflows.temporal import story_output_tools as tools
 from moonmind.workflows.temporal.github_issue_attempts import (
     OUTCOME_RETRY_RESET,
     AttemptHandoff,
+    build_retry_reset_handoff,
     parse_attempt_comment,
     render_attempt_comment,
 )
@@ -43,6 +44,8 @@ REPO = "example/repo"
 ISSUE = 3970
 LEASE = timedelta(minutes=30)
 ACTOR = {"id": 123, "login": "fixture-owner"}
+COLLABORATOR = {"id": 456, "login": "fixture-collaborator"}
+NEEDS_ATTENTION = "status: needs-attention"
 
 
 def _attempt(
@@ -80,12 +83,12 @@ def _attempt(
     )
 
 
-def _post(state, handoff: AttemptHandoff) -> None:
+def _post(state, handoff: AttemptHandoff, *, user=ACTOR) -> None:
     state["comments"].append(
         {
             "id": len(state["comments"]) + 1,
             "body": render_attempt_comment(handoff),
-            "user": dict(ACTOR),
+            "user": dict(user),
             "author_association": "COLLABORATOR",
             "created_at": "2026-09-21T00:00:00Z",
         }
@@ -107,6 +110,45 @@ def _stranded_history(state) -> list[str]:
                 predecessor_comment_id=str(index) if index else "",
             ),
         )
+    return ids
+
+
+def _exhausted_by_recorded_failures(state, *, retry_attention: bool) -> list[str]:
+    """Three finalized failures on an issue that now reads Needs attention.
+
+    With ``retry_attention`` the last finalization recorded that it sent the
+    issue to attention with no allowance left; otherwise the attention label
+    was applied for a reason the retry history does not record.
+    """
+    ids = [f"att-failed{index}-aaaa" for index in range(3)]
+    for index, attempt_id in enumerate(ids):
+        exhausted = retry_attention and index == len(ids) - 1
+        _post(
+            state,
+            replace(
+                _attempt(
+                    attempt_id,
+                    deployment="inst-device-a",
+                    remaining=3 - index,
+                    expired_days_ago=3,
+                    predecessor=ids[index - 1] if index else "",
+                    predecessor_comment_id=str(index) if index else "",
+                ),
+                activity="released",
+                outcome="failed",
+                writers_stopped=True,
+                **(
+                    {
+                        "pending_disposition": "to_needs_attention",
+                        "next_action": "obtain_attention",
+                        "retry_remaining": 0,
+                    }
+                    if exhausted
+                    else {}
+                ),
+            ),
+        )
+    state["labels"] = [NEEDS_ATTENTION]
     return ids
 
 
@@ -312,3 +354,124 @@ async def test_the_operator_command_inventories_by_default_and_applies_on_reques
     assert (
         await IssueClaimStore(sessions).get("default/after-command")
     ).issue_number == ISSUE
+
+
+@pytest.mark.asyncio
+async def test_a_collaborator_posted_reset_does_not_readmit_the_issue(journey):
+    """Trusted provenance is not reset authority; only the operator account resets."""
+    state, service, _sessions = journey
+    ids = _stranded_history(state)
+    _post(
+        state,
+        build_retry_reset_handoff(
+            attempt_id="att-4503forged-eeee",
+            deployment_id="inst-collaborator",
+            repository=REPO,
+            issue_number=ISSUE,
+            authorized_by=COLLABORATOR["login"],
+            authorized_at=datetime.now(UTC).isoformat(),
+            reason="Self-declared reset.",
+            predecessor_attempt_id=ids[-1],
+            predecessor_comment_id="3",
+            superseded_attempt_ids=ids,
+            allowance=3,
+        ),
+        user=COLLABORATOR,
+    )
+
+    result = await _search(service, "default/forged-reset")
+
+    assert result.completion_disposition == "idle", result.outputs
+    evidence = result.outputs["searchEvidence"]
+    assert evidence["rejectionCounts"] == {"budget_exhausted": 1}
+    retry = evidence["rejectedCandidates"][0]["claimEvidence"]["retry"]
+    assert retry["unauthorizedResets"] == 1
+    assert [item["attemptId"] for item in retry["chargedAttempts"]] == ids
+
+
+@pytest.mark.asyncio
+async def test_a_reset_resolves_the_attention_its_exhausted_budget_left(journey):
+    state, service, sessions = journey
+    _exhausted_by_recorded_failures(state, retry_attention=True)
+
+    [plan] = (
+        await inventory_retry_resets(
+            service=service, repository=REPO, include_recorded_outcomes=True
+        )
+    )["issues"]
+    assert plan["action"] == ACTION_RESET, plan
+    assert plan["resolvesAttention"] is True
+    # The inventory writes nothing.
+    assert state["labels"] == [NEEDS_ATTENTION]
+    assert len(state["comments"]) == 3
+
+    applied = await apply_retry_reset(
+        service=service,
+        plan=plan,
+        reason="Recorded failures came from the launcher fixed since.",
+    )
+
+    assert applied["applied"] is True, applied
+    assert applied["attentionResolved"] is True
+    assert state["labels"] == []
+    assert len(state["comments"]) == 4
+    admitted = await _search(service, "default/after-attention-reset")
+    assert admitted.completion_disposition != "idle", admitted.outputs
+    receipt = await IssueClaimStore(sessions).get("default/after-attention-reset")
+    assert receipt.issue_number == ISSUE
+
+
+@pytest.mark.asyncio
+async def test_attention_the_retry_budget_did_not_cause_is_not_reset(journey):
+    state, service, _sessions = journey
+    _exhausted_by_recorded_failures(state, retry_attention=False)
+
+    [plan] = (
+        await inventory_retry_resets(
+            service=service, repository=REPO, include_recorded_outcomes=True
+        )
+    )["issues"]
+
+    assert plan["action"] == ACTION_REFUSE
+    assert plan["reasonCode"] == "attention_not_from_retry_budget"
+    refused = await apply_retry_reset(
+        service=service, plan=plan, reason="Recorded failures are stale."
+    )
+    assert refused["applied"] is False
+    assert state["labels"] == [NEEDS_ATTENTION]
+    assert len(state["comments"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_an_apply_that_records_nothing_does_not_report_success(
+    journey, monkeypatch, capsys
+):
+    from moonmind.config.settings import settings
+    from moonmind.workflows.adapters import github_service
+    from tools import reset_issue_retry_allowance as command
+
+    state, service, _sessions = journey
+    ids = _stranded_history(state)
+    _post(
+        state,
+        _attempt(
+            "att-4503live-dddd",
+            deployment="inst-device-d",
+            remaining=1,
+            expired_days_ago=None,
+            predecessor=ids[-1],
+            predecessor_comment_id="3",
+        ),
+    )
+    monkeypatch.setattr(github_service, "GitHubService", lambda: service)
+    monkeypatch.setattr(settings.workflow, "github_repository", REPO)
+
+    status = await command.run(
+        command.parse_args(["--apply", "--reason", "stranded attempt records"])
+    )
+
+    out = capsys.readouterr().out
+    assert status != 0
+    assert "Resets recorded" not in out
+    assert "No resets were recorded" in out
+    assert len(state["comments"]) == 4

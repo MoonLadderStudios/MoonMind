@@ -20,7 +20,12 @@ reported and never reset. Review the inventory, then apply:
 
 Each reset is one GitHub comment posted by the authenticated account, naming
 who authorized it, when, why, and which attempts it supersedes. Earlier
-attempts stay in the issue's history.
+attempts stay in the issue's history. Where the exhausted allowance sent the
+issue to Needs attention, the reset also resolves that attention to Available.
+
+Exit status: 0 when every requested reset was recorded (or, without
+``--apply``, the inventory completed), 1 when ``--apply`` recorded nothing,
+and 2 when a reset could not be recorded or confirmed.
 """
 
 from __future__ import annotations
@@ -94,15 +99,27 @@ async def run(args: argparse.Namespace) -> int:
         if "applyResult" in plan:
             line += f" -> {plan['applyResult'].get('reasonCode')}"
         print(line)
-    if args.apply and not failed:
+    refused = sum(1 for plan in plans if plan["action"] == ACTION_REFUSE)
+    if args.apply and failed:
+        print(f"{failed} reset(s) were not recorded; see the lines above.")
+    elif args.apply and applied:
         print(
-            "Resets recorded. The next search reassesses these issues from their history."
+            f"Recorded {applied} reset(s). The next search reassesses these issues "
+            "from their history."
+            + (f" {refused} refused issue(s) were left unchanged." if refused else "")
         )
-    elif not args.apply and inventory["plannedResets"]:
+    elif args.apply:
+        print(
+            f"No resets were recorded: {inventory['plannedResets']} planned, "
+            f"{refused} refused."
+        )
+    elif inventory["plannedResets"]:
         print(
             'Inventory only. Re-run with --apply --reason "..." to record these resets.'
         )
-    return 2 if failed else 0
+    if failed:
+        return 2
+    return 1 if args.apply and not applied else 0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -36,6 +36,8 @@ REPO = "MoonLadderStudios/MoonMind"
 ISSUE = 4503
 LEASE = timedelta(minutes=30)
 BOT = "moonmind-bot"
+#: The authenticated operator account admission posts and reads as.
+BOT_ID = "9001"
 
 
 def _now() -> datetime:
@@ -114,11 +116,13 @@ def _issue_4503_history() -> list[AttemptHandoff]:
     ]
 
 
-def _comments(handoffs, *, poster: str = BOT, first_id: int = 100):
+def _comments(
+    handoffs, *, poster: str = BOT, poster_id: str = BOT_ID, first_id: int = 100
+):
     return [
         {
             "id": str(first_id + index),
-            "user": {"login": poster},
+            "user": {"id": poster_id, "login": poster},
             "body": render_attempt_comment(item),
         }
         for index, item in enumerate(handoffs)
@@ -126,14 +130,18 @@ def _comments(handoffs, *, poster: str = BOT, first_id: int = 100):
 
 
 def _reset(
-    predecessor: AttemptHandoff, predecessor_comment_id: str, superseded
+    predecessor: AttemptHandoff,
+    predecessor_comment_id: str,
+    superseded,
+    *,
+    authorized_by: str = BOT,
 ) -> AttemptHandoff:
     return build_retry_reset_handoff(
         attempt_id="att-4503-reset-dddd",
         deployment_id="inst-operator",
         repository=REPO,
         issue_number=ISSUE,
-        authorized_by="nsticco",
+        authorized_by=authorized_by,
         authorized_at="2026-09-26T12:00:00+00:00",
         reason="Attempt records were stranded by an interrupted finalizer.",
         predecessor_attempt_id=predecessor.attempt_id,
@@ -267,6 +275,7 @@ def test_an_audited_reset_record_restores_the_allowance_and_keeps_history() -> N
         expected_repository=REPO,
         expected_issue_number=ISSUE,
         trusted_posters=[BOT],
+        reset_authorizer_id=BOT_ID,
         max_attempts=3,
         now_epoch=_now().timestamp(),
     )
@@ -279,7 +288,91 @@ def test_an_audited_reset_record_restores_the_allowance_and_keeps_history() -> N
     retry = result.to_dict()["retry"]
     assert retry["chargedAttempts"] == []
     assert retry["resetAuthorization"] == reset.reset_authorization
-    assert "nsticco" in reset.reset_authorization
+    assert BOT in reset.reset_authorization
+    assert retry["unauthorizedResets"] == 0
+
+
+def _reconstruct(comments, *, trusted=(BOT,)):
+    return reconstruct_from_comments(
+        comments,
+        expected_repository=REPO,
+        expected_issue_number=ISSUE,
+        trusted_posters=list(trusted),
+        reset_authorizer_id=BOT_ID,
+        max_attempts=3,
+        now_epoch=_now().timestamp(),
+    )
+
+
+def test_a_trusted_collaborator_cannot_post_an_operator_reset() -> None:
+    """Provenance trust is not reset authority: only the operator account resets."""
+    history = _issue_4503_history()
+    reset = _reset(
+        history[-1],
+        "102",
+        [item.attempt_id for item in history],
+        authorized_by="collaborator",
+    )
+    comments = _comments(history) + _comments(
+        [reset], poster="collaborator", poster_id="77", first_id=103
+    )
+
+    result = _reconstruct(comments, trusted=(BOT, "collaborator"))
+
+    assert result.reason_code == "budget_exhausted"
+    retry = result.to_dict()["retry"]
+    assert len(retry["chargedAttempts"]) == 3
+    assert retry["resetAuthorization"] == ""
+    assert retry["unauthorizedResets"] == 1
+    # The operator can see why their expected reset did not take effect.
+    assert "not posted by the authenticated operator account" in retry["summary"]
+
+
+def test_a_reset_whose_authorization_names_another_account_is_ignored() -> None:
+    """Self-declared authorization fields must name the account that posted them."""
+    history = _issue_4503_history()
+    reset = _reset(
+        history[-1],
+        "102",
+        [item.attempt_id for item in history],
+        authorized_by="someone-else",
+    )
+
+    result = _reconstruct(_comments([*history, reset]))
+
+    assert result.reason_code == "budget_exhausted"
+    assert result.to_dict()["retry"]["unauthorizedResets"] == 1
+
+
+def test_a_reset_clears_only_the_attempts_it_names() -> None:
+    """An attempt recorded between the reset's read and its post stays charged."""
+    history = _issue_4503_history()
+    concurrent = _terminal(
+        "att-4503-concurrent-eeee", "failed", predecessor=history[-1].attempt_id
+    )
+    reset = _reset(history[-1], "102", [item.attempt_id for item in history])
+
+    result = _reconstruct(_comments([*history, concurrent, reset]))
+
+    assert result.outcome == "reconstructed"
+    assert result.retry_remaining == 2
+    retry = result.to_dict()["retry"]
+    assert [item["attemptId"] for item in retry["chargedAttempts"]] == [
+        "att-4503-concurrent-eeee"
+    ]
+
+
+def test_retry_decisions_ignore_resets_the_caller_did_not_authenticate() -> None:
+    history = _issue_4503_history()
+    reset = _reset(history[-1], "102", [item.attempt_id for item in history])
+
+    decision = compute_effective_retry(
+        [*history, reset], max_attempts=3, now_epoch=_now().timestamp()
+    )
+
+    assert decision.reason_code == "budget_exhausted"
+    assert decision.unauthorized_resets == 1
+    assert len(decision.charged_attempts) == 3
 
 
 def test_a_reset_record_is_released_history_that_explains_itself() -> None:
@@ -302,7 +395,10 @@ def test_attempts_after_a_reset_still_count() -> None:
     after = _terminal("att-4503-after-eeee", "failed", predecessor=reset.attempt_id)
 
     decision = compute_effective_retry(
-        [*history, reset, after], max_attempts=3, now_epoch=_now().timestamp()
+        [*history, reset, after],
+        max_attempts=3,
+        now_epoch=_now().timestamp(),
+        authorized_resets={reset.attempt_id},
     )
 
     assert decision.allowed is True
@@ -321,7 +417,10 @@ def test_a_reset_never_releases_an_operator_hold() -> None:
     reset = _reset(held, "100", [held.attempt_id])
 
     decision = compute_effective_retry(
-        [held, reset], max_attempts=3, now_epoch=_now().timestamp()
+        [held, reset],
+        max_attempts=3,
+        now_epoch=_now().timestamp(),
+        authorized_resets={reset.attempt_id},
     )
 
     assert decision.allowed is False
