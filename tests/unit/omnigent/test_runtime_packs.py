@@ -177,6 +177,31 @@ def test_persisted_state_can_supply_shared_image_ref(monkeypatch):
     assert get_shared_host_image_ref() == _SHARED_IMAGE_REF
 
 
+def test_shared_host_mutable_tag_uses_persisted_digest(monkeypatch):
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setenv(
+        OMNIGENT_SHARED_HOST_IMAGE_ENV,
+        f"{_SHARED_IMAGE_REPOSITORY}:latest",
+    )
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=_SHARED_IMAGE_REF),
+    )
+
+    assert get_shared_host_image_ref() == _SHARED_IMAGE_REF
+    explicit_ref = f"{_SHARED_IMAGE_REPOSITORY}@sha256:{'7' * 64}"
+    monkeypatch.setenv(OMNIGENT_SHARED_HOST_IMAGE_ENV, explicit_ref)
+    assert get_shared_host_image_ref() == explicit_ref
+    monkeypatch.setenv(
+        OMNIGENT_SHARED_HOST_IMAGE_ENV,
+        f"{_SHARED_IMAGE_REPOSITORY}@sha256:{'0' * 64}",
+    )
+    with pytest.raises(HarnessPlatformError):
+        get_shared_host_image_ref()
+
+
 # ---- Shared-image Host Class selection (#3828) ----
 
 
