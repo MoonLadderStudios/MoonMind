@@ -10569,24 +10569,28 @@ button.workflow-workspace-sidebar-row:active {
   }
 }
 
-/* MoonMind#4559 overlays: enrollment drawers, confirmations, and tier
- * dialogs stay viewport-bounded with safe-area spacing and a single scroll
- * container. Footer actions wrap and remain reachable at narrow widths and
- * short heights without nested scroll traps. */
+/* MoonMind#4559 overlays: confirmation dialog panels stay viewport-bounded
+ * with safe-area spacing and a single scroll container. Scoped to panels
+ * only: fixed inset-0 backdrops that carry role="dialog" (e.g. the
+ * tier-removal backdrop) keep full-viewport coverage, the wide
+ * jira-browser panel keeps its own sizing, and full-height enrollment
+ * drawers keep their right-anchored drawer layout. Footer actions wrap and
+ * remain reachable at narrow widths and short heights without nested
+ * scroll traps. */
 @media (max-width: 720px) {
-  .dashboard-content [role="dialog"],
-  .dashboard-content [data-state="open"][role="dialog"] {
+  .dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel):not(.h-full),
+  .dashboard-content [data-state="open"][role="dialog"]:not(.fixed):not(.jira-browser-panel):not(.h-full) {
     max-width: calc(100vw - 1.5rem);
     max-height: calc(100dvh - 2rem);
     overflow: auto;
     margin: auto;
   }
 }
-.dashboard-content [role="dialog"] {
+.dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel) {
   min-width: 0;
-  max-width: min(32rem, calc(100vw - 1.5rem));
+  max-width: calc(100vw - 1.5rem);
 }
-.dashboard-content [role="dialog"] button {
+.dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel) button {
   white-space: normal;
   overflow-wrap: anywhere;
   max-width: 100%;
