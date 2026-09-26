@@ -1097,6 +1097,35 @@ def _is_plan_output_ref(value: Any) -> bool:
     )
 
 
+def _resolved_plan_value_size_bytes(value: Any) -> int:
+    """Estimate a resolved value's history footprint deterministically."""
+
+    if isinstance(value, str):
+        return len(value.encode("utf-8", errors="ignore"))
+    if isinstance(value, (bytes, bytearray)):
+        return len(value)
+    if isinstance(value, Mapping):
+        total = 0
+        for key, item in value.items():
+            total += _resolved_plan_value_size_bytes(key)
+            total += _resolved_plan_value_size_bytes(item)
+        return total
+    if isinstance(value, (list, tuple)):
+        return sum(_resolved_plan_value_size_bytes(item) for item in value)
+    return len(str(value).encode("utf-8", errors="ignore"))
+
+
+def _check_resolved_plan_value_size(value: Any, *, current_node_id: str) -> None:
+    size = _resolved_plan_value_size_bytes(value)
+    if size > PLAN_REF_RESOLVED_VALUE_SIZE_LIMIT_BYTES:
+        raise ValueError(
+            f"Reference at {current_node_id} resolves to {size} bytes, "
+            f"above the {PLAN_REF_RESOLVED_VALUE_SIZE_LIMIT_BYTES} byte "
+            "workflow-history limit; carry an artifact reference instead of "
+            "the inline value"
+        )
+
+
 def _resolve_plan_ref_inputs(
     value: Any,
     *,
@@ -1135,12 +1164,27 @@ def _resolve_plan_ref_inputs(
                 f"invalid result for node '{ref_node}'"
             )
         try:
-            return _resolve_plan_json_pointer(payload, pointer)
+            resolved = _resolve_plan_json_pointer(payload, pointer)
         except ValueError as exc:
+            available: list[str] = []
+            if isinstance(payload, Mapping):
+                outputs = payload.get("outputs")
+                if isinstance(outputs, Mapping):
+                    available = sorted(str(key) for key in outputs.keys())[:8]
+            hint = ""
+            if available:
+                hint = f"; available outputs: {', '.join(available)}"
+            if payload.get("preserved") is True:
+                hint += (
+                    "; preserved producers expose only recorded artifact refs "
+                    "(outputSummaryRef/outputPrimaryRef)"
+                )
             raise ValueError(
                 f"Reference at {current_node_id} points to invalid output "
-                f"path '{pointer}' on node '{ref_node}': {exc}"
+                f"path '{pointer}' on node '{ref_node}': {exc}{hint}"
             ) from exc
+        _check_resolved_plan_value_size(resolved, current_node_id=current_node_id)
+        return resolved
     if isinstance(value, Mapping):
         return {
             key: _resolve_plan_ref_inputs(
@@ -1210,6 +1254,15 @@ RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution
 RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
     "run-deterministic-tool-ref-resolution-v1"
 )
+# PR #4557 review: deriving a stable container-job idempotency key changes the
+# submit activity arguments. Replay-gate the derivation so in-flight histories
+# that recorded the old request shape keep replaying it.
+RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH = (
+    "run-container-job-derived-idempotency-key-v1"
+)
+# PR #4557 review: bound resolved reference payloads carried in workflow
+# history so one large upstream output cannot grow every downstream command.
+PLAN_REF_RESOLVED_VALUE_SIZE_LIMIT_BYTES = 512 * 1024
 
 
 def _worker_capability_unavailable_error(
@@ -12437,6 +12490,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             "status": "COMPLETED",
                             "outputs": dict(preserved_outputs),
                             "progress": {},
+                            # Preserved producers expose only recorded
+                            # artifact refs; other pointers fail explicitly
+                            # with that hint instead of silent progress loss.
+                            "preserved": True,
                         }
                 continue
             current_step_row = self._step_ledger_row_for(node_id)
@@ -12601,10 +12658,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 current_previous_outputs = self._merge_trusted_issue_context(
                     current_previous_outputs
                 )
-                if current_previous_outputs:
-                    node_inputs["previousOutputs"] = dict(current_previous_outputs)
                 if ref_resolution_enabled:
                     try:
+                        # Resolve only admitted plan inputs: runtime-injected
+                        # previousOutputs may legitimately contain nested
+                        # {"ref": ...} domain data and must not be mistaken
+                        # for an executable plan reference.
                         node_inputs = dict(
                             _resolve_plan_ref_inputs(
                                 node_inputs,
@@ -12613,6 +12672,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             )
                         )
                     except ValueError as exc:
+                        # Allocate the execution identity before recording, as
+                        # the pre-launch validation path does, so the failed
+                        # row carries an attributable Step Execution.
+                        self._try_update_step_row(
+                            node_id,
+                            updated_at=workflow.now(),
+                            increment_attempt=True,
+                        )
                         diagnostic = self._record_step_execution_exception(
                             exc,
                             logical_step_id=node_id,
@@ -12640,6 +12707,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         }
                         result_status = "FAILED"
                         break
+                if current_previous_outputs:
+                    node_inputs["previousOutputs"] = dict(current_previous_outputs)
                 self._record_step_dependency_inputs(node_id)
 
                 self._step_count = index
@@ -14839,6 +14908,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             if isinstance(progress_payload, Mapping)
                             else {}
                         ),
+                        "preserved": False,
                     }
                     artifacts_payload = self._get_from_result(
                         execution_result, "output_artifacts"
@@ -22736,14 +22806,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 # acknowledgment retries under the same key and the
                 # container-job backend reconciles (exact replay) instead of
                 # mutating twice. An explicit plan key is preserved.
+                # Replay-gated: in-flight histories keep the old request
+                # shape so recorded activity commands replay unchanged.
                 "idempotencyKey": (
                     str(node_inputs.get("idempotencyKey") or "").strip()
-                    or step_execution_operation_idempotency_key(
-                        workflow_id=info.workflow_id,
-                        run_id=info.run_id,
-                        logical_step_id=node_id,
-                        execution_ordinal=execution_ordinal,
-                        operation="execute",
+                    or (
+                        step_execution_operation_idempotency_key(
+                            workflow_id=info.workflow_id,
+                            run_id=info.run_id,
+                            logical_step_id=node_id,
+                            execution_ordinal=execution_ordinal,
+                            operation="execute",
+                        )
+                        if workflow.patched(
+                            RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH
+                        )
+                        else node_inputs.get("idempotencyKey")
                     )
                 ),
                 "source": {
