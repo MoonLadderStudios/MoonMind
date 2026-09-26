@@ -10489,9 +10489,9 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-policy-editor textarea { display: block; font-family: monospace; margin-top: .35rem; max-width: 70rem; width: 100%; }
 .omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; min-width: 0; max-width: 100%; }
 .omnigent-inventory__table-wrap .data-table-slab { max-width: 100%; }
-.omnigent-inventory table { border-collapse: collapse; width: 100%; }
+.omnigent-inventory table { border-collapse: collapse; width: 100%; table-layout: fixed; }
 .omnigent-inventory th,
-.omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+.omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; min-width: 0; overflow-wrap: anywhere; }
 /* MoonMind#4559 inventory tables: grid sections must not inherit an automatic
  * minimum width from the table, and inventory cells wrap instead of forcing
  * the grid (or the whole page) wider than the viewport. The shared
