@@ -284,6 +284,11 @@ actor:
 - show `verifying` while the finalize endpoint validates durable auth material
   and `registering_profile` while that same endpoint registers or updates the
   Provider Profile
+- keep following the session after the finalize response: the endpoint returns
+  once the profile is saved (usually `registering_profile`) and the OAuth
+  workflow confirms `succeeded` or `failed` after host credential validation,
+  so the page shows a registration-in-progress status instead of re-offering
+  Finalize until that outcome arrives
 - show the safe registered provider-profile summary on success, with a return to
   Settings or manage-profile action as a convenience rather than a required
   step
