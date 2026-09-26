@@ -374,7 +374,9 @@ services:
   # when other compose stacks on this network also expose MinIO as `minio` (DNS returns
   # multiple backends → intermittent NoSuchKey).
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-02-03T21-03-04Z
+    image: cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+    # Existing minio-data volumes were written by the root-run upstream image.
+    user: "0:0"
     command: server /data --console-address :9001
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
