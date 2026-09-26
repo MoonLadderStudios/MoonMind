@@ -276,8 +276,13 @@ def test_missing_and_incompatible_lineage_block_recovery() -> None:
         repository="MoonLadderStudios/MoonMind", issue_number=4177,
         authorized_by="op-1", authorized_at="2026-09-26T00:00:00+00:00",
         reason="audited reset", predecessor_attempt_id="att-2",
+        superseded_attempt_ids=[item.attempt_id for item in exhausted],
     )
-    assert compute_effective_retry([*exhausted, reset], max_attempts=3).remaining == 3
+    assert compute_effective_retry(
+        [*exhausted, reset], max_attempts=3, authorized_resets={"att-reset"}
+    ).remaining == 3
+    # A reset record the caller did not authenticate resets nothing.
+    assert compute_effective_retry([*exhausted, reset], max_attempts=3).remaining == 0
     with pytest.raises(ValueError, match="retry_reset_unauthorized"):
         build_retry_reset_handoff(
             attempt_id="att-reset", deployment_id="inst-device-a",

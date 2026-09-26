@@ -639,10 +639,11 @@ async def reconcile_local_claims(
                             == receipt.actor_id
                         ],
                         max_attempts=handoff.retry_allowance,
-                        # The same clock admission uses, so a lapsed
-                        # announcement or an audited reset is read the same
-                        # way here as when the next attempt is admitted.
+                        # The same clock and reset authority admission uses,
+                        # so a lapsed announcement or an audited reset is read
+                        # the same way here as when the next attempt is admitted.
                         now_epoch=now.timestamp(),
+                        reset_authorizer_id=receipt.actor_id,
                     )
                     if lineage.reason_code not in {
                         "allowed",

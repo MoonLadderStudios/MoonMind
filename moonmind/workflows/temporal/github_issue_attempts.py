@@ -50,7 +50,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 #: Historical non-expiring format, retained for persisted attempt handoffs.
 ATTEMPT_HANDOFF_FORMAT_VERSION = 1
@@ -1071,7 +1071,9 @@ class RetryDecision:
     with its recorded outcome; ``unresolved_attempts`` counts the charged
     ones that never recorded a terminal outcome and hold no live lease, so a
     rejection can say whether it rests on unfinished attempt accounting
-    rather than on proven outcomes.
+    rather than on proven outcomes. ``unauthorized_resets`` counts reset
+    records that were ignored because the authenticated operator account
+    did not post them.
     """
 
     allowed: bool
@@ -1085,6 +1087,7 @@ class RetryDecision:
     charged_attempts: tuple[dict[str, Any], ...] = ()
     unresolved_attempts: int = 0
     reset_authorization: str = ""
+    unauthorized_resets: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1100,6 +1103,7 @@ class RetryDecision:
             "chargedAttemptsTruncated": len(self.charged_attempts) > MAX_LIST_ITEMS,
             "unresolvedAttempts": self.unresolved_attempts,
             "resetAuthorization": self.reset_authorization,
+            "unauthorizedResets": self.unauthorized_resets,
         }
 
 
@@ -1110,6 +1114,26 @@ def is_retry_reset(handoff: AttemptHandoff) -> bool:
         and handoff.activity == ATTEMPT_ACTIVITY_RELEASED
         and bool(_string(handoff.reset_authorization))
     )
+
+
+def _reset_bound_to_poster(handoff: AttemptHandoff, poster_login: str) -> bool:
+    """Return True when a reset's authorization names the account that posted it.
+
+    :func:`build_retry_reset_handoff` records ``"<login> at <instant>"`` and
+    a reason. A record naming anyone else, or missing either, is a
+    self-declared field, not the authenticated operator's decision.
+    """
+    from datetime import datetime
+
+    who, separator, when = handoff.reset_authorization.partition(" at ")
+    poster = _string(poster_login)
+    if not separator or not poster or _string(who).casefold() != poster.casefold():
+        return False
+    try:
+        datetime.fromisoformat(when.strip())
+    except ValueError:
+        return False
+    return bool(_string(handoff.last_report))
 
 
 def _unfinished_accounting(handoff: AttemptHandoff, now_epoch: float) -> bool:
@@ -1266,13 +1290,15 @@ def compute_effective_retry(
     max_attempts: int,
     now_epoch: float = 0.0,
     cooldown_seconds: float = 0.0,
+    authorized_resets: Collection[str] = (),
 ) -> RetryDecision:
     """Compute the retry decision from portable handoff lineage only.
 
     *handoffs* are in the order GitHub recorded them. Fresh workflow ids,
     device changes, and label removal never reset this budget: only observed
     handoff lineage counts, and the only reset is an operator's audited
-    reset record in that lineage. Internal retries stay within the
+    reset record in that lineage whose attempt id the caller authenticated
+    in *authorized_resets*. Internal retries stay within the
     controlling attempt and never consume a new attempt slot. Missing or
     incompatible policy lineage blocks automatic recovery. Counts are
     reported as observed lower bounds: no exact global counter is claimed
@@ -1308,15 +1334,23 @@ def compute_effective_retry(
             operator_hold=True,
             allowance=allowance,
         )
-    # The latest audited reset ends the charged window. Everything before it
-    # stays in lineage for prior-work assessment, but neither its attempts
-    # nor its back-offs count any more.
-    reset_index = max(
-        (index for index, handoff in enumerate(ordered) if is_retry_reset(handoff)),
-        default=-1,
-    )
-    reset_authorization = ordered[reset_index].reset_authorization if reset_index >= 0 else ""
-    window = ordered[reset_index + 1 :]
+    # An authenticated reset clears exactly the attempts it names that were
+    # recorded before it. They stay in lineage for prior-work assessment, but
+    # neither they nor their back-offs count any more. An attempt recorded
+    # after the operator reviewed the history is not named, so it still counts.
+    authorized = {_string(item) for item in authorized_resets}
+    resets = [(index, handoff) for index, handoff in enumerate(ordered) if is_retry_reset(handoff)]
+    honored = [(index, handoff) for index, handoff in resets if handoff.attempt_id in authorized]
+    cleared: set[str] = set()
+    for index, reset in honored:
+        cleared.update({item.attempt_id for item in ordered[:index]}.intersection(reset.retry_history))
+    reset_authorization = honored[-1][1].reset_authorization if honored else ""
+    unauthorized_resets = len(resets) - len(honored)
+    window = [
+        handoff
+        for handoff in ordered
+        if handoff.attempt_id not in cleared and not is_retry_reset(handoff)
+    ]
     # An attempt whose deployment never started a runtime says nothing about
     # this issue, so it is retained as lineage but never charged to the
     # allowance. Charging it lets one broken deployment exhaust every issue.
@@ -1353,12 +1387,19 @@ def compute_effective_retry(
         "charged_attempts": charged,
         "unresolved_attempts": unresolved,
         "reset_authorization": reset_authorization,
+        "unauthorized_resets": unauthorized_resets,
     }
     if remaining <= 0:
+        summary = _budget_exhausted_summary(charged, allowance=allowance, unresolved=unresolved)
+        if unauthorized_resets:
+            summary += (
+                f" {unauthorized_resets} retry reset record(s) were ignored: they were "
+                "not posted by the authenticated operator account they name."
+            )
         return RetryDecision(
             allowed=False,
             reason_code="budget_exhausted",
-            summary=_budget_exhausted_summary(charged, allowance=allowance, unresolved=unresolved),
+            summary=summary,
             remaining=0,
             cooldown_until=latest_cooldown,
             **explanation,
@@ -1510,17 +1551,29 @@ def reconstruct_from_comments(
     trusted_posters: Sequence[str] | None,
     max_attempts: int = 3,
     now_epoch: float = 0.0,
+    reset_authorizer_id: Any = "",
 ) -> Reconstruction:
     """Reconstruct remaining work and retry restrictions from GitHub alone.
 
     Private logs are never required. Missing or incompatible lineage,
     conflicting copies, and untrusted provenance produce explicit
     attention outcomes instead of a silently inferred fresh start.
+
+    Trusted provenance is not reset authority. A retry reset counts only
+    when the comment was posted by *reset_authorizer_id* -- the
+    authenticated account id this deployment posts and reads as -- and its
+    authorization names that same account. Any other reset record stays in
+    lineage without resetting anything.
     """
     parsed: list[ParsedAttempt] = []
+    poster_ids: dict[str, str] = {}
     for comment in comments:
         if not isinstance(comment, Mapping):
             continue
+        user = comment.get("user")
+        poster_ids[_string(comment.get("id"))] = (
+            _string(user.get("id")) if isinstance(user, Mapping) else ""
+        )
         parsed.append(
             parse_attempt_comment(
                 comment.get("body"),
@@ -1583,11 +1636,24 @@ def reconstruct_from_comments(
             )
     # Identical same-ID copies are one logical attempt, never extra charges.
     # GitHub lists comments oldest first, so lineage keeps recorded order and
-    # a reset record ends the charged window at the point it was posted.
+    # a reset record clears only attempts recorded before it.
     lineage = [copies[0] for copies in by_attempt.values()]
     latest = lineage[-1]
+    authorizer = _string(reset_authorizer_id)
+    authorized_resets = {
+        item.attempt_id
+        for item in marked
+        if authorizer
+        and item.handoff is not None
+        and is_retry_reset(item.handoff)
+        and poster_ids.get(_string(item.comment_id)) == authorizer
+        and _reset_bound_to_poster(item.handoff, item.author_login)
+    }
     retry = compute_effective_retry(
-        lineage, max_attempts=max_attempts, now_epoch=now_epoch
+        lineage,
+        max_attempts=max_attempts,
+        now_epoch=now_epoch,
+        authorized_resets=authorized_resets,
     )
     if not retry.allowed and retry.reason_code in {"missing_lineage", "incompatible_policy"}:
         return Reconstruction(
