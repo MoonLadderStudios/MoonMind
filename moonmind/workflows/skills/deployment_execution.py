@@ -78,6 +78,10 @@ class ComposeCommandPlan:
     runner_mode: str
     pull_args: tuple[str, ...]
     up_args: tuple[str, ...]
+    # Acquires reconciled infrastructure images that are absent locally
+    # without refreshing present ones, so `up --pull never` never fails on an
+    # infrastructure image the release newly pins.
+    missing_pull_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2155,6 +2159,17 @@ class DeploymentUpdateExecutor:
                 )
                 command_log["pull"]["result"] = pull_result
                 _ensure_command_succeeded("pull", pull_result)
+                if command_plan.missing_pull_args:
+                    missing_pull_result = await self.runner.pull(
+                        stack=parsed["stack"],
+                        command=command_plan.missing_pull_args,
+                        requested_image=requested_image,
+                    )
+                    command_log["missingImagePull"] = {
+                        "command": list(command_plan.missing_pull_args),
+                        "result": missing_pull_result,
+                    }
+                    _ensure_command_succeeded("pull", missing_pull_result)
                 target_image = await self.runner.inspect_image(requested_image)
                 command_log["targetImage"] = _target_image_audit(target_image)
                 after_build_id = _target_image_build_id(target_image)
@@ -2800,6 +2815,11 @@ def _command_plan_targeting_stack_services(
                 "failureClass": "runner_self_recreation_unsafe",
             },
         )
+    infrastructure_services = tuple(
+        service_name
+        for service_name in reconciliation_services
+        if service_name not in pull_services
+    )
     return ComposeCommandPlan(
         runner_mode=command_plan.runner_mode,
         pull_args=(*command_plan.pull_args, *pull_services),
@@ -2808,6 +2828,37 @@ def _command_plan_targeting_stack_services(
             "--no-deps",
             *reconciliation_services,
         ),
+        missing_pull_args=(
+            _missing_image_pull_args(command_plan.pull_args, infrastructure_services)
+            if infrastructure_services
+            else ()
+        ),
+    )
+
+
+def _missing_image_pull_args(
+    pull_args: Sequence[str], services: Sequence[str]
+) -> tuple[str, ...]:
+    """Return ``pull_args`` for ``services`` under the ``missing`` policy."""
+    args: list[str] = []
+    skip_next = False
+    for part in pull_args:
+        if skip_next:
+            skip_next = False
+            continue
+        if part == "--policy":
+            skip_next = True
+            continue
+        if part.startswith("--policy="):
+            continue
+        args.append(part)
+    pull_index = args.index("pull") + 1
+    return (
+        *args[:pull_index],
+        "--policy",
+        "missing",
+        *args[pull_index:],
+        *services,
     )
 
 
@@ -2995,6 +3046,7 @@ def _command_plan_without_services(
             command_plan.up_args,
             excluded_services=excluded,
         ),
+        missing_pull_args=command_plan.missing_pull_args,
     )
 
 
