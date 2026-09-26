@@ -397,6 +397,7 @@ def main(argv=None):
                 for arg in requested_args
             )
         ),
+        is_resume=args.resume is not None,
     )
 
 
@@ -408,12 +409,18 @@ def _submit_release(
     secret_file,
     legacy_direct,
     controller_url_explicit=False,
+    is_resume=False,
 ):
     """Route the recorded submission to its installed execution owner.
 
     An installed (or explicitly selected) standalone controller owns the
     update. Until a deployment installs it, the application-owned updater
     remains the supported default so a bare invocation still updates.
+
+    A resume never takes that automatic fallback on its own: the original
+    submission may still be owned by the controller, and forking the legacy
+    updater would create two deployment writers. Resume requires the owner
+    to be reconciled first via an explicit selection.
     """
     if legacy_direct:
         return _submit_legacy_direct(record, repo)
@@ -429,10 +436,12 @@ def _submit_release(
             controller_url = f"http://127.0.0.1:{port}"
     default_secret = _default_controller_secret_file(repo)
     if not explicit_controller and not default_secret.exists():
+        _reject_automatic_resume(is_resume)
+        # The notice stays free of secret material (CodeQL clear-text
+        # logging): it names no secret path or value, only the installer.
         print(
-            f"Standalone controller is not installed (no secret at "
-            f"{default_secret}); updating through the application-owned "
-            "updater. Install the controller with "
+            "Standalone controller is not installed; updating through the "
+            "application-owned updater. Install the controller with "
             "`python3 deploy/controller/bootstrap.py install` to use it.",
             flush=True,
         )
@@ -448,6 +457,7 @@ def _submit_release(
             # controller with durable work must retain its recovery authority.
             if not _controller_never_started(repo):
                 raise
+            _reject_automatic_resume(is_resume)
             print(
                 "Standalone controller bootstrap did not start a service; "
                 "updating through the application-owned updater.",
@@ -460,6 +470,18 @@ def _submit_release(
         controller_url=controller_url,
         secret_file=secret_file,
     )
+
+
+def _reject_automatic_resume(is_resume):
+    if is_resume:
+        raise RuntimeError(
+            "Refusing to resume with the legacy application-owned "
+            "updater: the original submission may still be owned by the "
+            "standalone controller. Reconcile controller ownership "
+            "first, then resume with --legacy-direct to confirm the "
+            "legacy path or --controller-secret-file to resume through "
+            "the controller."
+        )
 
 
 def _default_controller_secret_file(repo):
@@ -718,11 +740,23 @@ def _submit_legacy_direct(record, repo):
             "-f",
             str(path),
         ]
-        for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
-            override = repo / name
-            if override.exists():
-                command.extend(["-f", str(override)])
-                break
+        # Propagate the deployment's selected Compose file set (the same
+        # resolution the controller path carries). The release image already
+        # supplies the base file, so only the additional selected files are
+        # layered here; omitting them would reconcile without custom services
+        # while `--remove-orphans` may remove them.
+        compose_selection = os.environ.get("COMPOSE_FILE", "")
+        if compose_selection.strip():
+            for name in _resolve_compose_files(repo):
+                if name in ("docker-compose.yaml", "docker-compose.yml"):
+                    continue
+                command.extend(["-f", str(repo / name)])
+        else:
+            for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+                override = repo / name
+                if override.exists():
+                    command.extend(["-f", str(override)])
+                    break
         command.extend(
             [
                 "run",
