@@ -291,6 +291,37 @@ async def test_required_tool_probe_uses_image_owned_gh_without_volume() -> None:
 
 
 @pytest.mark.asyncio
+async def test_required_tool_probe_uses_effective_launch_image() -> None:
+    # P1: the on-demand launch starts effective_launch["hostImageRef"] (the
+    # MoonMind shared image), while self._image defaults to the legacy
+    # upstream OMNIGENT_HOST_IMAGE that does not carry the baked tools. The
+    # probe must run against the effective image or valid runs fail
+    # tool_bundle_unavailable before launch.
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        image="ghcr.io/omnigent-ai/omnigent-host:latest",
+    )
+    runtime._run = AsyncMock(return_value=(0, "gh version 2.76.2 (test)\n", ""))
+
+    await runtime._initialize_required_tools(
+        image_ref="example/shared@sha256:" + "b" * 64
+    )
+
+    runtime._run.assert_awaited_once_with(
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "/opt/moonmind-tools/bin/gh",
+        "example/shared@sha256:" + "b" * 64,
+        "--version",
+        check=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_required_tool_probe_fails_with_stable_readiness_evidence() -> None:
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),

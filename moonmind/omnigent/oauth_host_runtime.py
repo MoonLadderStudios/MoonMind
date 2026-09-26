@@ -710,7 +710,9 @@ class OmnigentOAuthHostRuntime:
                 container_job_environment
             )
             if "gh" in {item.strip().lower() for item in required_capabilities}:
-                await self._initialize_required_tools()
+                await self._initialize_required_tools(
+                    image_ref=str(launch["hostImageRef"])
+                )
             container_name = (
                 host_lease.container_name
                 or deterministic_host_container_name(host_lease.lease_id)
@@ -3651,11 +3653,16 @@ class OmnigentOAuthHostRuntime:
             ),
         }
 
-    async def _initialize_required_tools(self) -> None:
+    async def _initialize_required_tools(self, *, image_ref: str | None = None) -> None:
         # MoonLadderStudios/MoonMind#4558: probe the image-owned tools without
         # a tools volume and without an exact-version gate. A missing or
         # broken executable remains an actionable failure for affected runs;
-        # ordinary tool upgrades never require requalification here.
+        # ordinary tool upgrades never require requalification here. Probe the
+        # effective launch image (the image _launch_on_demand actually starts),
+        # not the legacy self._image default: production constructors leave
+        # self._image at the upstream OMNIGENT_HOST_IMAGE default, which is
+        # precisely the image that does not carry the baked tools.
+        probe_image = str(image_ref or "").strip() or self._image
         return_code, stdout, _stderr = await self._run(
             "docker",
             "run",
@@ -3664,7 +3671,7 @@ class OmnigentOAuthHostRuntime:
             "none",
             "--entrypoint",
             "/opt/moonmind-tools/bin/gh",
-            self._image,
+            probe_image,
             "--version",
             check=False,
         )
@@ -3676,7 +3683,7 @@ class OmnigentOAuthHostRuntime:
                 evidence={
                     "tool": "gh",
                     "phase": "deployment_initialization",
-                    "image": self._image,
+                    "image": probe_image,
                 },
             )
 

@@ -404,12 +404,16 @@ class DockerOmnigentHostLauncher:
         ]
         for attachment in attachments:
             kind = str(attachment["kind"])
-            if kind != "volume":
+            if kind == "image":
                 # Image-owned tools (MoonLadderStudios/MoonMind#4558): the
                 # selected image already carries /opt/moonmind-tools, so no
                 # mount overlay is created. Mounting anything over that path
                 # would hide the image-owned executables. PATH projection and
-                # exact-host probes still resolve them.
+                # exact-host probes still resolve them. Bind and volume
+                # attachments (workspace, skills, credentials, state) must
+                # still become Docker mounts: in local-daemon mode the
+                # workspace and skill projections are bind mounts, and
+                # skipping them would leave the host without its workspace.
                 continue
             source = str(attachment["sourceRef"])
             target = str(attachment["targetPath"])
