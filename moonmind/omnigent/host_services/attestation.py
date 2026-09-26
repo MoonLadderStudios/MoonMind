@@ -14,6 +14,7 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.host_ports import HostLaunchSpec
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
 from moonmind.omnigent.host_services.github_credentials import (
     github_repository_from_request,
 )
@@ -708,22 +709,35 @@ class DockerOmnigentHostAttestor:
                 )
         tool_mount_evidence: list[dict[str, Any]] = []
         for attachment in spec.toolAttachments:
-            matched = next(
-                (
-                    mount
-                    for mount in mounts
-                    if str(mount.get("Name") or mount.get("Source") or "")
-                    == str(attachment["sourceRef"])
-                    and str(mount.get("Destination") or "")
-                    == str(attachment["targetPath"])
-                ),
-                None,
-            )
-            if matched is None or bool(matched.get("RW")):
+            delivery = classify_tool_attachment(attachment)
+            if delivery == "unsupported":
                 raise HarnessPlatformError(
-                    "resolved tool projection is missing or writable on the exact host",
+                    "resolved tool projection is not a supported delivery",
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                 )
+            if delivery == "legacy-volume-drain":
+                # Persisted pre-cutover bindings are drained, never rewritten:
+                # the recorded volume must still be present read-only.
+                matched = next(
+                    (
+                        mount
+                        for mount in mounts
+                        if str(mount.get("Name") or mount.get("Source") or "")
+                        == str(attachment["sourceRef"])
+                        and str(mount.get("Destination") or "")
+                        == str(attachment["targetPath"])
+                    ),
+                    None,
+                )
+                if matched is None or bool(matched.get("RW")):
+                    raise HarnessPlatformError(
+                        "resolved tool projection is missing or writable on the exact host",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+            # Image-owned tools (MoonLadderStudios/MoonMind#4558) carry no
+            # mount: the selected image owns /opt/moonmind-tools. The
+            # executable, digest, and version-probe checks below still run
+            # against the exact host; no mount evidence is fabricated.
             for tool in attachment.get("tools", []):
                 probe = tool.get("versionProbe")
                 if (
@@ -845,17 +859,21 @@ class DockerOmnigentHostAttestor:
                         actual_digest[:19] or "unknown",
                         expected_version or "unknown",
                     )
-                tool_mount_evidence.append(
-                    {
-                        "name": str(tool.get("name") or ""),
-                        "version": str(tool.get("version") or ""),
-                        "path": executable,
-                        "accessMode": "read-only",
-                        "digestVerified": digest_verified,
-                        "versionProbe": list(tool["versionProbe"]),
-                        "probe": observed.strip()[:128],
-                    }
-                )
+                tool_evidence: dict[str, Any] = {
+                    "name": str(tool.get("name") or ""),
+                    "version": str(tool.get("version") or ""),
+                    "path": executable,
+                    "accessMode": "read-only",
+                    "delivery": delivery,
+                    "digestVerified": digest_verified,
+                    "versionProbe": list(tool["versionProbe"]),
+                    "probe": observed.strip()[:128],
+                }
+                if delivery == "image":
+                    tool_evidence["imageRef"] = inspect_ref
+                else:
+                    tool_evidence["sourceRef"] = str(attachment.get("sourceRef") or "")
+                tool_mount_evidence.append(tool_evidence)
         control_mount_evidence: dict[str, Any] | None = None
         if spec.controlAttachment is not None:
             control_mount = next(

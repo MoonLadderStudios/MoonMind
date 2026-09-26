@@ -11,7 +11,16 @@ from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
 )
-from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
+from moonmind.omnigent.host_services.legacy_tools_cleanup import (
+    apply_legacy_cleanup,
+    classify_legacy_tools_volume,
+    plan_legacy_cleanup,
+)
+from moonmind.omnigent.host_services.mounted_tools import (
+    IMAGE_TOOL_TARGET_PATH,
+    OmnigentMountedToolService,
+    classify_tool_attachment,
+)
 from moonmind.omnigent.host_services.registration import OmnigentHostRegistrationService
 from moonmind.omnigent.host_services.runtime_environment import (
     OmnigentRuntimeEnvironmentService,
@@ -25,6 +34,7 @@ __all__ = [
     "DockerOmnigentHostAttestor",
     "DockerOmnigentHostCleanupService",
     "DockerOmnigentHostLauncher",
+    "IMAGE_TOOL_TARGET_PATH",
     "LegacyOmnigentHostContainerService",
     "OmnigentEgressService",
     "OmnigentGithubCredentialService",
@@ -34,4 +44,8 @@ __all__ = [
     "OmnigentRuntimeScriptService",
     "OmnigentSkillDeliveryService",
     "OmnigentWorkspaceMaterializer",
+    "apply_legacy_cleanup",
+    "classify_legacy_tools_volume",
+    "classify_tool_attachment",
+    "plan_legacy_cleanup",
 ]

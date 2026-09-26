@@ -64,7 +64,6 @@ them as always-on containers.
 | --- | --- |
 | `temporal-namespace-init` | Temporal namespace setup |
 | `omnigent-runtime-bootstrap` | Omnigent runtime bootstrap |
-| `omnigent-tools-init` | Omnigent tooling setup |
 | `init-db` | MoonMind database initialization |
 | `omnigent-db-init` | Omnigent database initialization |
 | `omnigent-agent-init` | Omnigent agent registration |

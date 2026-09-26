@@ -35,6 +35,11 @@ ARG OPENCODE_VERSION=1.18.11
 ARG OPENCODE_MIN_VERSION=1.17.7
 ARG OPENCODE_MAX_VERSION=1.19.0
 ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache
+# Image-owned helper tools (MoonLadderStudios/MoonMind#4558): gh and the
+# non-secret MoonMind container CLI. The single pin source is
+# services/omnigent/tools/manifest.lock.json; these args mirror it and the
+# build fails if they drift from the manifest.
+ARG OMNIGENT_GH_VERSION=2.76.2
 
 FROM ${OMNIGENT_HOST_BASE_IMAGE} AS base
 
@@ -50,6 +55,7 @@ ARG OPENCODE_VERSION
 ARG OPENCODE_MIN_VERSION
 ARG OPENCODE_MAX_VERSION
 ARG OPENCODE_PLUGIN_NPM_CACHE
+ARG OMNIGENT_GH_VERSION
 
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
@@ -88,6 +94,34 @@ RUN CODEX_INSTALLED="$(codex --version 2>&1 | head -n1 | grep -oE '[0-9]+\.[0-9]
         || { echo "opencode version ${OPENCODE_INSTALLED} outside supported range ${OPENCODE_MIN_VERSION}..${OPENCODE_MAX_VERSION} (exclusive upper)" >&2; exit 1; } \
     && echo "codex ${CODEX_INSTALLED}, claude ${CLAUDE_INSTALLED}, opencode ${OPENCODE_INSTALLED} within supported ranges"
 
+# Image-owned Omnigent helper tools (MoonLadderStudios/MoonMind#4558).
+#
+# gh and the non-secret MoonMind container CLI are installed into
+# /opt/moonmind-tools/bin at build time from the pins in
+# services/omnigent/tools/manifest.lock.json (single source). The selected
+# image owns its tool contents for the host's lifetime: new tool contents
+# require a new image build, and host launch never downloads, installs, or
+# copies shared tool binaries. The installed files are root-owned and
+# unwritable by the runtime user; the logical `docker` capability stays
+# capability-mediated by the unchanged moonmind-container-cli.py behavior.
+COPY services/omnigent/moonmind-host/install_moonmind_tools.py /tmp/install_moonmind_tools.py
+COPY services/omnigent/tools/manifest.lock.json /tmp/manifest.lock.json
+COPY services/omnigent/scripts/moonmind-container-cli.py /tmp/moonmind-container-cli.py
+COPY services/omnigent/scripts/moonmind-tools.sh /tmp/moonmind-tools.sh
+RUN GH_VERSION="${OMNIGENT_GH_VERSION}" \
+    MANIFEST_PATH=/tmp/manifest.lock.json \
+    CLI_SOURCE=/tmp/moonmind-container-cli.py \
+    PROFILE_SOURCE=/tmp/moonmind-tools.sh \
+    OUTPUT_ROOT=/opt/moonmind-tools \
+    PROFILE_TARGET=/etc/profile.d/moonmind-tools.sh \
+    python3 /tmp/install_moonmind_tools.py \
+    && rm -f /tmp/install_moonmind_tools.py /tmp/manifest.lock.json \
+        /tmp/moonmind-container-cli.py /tmp/moonmind-tools.sh \
+    && test -x /opt/moonmind-tools/bin/gh \
+    && test -x /opt/moonmind-tools/bin/moonmind \
+    && test -r /opt/moonmind-tools/manifest.json \
+    && test -r /etc/profile.d/moonmind-tools.sh
+
 # Warm the OpenCode plugin SDK dependency closure at image build time.
 #
 # The first `opencode serve` in a config directory writes
@@ -122,12 +156,15 @@ USER 1000:1000
 WORKDIR /home/app
 
 ENV HOME="/home/app" \
-    PATH="/usr/local/bin:${PATH}"
+    PATH="/opt/moonmind-tools/bin:/usr/local/bin:${PATH}"
 
 # Sanity check as non-root
 RUN command -v codex && codex --version \
     && command -v claude && claude --version \
-    && command -v opencode && opencode --version
+    && command -v opencode && opencode --version \
+    && command -v gh && gh --version \
+    && command -v moonmind && moonmind --help \
+    && bash -lc 'command -v gh && command -v moonmind'
 
 LABEL org.opencontainers.image.title="omnigent-host-moonmind" \
       org.opencontainers.image.description="Neutral shared MoonMind Omnigent host image (Codex ${CODEX_CLI_VERSION}, Claude Code ${CLAUDE_CLI_VERSION}, OpenCode ${OPENCODE_VERSION})" \
@@ -136,4 +173,6 @@ LABEL org.opencontainers.image.title="omnigent-host-moonmind" \
       moonmind.codex.version="${CODEX_CLI_VERSION}" \
       moonmind.claude.version="${CLAUDE_CLI_VERSION}" \
       moonmind.opencode.version="${OPENCODE_VERSION}" \
+      moonmind.gh.version="${OMNIGENT_GH_VERSION}" \
+      moonmind.tools.bundle="gh-${OMNIGENT_GH_VERSION}-container-v1" \
       moonmind.opencode.plugin_npm_cache="${OPENCODE_PLUGIN_NPM_CACHE}"
