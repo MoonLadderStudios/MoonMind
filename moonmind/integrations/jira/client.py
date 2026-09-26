@@ -6,7 +6,6 @@ import asyncio
 import logging as stdlib_logging
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
@@ -80,29 +79,6 @@ class JiraClient:
                 action=action,
             ) from exc
 
-    async def request_bytes(
-        self,
-        *,
-        method: str,
-        path: str,
-        action: str,
-        params: Mapping[str, Any] | None = None,
-        context: Mapping[str, Any] | None = None,
-    ) -> tuple[bytes, str]:
-        """Perform one Jira request and return raw bytes plus content type."""
-
-        response = await self._request_raw(
-            method=method,
-            path=path,
-            action=action,
-            params=params,
-            context=context,
-        )
-        return (
-            bytes(response.content or b""),
-            response.headers.get("content-type", "").split(";", 1)[0].strip(),
-        )
-
     async def _request_raw(
         self,
         *,
@@ -124,7 +100,7 @@ class JiraClient:
             try:
                 response = await self._client.request(
                     method=method,
-                    url=self._resolve_request_path(path),
+                    url=path,
                     params=params,
                     json=json_body,
                 )
@@ -246,7 +222,7 @@ class JiraClient:
         try:
             auth_response = await self._client.request(
                 method="GET",
-                url=self._resolve_request_path("/myself"),
+                url="/myself",
             )
         except (httpx.TransportError, httpx.TimeoutException):
             return None
@@ -273,7 +249,7 @@ class JiraClient:
         try:
             response = await self._client.request(
                 method="GET",
-                url=self._resolve_request_path("/project/search"),
+                url="/project/search",
                 params={"maxResults": 1},
             )
         except (httpx.TransportError, httpx.TimeoutException):
@@ -288,24 +264,6 @@ class JiraClient:
                 request=response.request,
             )
         return response
-
-    def _resolve_request_path(self, path: str) -> str:
-        if not path.startswith("agile:"):
-            return path
-
-        agile_suffix = path.removeprefix("agile:").strip()
-        if not agile_suffix.startswith("/"):
-            agile_suffix = f"/{agile_suffix}"
-
-        parsed_base = urlparse(self._connection.base_url)
-        origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
-        base_path = parsed_base.path.rstrip("/")
-        marker = "/rest/api/"
-        if marker in f"{base_path}/":
-            prefix = base_path.split(marker, 1)[0]
-            return f"{origin}{prefix}/rest/agile/1.0{agile_suffix}"
-
-        return f"{origin}/rest/agile/1.0{agile_suffix}"
 
     def _retry_after_seconds(self, response: httpx.Response) -> float | None:
         raw = str(response.headers.get("Retry-After", "")).strip()

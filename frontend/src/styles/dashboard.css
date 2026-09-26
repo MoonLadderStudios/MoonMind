@@ -7204,10 +7204,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.75rem;
 }
 
-.jira-browse-button {
-  border-radius: 8px;
-}
-
 .oauth-terminal-page {
   display: grid;
   min-width: 0;
@@ -7421,21 +7417,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   outline: none;
 }
 
-.jira-provenance-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 1.5rem;
-  padding: 0.15rem 0.5rem;
-  border: 1px solid rgb(var(--mm-border));
-  border-radius: 8px;
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-muted));
-  font-size: 0.8rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.jira-browser-backdrop {
+.queue-dialog-backdrop {
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -7445,8 +7427,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: rgb(15 23 42 / 0.5);
 }
 
-.jira-browser-panel {
-  width: min(1040px, 100%);
+.queue-dialog-panel {
   max-height: min(760px, calc(100vh - 2rem));
   overflow: auto;
   padding: 1rem;
@@ -7456,69 +7437,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow: 0 24px 70px -32px rgb(0 0 0 / 0.55);
 }
 
-.jira-browser-panel h3,
-.jira-browser-panel h4 {
+.queue-dialog-panel h3 {
   margin: 0;
-}
-
-.jira-browser-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
-  gap: 1rem;
-  min-height: 360px;
-}
-
-.jira-column-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.jira-column-tab {
-  border-radius: 8px;
-}
-
-.jira-column-tab.active,
-.jira-issue-button.active {
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.28);
-}
-
-.jira-issue-list {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.jira-issue-button {
-  width: 100%;
-  display: grid;
-  justify-items: start;
-  gap: 0.2rem;
-  padding: 0.65rem 0.75rem;
-  border-radius: 8px;
-  border-color: rgb(var(--mm-border));
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  text-align: left;
-  box-shadow: none;
-}
-
-.jira-issue-action {
-  min-width: 0;
-  padding: 0.75rem;
-  border: 1px solid rgb(var(--mm-border));
-  border-radius: 8px;
-  background: rgb(var(--mm-panel) / 0.6);
 }
 
 @media (max-width: 820px) {
   .queue-field-heading {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .jira-browser-layout {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -10661,25 +10587,24 @@ button.workflow-workspace-sidebar-row:active {
 /* MoonMind#4559 overlays: confirmation dialog panels stay viewport-bounded
  * with safe-area spacing and a single scroll container. Scoped to panels
  * only: fixed inset-0 backdrops that carry role="dialog" (e.g. the
- * tier-removal backdrop) keep full-viewport coverage, the wide
- * jira-browser panel keeps its own sizing, and full-height enrollment
- * drawers keep their right-anchored drawer layout. Footer actions wrap and
- * remain reachable at narrow widths and short heights without nested
- * scroll traps. */
+ * tier-removal backdrop) keep full-viewport coverage, queue-dialog panels
+ * keep their own sizing, and full-height enrollment drawers keep their
+ * right-anchored drawer layout. Footer actions wrap and remain reachable at
+ * narrow widths and short heights without nested scroll traps. */
 @media (max-width: 720px) {
-  .dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel):not(.h-full),
-  .dashboard-content [data-state="open"][role="dialog"]:not(.fixed):not(.jira-browser-panel):not(.h-full) {
+  .dashboard-content [role="dialog"]:not(.fixed):not(.queue-dialog-panel):not(.h-full),
+  .dashboard-content [data-state="open"][role="dialog"]:not(.fixed):not(.queue-dialog-panel):not(.h-full) {
     max-width: calc(100vw - 1.5rem);
     max-height: calc(100dvh - 2rem);
     overflow: auto;
     margin: auto;
   }
 }
-.dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel) {
+.dashboard-content [role="dialog"]:not(.fixed):not(.queue-dialog-panel) {
   min-width: 0;
   max-width: calc(100vw - 1.5rem);
 }
-.dashboard-content [role="dialog"]:not(.fixed):not(.jira-browser-panel) button {
+.dashboard-content [role="dialog"]:not(.fixed):not(.queue-dialog-panel) button {
   white-space: normal;
   overflow-wrap: anywhere;
   max-width: 100%;
