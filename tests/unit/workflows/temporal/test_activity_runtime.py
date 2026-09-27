@@ -2673,6 +2673,44 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
             assert captured_context["idempotency_key"] == "wf-1_n1_execute"
 
 
+@pytest.mark.parametrize("method", ["mm_tool_execute", "mm_skill_execute"])
+async def test_tool_activity_heartbeats_during_pending_handler(method) -> None:
+    from dataclasses import replace
+
+    from temporalio.testing import ActivityEnvironment
+
+    dispatcher = SkillActivityDispatcher()
+    heartbeat_seen = asyncio.Event()
+
+    async def slow_handler(inputs, context):
+        # Represents a pending image pull or detached-owner observation.
+        await asyncio.wait_for(heartbeat_seen.wait(), timeout=1)
+        return SkillResult(status="COMPLETED", outputs={"ok": True})
+
+    dispatcher.register_skill(skill_name="repo.run_tests", handler=slow_handler)
+    snapshot = create_registry_snapshot(
+        skills=parse_skill_registry(_registry_payload()),
+        artifact_store=InMemoryArtifactStore(),
+    )
+    activities = TemporalSkillActivities(dispatcher=dispatcher)
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info, heartbeat_timeout=timedelta(seconds=0.15)
+    )
+    environment.on_heartbeat = lambda *details: heartbeat_seen.set()
+    result = await environment.run(
+        getattr(activities, method),
+        invocation_payload={
+            "id": "deploy",
+            "skill": {"name": "repo.run_tests"},
+            "inputs": {"repo_ref": "git:org/repo#main"},
+        },
+        registry_snapshot=snapshot,
+    )
+    assert heartbeat_seen.is_set()
+    assert result.status == "COMPLETED"
+
+
 async def test_mm_tool_execute_preserves_tool_failure_envelope() -> None:
     dispatcher = SkillActivityDispatcher()
 

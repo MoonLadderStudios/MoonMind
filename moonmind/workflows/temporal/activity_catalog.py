@@ -274,6 +274,7 @@ class TemporalActivityCatalog:
                 timeouts=TemporalActivityTimeouts(
                     start_to_close_seconds=definition.policies.timeouts.start_to_close_seconds,
                     schedule_to_close_seconds=definition.policies.timeouts.schedule_to_close_seconds,
+                    heartbeat_timeout_seconds=definition.policies.timeouts.heartbeat_timeout_seconds,
                 ),
                 retries=TemporalActivityRetries(
                     max_attempts=definition.policies.retries.max_attempts,
@@ -286,7 +287,8 @@ class TemporalActivityCatalog:
                     ),
                     non_retryable_error_codes=definition.policies.retries.non_retryable_error_codes,
                 ),
-                heartbeat_required=False,
+                heartbeat_required=definition.policies.timeouts.heartbeat_timeout_seconds
+                is not None,
             )
 
         return TemporalActivityRoute(
