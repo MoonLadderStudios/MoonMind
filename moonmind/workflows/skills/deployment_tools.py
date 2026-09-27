@@ -19,11 +19,11 @@ DEPLOYMENT_OVERVIEW_TOOL_VERSION = "1.0.0"
 # for a release that is still running.
 RELEASE_JOB_BUDGET_SECONDS = 7200
 # How long one supervising attempt watches the detached job. Timing out is
-# not a failure: promotion recreates every worker fleet, including the one
+# not a failure: deployment recreates changed services, including the one
 # running the supervising Activity, so the supervisor is expected to be
 # replaced mid-release and ``execute_detached`` re-attaches on the next
-# attempt. The window therefore only bounds how long a replaced supervisor
-# goes unnoticed, which is why it is far shorter than the budget.
+# attempt. Heartbeats detect a replaced supervisor promptly; this longer
+# window bounds healthy attempts without interrupting slow pre-launch work.
 #
 # It must still outlast one pre-launch compose command with room to spare.
 # ``HostDockerComposeRunner`` reads its own command timeout from here, and
@@ -35,6 +35,7 @@ RELEASE_JOB_BUDGET_SECONDS = 7200
 # pre-launch work.
 RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS = 900
 RELEASE_PRELAUNCH_HEADROOM_SECONDS = 300
+RELEASE_SUPERVISION_HEARTBEAT_TIMEOUT_SECONDS = 60
 RELEASE_SUPERVISION_WINDOW_SECONDS = (
     RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS + RELEASE_PRELAUNCH_HEADROOM_SECONDS
 )
@@ -192,6 +193,7 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
         "policies": {
             "timeouts": {
                 "start_to_close_seconds": RELEASE_SUPERVISION_WINDOW_SECONDS,
+                "heartbeat_timeout_seconds": RELEASE_SUPERVISION_HEARTBEAT_TIMEOUT_SECONDS,
                 "schedule_to_close_seconds": (
                     RELEASE_SUPERVISION_SCHEDULE_TO_CLOSE_SECONDS
                 ),

@@ -5,7 +5,7 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-09-22
+**Last Updated:** 2026-09-26
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
 
@@ -87,6 +87,14 @@ GET  /api/v1/operations/deployment/image-targets?stack=moonmind
 The submission identifies the stack and target image, with existing explicit maintenance options where supported. Keep current client fields usable during migration; this document does not introduce a replacement API schema or another job-status vocabulary.
 
 The API submits or observes the same controller operation the host uses. Its response identifies that operation and its actual current state. An API/workflow timeout is not permission to launch another updater or evidence that the underlying operation failed.
+
+The workflow's deployment observer heartbeats while reading its registry,
+pulling the updater image, and awaiting the durable result. A 60-second
+heartbeat timeout detects a replaced observer independently of the longer
+command and release deadlines. Its retry reattaches using the same operation
+identity and reads an existing terminal receipt without repeating deployment.
+Historical workflows retain the timeout policy in their saved registry snapshot;
+new update workflows use the heartbeat policy after the worker code is installed.
 
 ## 8. Executable tool contract
 
