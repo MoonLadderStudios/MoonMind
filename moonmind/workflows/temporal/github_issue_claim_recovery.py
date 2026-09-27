@@ -44,6 +44,20 @@ MAX_HISTORY_EVENTS = 25000
 MAX_CLAIM_SECONDS = 30
 MAX_SWEEP_SECONDS = 120
 
+# These Activities inspect admission/capacity or renew the issue reservation;
+# none can dispatch provider work. Unknown Activities remain possible work.
+# This positive evidence also covers retained runs that predate the typed
+# ISSUE_CLAIM_CAPACITY_BLOCKED failure and instead died when their lease expired.
+PRE_DISPATCH_ACTIVITIES = frozenset(
+    {
+        "github_issue.renew_claim",
+        "integration.resolve_adapter_metadata",
+        "omnigent.evaluate_session_admission",
+        "provider_profile.list",
+        "provider_profile.manager_state",
+    }
+)
+
 
 def _repository_identity(value):
     """Compare canonical repository identities, not authored spellings."""
@@ -96,13 +110,15 @@ async def _continue_as_new_chain(client, workflow_id):
 
 
 async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False):
-    """Return ``(started agents, terminal run completed)`` for a closed owner tree.
+    """Return ``(agents, completed, undispatched agents)`` for a closed owner tree.
 
     Raises while any execution is still running, inside the cleanup grace, or
     held by cancellation, and whenever the history cannot prove every child
     start and shared mutation settled. A completed owner whose attempt already
     recorded its outcome (*outcome_recorded*) is left to that journey before
-    any history is read.
+    any history is read. An undispatched agent has a complete initial-run
+    history containing only known admission Activities and no child starts.
+    The workflow's existence or an absent runtime binding alone proves nothing.
     """
     namespace, workflow_id = receipt.owner.split("/", 1)
     chain = await _continue_as_new_chain(client, workflow_id)
@@ -111,6 +127,7 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
     pending = list(chain)
     executions = set()
     agents = set()
+    undispatched_agents = set()
     completed = False
     total_events = 0
     while pending:
@@ -166,6 +183,9 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
         settled_starts = set()
         shared_effects = set()
         shared_started = set()
+        initial_run = False
+        admission_only = True
+
         def _scheduled_id(attrs, *names):
             for name in names:
                 value = getattr(attrs, name, None)
@@ -194,6 +214,10 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
             total_events += 1
             if total_events > MAX_HISTORY_EVENTS:
                 raise ValueError("history_scan_incomplete")
+            if event.HasField("workflow_execution_started_event_attributes"):
+                initial_run = not (
+                    event.workflow_execution_started_event_attributes.continued_execution_run_id
+                )
             if event.HasField(
                 "start_child_workflow_execution_initiated_event_attributes"
             ):
@@ -218,6 +242,8 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
                 )
             if event.HasField("activity_task_scheduled_event_attributes"):
                 name = event.activity_task_scheduled_event_attributes.activity_type.name
+                if name not in PRE_DISPATCH_ACTIVITIES:
+                    admission_only = False
                 # These are the production shared-mutation boundaries. A
                 # failed/unknown call cannot be inferred absent from labels.
                 if name == "mm.tool.execute" or name.startswith(
@@ -250,7 +276,14 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
             raise ValueError("child_start_unsettled")
         if shared_effects:
             raise ValueError("shared_mutation_outcome_unknown")
-    return agents, completed
+        if (
+            described.workflow_type == "MoonMind.AgentRun"
+            and initial_run
+            and admission_only
+            and not initiated
+        ):
+            undispatched_agents.add((identity[0], described.run_id))
+    return agents, completed, undispatched_agents
 
 
 #: MoonMind's own low-cardinality harness codes that mean the deployment could
@@ -376,7 +409,9 @@ def recovery_disposition_evidence(*, agent_started: bool, remaining: int, runtim
     }
 
 
-async def _runtime_no_work(store, agents, receipt, service):
+async def _runtime_no_work(
+    store, agents, receipt, service, *, undispatched_agents=frozenset()
+):
     from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
 
     if not agents:
@@ -464,9 +499,8 @@ async def _runtime_no_work(store, agents, receipt, service):
         # never writes this table. A missing or released slot lease proves no
         # provider capacity needs MoonMind cleanup, but it proves nothing about
         # repository work the agent may have edited or committed before
-        # failing. Without a binding row there is no inspected checkpoint, so
-        # the claim must stay recoverable until runtime-specific workspace or
-        # saved-work evidence is verified.
+        # failing. Only a complete pre-dispatch history can replace checkpoint
+        # evidence here; it must also wait for any capacity cleanup below.
         missing = sorted({owner for owner, _ in uncovered})
         async with store.sessions() as session:
             leases = (
@@ -486,7 +520,8 @@ async def _runtime_no_work(store, agents, receipt, service):
                 # owns the wait and reaps leases of dead owners, so recovery
                 # retries on a later sweep instead of releasing now.
                 raise ValueError("runtime_cleanup_pending")
-        raise ValueError("saved_work_requires_recovery")
+        if uncovered - undispatched_agents:
+            raise ValueError("saved_work_requires_recovery")
     return checkpoints
 
 
@@ -550,16 +585,19 @@ async def reconcile_local_claims(
                 )
                 recorded = parse_attempt_comment(receipt.comment_body).handoff
                 completed = False
+                undispatched_agents = set()
                 try:
-                    agents, completed = await _closed_execution_tree(
-                        client,
-                        receipt,
-                        now,
-                        outcome_recorded=recorded is not None
-                        and (
-                            recorded.outcome != "in_progress"
-                            or recorded.activity not in {"preparing", "active"}
-                        ),
+                    agents, completed, undispatched_agents = (
+                        await _closed_execution_tree(
+                            client,
+                            receipt,
+                            now,
+                            outcome_recorded=recorded is not None
+                            and (
+                                recorded.outcome != "in_progress"
+                                or recorded.activity not in {"preparing", "active"}
+                            ),
+                        )
                     )
                 except ValueError as exc:
                     if (
@@ -586,19 +624,27 @@ async def reconcile_local_claims(
                 )
                 if capacity_backoff:
                     agents = []
-                checkpoints = await _runtime_no_work(store, agents, receipt, service)
+                checkpoints = await _runtime_no_work(
+                    store,
+                    agents,
+                    receipt,
+                    service,
+                    undispatched_agents=undispatched_agents,
+                )
                 # ``_runtime_no_work`` returns a checkpoint for every started
                 # agent that had a provider session or workspace and raises for
                 # any it cannot account for, so no checkpoint means no agent
                 # runtime ever existed -- including an AgentRun that promoted
-                # the claim to active and then failed to launch its host. Only
-                # then is a typed provisioning failure a deployment fault.
+                # the claim to active and then failed to launch its host. The
+                # pre-dispatch history or a typed provisioning failure then
+                # explains why the attempt must not spend the issue allowance.
                 runtime_started = bool(checkpoints)
                 if capacity_backoff:
                     runtime_unavailable = True
                 else:
-                    runtime_unavailable = (not runtime_started) and await _runtime_provisioning_failed(
-                        client, receipt
+                    runtime_unavailable = (not runtime_started) and (
+                        bool(undispatched_agents)
+                        or await _runtime_provisioning_failed(client, receipt)
                     )
                 if unannounced:
                     released = await store.abandon_unannounced(
