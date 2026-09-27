@@ -161,7 +161,9 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
     if fault == "exhausted":
         assert (
             compute_effective_retry(
-                [handoff], max_attempts=3, now_epoch=datetime.now(UTC).timestamp()
+                [handoff],
+                max_attempts=handoff.retry_allowance,
+                now_epoch=datetime.now(UTC).timestamp(),
             ).reason_code
             == "budget_exhausted"
         )
@@ -211,7 +213,9 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
     assert recovered.attempt_id == handoff.attempt_id
     assert recovered.cooldown_until and state["labels"] == []
     retry = compute_effective_retry(
-        [recovered], max_attempts=3, now_epoch=datetime.now(UTC).timestamp()
+        [recovered],
+        max_attempts=handoff.retry_allowance,
+        now_epoch=datetime.now(UTC).timestamp(),
     )
     assert retry.remaining == handoff.retry_allowance
     assert retry.reason_code == "cooling_down"
