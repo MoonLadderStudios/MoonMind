@@ -901,5 +901,30 @@ async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redac
     assert harness.running.server.route_calls == calls_before_denial
 
 
+async def test_fake_server_loopback_bypasses_egress_proxy(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hermetic loopback traffic must never egress through a proxy.
+
+    Managed-container runners may set HTTP(S)_PROXY with an empty NO_PROXY
+    (MoonLadderStudios/MoonMind#3626). The shared fake server binds
+    127.0.0.1, so its harness must keep those calls on loopback.
+    """
+
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("https_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+    harness = await bridge_harness()
+
+    agents = await harness.client.list_agents()
+
+    assert agents
+    assert harness.running.server.route_calls == ["agents"]
+
+
 async def _always_connected() -> bool:
     return False

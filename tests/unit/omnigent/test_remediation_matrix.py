@@ -1539,3 +1539,248 @@ def test_release_requires_evidence_document_path_for_manifest(tmp_path) -> None:
         now=NOW,
     )
     assert "remediation_evidence_document_path_required" in status.blockers
+
+
+# ---------------------------------------------------------------------------
+# Per-operation evidence (MoonLadderStudios/MoonMind#3626 REQ-C3)
+#
+# Unrelated all-matrix prerequisites must not gate the actual operation.
+# Read-only diagnosis stays supported from its own observed rows even when an
+# unrelated reliability/security report is missing (e.g. runner outage), and
+# manual mutation stays supported from its own rows even when only the
+# separately-closed autonomous gate row is missing. Missing mandatory proof
+# for the claimed operation itself must still fail closed.
+# ---------------------------------------------------------------------------
+
+
+def test_diagnosis_supported_without_unrelated_reliability_kind(tmp_path) -> None:
+    release, release_path = _stage_release(tmp_path)
+    release["evidenceManifest"] = [
+        item
+        for item in release["evidenceManifest"]
+        if item["kind"] != "reliabilitySecurityEvidence"
+    ]
+    release["evidenceRefs"] = [item["ref"] for item in release["evidenceManifest"]]
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+    status = evaluate_remediation_release(
+        evidence=release,
+        evidence_document_path=release_path,
+        evidence_ref="release.json",
+        now=NOW,
+    )
+    # Full promotion still requires the complete matrix...
+    assert "complete_evidence_kind_coverage_required" in status.blockers
+    assert "matrix_row_coverage_incomplete" in status.blockers
+    assert status.manual_mutation_supported is False
+    # ...but unrelated runner/report outage must not disable basic diagnosis.
+    assert status.manual_diagnosis_supported is True
+    assert status.autonomous_rollout_authorized is False
+
+
+def test_mutation_supported_without_autonomous_gate_row(tmp_path) -> None:
+    release, release_path = _stage_release(tmp_path)
+    reliability_path = tmp_path / "reliabilitySecurityEvidence.json"
+    artifact = json.loads(reliability_path.read_text(encoding="utf-8"))
+    artifact["rows"] = [
+        entry
+        for entry in artifact["rows"]
+        if entry["row"] != "remediation.autonomous.rollout-gate-closed"
+    ]
+    content = _artifact_bytes(artifact)
+    reliability_path.write_bytes(content)
+    for item in release["evidenceManifest"]:
+        if item["kind"] == "reliabilitySecurityEvidence":
+            item["sha256"] = hashlib.sha256(content).hexdigest()
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+    status = evaluate_remediation_release(
+        evidence=release,
+        evidence_document_path=release_path,
+        evidence_ref="release.json",
+        now=NOW,
+    )
+    # Full promotion still requires every row including the autonomous gate...
+    assert "matrix_row_coverage_incomplete" in status.blockers
+    # ...but the separately-closed autonomous row must not gate manual work.
+    assert status.manual_diagnosis_supported is True
+    assert status.manual_mutation_supported is True
+    assert status.autonomous_rollout_authorized is False
+    assert status.blockers.count("autonomous_rollout_gate_closed") == 1
+
+
+def test_missing_mandatory_diagnosis_proof_still_fails_closed(tmp_path) -> None:
+    release, release_path = _stage_release(tmp_path)
+    release["evidenceManifest"] = [
+        item for item in release["evidenceManifest"] if item["kind"] != "diagnosisEvidence"
+    ]
+    release["evidenceRefs"] = [item["ref"] for item in release["evidenceManifest"]]
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+    status = evaluate_remediation_release(
+        evidence=release,
+        evidence_document_path=release_path,
+        evidence_ref="release.json",
+        now=NOW,
+    )
+    assert status.manual_diagnosis_supported is False
+    assert status.manual_mutation_supported is False
+
+
+def test_operation_builder_builds_scoped_diagnosis_evidence(tmp_path) -> None:
+    from moonmind.omnigent.remediation_matrix import (
+        build_remediation_operation_evidence,
+        remediation_operation_required_rows,
+    )
+
+    artifacts = {kind: _artifact(kind) for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS}
+    for kind, artifact in artifacts.items():
+        _stage_row_dependencies(tmp_path, artifact)
+        path = tmp_path / f"{kind}.json"
+        path.write_bytes(_artifact_bytes(artifact))
+    release_inputs = {
+        "images": dict(IMAGES),
+        "architectures": list(ARCHITECTURES),
+        "profileVersion": PROFILE_VERSION,
+        "profileSha256": PROFILE_SHA256,
+        "launchPolicyVersion": POLICY_VERSION,
+        "agentProfileVersion": AGENT_PROFILE_VERSION,
+        "remediationPolicyVersion": REMEDIATION_POLICY_VERSION,
+    }
+    document = build_remediation_operation_evidence(
+        release=release_inputs,
+        artifact_paths=[tmp_path / f"{kind}.json" for kind in artifacts],
+        operation="manual_diagnosis",
+        generated_at=NOW,
+    )
+    assert set(document["matrixRows"]) == set(
+        remediation_operation_required_rows("manual_diagnosis")
+    )
+    assert document["thresholds"]["withinLimits"] is True
+    release_path = tmp_path / "scoped-release.json"
+    release_path.write_text(json.dumps(document), encoding="utf-8")
+    status = evaluate_remediation_release(
+        evidence=document,
+        evidence_document_path=release_path,
+        evidence_ref="scoped-release.json",
+        now=NOW,
+    )
+    assert status.manual_diagnosis_supported is True
+    assert status.manual_mutation_supported is False
+    assert status.autonomous_rollout_authorized is False
+
+
+# ---------------------------------------------------------------------------
+# PR #4534 Codex review regression coverage: scoped manual-operation evidence.
+# ---------------------------------------------------------------------------
+
+
+def test_manual_mutation_builder_filters_autonomous_row(tmp_path) -> None:
+    from moonmind.omnigent.remediation_matrix import (
+        build_remediation_operation_evidence,
+        remediation_operation_required_rows,
+    )
+
+    artifacts = {kind: _artifact(kind) for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS}
+    for kind, artifact in artifacts.items():
+        _stage_row_dependencies(tmp_path, artifact)
+        path = tmp_path / f"{kind}.json"
+        path.write_bytes(_artifact_bytes(artifact))
+    release_inputs = {
+        "images": dict(IMAGES),
+        "architectures": list(ARCHITECTURES),
+        "profileVersion": PROFILE_VERSION,
+        "profileSha256": PROFILE_SHA256,
+        "launchPolicyVersion": POLICY_VERSION,
+        "agentProfileVersion": AGENT_PROFILE_VERSION,
+        "remediationPolicyVersion": REMEDIATION_POLICY_VERSION,
+    }
+    document = build_remediation_operation_evidence(
+        release=release_inputs,
+        artifact_paths=[tmp_path / f"{kind}.json" for kind in artifacts],
+        operation="manual_mutation",
+        generated_at=NOW,
+    )
+    assert set(document["matrixRows"]) == set(
+        remediation_operation_required_rows("manual_mutation")
+    )
+    assert "remediation.autonomous.rollout-gate-closed" not in document["matrixRows"]
+    assert document["thresholds"]["withinLimits"] is True
+
+
+def test_scoped_evidence_unhashable_matrix_rows_fails_closed(tmp_path) -> None:
+    from moonmind.omnigent.remediation_matrix import build_remediation_operation_evidence
+
+    artifacts = {kind: _artifact(kind) for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS}
+    for kind, artifact in artifacts.items():
+        _stage_row_dependencies(tmp_path, artifact)
+        path = tmp_path / f"{kind}.json"
+        path.write_bytes(_artifact_bytes(artifact))
+    release_inputs = {
+        "images": dict(IMAGES),
+        "architectures": list(ARCHITECTURES),
+        "profileVersion": PROFILE_VERSION,
+        "profileSha256": PROFILE_SHA256,
+        "launchPolicyVersion": POLICY_VERSION,
+        "agentProfileVersion": AGENT_PROFILE_VERSION,
+        "remediationPolicyVersion": REMEDIATION_POLICY_VERSION,
+    }
+    document = build_remediation_operation_evidence(
+        release=release_inputs,
+        artifact_paths=[tmp_path / f"{kind}.json" for kind in artifacts],
+        operation="manual_diagnosis",
+        generated_at=NOW,
+    )
+    document["matrixRows"] = [{}]
+    release_path = tmp_path / "scoped-malformed.json"
+    release_path.write_text(json.dumps(document), encoding="utf-8")
+    status = evaluate_remediation_release(
+        evidence=document,
+        evidence_document_path=release_path,
+        evidence_ref="scoped-malformed.json",
+        now=NOW,
+    )
+    assert "operation_matrix_rows_mismatch" in status.blockers
+    assert status.manual_diagnosis_supported is False
+    assert status.manual_mutation_supported is False
+
+
+def test_scoped_evidence_marker_is_informational_not_rollback(tmp_path) -> None:
+    from moonmind.omnigent.remediation_matrix import build_remediation_operation_evidence
+
+    artifacts = {kind: _artifact(kind) for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS}
+    for kind, artifact in artifacts.items():
+        _stage_row_dependencies(tmp_path, artifact)
+        path = tmp_path / f"{kind}.json"
+        path.write_bytes(_artifact_bytes(artifact))
+    release_inputs = {
+        "images": dict(IMAGES),
+        "architectures": list(ARCHITECTURES),
+        "profileVersion": PROFILE_VERSION,
+        "profileSha256": PROFILE_SHA256,
+        "launchPolicyVersion": POLICY_VERSION,
+        "agentProfileVersion": AGENT_PROFILE_VERSION,
+        "remediationPolicyVersion": REMEDIATION_POLICY_VERSION,
+    }
+    document = build_remediation_operation_evidence(
+        release=release_inputs,
+        artifact_paths=[tmp_path / f"{kind}.json" for kind in artifacts],
+        operation="manual_diagnosis",
+        generated_at=NOW,
+    )
+    release_path = tmp_path / "scoped-release.json"
+    release_path.write_text(json.dumps(document), encoding="utf-8")
+    status = evaluate_remediation_release(
+        evidence=document,
+        evidence_document_path=release_path,
+        evidence_ref="scoped-release.json",
+        now=NOW,
+    )
+    assert "operation_scoped_evidence_not_release" in status.blockers
+    payload = status.as_dict()
+    assert payload["rollbackRequired"] is False
+    marker_alerts = [
+        alert
+        for alert in payload["alerts"]
+        if alert["code"] == "operation_scoped_evidence_not_release"
+    ]
+    assert len(marker_alerts) == 1
+    assert marker_alerts[0]["severity"] == "warning"
+    assert marker_alerts[0]["operatorAction"] == "scoped_evidence_not_full_release"
