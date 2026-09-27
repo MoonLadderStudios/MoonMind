@@ -561,11 +561,12 @@ async def test_continue_as_new_chain_visits_prior_run_children():
         ("parent", "terminal-run"),
         ("parent", "prev-run"),
     ]
-    agents, completed = await recovery._closed_execution_tree(
+    agents, completed, undispatched_agents = await recovery._closed_execution_tree(
         client, SimpleNamespace(owner="default/parent"), now
     )
     assert agents == {("child-agent", "child-run")}
     assert completed is False
+    assert undispatched_agents == set()
 
 
 @pytest.mark.asyncio
