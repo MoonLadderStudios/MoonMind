@@ -8,6 +8,7 @@ host through the bridge facade or execution adapter.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -372,9 +373,28 @@ class FakeOmnigentServer:
         return web.Response(body=b"session file evidence\n", content_type="text/plain")
 
 
+# The fake host always binds 127.0.0.1. Managed-container runners may export
+# HTTP(S)_PROXY with an empty NO_PROXY, which would send hermetic loopback
+# calls to the egress proxy (MoonLadderStudios/MoonMind#3626). Keep only the
+# loopback bypass entries present; operator proxy settings are untouched.
+_LOOPBACK_NO_PROXY_ENTRIES = ("127.0.0.1", "localhost")
+
+
+def _ensure_loopback_proxy_bypass() -> None:
+    for name in ("NO_PROXY", "no_proxy"):
+        current = os.environ.get(name, "")
+        parts = [part.strip() for part in current.split(",") if part.strip()]
+        missing = [
+            entry for entry in _LOOPBACK_NO_PROXY_ENTRIES if entry not in parts
+        ]
+        if missing:
+            os.environ[name] = ",".join([*parts, *missing])
+
+
 async def start_fake_omnigent_server(
     server: FakeOmnigentServer,
 ) -> RunningFakeOmnigentServer:
+    _ensure_loopback_proxy_bypass()
     runner = web.AppRunner(server.app())
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)

@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from moonmind.omnigent.remediation_matrix_conformance import (  # noqa: E402
+    build_remediation_operation_evidence,
     build_remediation_release_evidence,
 )
 
@@ -33,6 +34,15 @@ def main() -> int:
     parser.add_argument("--release", required=True, type=Path)
     parser.add_argument("--artifact", required=True, action="append", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--operation",
+        choices=("manual_diagnosis", "manual_mutation"),
+        default=None,
+        help=(
+            "Build scoped per-operation evidence instead of the complete "
+            "release document. Unrelated kinds/rows may be absent."
+        ),
+    )
     args = parser.parse_args()
 
     release = json.loads(args.release.read_text(encoding="utf-8"))
@@ -106,10 +116,17 @@ def main() -> int:
             encoding="utf-8",
         )
         staged.append(target)
-    document = build_remediation_release_evidence(
-        release=release,
-        artifact_paths=staged,
-    )
+    if args.operation is not None:
+        document = build_remediation_operation_evidence(
+            release=release,
+            artifact_paths=staged,
+            operation=args.operation,
+        )
+    else:
+        document = build_remediation_release_evidence(
+            release=release,
+            artifact_paths=staged,
+        )
     for item in document["evidenceManifest"]:
         item["ref"] = f"remediation-evidence/{Path(item['ref']).name}"
     document["evidenceRefs"] = [

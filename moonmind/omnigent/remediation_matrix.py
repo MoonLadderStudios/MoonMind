@@ -1108,6 +1108,129 @@ _AUTONOMOUS_ROWS = frozenset(
     if row.gate == GATE_AUTONOMOUS_ROLLOUT
 )
 
+# Per-operation evidence scopes (MoonLadderStudios/MoonMind#3626 REQ-C3).
+# Full-release promotion still requires the complete matrix, but an actual
+# operation is gated only by evidence for that operation through its existing
+# consumers: diagnosis needs only its own observed rows, and manual mutation
+# needs only diagnosis plus manual-mutation rows. The separately-closed
+# autonomous gate row never qualifies manual work, and unrelated
+# report/runner outages must not disable basic authorized diagnosis.
+REMEDIATION_OPERATION_MANUAL_DIAGNOSIS = "manual_diagnosis"
+REMEDIATION_OPERATION_MANUAL_MUTATION = "manual_mutation"
+REMEDIATION_OPERATIONS = (
+    REMEDIATION_OPERATION_MANUAL_DIAGNOSIS,
+    REMEDIATION_OPERATION_MANUAL_MUTATION,
+)
+_OPERATION_REQUIRED_ROWS: dict[str, frozenset[str]] = {
+    REMEDIATION_OPERATION_MANUAL_DIAGNOSIS: _MANUAL_DIAGNOSIS_ROWS,
+    REMEDIATION_OPERATION_MANUAL_MUTATION: (
+        _MANUAL_DIAGNOSIS_ROWS | _MANUAL_MUTATION_ROWS
+    ),
+}
+
+
+def remediation_operation_required_rows(operation: str) -> frozenset[str]:
+    """Return the observed rows required to support one manual operation."""
+
+    try:
+        return _OPERATION_REQUIRED_ROWS[operation]
+    except KeyError as exc:
+        raise RemediationMatrixError(
+            f"unknown remediation operation: {operation!r}"
+        ) from exc
+
+
+def remediation_operation_required_kinds(operation: str) -> frozenset[str]:
+    """Return the evidence kinds owning one manual operation's rows."""
+
+    return frozenset(
+        REMEDIATION_ROW_CATALOG_BY_ID[row_id].evidence_kind
+        for row_id in remediation_operation_required_rows(operation)
+    )
+
+
+def _operation_thresholds_pass(
+    derived_rows: Mapping[str, Mapping[str, Any]],
+    operation_rows: frozenset[str] | set[str],
+) -> bool:
+    """Check scoped release-threshold conditions for one operation's rows.
+
+    Mirrors :func:`derive_remediation_release_thresholds` without requiring
+    unrelated rows: every operation row must have passing threshold samples
+    and clean secret/authority, egress, action-outcome, and cleanup facts.
+    """
+
+    for row_id in operation_rows:
+        entry = derived_rows.get(row_id)
+        if not isinstance(entry, Mapping):
+            return False
+        thresholds = entry.get("thresholds")
+        if not isinstance(thresholds, Mapping) or not thresholds:
+            return False
+        if any(
+            not isinstance(result, Mapping) or result.get("within") is not True
+            for result in thresholds.values()
+        ):
+            return False
+        facts = entry.get("telemetryFacts")
+        if not isinstance(facts, Mapping):
+            return False
+        if facts.get("secretFindings") != 0:
+            return False
+        if facts.get("prohibitedAuthorityFindings") != 0:
+            return False
+        if facts.get("egressAttestationOutcome") != "passed":
+            return False
+        if facts.get("actionOutcome") == "unknown":
+            return False
+        if (
+            facts.get("cleanupOutcome") != "completed"
+            or facts.get("remainingLiveResources") != 0
+        ):
+            return False
+    return True
+
+
+def _derive_remediation_operation_thresholds(
+    rows: Mapping[str, Mapping[str, Any]],
+    telemetry: Mapping[str, Any],
+    *,
+    required_rows: frozenset[str] | set[str],
+) -> dict[str, Any]:
+    """Derive scoped promotion/rollback results for one operation's rows."""
+
+    facts = [entry["telemetryFacts"] for entry in rows.values()]
+    row_thresholds_pass = all(
+        result.get("within") is True
+        for entry in rows.values()
+        for result in entry["thresholds"].values()
+    )
+    results = {
+        "allRowThresholdSamplesPassed": row_thresholds_pass,
+        "semanticSourceRecordsValid": set(rows) == set(required_rows),
+        "secretAndAuthorityFindingsZero": all(
+            item["secretFindings"] == 0
+            and item["prohibitedAuthorityFindings"] == 0
+            for item in facts
+        ),
+        "egressAttestationFailuresZero": all(
+            item["egressAttestationOutcome"] == "passed" for item in facts
+        ),
+        "unknownActionOutcomesZero": all(
+            item["actionOutcome"] != "unknown" for item in facts
+        ),
+        "cleanupFailuresZero": all(
+            item["cleanupOutcome"] == "completed"
+            and item["remainingLiveResources"] == 0
+            for item in facts
+        ),
+    }
+    return {
+        "schemaVersion": REMEDIATION_RELEASE_THRESHOLD_SCHEMA_VERSION,
+        "withinLimits": all(results.values()),
+        "results": results,
+    }
+
 
 class RemediationMatrixError(ValueError):
     """Raised when a protected artifact fails observed-evidence row binding."""
@@ -3418,14 +3541,156 @@ def derive_remediation_release_thresholds(
     }
 
 
+_REQUIRED_OPERATION_RELEASE_INPUTS = (
+    "images",
+    "architectures",
+    "profileVersion",
+    "profileSha256",
+    "launchPolicyVersion",
+    "agentProfileVersion",
+    "remediationPolicyVersion",
+)
+
+
+def build_remediation_operation_evidence(
+    *,
+    release: Mapping[str, Any],
+    artifact_paths: Any,
+    operation: str,
+    generated_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Build one digest-bound scoped evidence document for a manual operation.
+
+    Unlike the complete release builder, this requires only the operation's
+    own rows and owning kinds: unrelated kinds/rows may be absent (for
+    example after a report/runner outage) without failing the scoped build.
+    Thresholds and telemetry are derived from the operation rows only, and
+    the document carries its ``operation`` scope so consumers never mistake
+    it for a complete release. Missing mandatory proof for the claimed
+    operation still raises.
+    """
+
+    required_rows = set(remediation_operation_required_rows(operation))
+    required_kinds = set(remediation_operation_required_kinds(operation))
+    observation_time = generated_at or datetime.now(timezone.utc)
+    missing_inputs = [
+        key for key in _REQUIRED_OPERATION_RELEASE_INPUTS if not release.get(key)
+    ]
+    if missing_inputs:
+        raise RemediationMatrixError(
+            f"immutable release inputs are incomplete: {missing_inputs}"
+        )
+
+    seen_kinds: set[str] = set()
+    observed_rows: dict[str, Mapping[str, Any]] = {}
+    derived_rows: dict[str, Mapping[str, Any]] = {}
+    manifest: list[dict[str, str]] = []
+    try:
+        for supplied_path in artifact_paths:
+            path = supplied_path.resolve()
+            content = path.read_bytes()
+            payload = json.loads(content)
+            if not isinstance(payload, Mapping):
+                raise RemediationMatrixError(
+                    f"remediation evidence is not an object: {path}"
+                )
+            kind, row_ids = validate_remediation_evidence_artifact(
+                payload,
+                expected_kind=None,
+                images=release["images"],
+                architectures=release["architectures"],
+                profile_version=release["profileVersion"],
+                profile_sha256=release["profileSha256"],
+                policy_version=release["launchPolicyVersion"],
+                agent_profile_version=release["agentProfileVersion"],
+                remediation_policy_version=release["remediationPolicyVersion"],
+                evidence_document_path=path,
+                evidence_time=observation_time,
+            )
+            if kind not in required_kinds:
+                continue
+            if kind in seen_kinds:
+                raise RemediationMatrixError(
+                    f"duplicate remediation evidence kind: {kind}"
+                )
+            seen_kinds.add(kind)
+            entries = {
+                str(entry["row"]): entry
+                for entry in payload["rows"]
+                if isinstance(entry, Mapping) and isinstance(entry.get("row"), str)
+            }
+            for row_id in row_ids:
+                if row_id not in required_rows:
+                    # Scoped operation builds reuse the repository's normal
+                    # one-artifact-per-kind output: reliabilitySecurityEvidence
+                    # carries both manual-mutation rows and the separately gated
+                    # autonomous rollout row. Filter to the operation's required
+                    # rows instead of rejecting the autonomous row.
+                    continue
+                if row_id in observed_rows:
+                    raise RemediationMatrixError(
+                        f"duplicate observed remediation row: {row_id}"
+                    )
+                observed_rows[row_id] = entries[row_id]
+                derived_rows[row_id] = derive_remediation_row_evidence(
+                    entries[row_id],
+                    row=REMEDIATION_ROW_CATALOG_BY_ID[row_id],
+                    evidence_document_path=path,
+                    evidence_time=observation_time,
+                )
+            manifest.append(
+                {
+                    "kind": kind,
+                    "ref": path.as_uri(),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+            )
+    except (OSError, UnicodeError, json.JSONDecodeError, RemediationMatrixError) as exc:
+        raise RemediationMatrixError(str(exc)) from exc
+
+    missing_kinds = sorted(required_kinds - seen_kinds)
+    missing_rows = sorted(required_rows - set(observed_rows))
+    if missing_kinds or missing_rows:
+        raise RemediationMatrixError(
+            "incomplete operator-remediation operation evidence; "
+            f"operation={operation}, "
+            f"missingKinds={missing_kinds}, missingRows={missing_rows}"
+        )
+    telemetry = derive_remediation_telemetry(derived_rows)
+    thresholds = _derive_remediation_operation_thresholds(
+        derived_rows, telemetry, required_rows=required_rows
+    )
+    if thresholds["withinLimits"] is not True:
+        raise RemediationMatrixError(
+            f"one or more remediation operation thresholds failed: {operation}"
+        )
+
+    return {
+        "schemaVersion": REMEDIATION_RELEASE_POLICY_VERSION,
+        "issue": "MoonLadderStudios/MoonMind#3626",
+        "matrixVersion": REMEDIATION_MATRIX_VERSION,
+        "operation": operation,
+        "generatedAt": observation_time.isoformat(),
+        **{key: release[key] for key in _REQUIRED_OPERATION_RELEASE_INPUTS},
+        "matrixRows": sorted(required_rows),
+        "telemetry": telemetry,
+        "thresholds": thresholds,
+        "evidenceRefs": [item["ref"] for item in manifest],
+        "evidenceManifest": manifest,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class RemediationReleaseStatus:
     """Authoritative, fail-closed operator-remediation release status.
 
-    ``manual_diagnosis_supported`` and ``manual_mutation_supported`` become true
-    only when every gating row is independently proven by observed evidence and
-    the release document is fresh, complete, threshold-compliant, and secret
-    free. ``autonomous_rollout_authorized`` is always ``False`` in this version:
+    Full-release promotion still requires the complete matrix, but each
+    manual operation is supported by its own observed evidence:
+    ``manual_diagnosis_supported`` needs only the diagnosis rows, and
+    ``manual_mutation_supported`` needs only diagnosis plus manual-mutation
+    rows. An unrelated missing kind/row or a report/runner outage blocks
+    promotion without disabling basic authorized diagnosis.
+    ``autonomous_rollout_authorized`` is always ``False`` in this version:
     the autonomous gate is a hard blocker (acceptance criterion 9).
     """
 
@@ -3455,7 +3720,11 @@ class RemediationReleaseStatus:
             "manualPromotionAllowed": self.manual_mutation_supported,
             "autonomousPromotionAllowed": self.autonomous_rollout_authorized,
             "rollbackRequired": any(
-                blocker != "autonomous_rollout_gate_closed"
+                blocker
+                not in (
+                    "autonomous_rollout_gate_closed",
+                    "operation_scoped_evidence_not_release",
+                )
                 for blocker in self.blockers
             ),
             "evidenceRef": self.evidence_ref,
@@ -3468,13 +3737,21 @@ class RemediationReleaseStatus:
                     "code": blocker,
                     "severity": (
                         "warning"
-                        if blocker == "autonomous_rollout_gate_closed"
+                        if blocker
+                        in (
+                            "autonomous_rollout_gate_closed",
+                            "operation_scoped_evidence_not_release",
+                        )
                         else "critical"
                     ),
                     "operatorAction": (
                         "keep_autonomous_mutation_disabled"
                         if blocker == "autonomous_rollout_gate_closed"
-                        else "block_or_rollback_manual_promotion"
+                        else (
+                            "scoped_evidence_not_full_release"
+                            if blocker == "operation_scoped_evidence_not_release"
+                            else "block_or_rollback_manual_promotion"
+                        )
                     ),
                 }
                 for blocker in self.blockers
@@ -3482,6 +3759,67 @@ class RemediationReleaseStatus:
             "catalog": remediation_catalog_document(),
             "blockers": list(self.blockers),
         }
+
+
+# Global release-input blockers that fail every manual operation when present.
+# Coverage, telemetry-divergence, threshold, per-kind manifest integrity, and
+# unattributed-manifest blockers are evaluated per operation instead, so an
+# unrelated missing kind/row or report/runner outage blocks promotion without
+# disabling basic authorized diagnosis. Unattributed manifest corruption still
+# fails every operation through the manifest detail flag.
+_GLOBAL_OPERATION_BLOCKERS = frozenset(
+    {
+        "unsupported_release_evidence_version",
+        "unsupported_support_matrix_version",
+        "unsupported_remediation_operation_scope",
+        "operation_matrix_rows_mismatch",
+        "remediation_release_evidence_stale",
+        "remediation_release_evidence_timestamp_invalid",
+        "launch_policy_version_required",
+        "agent_profile_version_required",
+        "remediation_policy_version_required",
+        "immutable_release_images_required",
+        "tested_architectures_required",
+        "provenance_bound_evidence_manifest_required",
+        "remediation_evidence_document_path_required",
+    }
+)
+
+
+def _operation_supported(
+    operation: str,
+    *,
+    covered_rows: frozenset[str],
+    derived_rows: Mapping[str, Mapping[str, Any]],
+    manifest_detail: Mapping[str, Any],
+    blockers: list[str],
+) -> bool:
+    """Decide whether one manual operation is supported by its own evidence."""
+
+    required_rows = _OPERATION_REQUIRED_ROWS[operation]
+    required_kinds = set(
+        REMEDIATION_ROW_CATALOG_BY_ID[row_id].evidence_kind
+        for row_id in required_rows
+    )
+    if any(blocker in _GLOBAL_OPERATION_BLOCKERS for blocker in blockers):
+        return False
+    if manifest_detail.get("global_manifest_issue"):
+        return False
+    seen_kinds = manifest_detail.get("seen_kinds", set())
+    if not required_kinds <= set(seen_kinds):
+        return False
+    failed_kinds = manifest_detail.get("failed_kinds", set())
+    if required_kinds & set(failed_kinds):
+        return False
+    split_kinds = manifest_detail.get("split_kinds", set())
+    if required_kinds & set(split_kinds):
+        return False
+    conflict_rows = manifest_detail.get("conflict_rows", set())
+    if set(conflict_rows) & set(required_rows):
+        return False
+    if not set(required_rows) <= set(covered_rows):
+        return False
+    return _operation_thresholds_pass(derived_rows, required_rows)
 
 
 def evaluate_remediation_release(
@@ -3493,11 +3831,15 @@ def evaluate_remediation_release(
 ) -> RemediationReleaseStatus:
     """Resolve the fail-closed operator-remediation release status.
 
-    A missing, stale, malformed, secret-bearing, or over-threshold artifact
-    blocks promotion (section 5). The combined matrix is assembled only from
-    complete passing observed rows and immutable release inputs, never from a
-    self-asserted pass or a spliced row list (acceptance criterion 7). The
-    autonomous rollout gate stays closed regardless of manual coverage.
+    Full-release promotion still requires the complete matrix assembled only
+    from passing observed rows and immutable release inputs, never from a
+    self-asserted pass or a spliced row list (acceptance criterion 7). Each
+    manual operation is additionally supported by its own observed evidence:
+    diagnosis needs only diagnosis rows, and manual mutation needs only
+    diagnosis plus manual-mutation rows, so an unrelated missing kind/row or
+    report/runner outage blocks promotion without disabling basic authorized
+    diagnosis. The autonomous rollout gate stays closed regardless of manual
+    coverage.
     """
 
     blockers: list[str] = []
@@ -3512,6 +3854,33 @@ def evaluate_remediation_release(
             blockers=("autonomous_rollout_gate_closed", *dict.fromkeys(blockers)),
             evidence_ref=evidence_ref,
         )
+
+    operation = evidence.get("operation")
+    scoped_operation: str | None = (
+        operation if isinstance(operation, str) and operation in _OPERATION_REQUIRED_ROWS
+        else None
+    )
+    if operation is not None and scoped_operation is None:
+        blockers.append("unsupported_remediation_operation_scope")
+    doc_required_rows = (
+        set(_OPERATION_REQUIRED_ROWS[scoped_operation])
+        if scoped_operation is not None
+        else set(REQUIRED_REMEDIATION_MATRIX_ROWS)
+    )
+    doc_required_kinds = (
+        set(remediation_operation_required_kinds(scoped_operation))
+        if scoped_operation is not None
+        else set(REQUIRED_REMEDIATION_EVIDENCE_KINDS)
+    )
+    if scoped_operation is not None:
+        blockers.append("operation_scoped_evidence_not_release")
+        declared_rows = evidence.get("matrixRows")
+        if (
+            not isinstance(declared_rows, list)
+            or not all(isinstance(item, str) for item in declared_rows)
+            or set(declared_rows) != doc_required_rows
+        ):
+            blockers.append("operation_matrix_rows_mismatch")
 
     if evidence.get("schemaVersion") != REMEDIATION_RELEASE_POLICY_VERSION:
         blockers.append("unsupported_release_evidence_version")
@@ -3561,20 +3930,42 @@ def evaluate_remediation_release(
         blockers.append("tested_architectures_required")
 
     telemetry = evidence.get("telemetry")
-    try:
-        validate_remediation_telemetry_schema(telemetry)
-    except RemediationMatrixError:
-        blockers.append("remediation_telemetry_required_or_invalid")
+    if scoped_operation is None:
+        try:
+            validate_remediation_telemetry_schema(telemetry)
+        except RemediationMatrixError:
+            blockers.append("remediation_telemetry_required_or_invalid")
 
     thresholds = evidence.get("thresholds")
-    covered_rows, derived_rows = _verify_remediation_manifest(
+    covered_rows, derived_rows, manifest_detail = _verify_remediation_manifest(
         evidence,
         evidence_document_path=evidence_document_path,
         blockers=blockers,
+        required_rows=doc_required_rows,
+        required_kinds=doc_required_kinds,
     )
     derived_telemetry: Mapping[str, Any] | None = None
     derived_thresholds: Mapping[str, Any] | None = None
-    if set(derived_rows) == set(REQUIRED_REMEDIATION_MATRIX_ROWS):
+    if scoped_operation is not None:
+        if set(derived_rows) == doc_required_rows:
+            try:
+                derived_telemetry = derive_remediation_telemetry(derived_rows)
+                if telemetry != derived_telemetry:
+                    blockers.append("operation_telemetry_diverges_from_evidence")
+                derived_thresholds = _derive_remediation_operation_thresholds(
+                    derived_rows,
+                    derived_telemetry,
+                    required_rows=doc_required_rows,
+                )
+                if thresholds != derived_thresholds:
+                    blockers.append("operation_thresholds_diverge_from_telemetry")
+                if derived_thresholds.get("withinLimits") is not True:
+                    blockers.append("rollback_threshold_exceeded_or_missing")
+            except (KeyError, TypeError, RemediationMatrixError):
+                blockers.append("remediation_telemetry_derivation_failed")
+        else:
+            blockers.append("rollback_threshold_exceeded_or_missing")
+    elif set(derived_rows) == set(REQUIRED_REMEDIATION_MATRIX_ROWS):
         try:
             derived_telemetry = derive_remediation_telemetry(derived_rows)
             if telemetry != derived_telemetry:
@@ -3591,12 +3982,19 @@ def evaluate_remediation_release(
     else:
         blockers.append("rollback_threshold_exceeded_or_missing")
 
-    manual_diagnosis_ok = (
-        not blockers and _MANUAL_DIAGNOSIS_ROWS <= covered_rows
+    manual_diagnosis_ok = _operation_supported(
+        REMEDIATION_OPERATION_MANUAL_DIAGNOSIS,
+        covered_rows=covered_rows,
+        derived_rows=derived_rows,
+        manifest_detail=manifest_detail,
+        blockers=blockers,
     )
-    manual_mutation_ok = (
-        not blockers
-        and (_MANUAL_DIAGNOSIS_ROWS | _MANUAL_MUTATION_ROWS) <= covered_rows
+    manual_mutation_ok = _operation_supported(
+        REMEDIATION_OPERATION_MANUAL_MUTATION,
+        covered_rows=covered_rows,
+        derived_rows=derived_rows,
+        manifest_detail=manifest_detail,
+        blockers=blockers,
     )
 
     # Acceptance criterion 9: keep autonomous mutating remediation fail-closed.
@@ -3631,7 +4029,9 @@ def _verify_remediation_manifest(
     *,
     evidence_document_path: Path | None,
     blockers: list[str],
-) -> tuple[frozenset[str], dict[str, Mapping[str, Any]]]:
+    required_rows: set[str] | frozenset[str] | None = None,
+    required_kinds: set[str] | frozenset[str] | None = None,
+) -> tuple[frozenset[str], dict[str, Mapping[str, Any]], dict[str, Any]]:
     """Resolve every manifest ref locally, bind its bytes to its digest, and
     re-validate the observed per-row evidence it carries.
 
@@ -3640,15 +4040,43 @@ def _verify_remediation_manifest(
     architectures, and profile/policy/agent-profile/remediation-policy versions.
     Each evidence kind is bound to exactly one artifact, so split coverage cannot
     be spliced into apparent completeness (acceptance criterion 7).
+
+    Coverage blockers are emitted against the required row/kind sets so scoped
+    operation documents are judged by their own operation, not the complete
+    matrix. Per-kind integrity detail is returned so operation support can be
+    decided from the operation's own kinds/rows while promotion still requires
+    the complete matrix.
     """
+
+    expected_rows = (
+        set(required_rows)
+        if required_rows is not None
+        else set(REQUIRED_REMEDIATION_MATRIX_ROWS)
+    )
+    expected_kinds = (
+        set(required_kinds)
+        if required_kinds is not None
+        else set(REQUIRED_REMEDIATION_EVIDENCE_KINDS)
+    )
+    empty_detail: dict[str, Any] = {
+        "seen_kinds": set(),
+        "failed_kinds": set(),
+        "split_kinds": set(),
+        "conflict_rows": set(),
+        "global_manifest_issue": False,
+    }
 
     manifest = evidence.get("evidenceManifest")
     if not isinstance(manifest, list) or not manifest:
         blockers.append("provenance_bound_evidence_manifest_required")
-        return frozenset(), {}
+        detail = dict(empty_detail)
+        detail["global_manifest_issue"] = True
+        return frozenset(), {}, detail
     if evidence_document_path is None:
         blockers.append("remediation_evidence_document_path_required")
-        return frozenset(), {}
+        detail = dict(empty_detail)
+        detail["global_manifest_issue"] = True
+        return frozenset(), {}, detail
 
     base = evidence_document_path.resolve().parent
     images = evidence.get("images")
@@ -3670,11 +4098,22 @@ def _verify_remediation_manifest(
     observed_rows: set[str] = set()
     derived_rows: dict[str, Mapping[str, Any]] = {}
     seen_kinds: set[str] = set()
-    ownership_conflict = False
-    split_kind = False
+    failed_kinds: set[str] = set()
+    split_kinds: set[str] = set()
+    conflict_rows: set[str] = set()
+    global_manifest_issue = False
+
+    def _record_kind_failure(kind: Any) -> None:
+        nonlocal global_manifest_issue
+        if isinstance(kind, str) and kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS:
+            failed_kinds.add(kind)
+        else:
+            global_manifest_issue = True
+
     for item in manifest:
         if not isinstance(item, Mapping):
             blockers.append("provenance_bound_evidence_manifest_invalid")
+            global_manifest_issue = True
             continue
         ref = item.get("ref")
         expected = item.get("sha256")
@@ -3686,6 +4125,7 @@ def _verify_remediation_manifest(
             or any(character not in "0123456789abcdef" for character in expected)
         ):
             blockers.append("provenance_bound_evidence_manifest_invalid")
+            _record_kind_failure(kind)
             continue
         try:
             artifact_path = _evidence_path(ref)
@@ -3694,9 +4134,11 @@ def _verify_remediation_manifest(
             content = artifact_path.read_bytes()
         except (OSError, ValueError):
             blockers.append("evidence_manifest_ref_unreadable")
+            _record_kind_failure(kind)
             continue
         if hashlib.sha256(content).hexdigest() != expected:
             blockers.append("evidence_manifest_digest_mismatch")
+            _record_kind_failure(kind)
             continue
         try:
             payload = json.loads(content)
@@ -3715,14 +4157,18 @@ def _verify_remediation_manifest(
             )
         except (json.JSONDecodeError, UnicodeError, RemediationMatrixError):
             blockers.append("evidence_row_binding_invalid")
+            # Attribute binding failures to the declared kind when known so an
+            # unrelated kind's corruption does not fail scoped operations.
+            _record_kind_failure(kind)
             continue
         if artifact_kind in seen_kinds:
-            split_kind = True
+            split_kinds.add(artifact_kind)
             continue
         seen_kinds.add(artifact_kind)
-        if observed_rows & rows:
-            ownership_conflict = True
-        observed_rows |= rows
+        overlap = observed_rows & set(rows)
+        if overlap:
+            conflict_rows |= overlap
+        observed_rows |= set(rows)
         entries = {
             str(entry.get("row")): entry
             for entry in payload.get("rows", [])
@@ -3736,16 +4182,23 @@ def _verify_remediation_manifest(
                 evidence_time=evidence_time,
             )
 
-    if split_kind:
+    if split_kinds:
         blockers.append("split_evidence_kind_rejected")
-    if ownership_conflict:
+    if conflict_rows:
         blockers.append("matrix_row_ownership_conflict")
-    missing_kinds = set(REQUIRED_REMEDIATION_EVIDENCE_KINDS) - seen_kinds
+    missing_kinds = expected_kinds - seen_kinds
     if missing_kinds:
         blockers.append("complete_evidence_kind_coverage_required")
-    if observed_rows != set(REQUIRED_REMEDIATION_MATRIX_ROWS):
+    if observed_rows != expected_rows:
         blockers.append("matrix_row_coverage_incomplete")
-    return frozenset(observed_rows), derived_rows
+    detail: dict[str, Any] = {
+        "seen_kinds": seen_kinds,
+        "failed_kinds": failed_kinds,
+        "split_kinds": split_kinds,
+        "conflict_rows": conflict_rows,
+        "global_manifest_issue": global_manifest_issue,
+    }
+    return frozenset(observed_rows), derived_rows, detail
 
 
 REMEDIATION_RELEASE_EVIDENCE_ENV = (
@@ -3846,6 +4299,12 @@ __all__ = [
     "validate_remediation_telemetry_schema",
     "derive_remediation_release_thresholds",
     "validate_remediation_evidence_artifact",
+    "REMEDIATION_OPERATION_MANUAL_DIAGNOSIS",
+    "REMEDIATION_OPERATION_MANUAL_MUTATION",
+    "REMEDIATION_OPERATIONS",
+    "remediation_operation_required_rows",
+    "remediation_operation_required_kinds",
+    "build_remediation_operation_evidence",
     "RemediationReleaseStatus",
     "evaluate_remediation_release",
     "REMEDIATION_RELEASE_EVIDENCE_ENV",
