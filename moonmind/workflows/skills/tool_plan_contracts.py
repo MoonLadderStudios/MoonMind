@@ -223,6 +223,7 @@ class ToolPolicyTimeouts:
 
     start_to_close_seconds: int
     schedule_to_close_seconds: int
+    heartbeat_timeout_seconds: int | None = None
 
     def __post_init__(self) -> None:
         _ensure_positive_int(
@@ -233,6 +234,11 @@ class ToolPolicyTimeouts:
             self.schedule_to_close_seconds,
             field_name="policies.timeouts.schedule_to_close_seconds",
         )
+        if self.heartbeat_timeout_seconds is not None:
+            _ensure_positive_int(
+                self.heartbeat_timeout_seconds,
+                field_name="policies.timeouts.heartbeat_timeout_seconds",
+            )
         if self.schedule_to_close_seconds < self.start_to_close_seconds:
             raise ContractValidationError(
                 "invalid_policy",
@@ -240,10 +246,14 @@ class ToolPolicyTimeouts:
             )
 
     def to_payload(self) -> dict[str, int]:
-        return {
+        payload = {
             "start_to_close_seconds": self.start_to_close_seconds,
             "schedule_to_close_seconds": self.schedule_to_close_seconds,
         }
+        # Preserve historical registry payloads and their content digests.
+        if self.heartbeat_timeout_seconds is not None:
+            payload["heartbeat_timeout_seconds"] = self.heartbeat_timeout_seconds
+        return payload
 
 @dataclass(frozen=True, slots=True)
 class ToolPolicyRetries:
@@ -1312,6 +1322,11 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
                 ),
                 schedule_to_close_seconds=int(
                     timeout_payload.get("schedule_to_close_seconds") or 0
+                ),
+                heartbeat_timeout_seconds=(
+                    int(timeout_payload["heartbeat_timeout_seconds"])
+                    if timeout_payload.get("heartbeat_timeout_seconds") is not None
+                    else None
                 ),
             ),
             retries=ToolPolicyRetries(
