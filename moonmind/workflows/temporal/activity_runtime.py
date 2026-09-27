@@ -2592,7 +2592,9 @@ class TemporalSkillActivities:
         context: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> SkillResult:
-        return await self._execute_skill_invocation(
+        from temporalio import activity
+
+        pending = self._execute_skill_invocation(
             invocation_payload=invocation_payload,
             registry_snapshot=registry_snapshot,
             registry_snapshot_ref=registry_snapshot_ref,
@@ -2601,6 +2603,19 @@ class TemporalSkillActivities:
             context=context,
             idempotency_key=idempotency_key,
         )
+        heartbeat_timeout = (
+            activity.info().heartbeat_timeout if activity.in_activity() else None
+        )
+        if heartbeat_timeout:
+            # Cover registry reads and slow pre-launch pulls as well as the
+            # detached-owner wait. Worker replacement must trigger reattachment
+            # without shortening the command or durable release budgets.
+            return await _await_with_activity_heartbeats(
+                pending,
+                heartbeat_payload={"phase": "executing_tool"},
+                interval_seconds=min(10.0, heartbeat_timeout.total_seconds() / 3),
+            )
+        return await pending
 
     async def _execute_skill_invocation(
         self,
@@ -2738,7 +2753,7 @@ class TemporalSkillActivities:
     ) -> SkillResult:
         """Canonical tool-execution alias for mm.skill.execute."""
 
-        return await self._execute_skill_invocation(
+        return await self.mm_skill_execute(
             invocation_payload=invocation_payload,
             registry_snapshot=registry_snapshot,
             registry_snapshot_ref=registry_snapshot_ref,

@@ -318,6 +318,41 @@ def test_deployment_update_plan_rejects_shell_path_and_runner_overrides(
         validate_plan_payload(payload=payload, registry_snapshot=snapshot)
 
 
+def test_deployment_observer_detects_loss_without_shortening_pull_budget() -> None:
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
+    )
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    payload = build_deployment_update_tool_definition_payload()
+    definition = parse_tool_definition(payload)
+    # Persisting/reloading the registry must retain the liveness policy.
+    restored = parse_tool_definition(definition.to_payload())
+    route = build_default_activity_catalog().resolve_skill(restored)
+    assert route.heartbeat_required
+    assert 0 < route.timeouts.heartbeat_timeout_seconds <= 60
+    assert route.timeouts.start_to_close_seconds >= 1200
+    kwargs = MoonMindRunWorkflow()._execute_kwargs_for_route(route)
+    assert kwargs["heartbeat_timeout"].total_seconds() <= 60
+
+
+@pytest.mark.parametrize("heartbeat", [0, -1])
+def test_tool_policy_rejects_nonpositive_heartbeat(heartbeat) -> None:
+    payload = build_deployment_update_tool_definition_payload()
+    payload["policies"]["timeouts"]["heartbeat_timeout_seconds"] = heartbeat
+    with pytest.raises(ContractValidationError, match="heartbeat_timeout_seconds"):
+        parse_tool_definition(payload)
+
+
+def test_legacy_tool_snapshot_keeps_its_original_timeout_payload() -> None:
+    payload = build_deployment_update_tool_definition_payload()
+    payload["policies"]["timeouts"].pop("heartbeat_timeout_seconds", None)
+    assert (
+        parse_tool_definition(payload).to_payload()["policies"]["timeouts"]
+        == payload["policies"]["timeouts"]
+    )
+
+
 def test_deployment_update_policy_supervises_the_detached_release_budget() -> None:
     """The supervising activity must outlive the job it supervises.
 
