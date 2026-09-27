@@ -491,14 +491,15 @@ async def test_materialize_backend_grant_matrix(tmp_path, monkeypatch):
             runtime_uid=os.getuid(),
             runtime_gid=os.getgid(),
         )
+    reader_grant = _grant_spec(
+        workspace_id,
+        owner=("owner-wf", "owner-st"),
+        mode="read_only",
+        grantee="reader-wf",
+    )
     shared = await materializer.materialize(
         _request(
-            _grant_spec(
-                workspace_id,
-                owner=("owner-wf", "owner-st"),
-                mode="read_only",
-                grantee="reader-wf",
-            ),
+            reader_grant,
             workflow_id="reader-wf",
             step_id="reader-st",
         ),
@@ -514,13 +515,10 @@ async def test_materialize_backend_grant_matrix(tmp_path, monkeypatch):
     from moonmind.omnigent.workspace_sources import parse_existing_workspace_grant
 
     _store = _RecordStore(tmp_path)
+    # The digest includes issuance time; releasing a newly issued grant can
+    # leave the claim above active when the clock crosses a second boundary.
     _parsed = parse_existing_workspace_grant(
-        _grant_spec(
-            workspace_id,
-            owner=("owner-wf", "owner-st"),
-            mode="read_only",
-            grantee="reader-wf",
-        )["workspaceSource"]["existingWorkspaceGrant"]
+        reader_grant["workspaceSource"]["existingWorkspaceGrant"]
     )
     _claim_id, _ = _RecordStore._grant_claim_identity(_parsed)
     _store.release_existing_workspace(workspace_id, _claim_id)

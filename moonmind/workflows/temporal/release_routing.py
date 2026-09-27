@@ -560,10 +560,9 @@ async def bootstrap_version_routing(client, spec):
         try:
             snapshot = await routing_snapshot(client, spec.deployment_id)
             current = current_version(snapshot)
-            routing = snapshot.worker_deployment_info.routing_config
-            never_routed = current in {"", "__unversioned__"} and not routing.HasField(
-                "current_version_changed_time"
-            )
+            # Temporal can timestamp the transition to its unversioned
+            # sentinel. It is still not a describable worker version.
+            never_routed = current in {"", "__unversioned__"}
             if current and not never_routed:
                 if current == target:
                     if verification_owed:

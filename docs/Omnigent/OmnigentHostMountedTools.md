@@ -1,10 +1,10 @@
-# Omnigent Host Mounted Runtime Tools
+# Omnigent Host Image-Owned Runtime Tools
 
 **Document Class:** Canonical declarative
 **Viewpoint:** System / Feature Design View
 **Status:** Desired-state design  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-18
+**Last updated:** 2026-09-26
 
 **Implementation tracking:** rollout notes, spikes, migration checklists, and temporary handoffs belong under `docs/tmp/` or in issue/PR tracking. This document defines the durable target-state contract.
 
@@ -13,6 +13,7 @@
 - [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
 - [`docs/Omnigent/OmnigentAdapter.md`](./OmnigentAdapter.md)
 - [`docs/Omnigent/CombinedStackValidationAndRollback.md`](./CombinedStackValidationAndRollback.md)
+- [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md)
 - [`docs/Workflows/RequiredCapabilities.md`](../Workflows/RequiredCapabilities.md)
 - [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
@@ -21,22 +22,42 @@
 
 ## 1. Purpose
 
-MoonMind needs a simple way to add small command-line capabilities to an unchanged upstream `omnigent-host` image when a workflow or resolved Skill requires a tool that the stock image does not contain.
+MoonMind needs a simple way to add small command-line capabilities to Omnigent hosts when a workflow or resolved Skill requires a tool that the upstream `omnigent-host` image does not contain.
 
-The canonical solution is a **MoonMind-managed, read-only mounted tool bundle**:
+The canonical solution is **image-owned tools in the shared host image**
+(`services/omnigent/moonmind-host/Dockerfile`, published by
+`.github/workflows/docker-publish-moonmind-host.yml`):
 
 ```text
-MoonMind startup or deployment reconciliation
-  -> prepare one versioned tool bundle
-  -> mount the bundle read-only into stock omnigent-host containers
-  -> expose the bundle's bin directory to host and runner shells
-  -> verify required tools before an Omnigent session starts
-  -> let the agent invoke the real tools through their normal CLI interfaces
+Shared host-image build
+  -> install and verify gh plus the MoonMind container CLI from pinned inputs
+  -> publish through the existing image pipeline
+
+Normal host launch
+  -> use the selected host image
+  -> expose image-owned executables to ordinary and login shells
+  -> check the capabilities and credentials the run actually requires
+  -> execute without a tools initializer or tools volume
 ```
 
-The first supported example is GitHub CLI, `gh`, for GitHub-aware Skills such as `pr-resolver`. The same mechanism may carry other small, self-contained CLI tools later when mounting a binary is sufficient and simpler than maintaining a custom host image.
+The selected image owns its tool contents for the host's lifetime. New tool
+contents require a new image build. Existing hosts are not modified in place.
+Tool installation remains separate from credentials and authorization.
 
-This design preserves the upstream image, keeps portable Skills on their ordinary CLI interfaces, and avoids per-run package installation.
+The first supported example is GitHub CLI, `gh`, for GitHub-aware Skills such as `pr-resolver`, plus the non-secret MoonMind container CLI (`moonmind`, the `docker` capability). The same mechanism may carry other small, self-contained CLI tools later when installing a binary at build time is sufficient and simpler than maintaining a second delivery system.
+
+This design preserves the upstream image lineage, keeps portable Skills on their ordinary CLI interfaces, and avoids per-run package installation.
+
+> Retired path (MoonLadderStudios/MoonMind#4558): a separately initialized,
+> version-named tools volume (`omnigent-tools-init`, `moonmind-omnigent-tools-*`)
+> previously delivered these executables. That lifecycle is removed from the
+> supported shared-host path because initialization and launch configuration
+> could disagree, re-running initialization mutated shared state in place, and
+> routine upgrades required operators to synchronize volume names, tool
+> versions, manifests, and initializer-image settings. Lingering pre-cutover
+> volumes are retired by the bounded maintenance cleanup
+> (`tools/cleanup-legacy-omnigent-tools-volumes.sh`), never by Compose and
+> never automatically during updates.
 
 ---
 
@@ -44,10 +65,10 @@ This design preserves the upstream image, keeps portable Skills on their ordinar
 
 This document covers:
 
-- adding small runtime CLI tools to stock `omnigent-host` containers;
-- one standard mounted tool-bundle layout;
+- adding small runtime CLI tools through the shared host image;
+- one standard image-owned tool layout;
 - static Docker Compose hosts and MoonMind-launched on-demand hosts;
-- tool versioning and initialization;
+- tool versioning at build time;
 - runtime `PATH` projection, including login shells;
 - required-capability readiness checks;
 - the initial `gh` use case;
@@ -56,7 +77,6 @@ This document covers:
 
 This document does not define:
 
-- a custom MoonMind fork of `omnigent-host`;
 - a general-purpose package manager or plugin marketplace for hosts;
 - downloading or installing tools from inside an active agent run;
 - an RPC service that imitates a third-party CLI;
@@ -65,7 +85,7 @@ This document does not define:
 - resolved Skill storage or selection, which remains defined by `SkillSystem.md`;
 - tools that require kernel modules, privileged host changes, background daemons, or broad system-package installation.
 
-The baseline intentionally does not require a token broker, sidecar command service, custom container image, or new persistent database model.
+The baseline intentionally does not require a token broker, sidecar command service, tool-bundle volume, or new persistent database model.
 
 ---
 
@@ -73,16 +93,16 @@ The baseline intentionally does not require a token broker, sidecar command serv
 
 The target design is governed by these decisions:
 
-1. **The upstream host image remains unchanged.** MoonMind extends the runtime through mounts and launch configuration rather than maintaining a fork for isolated CLI additions.
-2. **One standard tool bundle is the extension boundary.** Tools are mounted under `/opt/moonmind-tools`; MoonMind does not invent a separate mount layout for every executable.
-3. **The bundle is read-only to hosts and runners.** A trusted initializer prepares it before the host starts. Agent processes never update the bundle.
-4. **Tool versions are explicit.** The initializer uses pinned versions and verifies the expected bytes before publishing a bundle as ready. `latest` is not a durable tool identity.
-5. **Both ordinary and login-shell paths are supported.** The host receives a `PATH` value at launch and a small `/etc/profile.d` snippet so `bash -lc` sessions retain `/opt/moonmind-tools/bin`.
+1. **The selected shared host image owns its tools.** MoonMind extends the upstream base once, at build time, rather than maintaining a per-launch bundle or a fork per CLI addition.
+2. **One standard tool path is the extension boundary.** Tools live under `/opt/moonmind-tools`; MoonMind does not invent a separate layout for every executable.
+3. **Tool files are image-owned and unwritable by the runtime user.** No trusted initializer runs at startup. Agent processes never update the tools.
+4. **Tool versions are pinned at build time.** The image build consumes `services/omnigent/tools/manifest.lock.json` (single source), verifies hashes and probes, and fails on drift. `latest` is not a durable tool identity, and no runtime version string must match a build pin.
+5. **Both ordinary and login-shell paths are supported.** The image sets `PATH` directly and ships an image-owned `/etc/profile.d/moonmind-tools.sh` so `bash -lc` sessions retain `/opt/moonmind-tools/bin`.
 6. **Required capabilities determine readiness.** A mounted executable may be present on every compatible host, but a run receives readiness guarantees and any required credentials only when its normalized `requiredCapabilities` demand them. The Run workflow carries that authored list into the canonical `AgentExecutionRequest`; host preflight and the provider adapter consume the same list rather than re-deriving it.
 7. **Tool availability does not grant authorization.** Credentials are resolved separately through MoonMind's existing settings and secret-reference boundaries.
 8. **Portable Skills receive the real CLI they declare.** MoonMind does not replace `gh` with an incomplete host-native emulator when the resolved Skill implementation calls `gh` directly.
 9. **Missing required tools fail before session creation or mutation.** MoonMind must not start an Omnigent runner and let the Skill discover the missing executable after reasoning has begun.
-10. **Mounted tools remain a small-tool solution.** When a capability needs extensive system changes, MoonMind should prefer an upstream host-image addition or an explicitly justified derived image rather than stretching this mechanism into a package distribution system.
+10. **Image-owned tools remain a small-tool solution.** When a capability needs extensive system changes, MoonMind should prefer an upstream host-image addition rather than stretching this mechanism into a package distribution system.
 
 Submission admission collects requirements from the workflow, its normalized
 Skill and Tool steps, and resolved Skill metadata before compiling the immutable
@@ -92,11 +112,11 @@ frozen tool authority; changing requirements requires a newly admitted execution
 
 ---
 
-## 4. Canonical tool bundle
+## 4. Canonical tool layout
 
 ### 4.1 Runtime path
 
-Every mounted tool bundle uses this runtime root:
+Every image-owned tool bundle uses this runtime root:
 
 ```text
 /opt/moonmind-tools
@@ -109,31 +129,30 @@ The canonical layout is:
   manifest.json
   bin/
     gh
+    moonmind
     <future-tool>
 ```
 
 Executable names under `bin/` are the ordinary command names expected by Skills and agents. A Skill that invokes `gh` must find an executable named `gh`; it must not need a MoonMind-specific alias.
 
-### 4.2 Bundle identity
+### 4.2 Tool identity
 
-The initial implementation does not require a new database-backed `ToolBundle` resource. Bundle identity is deployment-owned and consists of:
+There is no database-backed `ToolBundle` resource. Tool identity is the selected image plus the non-secret manifest stored inside the image:
 
-- the mounted volume or daemon-visible source reference;
-- an explicit bundle version;
-- the manifest stored inside the bundle.
+- the digest-pinned shared host image reference;
+- the manifest stored at `/opt/moonmind-tools/manifest.json`;
+- the build pins in `services/omnigent/tools/manifest.lock.json` that produced them.
 
-A minimal manifest has this shape:
+A minimal image manifest has this shape:
 
 ```json
 {
   "schemaVersion": 1,
-  "bundleVersion": "<deployment-selected-version>",
+  "bundleVersion": "<gh-version>-container-v1",
   "tools": [
     {
       "name": "gh",
       "version": "<pinned-gh-version>",
-      "platform": "linux/amd64",
-      "sha256": "<expected-sha256>",
       "path": "bin/gh",
       "versionProbe": ["--version"]
     }
@@ -145,52 +164,49 @@ The manifest is readiness evidence and diagnostics metadata. It contains no cred
 
 ### 4.3 Storage
 
-For the local Compose path, the preferred storage is one versioned Docker named volume populated by an initializer service. The initializer is a default one-shot dependency of the agent-runtime worker, so on-demand hosts are operational without enabling a static-host Compose profile and no tool container remains running at steady state.
-
-For on-demand host launches, MoonMind mounts the same named volume into each compatible host. A daemon-visible read-only bind source is also valid when a deployment already manages immutable tool directories outside Docker volumes.
-
-Hosts bind to one completed bundle version for their lifetime. Tool updates publish a new completed bundle version and use it for later hosts; an active host does not observe an in-place tool replacement.
+There is no tools volume. The image layers carry the executables, so every host started from the selected image sees the same bytes for its lifetime. Tool updates publish a new image; later hosts start from it through the normal update and rollback path. An active host never observes an in-place tool replacement, and hosts on different images never share mutable tool state.
 
 ---
 
-## 5. Tool initialization
+## 5. Tool installation at image build time
 
-A trusted initializer is the only writer to the bundle.
+The image build is the only writer to the tool layout
+(`services/omnigent/moonmind-host/install_moonmind_tools.py`, run by
+`services/omnigent/moonmind-host/Dockerfile`).
 
-For each declared tool, the initializer must:
+For each declared tool, the build must:
 
-1. select the correct operating-system and CPU-architecture artifact;
-2. obtain one pinned release artifact from an approved source or copy it from a trusted build image;
+1. select the correct operating-system and CPU-architecture artifact from `services/omnigent/tools/manifest.lock.json`;
+2. obtain one pinned release artifact from an approved source (or copy the MoonMind CLI from its reviewed source file);
 3. verify the expected SHA-256;
-4. install the executable into an isolated staging directory with executable permissions;
-5. execute the tool's bounded, non-interactive `versionProbe` arguments from the trusted manifest;
-6. atomically publish the completed staging directory, including `manifest.json`, only after every tool passes validation.
+4. install the executable image-owned with non-writable permissions;
+5. execute the tool's bounded, non-interactive `versionProbe` arguments;
+6. write `/opt/moonmind-tools/manifest.json` and the login-shell snippet only after every tool passes validation.
 
-The initializer is idempotent. A completed bundle whose manifest does not match the expected manifest fails rather than being modified in place. Incomplete staging state without a completed manifest is not a bundle: the initializer may safely remove that private staging state and retry. Staging paths are unique to an initializer attempt, so a failed attempt cannot poison the versioned published volume or expose partial files to hosts.
+The build fails on pin drift instead of publishing mismatched tools. `services/omnigent/scripts/moonmind-container-cli.py` is copied as `moonmind` with its capability-mediated behavior unchanged; the logical `docker` capability must not become unrestricted Docker-daemon access.
 
-Tool downloads do not occur inside an ordinary Omnigent workflow session. An agent cannot add arbitrary executables to the shared bundle.
+Tool downloads do not occur inside an ordinary Omnigent workflow session, at host launch, or from the worker. An agent cannot add arbitrary executables to the shared image.
 
-Before an on-demand host is created, the trusted runtime adapter probes the
-completed named volume through the system Docker boundary and verifies the
-pinned tool version. It never invokes deployment Compose from the worker: the
-worker's project path is not Docker-daemon path authority. A missing or stale
-bundle fails with `tool_bundle_unavailable` and deployment-initialization
-evidence before session creation.
+Before an on-demand host is created, the trusted runtime adapter resolves required tool names against the deployment manifest and binds them to the selected image's tool path. It never inspects a tools volume and never compares the selected image against a checkout's exact tool version: reproducible build pins and live integrity probes are the authority, not a requalification fingerprint operators must update after ordinary upgrades.
 
 ---
 
-## 6. Host mounts and shell visibility
+## 6. Host shell visibility without mounts
 
-### 6.1 Required mounts
+### 6.1 No tool mounts
 
-A compatible host receives:
+A compatible host receives **no** tool volume and **no** tool profile bind mount. The image already contains:
 
 ```text
-<tool bundle> -> /opt/moonmind-tools                read-only
-<profile file> -> /etc/profile.d/moonmind-tools.sh  read-only
+/opt/moonmind-tools/bin/gh          executable, image-owned
+/opt/moonmind-tools/bin/moonmind    executable, image-owned
+/opt/moonmind-tools/manifest.json   non-secret tool metadata
+/etc/profile.d/moonmind-tools.sh    login-shell PATH snippet
 ```
 
-The profile file is a small deployment-owned script:
+Mounting anything over `/opt/moonmind-tools` would hide the image-owned executables and is forbidden on the shared-host path. Launch specifications resolve required tools to the image-owned path, the launcher creates no overlay for them, and exact-host attestation probes the executables in place without fabricating mount evidence.
+
+The login-shell snippet is the image-owned copy of `services/omnigent/scripts/moonmind-tools.sh`:
 
 ```sh
 case ":${PATH}:" in
@@ -213,43 +229,21 @@ PATH=/opt/moonmind-tools/bin:<upstream-image-PATH>
 
 Both mechanisms are required. Omnigent native harnesses may execute through login shells, and login-shell initialization may rebuild `PATH` after container environment values are applied.
 
-MoonMind must not mount a tool volume over all of `/usr/local/bin`, because that would hide executables already supplied by the upstream host image.
+MoonMind must not mount a tool volume over all of `/usr/local/bin`, because that would hide executables already supplied by the host image.
 
 ### 6.2 Illustrative Compose shape
 
-The exact service and volume names are deployment details, but the canonical shape is:
+The exact service names are deployment details, but the canonical shape carries no tools lifecycle:
 
 ```yaml
 services:
-  omnigent-tools-init:
-    image: ${MOONMIND_IMAGE}
-    command: ["/opt/moonmind/init-omnigent-tools.sh"]
-    volumes:
-      - omnigent-tools:/output
-
   omnigent-host-codex:
-    image: ${OMNIGENT_HOST_IMAGE}:${OMNIGENT_HOST_IMAGE_TAG}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-...}
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
-    volumes:
-      - omnigent-tools:/opt/moonmind-tools:ro
-      - ./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
-    depends_on:
-      omnigent-tools-init:
-        condition: service_completed_successfully
-
-volumes:
-  omnigent-tools:
-    name: moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION}
 ```
 
-The deployment sets `OMNIGENT_HOST_BASE_PATH` from the selected upstream image's default `PATH`; the fallback shown above preserves the conventional executable and system-administration directories. It must not replace a discovered upstream path with a smaller static list. The volume identity includes the pinned bundle version, so an upgrade publishes a distinct volume and existing hosts remain bound to their original completed bundle. The on-demand Docker launch uses the same target paths and readiness rules.
-
-### 6.3 Docker-daemon visibility
-
-Every bind source used by an on-demand host must be visible to the Docker daemon, not merely to the Temporal worker container issuing `docker run`.
-
-Named volumes are preferred for tool binaries because they avoid worker-path translation. Deployment-owned profile files may use an existing daemon-visible MoonMind project path.
+There is no `omnigent-tools-init` service, no `depends_on` edge to one, no `omnigent-tools` volume, and no `OMNIGENT_GH_VERSION` / `OMNIGENT_GH_IMAGE` / tools-volume settings. Stale values for those names in an existing `.env` are ignored: they neither change tool selection nor block launch. The deployment sets `OMNIGENT_HOST_BASE_PATH` from the selected image's default `PATH`; the fallback shown above preserves the conventional executable and system-administration directories. It must not replace a discovered upstream path with a smaller static list.
 
 ---
 
@@ -349,7 +343,7 @@ bash -lc '<tool> <validated-versionProbe-arguments>'
 
 A `versionProbe` attests the delivered build: that the pinned executable is present, executable, and reports its manifest-declared version. Exact-host attestation therefore runs it with a cleared environment, not the host's runtime configuration. A tool can be built exactly right and still refuse to run under a broken credential projection, and that fault belongs to the credential owner in section 7 — reporting it as `OMNIGENT_HARNESS_BUILD_MISMATCH` sends the operator to realign a build that was never wrong. Credential and authorization evidence comes from the capability probes below, which do run in the agent's real environment.
 
-The check must run in the actual stock host environment with the mounted bundle and profile file applied. When the harness creates a distinct runner environment, the same probe must also execute through the exact runner construction path before session creation. Runner-bound verification is mandatory in that case; host-shell success alone is insufficient evidence.
+The check must run in the actual host environment with the image-owned tools and profile file applied. When the harness creates a distinct runner environment, the same probe must also execute through the exact runner construction path before session creation. Runner-bound verification is mandatory in that case; host-shell success alone is insufficient evidence.
 
 ### 8.2 `gh` readiness
 
@@ -393,30 +387,30 @@ present. Same-lease retries atomically refresh file contents before launch.
 
 ## 9. Use for future tools
 
-MoonMind may add another CLI to the standard bundle when all of the following are true:
+MoonMind may add another CLI to the shared host image when all of the following are true:
 
 - a workflow, Tool, or resolved Skill has a real runtime dependency on the CLI;
 - the CLI has a stable non-interactive interface suitable for agent execution;
 - a prebuilt artifact exists for the supported Linux architectures;
-- the executable runs against the libraries already present in the stock host;
+- the executable runs against the libraries already present in the host image;
 - the CLI does not require a background daemon, privileged installation, kernel changes, or an entrypoint replacement;
-- mounting the executable and adding it to `PATH` is materially simpler than changing the host image;
+- installing the executable at build time and adding it to `PATH` is materially simpler than a second delivery system;
 - a required-capability readiness check can prove the tool is usable before session creation.
 
-Future tools should normally join the same standard bundle rather than create one named volume and path convention per executable. Keep the bundle intentionally small and tied to demonstrated workflow requirements.
+Future tools should normally join the same standard image-owned layout rather than create one delivery system per executable. Keep the tool set intentionally small and tied to demonstrated workflow requirements.
 
-The mounted-binary approach is not appropriate when a capability requires:
+The image-owned binary approach is not appropriate when a capability requires:
 
 - many tightly coupled system packages;
 - shared libraries absent from the host image;
 - privileged device, network, or kernel configuration;
 - a long-running system service;
 - changes to the host entrypoint or base user model;
-- a large toolchain whose lifecycle is better managed as an image.
+- a large toolchain whose lifecycle is better managed upstream.
 
-In those cases, prefer an upstream addition to `omnigent-host`. Use a MoonMind-derived image only when the requirement is necessary, upstream inclusion is unavailable, and the broader image ownership is explicitly accepted.
+In those cases, prefer an upstream addition to `omnigent-host`.
 
-When upstream `omnigent-host` begins supplying a tool that MoonMind mounted only to fill that gap, MoonMind should remove the duplicate from the bundle and use the upstream executable after compatibility and readiness checks pass.
+When upstream `omnigent-host` begins supplying a tool that MoonMind installs only to fill that gap, MoonMind should remove the duplicate from the image build and use the upstream executable after compatibility and readiness checks pass.
 
 ---
 
@@ -424,13 +418,13 @@ When upstream `omnigent-host` begins supplying a tool that MoonMind mounted only
 
 Safe diagnostics may include:
 
-- tool bundle version;
+- selected host image reference;
 - tool name, reported version, architecture, and expected digest;
-- whether the tool volume and profile file were mounted;
+- image-owned tool paths and their readiness status;
 - host-shell and runner-shell readiness status;
 - required capability and target repository identifier;
 - bounded, redacted command failures;
-- whether the failure occurred during initialization, host launch, runner visibility, authentication, or authorization.
+- whether the failure occurred during image build, host launch, runner visibility, authentication, or authorization.
 
 Diagnostics must not include:
 
@@ -460,15 +454,15 @@ A missing optional tool does not make the host globally unhealthy. It blocks onl
 
 An implementation conforms to this design when all of the following are true:
 
-1. It uses an unchanged upstream `omnigent-host` image for the mounted-tools path.
-2. A trusted initializer prepares a pinned, verified tool bundle before the host starts.
-3. The host mounts the bundle read-only at `/opt/moonmind-tools`.
+1. It uses the digest-pinned shared host image, which owns `gh` and `moonmind` at `/opt/moonmind-tools`.
+2. The image build installs pinned, verified tools from `manifest.lock.json` before any host starts.
+3. The host exposes the image-owned tools at `/opt/moonmind-tools` with no mount overlay.
 4. Both ordinary processes and `bash -lc` shells resolve tools from `/opt/moonmind-tools/bin`.
 5. Required-capability preflight blocks before Omnigent session creation when a required tool is missing or unusable.
-6. Credentials are resolved separately from the tool bundle and are not stored in durable workflow or host records.
+6. Credentials are resolved separately from the tools and are not stored in durable workflow or host records.
 7. The `gh` path supports authenticated GitHub repository and pull-request operations for a target repository while Git transport continues to use normal Git credentials.
 8. Private repository preparation succeeds before host launch through the canonical MoonMind Git authentication path.
-9. Resolved Skills remain the semantic authority; the mounted binary only supplies the declared executable capability.
+9. Resolved Skills remain the semantic authority; the installed binary only supplies the declared executable capability.
 10. No ordinary agent run downloads, installs, or mutates shared runtime tools.
 
 The baseline success test for the initial example is an Omnigent Codex runner executing:

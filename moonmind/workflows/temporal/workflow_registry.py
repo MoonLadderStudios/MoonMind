@@ -110,6 +110,11 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "operator",
     ),
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.oauth_session",
+        "MoonMindOAuthCredentialValidationWorkflow",
+        "operator",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor",
         "MoonMindOmnigentOAuthHostJanitorWorkflow",
         "excluded",

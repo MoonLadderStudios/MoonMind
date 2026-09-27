@@ -92,6 +92,10 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
         except Exception:
             state = None
     raw = str(environment.get(key) or "").strip()
+    if key == OMNIGENT_SHARED_HOST_IMAGE_ENV and raw and "@" not in raw:
+        # The deployment may receive a mutable bootstrap tag, then persist the
+        # resolved digest. The tag itself never becomes launch authority.
+        raw = _persisted_image_ref(key) or raw
     if not raw:
         if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV and state is not None:
             raw = str(getattr(state, "opencode_host_image_ref", "") or "").strip()
@@ -167,7 +171,18 @@ def get_shared_host_image_ref() -> str:
     it must be digest-pinned: mutable tags never become launch authority.
     """
 
-    return _require_image_ref(os.environ, OMNIGENT_SHARED_HOST_IMAGE_ENV)
+    return resolve_shared_host_image_ref()
+
+
+def resolve_shared_host_image_ref(
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the shared host's deployment-owned immutable image ref."""
+
+    return _require_image_ref(
+        os.environ if environment is None else environment,
+        OMNIGENT_SHARED_HOST_IMAGE_ENV,
+    )
 
 
 class HostClassHarnessEntry(BaseModel):

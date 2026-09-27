@@ -3744,11 +3744,17 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     )
     assert command[-1] == expected["startScript"]
     assert login_manifest["hostImageRef"] == manifest["hostImageRef"]
+    # MoonLadderStudios/MoonMind#4558: the profile.d snippet is image-owned,
+    # so no bind mount may overlay it; PATH still leads with the image-owned
+    # tools directory for ordinary processes.
     assert (
         "type=bind,"
         f"src={tmp_path / login_expected['sourceName']},"
         f"dst={login_expected['containerPath']},readonly"
-    ) in command
+    ) not in command
+    assert "PATH=/opt/moonmind-tools/bin:" in " ".join(
+        str(item) for item in command
+    )
 
 
 async def test_omnigent_stock_host_catalog_resolves_lease_owned_host() -> None:
@@ -7478,7 +7484,7 @@ async def test_omnigent_required_capability_authority_reaches_adapter(
     assert payload["terminal_launch_args"] == expected["terminalLaunchArgs"]
 
 
-async def test_omnigent_tool_bundle_uses_deployment_owned_named_volume(
+async def test_omnigent_tool_probe_uses_image_owned_gh_without_compose(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Replay mm:d4a7b625 at the worker-to-system-Docker boundary."""
@@ -7486,7 +7492,6 @@ async def test_omnigent_tool_bundle_uses_deployment_owned_named_volume(
     replay_id = "omnigent-tool-bundle-deployment-boundary"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
-    monkeypatch.setenv("OMNIGENT_GH_VERSION", "2.76.2")
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         image=expected["probeImage"],
@@ -7499,9 +7504,12 @@ async def test_omnigent_tool_bundle_uses_deployment_owned_named_volume(
     assert manifest["failureCode"] == "CODEX_OAUTH_LOGIN_STATUS_FAILED"
     assert command[:2] == ("docker", "run")
     assert "compose" not in command
-    assert (
-        f"{expected['toolVolume']}:/opt/moonmind-tools:ro"
-        in command
+    # MoonLadderStudios/MoonMind#4558: the probe runs the image-owned gh with
+    # no tools-volume mount and no Compose invocation.
+    assert "--entrypoint" in command
+    assert "/opt/moonmind-tools/bin/gh" in command
+    assert not any(
+        "moonmind-omnigent-tools" in str(item) for item in command
     )
 
 

@@ -159,7 +159,7 @@ def build_container_job_tool_definition_payload(*, name: str) -> dict[str, Any]:
         "inputs": {
             "schema": {
                 "type": "object",
-                "required": ["idempotencyKey", "spec"],
+                "required": ["spec"],
                 "properties": {
                     "contractVersion": {"const": "v1"},
                     "idempotencyKey": {"type": "string", "minLength": 1, "maxLength": 255},

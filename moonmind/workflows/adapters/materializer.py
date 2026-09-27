@@ -206,6 +206,9 @@ class ProviderProfileMaterializer:
         runtime_id = str(profile.runtime_id or "").strip()
         if runtime_id == "claude_code":
             env["CLAUDE_HOME"] = mount_path
+            # The pinned Claude Code CLI ignores CLAUDE_HOME; the config dir
+            # override is what steers credential reads into the OAuth home.
+            env["CLAUDE_CONFIG_DIR"] = mount_path
             env["CLAUDE_VOLUME_PATH"] = mount_path
         elif runtime_id == "codex_cli":
             env["CODEX_HOME"] = mount_path

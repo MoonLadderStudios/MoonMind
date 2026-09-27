@@ -5586,7 +5586,7 @@ async def test_cleanup_docker_references_include_precise_container_correlation(
         del input_text, env
         if command == ("docker", "ps", "-q"):
             return 0, "container-1\n", ""
-        if command == ("docker", "inspect", "container-1"):
+        if command == ("docker", "container", "inspect", "container-1"):
             return (
                 0,
                 json.dumps(
@@ -5626,6 +5626,55 @@ async def test_cleanup_docker_references_include_precise_container_correlation(
 
     assert "mm:workflow-1" in state.active_container_refs
     assert "/work/agent_jobs" in state.active_mount_paths
+
+
+@pytest.mark.asyncio
+async def test_cleanup_docker_references_tolerate_container_removed_during_scan(
+    tmp_path: Path,
+) -> None:
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        if command == ("docker", "ps", "-q"):
+            _fake_runner.calls += 1
+            return 0, ("gone\nlive\n" if _fake_runner.calls == 1 else "live\n"), ""
+        if command[:3] == ("docker", "container", "inspect"):
+            if "gone" in command:
+                return 1, "", "Error response from daemon: No such container: gone"
+            return (
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": "live",
+                            "Name": "/live",
+                            "Config": {"Labels": {"moonmind.run_id": "run-live"}},
+                            "Mounts": [],
+                        }
+                    ]
+                ),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    _fake_runner.calls = 0
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path),
+        session_store=ManagedSessionStore(tmp_path / "session-store"),
+        command_runner=_fake_runner,
+    )
+
+    state = await controller.collect_managed_runtime_cleanup_docker_references()
+
+    assert not state.failed
+    assert "run-live" in state.active_container_refs
+    assert "gone" not in state.active_container_refs
 
 
 @pytest.mark.asyncio

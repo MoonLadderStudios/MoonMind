@@ -25,6 +25,7 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     ATTEMPT_ACTIVITY_ACTIVE,
     activity_for_lifecycle_mode,
     build_attempt_handoff,
+    build_retry_reset_handoff,
     check_cross_attempt_overwrite,
     compute_effective_retry,
     confirm_release,
@@ -268,10 +269,26 @@ def test_missing_and_incompatible_lineage_block_recovery() -> None:
     assert compute_effective_retry([], max_attempts=3).reason_code == "missing_lineage"
     odd = _handoff(retry_policy_version=99)
     assert compute_effective_retry([odd], max_attempts=3).reason_code == "incompatible_policy"
-    # Authorized resets require an audited decision token.
-    ok = _handoff()
-    reset = compute_effective_retry([ok], max_attempts=3, reset_authorization="audit:op-1")
-    assert reset.reason_code == "authorized_reset"
+    # The only reset is an audited record in lineage naming who authorized it.
+    exhausted = [_handoff(attempt_id=f"att-{index}", outcome="failed") for index in range(3)]
+    reset = build_retry_reset_handoff(
+        attempt_id="att-reset", deployment_id="inst-device-a",
+        repository="MoonLadderStudios/MoonMind", issue_number=4177,
+        authorized_by="op-1", authorized_at="2026-09-26T00:00:00+00:00",
+        reason="audited reset", predecessor_attempt_id="att-2",
+        superseded_attempt_ids=[item.attempt_id for item in exhausted],
+    )
+    assert compute_effective_retry(
+        [*exhausted, reset], max_attempts=3, authorized_resets={"att-reset"}
+    ).remaining == 3
+    # A reset record the caller did not authenticate resets nothing.
+    assert compute_effective_retry([*exhausted, reset], max_attempts=3).remaining == 0
+    with pytest.raises(ValueError, match="retry_reset_unauthorized"):
+        build_retry_reset_handoff(
+            attempt_id="att-reset", deployment_id="inst-device-a",
+            repository="MoonLadderStudios/MoonMind", issue_number=4177,
+            authorized_by="", authorized_at="2026-09-26T00:00:00+00:00", reason="x",
+        )
 
 
 def test_internal_retries_do_not_create_attempts() -> None:

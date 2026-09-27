@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from moonmind.config.settings import AtlassianSettings, JiraSettings
-from moonmind.integrations.jira.auth import resolve_jira_connection
+import moonmind.integrations.jira.auth as jira_auth
 from moonmind.integrations.jira.errors import JiraToolError
 
 pytestmark = [pytest.mark.asyncio]
@@ -34,7 +34,8 @@ async def test_resolve_service_account_connection_from_secret_refs(
         return secret_values[ref]
 
     monkeypatch.setattr(
-        "moonmind.integrations.jira.auth.resolve_managed_api_key_reference",
+        jira_auth,
+        "resolve_managed_api_key_reference",
         _fake_resolve,
     )
 
@@ -51,7 +52,7 @@ async def test_resolve_service_account_connection_from_secret_refs(
         ),
     )
 
-    connection = await resolve_jira_connection(settings)
+    connection = await jira_auth.resolve_jira_connection(settings)
 
     assert connection.auth_mode == "service_account_scoped"
     assert (
@@ -72,7 +73,7 @@ async def test_resolve_basic_connection_from_raw_values() -> None:
         atlassian_site_url="https://https://example.atlassian.net/",
     )
 
-    connection = await resolve_jira_connection(settings)
+    connection = await jira_auth.resolve_jira_connection(settings)
 
     assert connection.auth_mode == "basic"
     assert connection.base_url == "https://example.atlassian.net/rest/api/3"
@@ -86,7 +87,8 @@ async def test_secret_ref_resolution_failure_is_sanitized(
         raise ValueError(f"secret resolution failed for {ref}: token-999")
 
     monkeypatch.setattr(
-        "moonmind.integrations.jira.auth.resolve_managed_api_key_reference",
+        jira_auth,
+        "resolve_managed_api_key_reference",
         _fake_resolve,
     )
 
@@ -95,7 +97,7 @@ async def test_secret_ref_resolution_failure_is_sanitized(
     )
 
     with pytest.raises(JiraToolError) as excinfo:
-        await resolve_jira_connection(settings)
+        await jira_auth.resolve_jira_connection(settings)
 
     assert excinfo.value.code == "jira_not_configured"
     assert "auth_mode" in str(excinfo.value)

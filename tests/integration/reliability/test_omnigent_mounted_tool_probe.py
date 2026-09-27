@@ -1,4 +1,4 @@
-"""Replay mounted-tool delivery through host attestation and the real CLI."""
+"""Replay image-owned tool delivery through host attestation and the real CLI."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ pytestmark = [
         None,
         "digest",
         "probe",
-        "writable_mount",
         "missing_probe",
         "null_probe",
         "empty_probe",
@@ -40,6 +39,7 @@ pytestmark = [
         "null_argument",
         "empty_argument",
         "nul_argument",
+        "legacy_writable_mount",
     ],
 )
 async def test_declared_tool_probe_reaches_exact_host(
@@ -84,20 +84,27 @@ async def test_declared_tool_probe_reaches_exact_host(
         async def inspect_container(self, _name):
             return {
                 "Config": {"Labels": {}, "Image": image_ref},
+                # Image-owned tools carry no mount: the selected image owns
+                # /opt/moonmind-tools. The legacy drain mount below exercises
+                # only the pre-cutover volume path.
                 "Mounts": [
                     {"Name": "workspace", "Destination": "/workspace", "RW": True},
                     {"Name": "skills", "Destination": "/skills", "RW": False},
-                    {
-                        "Name": "replay-tools",
-                        "Destination": str(bundle),
-                        "RW": fault == "writable_mount",
-                    },
-                ],
+                ]
+                + (
+                    [
+                        {
+                            "Name": "replay-tools",
+                            "Destination": "/opt/moonmind-tools",
+                            "RW": True,
+                        }
+                    ]
+                    if fault == "legacy_writable_mount"
+                    else []
+                ),
             }
 
         async def run(self, argv, **kwargs):
-            if argv[:3] == ["docker", "volume", "inspect"]:
-                return 0, "[]", ""
             if argv[:3] == ["docker", "image", "inspect"]:
                 return (
                     0,
@@ -139,17 +146,35 @@ async def test_declared_tool_probe_reaches_exact_host(
             raise AssertionError(f"unexpected attestation command: {argv}")
 
     backend = Backend()
-    service = OmnigentMountedToolService(backend=backend, volume_ref="replay-tools")
-    spec.toolAttachments = await service.materialize(
-        {
-            "tools": manifest["requiredTools"],
-            "toolDeliveryRef": "tool-delivery:sha256:" + "3" * 64,
-        }
-    )
+    service = OmnigentMountedToolService(backend=backend)
+    if fault == "legacy_writable_mount":
+        # Persisted pre-cutover bindings stay readable but a writable legacy
+        # tools mount still fails closed instead of attesting.
+        spec.toolAttachments = [
+            {
+                "kind": "volume",
+                "sourceRef": "replay-tools",
+                "targetPath": "/opt/moonmind-tools",
+                "accessMode": "read-only",
+                "cleanupRef": None,
+                "toolDeliveryRef": "tool-delivery:sha256:" + "3" * 64,
+                "tools": [],
+            }
+        ]
+    else:
+        spec.toolAttachments = await service.materialize(
+            {
+                "tools": manifest["requiredTools"],
+                "toolDeliveryRef": "tool-delivery:sha256:" + "3" * 64,
+            },
+            image_ref=image_ref,
+        )
+        attachment = spec.toolAttachments[0]
+        attachment["targetPath"] = str(bundle)
     attachment = spec.toolAttachments[0]
-    attachment["targetPath"] = str(bundle)
-    tool = attachment["tools"][0]
-    assert tool["versionProbe"] == expected["versionProbe"]
+    tool = attachment["tools"][0] if attachment["tools"] else None
+    if tool is not None:
+        assert tool["versionProbe"] == expected["versionProbe"]
     if fault == "digest":
         tool["executableDigests"] = ["0" * 64]
     elif fault == "probe":

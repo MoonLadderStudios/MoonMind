@@ -1283,6 +1283,35 @@ describe('ProviderProfilesManager form controls', () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  // MoonLadderStudios/MoonMind#4559: long unbroken session identifiers must
+  // stay inside the narrow-viewport dialog instead of forcing it wider.
+  it('keeps a long tmate session identifier inside the dialog bounds', async () => {
+    const longSessionId = 'oas_settings_tmate_with_a_very_long_unbroken_identifier_for_mobile';
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        session_id: longSessionId,
+        runtime_id: 'codex_cli',
+        profile_id: 'codex-oauth',
+        status: 'awaiting_user',
+        terminal_session_id: 'https://tmate.io/t/oas_settings_tmate',
+        terminal_bridge_id: 'ssh tmate.io/t/oas_settings_tmate',
+        session_transport: 'tmate',
+      }),
+    } as Response);
+    vi.spyOn(window, 'open').mockReturnValue(null);
+
+    renderProviderProfilesManager([codexOauthProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Tmate OAuth session',
+    });
+    const sessionValue = within(dialog).getByText(longSessionId);
+    expect(sessionValue.className).toContain('break-all');
+  });
+
   it('updates the Tmate OAuth modal when terminal refs arrive from polling', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce({

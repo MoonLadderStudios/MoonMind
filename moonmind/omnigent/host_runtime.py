@@ -159,7 +159,11 @@ class GenericOmnigentHostRuntime:
                 "workflow-authored tool attachments are not accepted",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
-        tools = tuple(await self._tools.materialize(plan.payload.resolvedTools))
+        tools = tuple(
+            await self._tools.materialize(
+                plan.payload.resolvedTools, image_ref=host_class.imageRef
+            )
+        )
         if authority_sink is not None:
             for tool in tools:
                 await authority_sink({"kind": "tool", **tool})

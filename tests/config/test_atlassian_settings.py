@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
-from moonmind.config.settings import AtlassianSettings, FeatureFlagsSettings
+from moonmind.config.settings import AtlassianSettings
 
 _ATLASSIAN_ENV_KEYS = (
     "ATLASSIAN_CONFLUENCE_ENABLED",
@@ -18,14 +16,6 @@ _ATLASSIAN_ENV_KEYS = (
     "ATLASSIAN_JIRA_READ_TIMEOUT_SECONDS",
     "ATLASSIAN_JIRA_RETRY_ATTEMPTS",
     "ATLASSIAN_SITE_URL",
-    "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
-    "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
-    "FEATURE_FLAGS__JIRA_CREATE_PAGE_ENABLED",
-    "FEATURE_FLAGS__JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
-    "JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
-    "JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
-    "JIRA_CREATE_PAGE_ENABLED",
-    "JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
 )
 
 @pytest.fixture(autouse=True)
@@ -78,33 +68,3 @@ def test_atlassian_settings_reject_invalid_allowed_action(
 
     with pytest.raises(ValidationError):
         AtlassianSettings(_env_file=None)
-
-def test_jira_create_page_defaults_are_normalized(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", " eng ")
-    monkeypatch.setenv("JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", " 42 ")
-
-    settings = FeatureFlagsSettings(_env_file=None)
-
-    assert settings.jira_create_page_default_project_key == "ENG"
-    assert settings.jira_create_page_default_board_id == "42"
-
-def test_jira_create_page_default_project_rejects_invalid_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", "bad-key")
-
-    with pytest.raises(ValidationError):
-        FeatureFlagsSettings(_env_file=None)
-
-def test_env_template_documents_jira_create_page_rollout_settings() -> None:
-    env_template = Path(".env-template").read_text(encoding="utf-8")
-
-    assert 'JIRA_CREATE_PAGE_ENABLED="false"' in env_template
-    assert 'JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY=""' in env_template
-    assert 'JIRA_CREATE_PAGE_DEFAULT_BOARD_ID=""' in env_template
-    assert (
-        'JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION="true"'
-        in env_template
-    )

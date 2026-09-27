@@ -5,7 +5,7 @@
 
 **Status:** Normative architecture hub (Temporal-native; compatibility projections and hardening work remain repo-visible)
 **Owner:** MoonMind Platform
-**Last updated:** 2026-09-13
+**Last updated:** 2026-09-26
 **Audience:** backend, infra, managed-runtime, integrations, dashboard, workflow authors, operators
 
 ---
@@ -40,7 +40,7 @@ The current repo baseline is:
 
 - Temporal core paths are live, while compatibility and migration surfaces still exist.
 - The Temporal deployment posture is explicitly self-hosted Docker Compose with PostgreSQL persistence and PostgreSQL Visibility.
-- The default artifact backend is MinIO / S3-compatible storage.
+- The default artifact backend is Silo / S3-compatible storage, using MinIO-compatible endpoints and data.
 - The worker topology is a small capability-based fleet set: `workflow`, `artifacts`, `llm`, `sandbox`, `integrations`, and `agent_runtime`.
 - The live registered workflow catalog includes `MoonMind.MergeAutomation` in addition to the previously documented core workflow types.
 - The workflow helper-activity exception is narrow; the current workflow-queue handler routing (current lane vs historical-only) is owned by the generated reference [WorkflowTypeCatalogGenerated.md](WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing) (produced from `workflow_registry.py`) with the current-vs-intended boundary tabulated in [ActivityCatalogAndWorkerTopology.md](ActivityCatalogAndWorkerTopology.md#51-workflow-fleet-exception-rule) §5.1.

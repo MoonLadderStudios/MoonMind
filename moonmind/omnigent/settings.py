@@ -307,6 +307,12 @@ def omnigent_evidence_policy(
     Values: deployment, protected, either (default).
     Deployment accepts locally-generated deployment qualification evidence.
     Protected requires protected CI evidence for official support tier.
+
+    MoonLadderStudios/MoonMind#4560: ``either`` (including the shipped
+    Compose default expansion) is ordinary certificate-independent admission:
+    historical certificates are an optional truthful observation, never a
+    prerequisite. Only an explicit ``protected`` or ``deployment`` value
+    selects strict certification. See :func:`omnigent_admission_mode`.
     """
 
     source = env if env is not None else os.environ
@@ -318,6 +324,55 @@ def omnigent_evidence_policy(
     raise ValueError(
         f"invalid evidence policy {raw!r}: expected one of {sorted(_DEPLOYMENT_EVIDENCE_POLICY_VALUES)}"
     )
+
+
+def omnigent_admission_mode(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return the effective admission mode for ordinary vs strict execution.
+
+    MoonLadderStudios/MoonMind#4560: ordinary MoonMind workflows must not
+    become unrunnable merely because a historical qualification certificate
+    is missing, stale, or names another policy revision. The trusted
+    settings boundary -- never workflow-authored input -- chooses this mode.
+
+    Disposition of the three legacy values plus omitted/blank configuration:
+
+    - omitted, blank, or ``either`` (including the shipped Compose default
+      ``either`` expanded into the environment) -> ``"ordinary"``:
+      certificate-independent admission. Optional certificates remain a
+      truthful observation but never veto execution.
+    - explicit ``protected`` -> ``"strict"``: protected-tier certification
+      is required for new admission.
+    - explicit ``deployment`` -> ``"strict"``: deployment-tier certification
+      is required for new admission. Preserved so a deliberately selected
+      stricter requirement is never silently weakened.
+
+    Omitted/blank and the documented default-equivalent behave consistently
+    as ordinary.
+    """
+
+    source = env if env is not None else os.environ
+    raw = _clean(source.get(MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV)).lower()
+    if not raw or raw == "either":
+        return "ordinary"
+    if raw in {"protected", "deployment"}:
+        return "strict"
+    if raw in _DEPLOYMENT_EVIDENCE_POLICY_VALUES:  # pragma: no cover - guarded above
+        return "ordinary"
+    raise ValueError(
+        f"invalid evidence policy {raw!r}: expected one of {sorted(_DEPLOYMENT_EVIDENCE_POLICY_VALUES)}"
+    )
+
+
+def omnigent_requires_certification(*, env: Mapping[str, Any] | None = None) -> bool:
+    """Return whether new admission requires historical certification.
+
+    Trusted settings-boundary helper for MoonLadderStudios/MoonMind#4560.
+    True only when the operator deliberately selected strict certification
+    (explicit ``protected`` or ``deployment``). Ordinary installations --
+    omitted, blank, or shipped ``either`` -- return False.
+    """
+
+    return omnigent_admission_mode(env=env) == "strict"
 
 
 def resolved_server_url(*, env: Mapping[str, Any] | None = None) -> str:
@@ -531,6 +586,8 @@ __all__ = [
     "generic_host_enabled",
     "is_omnigent_enabled",
     "omnigent_evidence_policy",
+    "omnigent_admission_mode",
+    "omnigent_requires_certification",
     "opencode_contributor_data_use_accepted",
     "opencode_model_catalog_max_age",
     "opencode_model_catalog_refresh_lead",

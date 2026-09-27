@@ -386,6 +386,16 @@ AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID = (
     "agent-run-awaiting-slot-runtime-profile-edit-v1"
 )
 CANONICAL_WAITING_STATE_PATCH_ID = "agent-run-canonical-waiting-state-v1"
+# Versions the slot-acquired parent-signal routing. In-flight histories that
+# recorded ``AGENT_RUN_PROGRESS_PATCH_ID`` during the preceding
+# ``awaiting_slot`` emission recorded a direct legacy ``child_state_changed``
+# signal at slot acquisition (the routed helper came later). Replaying such
+# a history through the routed helper would emit ``agent_run_progress``
+# instead and Temporal would reject the workflow task as nondeterministic,
+# so only histories carrying this fresh marker take the routed path.
+AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID = (
+    "agent-run-slot-acquired-progress-v1"
+)
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID = (
     "agent-run-claude-code-no-progress-policy-v2"
@@ -1390,21 +1400,16 @@ class MoonMindAgentRun:
             **kwargs,
         )
 
-    async def _signal_parent_child_state_changed(
+    async def _signal_parent_legacy_child_state_changed(
         self,
         parent_info: Any,
         new_state: str,
         reason: str,
     ) -> None:
-        # MoonLadderStudios/MoonMind#1088: new histories apply only the
-        # typed ``agent_run_progress`` projection; old histories retain the
-        # legacy ``child_state_changed`` signal. Compatibility, control, and
-        # replay messages are unaffected.
-        if self._workflow_patch_enabled(AGENT_RUN_PROGRESS_PATCH_ID):
-            await self._signal_parent_progress_projection(
-                parent_info, new_state, reason
-            )
-            return
+        # Direct legacy ``child_state_changed`` signal: the recorded command
+        # for old histories. The single literal lives here; both the
+        # cutover gate's old-history branch and versioned pre-cutover call
+        # sites delegate to it so replay keeps the recorded command.
         if not parent_info:
             return
         parent_handle = workflow.get_external_workflow_handle(
@@ -1422,6 +1427,25 @@ class MoonMindAgentRun:
                 parent_info.workflow_id,
                 exc,
             )
+
+    async def _signal_parent_child_state_changed(
+        self,
+        parent_info: Any,
+        new_state: str,
+        reason: str,
+    ) -> None:
+        # MoonLadderStudios/MoonMind#1088: new histories apply only the
+        # typed ``agent_run_progress`` projection; old histories retain the
+        # legacy ``child_state_changed`` signal. Compatibility, control, and
+        # replay messages are unaffected.
+        if self._workflow_patch_enabled(AGENT_RUN_PROGRESS_PATCH_ID):
+            await self._signal_parent_progress_projection(
+                parent_info, new_state, reason
+            )
+            return
+        await self._signal_parent_legacy_child_state_changed(
+            parent_info, new_state, reason
+        )
 
     def _init_progress_identity(self, request: AgentExecutionRequest) -> None:
         """Record the Step Execution/attempt identity for progress emission.
@@ -7344,13 +7368,29 @@ class MoonMindAgentRun:
                     overall_start = workflow.now()
 
                     self.run_status = RunStatus.launching
-                    if parent_info:
-                        parent_handle = workflow.get_external_workflow_handle(
-                            parent_info.workflow_id, run_id=parent_info.run_id
+                    # MoonLadderStudios/MoonMind#1088: route through the
+                    # single cutover gate so new histories emit the typed
+                    # projection and old histories retain the legacy
+                    # signal; a direct legacy signal here would bypass the
+                    # single new-write path. Versioned by
+                    # AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID so
+                    # in-flight histories that recorded the legacy command
+                    # keep replaying it.
+                    if self._workflow_patch_enabled(
+                        AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID
+                    ):
+                        await self._signal_parent_child_state_changed(
+                            parent_info,
+                            "launching",
+                            f"Slot acquired for {runtime_id}",
                         )
-                        await parent_handle.signal(
-                            "child_state_changed",
-                            args=["launching", f"Slot acquired for {runtime_id}"]
+                    else:
+                        # Replay compatibility for histories that already
+                        # recorded the legacy signal at slot acquisition.
+                        await self._signal_parent_legacy_child_state_changed(
+                            parent_info,
+                            "launching",
+                            f"Slot acquired for {runtime_id}",
                         )
                     request.execution_profile_ref = self._assigned_profile_id
                     if workflow.patched(

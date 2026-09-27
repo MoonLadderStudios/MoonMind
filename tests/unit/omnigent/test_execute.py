@@ -5573,3 +5573,215 @@ def test_safe_heartbeat_reraises_cancellation():
     ):
         with pytest.raises(asyncio.CancelledError):
             _safe_heartbeat({"activityAlive": True})
+
+
+def _host_lost_snapshot(marker: str, *, host_online: bool = False) -> dict[str, Any]:
+    """The resolver:pr:4554 session after a Docker engine restart killed its host.
+
+    The turn stopped inside a tool call, so the stock server's ``idle`` status
+    sits beside an unmatched ``function_call`` that can never produce output.
+    """
+
+    return {
+        "status": "idle",
+        "active_response_id": None,
+        "runner_online": host_online,
+        "host_online": host_online,
+        "host_resumable": False,
+        "items": [
+            {
+                "id": "marked-user",
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": f"resolve\n\n{marker}"}],
+                },
+            },
+            {
+                "id": "wait-for-ci",
+                "type": "function_call",
+                "data": {"call_id": "call-ci", "name": "bash"},
+            },
+        ],
+    }
+
+
+class _RestartedOmnigentTransportPool:
+    """Replay the Omnigent server restart through the real HTTP client.
+
+    The first requests are refused while the server boots; afterwards it
+    serves the orphaned session and keeps its SSE stream open with the
+    heartbeat-only frames a session with a dead runner receives.
+    """
+
+    def __init__(self, marker: str, *, refused_connections: int) -> None:
+        self.refused = {"remaining": refused_connections, "count": 0}
+        self.paths: list[str] = []
+
+        async def heartbeats():
+            while True:
+                yield (
+                    b"event: session.heartbeat\n"
+                    b'data: {"type": "session.heartbeat"}\n\n'
+                )
+                await asyncio.sleep(0.01)
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if self.refused["remaining"] > 0:
+                self.refused["remaining"] -= 1
+                self.refused["count"] += 1
+                raise httpx.ConnectError(
+                    "All connection attempts failed", request=request
+                )
+            path = request.url.path
+            self.paths.append(f"{request.method} {path}")
+            if path == "/v1/agents":
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [{"id": "agent-1", "name": "opencode-native-ui"}],
+                        "has_more": False,
+                    },
+                )
+            if path == "/v1/sessions/session-1/stream":
+                return httpx.Response(
+                    200,
+                    content=heartbeats(),
+                    headers={"content-type": "text/event-stream"},
+                )
+            if path == "/v1/sessions/session-1" and request.method == "GET":
+                return httpx.Response(200, json=_host_lost_snapshot(marker))
+            return httpx.Response(200, json={})
+
+        self._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    def client(self) -> httpx.AsyncClient:
+        return self._client
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_recovers_turn_orphaned_by_host_loss(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Replay resolver:pr:4554:head:122131097cc7 through the production boundary.
+
+    A Docker engine restart killed the on-demand host and the Omnigent server
+    together. The retried Activity reattached while the server was still
+    refusing connections, and then found a session whose host never came back.
+    The execution must wait out the server outage, then report the lost host
+    as a typed, step-retryable failure instead of an untyped transport error
+    or an indefinite wait on a tool call that can never finish.
+    """
+
+    correlation_id = "corr-host-lost"
+    idempotency_key = "idem-host-lost"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    store = _RecordingBridgeStore()
+    store.row.omnigent_session_id = "session-1"
+    store.row.first_message_state = "posted"
+    store.row.first_message_posted_at = object()
+    pool = _RestartedOmnigentTransportPool(marker, refused_connections=3)
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client."
+        "_CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.0,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._SESSION_HOST_LOSS_GRACE_SECONDS", 0.05
+    )
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    token = _ACTIVITY_HEARTBEAT_STATE.set({})
+    try:
+        result = await asyncio.wait_for(
+            run_omnigent_execution(
+                AgentExecutionRequest(
+                    agentKind="external",
+                    agentId="omnigent",
+                    correlationId=correlation_id,
+                    idempotencyKey=idempotency_key,
+                    parameters={
+                        "omnigent": {
+                            "agent": {"agentName": "opencode-native-ui"},
+                            "session": {"allowEmptyWorkspace": True},
+                            "prompt": {"text": "resolve"},
+                        },
+                    },
+                ),
+                artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+                run_store=store,
+                transport_pool=pool,
+            ),
+            timeout=10.0,
+        )
+    finally:
+        _ACTIVITY_HEARTBEAT_STATE.reset(token)
+        await pool.client().aclose()
+
+    assert pool.refused["count"] == 3, "the server outage must be waited out"
+    assert "GET /v1/sessions/session-1/stream" in pool.paths
+    assert "POST /v1/sessions" not in pool.paths, "the orphaned session is reattached"
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_SESSION_HOST_LOST"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.metadata["omnigentSessionId"] == "session-1"
+    assert "host" in result.summary
+    assert [call["status"] for call in store.terminal_calls] == ["failed"]
+    assert loop.time() - started < 10.0
+
+
+def test_host_loss_grace_restarts_when_the_host_reconnects() -> None:
+    """A host that reconnects after an Omnigent restart keeps its turn."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        watchdog = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300.0, host_loss_grace_seconds=60.0
+        )
+        marker = "current-marker"
+        progress = {"boundarySource": "marker", "progress": True}
+        now = loop.time()
+
+        watchdog.observe(
+            _host_lost_snapshot(marker), progress, observation_started_at=now
+        )
+        watchdog.observe(
+            _host_lost_snapshot(marker, host_online=True),
+            progress,
+            observation_started_at=now + 30.0,
+        )
+        # Offline again: the grace restarts instead of counting the online gap.
+        watchdog.observe(
+            _host_lost_snapshot(marker), progress, observation_started_at=now + 61.0
+        )
+        watchdog.observe(
+            _host_lost_snapshot(marker), progress, observation_started_at=now + 120.0
+        )
+        # A resumable host is expected to come back, so it never counts as lost.
+        resumable = _host_lost_snapshot(marker)
+        resumable["host_resumable"] = True
+        watchdog.observe(resumable, progress, observation_started_at=now + 500.0)
+        watchdog.observe(
+            _host_lost_snapshot(marker), progress, observation_started_at=now + 561.0
+        )
+        with pytest.raises(OmnigentSessionStillRunningError) as excinfo:
+            watchdog.observe(
+                _host_lost_snapshot(marker),
+                progress,
+                observation_started_at=now + 621.0,
+            )
+        assert excinfo.value.code == "OMNIGENT_SESSION_HOST_LOST"
+    finally:
+        loop.close()

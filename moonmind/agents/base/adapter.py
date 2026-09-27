@@ -67,6 +67,9 @@ def resolve_volume_mount_env(
     
     if runtime_id == "claude_code":
         shaped_env["CLAUDE_HOME"] = volume_mount_path
+        # The pinned Claude Code CLI ignores CLAUDE_HOME; CLAUDE_CONFIG_DIR
+        # is the supported steering variable for the credential location.
+        shaped_env["CLAUDE_CONFIG_DIR"] = volume_mount_path
     elif runtime_id == "codex_cli":
         shaped_env["CODEX_HOME"] = volume_mount_path
         

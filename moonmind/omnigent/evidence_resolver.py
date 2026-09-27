@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
 from moonmind.omnigent.settings import omnigent_evidence_policy
 
@@ -17,13 +17,36 @@ def resolve_execution_evidence(
     *,
     policy: str | None = None,
     now=None,
-) -> tuple[dict[str, Any], Literal["supported", "deployment_qualified"]]:
+    require_evidence: bool | None = None,
+) -> tuple[dict[str, Any] | None, str]:
     """Resolve evidence for a plan according to policy.
 
-    Returns (evidence_dict, support_tier).
-    Raises ValueError if no admissible evidence is found.
+    MoonLadderStudios/MoonMind#4560: ordinary admission is
+    certificate-independent. When the trusted settings boundary selects
+    ordinary mode (omitted/blank/``either``), missing, expired, malformed,
+    or unavailable optional certificates never veto execution: this returns
+    ``(None, "uncertified")`` instead of raising, and the caller persists an
+    explicitly uncertified ordinary admission -- never a fabricated passing
+    certificate, never a ``supported``/``deployment_qualified`` claim.
+
+    When strict certification is explicitly selected (``protected`` or
+    ``deployment``), this fails closed exactly as before. ``require_evidence``
+    overrides the settings-derived default; when None it is derived from
+    :func:`omnigent_requires_certification`, which reads only the trusted
+    deployment settings -- never workflow-authored input.
+
+    Returns (evidence_dict_or_None, support_tier).
+    Raises ValueError if no admissible evidence is found under strict mode.
     """
+
+    from moonmind.omnigent.settings import omnigent_requires_certification
+
     selected_policy = (policy or omnigent_evidence_policy()).lower()
+    strict = (
+        require_evidence
+        if require_evidence is not None
+        else omnigent_requires_certification()
+    )
     # Try protected first if policy is protected or either
     if selected_policy in {"protected", "either"}:
         try:
@@ -36,9 +59,12 @@ def resolve_execution_evidence(
             )
             return evidence, "supported"
         except Exception:
-            if selected_policy == "protected":
+            if selected_policy == "protected" and strict:
                 raise
-            # fall through to deployment for either
+            # A non-strict `require_evidence` override resolves to
+            # uncertified below instead of vetoing, exactly as the
+            # deployment branch already behaves. `either` still falls
+            # through to deployment for its own attempt first.
     if selected_policy in {"deployment", "either"}:
         try:
             from moonmind.omnigent.deployment_evidence import load_deployment_evidence
@@ -46,12 +72,24 @@ def resolve_execution_evidence(
             evidence = load_deployment_evidence(plan_payload, now=now)
             return evidence, "deployment_qualified"
         except Exception as exc:
+            if not strict:
+                # Ordinary admission: an invalid optional report remains
+                # invalid and authorizes nothing, but it never vetoes
+                # ordinary execution either. Report uncertified truthfully.
+                logger.debug(
+                    "optional execution evidence unavailable; admitting ordinary "
+                    "uncertified execution",
+                    exc_info=True,
+                )
+                return None, "uncertified"
             # If policy is either and protected already failed, bubble deployment failure.
             # The underlying reason is the only actionable part of this failure,
             # so it travels in the message and not just the exception chain.
             raise ValueError(
                 f"no admissible execution evidence for the current policy: {exc}"
             ) from exc
+    if not strict:
+        return None, "uncertified"
     raise ValueError(f"unknown evidence policy: {selected_policy}")
 
 
@@ -175,7 +213,9 @@ def resolve_support_evidence_freshness(
     status rather than "missing".
 
     It never raises and never admits anything: admission authority stays with
-    :func:`resolve_execution_evidence`, which fails closed.
+    :func:`resolve_execution_evidence`, which fails closed under explicit
+    strict certification and admits explicitly uncertified ordinary execution
+    otherwise.
     """
 
     selected_policy = (policy or omnigent_evidence_policy()).lower()

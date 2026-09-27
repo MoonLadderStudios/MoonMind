@@ -1990,6 +1990,33 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
   });
 
+  it('MoonLadderStudios/MoonMind#2738 expands a workflow detail route to the same collection table with stable query context', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/workflows/route-123?source=temporal&stateIn=failed&limit=10&token=secret',
+    );
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow detail route loaded: /workflows/route-123')).toBeTruthy();
+    fetchSpy.mockClear();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows');
+    });
+    expect(window.location.search).toContain('source=temporal');
+    expect(window.location.search).toContain('stateIn=failed');
+    expect(window.location.search).toContain('limit=10');
+    expect(window.location.search).not.toContain('token=secret');
+    expect(window.location.search).not.toContain('route-123');
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('table');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
+  });
+
   it('MM-1113 resolves the first row from the exact current list query context', async () => {
     window.history.replaceState(
       {},

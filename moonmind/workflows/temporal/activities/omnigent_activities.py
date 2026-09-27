@@ -703,7 +703,7 @@ async def _try_generic_realizer_dispatch(
 
     from moonmind.omnigent.execute import (
         OmnigentSessionStillRunningError,
-        OmnigentTurnNotStartedError,
+        OmnigentTurnUnrecoverableError,
     )
     from moonmind.omnigent.harness_platform.failures import (
         HarnessPlatformError,
@@ -742,7 +742,7 @@ async def _try_generic_realizer_dispatch(
             # retained by the realizer for Temporal retry. Collapsing this into
             # a terminal generic dispatch result defeats that recovery path and
             # strands healthy turns that are still executing a tool.
-            if isinstance(exc, OmnigentTurnNotStartedError):
+            if isinstance(exc, OmnigentTurnUnrecoverableError):
                 typed = _typed_platform_failure_result(exc)
                 if typed is not None:
                     return typed
@@ -881,7 +881,7 @@ async def _try_generic_realizer_dispatch(
     except OmnigentSessionStillRunningError as exc:
         # Planned requests that reach this path have the same retry contract as
         # requests carrying an explicit OmnigentExecutionPlan binding above.
-        if isinstance(exc, OmnigentTurnNotStartedError):
+        if isinstance(exc, OmnigentTurnUnrecoverableError):
             typed = _typed_platform_failure_result(exc)
             if typed is not None:
                 return typed
@@ -978,7 +978,8 @@ async def _omnigent_execute_activity(
 ) -> AgentRunResult:
     """Run one Omnigent streaming execution.
 
-    An accepted turn the provider never started is finalized inside
+    An accepted turn that can never make progress (the provider never started
+    it, or its host is gone) is finalized inside
     ``run_omnigent_execution`` itself (decisive snapshot captured, bridge row
     terminal) and returned as a typed ``AgentRunResult``, so every execution
     shape below (plan-dispatched realizer, unprofiled direct run, profile-bound

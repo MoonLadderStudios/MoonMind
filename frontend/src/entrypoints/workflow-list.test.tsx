@@ -5,6 +5,10 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import { markWorkflowListReturnFocusIntent } from '../lib/workflowListContext';
+import {
+  DASHBOARD_PREFERENCES_STORAGE_KEY,
+  DASHBOARD_PREFERENCES_VERSION,
+} from '../utils/dashboardPreferences';
 import { WorkflowListPage } from './workflow-list';
 import '../styles/dashboard.css';
 
@@ -91,6 +95,23 @@ describe('Workflows Entrypoint', () => {
     expect(await screen.findByRole('row', { name: /Authorized table workflow/i })).toBeTruthy();
     expect(screen.queryByText(/unauthorized/i)).toBeNull();
     expect(screen.queryByRole('link', { name: /unauthorized/i })).toBeNull();
+  });
+
+  it('shows every workflow without an attention toggle, even with a legacy stored attention-only preference', async () => {
+    window.localStorage.setItem(
+      DASHBOARD_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: DASHBOARD_PREFERENCES_VERSION,
+        preferences: { workflowListNeedsAttentionOnly: true },
+      }),
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    expect(await screen.findByRole('row', { name: /Example task/i })).toBeTruthy();
+    expect(screen.queryByRole('radio', { name: 'All' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Needs attention' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Attention visibility' })).toBeNull();
   });
 
   it('shows structured API validation detail when the workflow list request fails', async () => {

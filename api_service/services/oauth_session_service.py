@@ -8,6 +8,40 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def validate_oauth_profile_on_host(
+    *, profile_id: str, provider_lease_id: str
+) -> dict[str, Any]:
+    """Run the credential-only host probe under the caller's maintenance lease."""
+
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.workflows.oauth_session import (
+        OAUTH_CREDENTIAL_VALIDATION_WORKFLOW_NAME,
+    )
+
+    workflow_id = f"oauth-credential-validation:{provider_lease_id}"
+    client = await TemporalClientAdapter().get_client()
+    try:
+        handle = await client.start_workflow(
+            OAUTH_CREDENTIAL_VALIDATION_WORKFLOW_NAME,
+            {
+                "session_id": provider_lease_id,
+                "profile_id": profile_id,
+                "provider_lease_id": provider_lease_id,
+            },
+            id=workflow_id,
+            task_queue=get_workflow_task_queue(),
+        )
+    except WorkflowAlreadyStartedError:
+        handle = client.get_workflow_handle(workflow_id)
+    result = await handle.result()
+    if not isinstance(result, dict):
+        raise RuntimeError("OAuth credential host validation returned no result")
+    return result
+
+
 async def get_oauth_session_workflow_status(session_id: str) -> str | None:
     """Return the authoritative Temporal status for an OAuth session workflow.
 
@@ -128,6 +162,7 @@ async def complete_oauth_session_workflow(session_id: str) -> None:
         logger.exception(
             "Failed to mark OAuth session workflow %s complete", session_id
         )
+        raise
 
 
 async def fail_oauth_session_workflow(session_id: str, reason: str) -> None:

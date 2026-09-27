@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -84,7 +85,6 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
 )
-from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
@@ -102,6 +102,8 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     resolve_sandbox_workspace_locator,
 )
 from moonmind.workloads.docker_launcher import structured_container_security_args
+
+logger = logging.getLogger(__name__)
 
 _FORBIDDEN_ENV = (
     "OPENAI_API_KEY",
@@ -367,9 +369,10 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs"))
         ).resolve()
-        self._tool_bundle_volume = os.getenv(
-            "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
-        )
+        # MoonLadderStudios/MoonMind#4558: the version-named tools volume is
+        # retired. The selected shared host image owns gh/moonmind at
+        # /opt/moonmind-tools; OMNIGENT_TOOL_BUNDLE_VOLUME and related stale
+        # settings are ignored so they cannot change tool selection.
         self._workspace_volume = os.getenv(
             "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"
         ).strip()
@@ -537,21 +540,36 @@ class OmnigentOAuthHostRuntime:
         ]
         for runtime_env in adapter["env"]:
             args.extend(["--env", runtime_env])
-        args.extend(["--entrypoint", "/usr/bin/env"])
+        # Docker options end at the image. The following -u flags belong to
+        # /usr/bin/env, where they remove inherited credential variables.
+        args.extend(["--entrypoint", "/usr/bin/env", host_image_ref])
         for key in _FORBIDDEN_ENV:
             args.extend(["-u", key])
-        args.extend([host_image_ref, *adapter["login_command"]])
+        args.extend(adapter["login_command"])
         try:
             result = await asyncio.wait_for(self._run(*args, check=False), timeout=60)
         except TimeoutError as exc:
             raise OmnigentOAuthHostError(
                 "OAuth credential validation timed out",
-                code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                code=HostPreflightFailure.VALIDATION_UNAVAILABLE.value,
             ) from exc
         if result[0] != 0:
+            logger.warning(
+                "OAuth credential preflight exited %d for profile %s",
+                result[0],
+                binding.provider_profile_id,
+            )
             raise OmnigentOAuthHostError(
-                "OAuth credential validation failed",
-                code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                (
+                    "OAuth credential validation failed"
+                    if result[0] == 1
+                    else "OAuth credential validation could not run"
+                ),
+                code=(
+                    HostPreflightFailure.LOGIN_STATUS_FAILED.value
+                    if result[0] == 1
+                    else HostPreflightFailure.VALIDATION_UNAVAILABLE.value
+                ),
             )
         return {
             "status": "ready",
@@ -692,7 +710,9 @@ class OmnigentOAuthHostRuntime:
                 container_job_environment
             )
             if "gh" in {item.strip().lower() for item in required_capabilities}:
-                await self._initialize_required_tools()
+                await self._initialize_required_tools(
+                    image_ref=str(launch["hostImageRef"])
+                )
             container_name = (
                 host_lease.container_name
                 or deterministic_host_container_name(host_lease.lease_id)
@@ -1750,7 +1770,6 @@ class OmnigentOAuthHostRuntime:
         source = self._scripts_dir.resolve()
         required_scripts = (
             "init-oauth-host.sh",
-            "moonmind-tools.sh",
             "start-codex-oauth-host.sh",
             "start-claude-oauth-host.sh",
         )
@@ -2394,14 +2413,12 @@ class OmnigentOAuthHostRuntime:
             f"type=bind,src={runtime_scripts},dst=/opt/moonmind,readonly",
             "--mount",
             "type=bind,"
-            f"src={runtime_scripts / 'moonmind-tools.sh'},"
-            "dst=/etc/profile.d/moonmind-tools.sh,readonly",
-            "--mount",
-            "type=bind,"
             f"src={runtime_scripts / 'moonmind-execution.sh'},"
             "dst=/etc/profile.d/moonmind-execution.sh,readonly",
-            "--mount",
-            f"type=volume,src={self._tool_bundle_volume},dst=/opt/moonmind-tools,readonly",
+            # MoonLadderStudios/MoonMind#4558: no tools-volume or profile
+            # mount overlays. The selected image owns /opt/moonmind-tools and
+            # /etc/profile.d/moonmind-tools.sh; mounting over them would hide
+            # the image-owned executables.
             "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
             "--mount",
@@ -3636,30 +3653,37 @@ class OmnigentOAuthHostRuntime:
             ),
         }
 
-    async def _initialize_required_tools(self) -> None:
-        expected_version = os.getenv("OMNIGENT_GH_VERSION", "2.76.2")
+    async def _initialize_required_tools(self, *, image_ref: str | None = None) -> None:
+        # MoonLadderStudios/MoonMind#4558: probe the image-owned tools without
+        # a tools volume and without an exact-version gate. A missing or
+        # broken executable remains an actionable failure for affected runs;
+        # ordinary tool upgrades never require requalification here. Probe the
+        # effective launch image (the image _launch_on_demand actually starts),
+        # not the legacy self._image default: production constructors leave
+        # self._image at the upstream OMNIGENT_HOST_IMAGE default, which is
+        # precisely the image that does not carry the baked tools.
+        probe_image = str(image_ref or "").strip() or self._image
         return_code, stdout, _stderr = await self._run(
             "docker",
             "run",
             "--rm",
-            "--volume",
-            f"{self._tool_bundle_volume}:/opt/moonmind-tools:ro",
+            "--network",
+            "none",
             "--entrypoint",
             "/opt/moonmind-tools/bin/gh",
-            self._image,
+            probe_image,
             "--version",
             check=False,
         )
         first_line = stdout.splitlines()[0] if stdout.splitlines() else ""
-        if return_code != 0 or f" {expected_version} " not in f" {first_line} ":
+        if return_code != 0 or "gh version" not in first_line:
             raise MountedToolPreflightError(
-                "The deployment-owned Omnigent tool bundle is not ready",
+                "The selected host image does not provide a working gh tool",
                 code="tool_bundle_unavailable",
                 evidence={
                     "tool": "gh",
                     "phase": "deployment_initialization",
-                    "bundleVolume": self._tool_bundle_volume,
-                    "expectedVersion": expected_version,
+                    "image": probe_image,
                 },
             )
 

@@ -216,125 +216,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jira/connections/verify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Verify Connection */
-        get: operations["verify_connection_api_jira_connections_verify_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jira/projects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Projects */
-        get: operations["list_projects_api_jira_projects_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jira/projects/{project_key}/boards": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Project Boards */
-        get: operations["list_project_boards_api_jira_projects__project_key__boards_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jira/boards/{board_id}/columns": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Board Columns */
-        get: operations["list_board_columns_api_jira_boards__board_id__columns_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jira/boards/{board_id}/issues": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Board Issues */
-        get: operations["list_board_issues_api_jira_boards__board_id__issues_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jira/issues/{issue_key}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Issue */
-        get: operations["get_issue_api_jira_issues__issue_key__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jira/issues/{issue_key}/attachments/{attachment_id}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Download Issue Attachment */
-        get: operations["download_issue_attachment_api_jira_issues__issue_key__attachments__attachment_id__content_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/me": {
         parameters: {
             query?: never;
@@ -2050,6 +1931,33 @@ export interface paths {
         put?: never;
         /** Fork Checkpoint Branch */
         post: operations["fork_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__fork_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/comparison-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Candidate Comparison
+         * @description Preview comparison-requested candidate generation without side effects.
+         *
+         *     MoonLadderStudios/MoonMind#2215: a request to compare saved results never
+         *     authorizes new inference, and requested runs reuse ordinary branch
+         *     admission with explicit bounded configurations, one shared source intent,
+         *     and the existing provider/resource budgets. The preview performs no
+         *     writes, launches no work, and expands no candidate matrix, so duplicate or
+         *     interrupted previews cannot duplicate completed compute.
+         */
+        post: operations["preview_candidate_comparison_api_executions__workflow_id__checkpoint_branches_comparison_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6194,6 +6102,105 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * CheckpointBranchComparisonPreviewCandidate
+         * @description One explicit comparison candidate for a generation preview.
+         *
+         *     A candidate either reuses an existing completed branch (``branchId``) or
+         *     describes a requested new run through ordinary admission bounds. The
+         *     preview never launches work itself (MoonLadderStudios/MoonMind#2215).
+         */
+        CheckpointBranchComparisonPreviewCandidate: {
+            /** Candidateid */
+            candidateId: string;
+            /** Branchid */
+            branchId?: string | null;
+            /** Sourceintentref */
+            sourceIntentRef?: string | null;
+            /** Maxbudgetusd */
+            maxBudgetUsd?: number | null;
+            /** Workspacepolicy */
+            workspacePolicy?: ("continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source") | null;
+            /** Runtimecontextpolicy */
+            runtimeContextPolicy?: "fresh_agent_run" | null;
+            /** Providerprofileref */
+            providerProfileRef?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
+        };
+        /**
+         * CheckpointBranchComparisonPreviewRequest
+         * @description Bounded preview for comparison-requested candidate generation.
+         *
+         *     Comparing saved results never authorizes new inference: with
+         *     ``allowNewRuns`` false every candidate must name its existing branch.
+         *     Requested runs reuse ordinary branch admission with explicit bounded
+         *     configurations and one shared source intent. Cartesian expansion across
+         *     model/provider/effort grids is rejected, not expanded
+         *     (MoonLadderStudios/MoonMind#2215).
+         */
+        CheckpointBranchComparisonPreviewRequest: {
+            /** Objective */
+            objective: string;
+            /**
+             * Rubricid
+             * @default checkpoint-branch-gates
+             */
+            rubricId: string;
+            /**
+             * Allownewruns
+             * @default false
+             */
+            allowNewRuns: boolean;
+            /** Candidates */
+            candidates: components["schemas"]["CheckpointBranchComparisonPreviewCandidate"][];
+        };
+        /** CheckpointBranchComparisonPreviewResponse */
+        CheckpointBranchComparisonPreviewResponse: {
+            /** Workflowid */
+            workflowId: string;
+            /** Objective */
+            objective: string;
+            /** Rubricid */
+            rubricId: string;
+            /** Selectedruncount */
+            selectedRunCount: number;
+            /** Reuseexistingcount */
+            reuseExistingCount: number;
+            /**
+             * Willlaunchnewwork
+             * @default false
+             */
+            willLaunchNewWork: boolean;
+            /**
+             * Authorizesnewinference
+             * @default false
+             */
+            authorizesNewInference: boolean;
+            /**
+             * Nocartesianexpansion
+             * @default true
+             */
+            noCartesianExpansion: boolean;
+            /** Creationpath */
+            creationPath?: string[];
+            /** Costdeltas */
+            costDeltas?: {
+                [key: string]: unknown;
+            };
+            /** Privacychanges */
+            privacyChanges?: string[];
+            /** Authoritychanges */
+            authorityChanges?: string[];
+            /** Candidates */
+            candidates?: {
+                [key: string]: unknown;
+            }[];
+            /** Previewdigest */
+            previewDigest: string;
+        };
         /** CheckpointBranchContinueRequest */
         CheckpointBranchContinueRequest: {
             /** Label */
@@ -9734,167 +9741,6 @@ export interface components {
             login: string;
         } & {
             [key: string]: unknown;
-        };
-        /** JiraBoard */
-        JiraBoard: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Projectkey */
-            projectKey: string;
-            /** Type */
-            type?: string | null;
-        };
-        /** JiraBoardColumns */
-        JiraBoardColumns: {
-            board: components["schemas"]["JiraBoard"];
-            /** Columns */
-            columns: components["schemas"]["JiraColumn"][];
-        };
-        /** JiraBoardIssues */
-        JiraBoardIssues: {
-            /** Boardid */
-            boardId: string;
-            /** Columns */
-            columns: components["schemas"]["JiraColumn"][];
-            /** Itemsbycolumn */
-            itemsByColumn?: {
-                [key: string]: components["schemas"]["JiraIssueSummary"][];
-            };
-            /** Unmappeditems */
-            unmappedItems?: components["schemas"]["JiraIssueSummary"][];
-        };
-        /** JiraColumn */
-        JiraColumn: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Order */
-            order: number;
-            /**
-             * Count
-             * @default 0
-             */
-            count: number;
-            /** Statusids */
-            statusIds?: string[];
-        };
-        /** JiraConnectionVerification */
-        JiraConnectionVerification: {
-            /** Ok */
-            ok: boolean;
-            /** Accountid */
-            accountId?: string | null;
-            /** Displayname */
-            displayName?: string | null;
-            /** Projectkey */
-            projectKey?: string | null;
-            /** Projectname */
-            projectName?: string | null;
-        };
-        /** JiraIssueAttachment */
-        JiraIssueAttachment: {
-            /** Id */
-            id: string;
-            /** Filename */
-            filename: string;
-            /** Contenttype */
-            contentType: string;
-            /** Sizebytes */
-            sizeBytes?: number | null;
-            /** Downloadurl */
-            downloadUrl: string;
-        };
-        /** JiraIssueColumn */
-        JiraIssueColumn: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-        };
-        /** JiraIssueDetail */
-        JiraIssueDetail: {
-            /** Issuekey */
-            issueKey: string;
-            /** Url */
-            url?: string | null;
-            /** Summary */
-            summary: string;
-            /** Issuetype */
-            issueType?: string | null;
-            column?: components["schemas"]["JiraIssueColumn"] | null;
-            status?: components["schemas"]["JiraIssueStatus"] | null;
-            /**
-             * Descriptiontext
-             * @default
-             */
-            descriptionText: string;
-            /**
-             * Acceptancecriteriatext
-             * @default
-             */
-            acceptanceCriteriaText: string;
-            /** Attachments */
-            attachments?: components["schemas"]["JiraIssueAttachment"][];
-            recommendedImports: components["schemas"]["JiraIssueRecommendations"];
-        };
-        /** JiraIssueRecommendations */
-        JiraIssueRecommendations: {
-            /** Presetinstructions */
-            presetInstructions: string;
-            /** Stepinstructions */
-            stepInstructions: string;
-        };
-        /** JiraIssueStatus */
-        JiraIssueStatus: {
-            /** Id */
-            id?: string | null;
-            /** Name */
-            name?: string | null;
-        };
-        /** JiraIssueSummary */
-        JiraIssueSummary: {
-            /** Issuekey */
-            issueKey: string;
-            /** Summary */
-            summary: string;
-            /** Issuetype */
-            issueType?: string | null;
-            /** Statusid */
-            statusId?: string | null;
-            /** Statusname */
-            statusName?: string | null;
-            /** Assignee */
-            assignee?: string | null;
-            /** Updatedat */
-            updatedAt?: string | null;
-            /** Columnid */
-            columnId: string;
-        };
-        /** JiraListResponse[JiraBoard] */
-        JiraListResponse_JiraBoard_: {
-            /** Items */
-            items: components["schemas"]["JiraBoard"][];
-            /** Projectkey */
-            projectKey?: string | null;
-        };
-        /** JiraListResponse[JiraProject] */
-        JiraListResponse_JiraProject_: {
-            /** Items */
-            items: components["schemas"]["JiraProject"][];
-            /** Projectkey */
-            projectKey?: string | null;
-        };
-        /** JiraProject */
-        JiraProject: {
-            /** Projectkey */
-            projectKey: string;
-            /** Name */
-            name: string;
-            /** Id */
-            id?: string | null;
         };
         /** LaunchPolicyReadiness */
         LaunchPolicyReadiness: {
@@ -14852,219 +14698,6 @@ export interface operations {
             };
         };
     };
-    verify_connection_api_jira_connections_verify_get: {
-        parameters: {
-            query?: {
-                projectKey?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JiraConnectionVerification"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_projects_api_jira_projects_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JiraListResponse_JiraProject_"];
-                };
-            };
-        };
-    };
-    list_project_boards_api_jira_projects__project_key__boards_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_key: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JiraListResponse_JiraBoard_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_board_columns_api_jira_boards__board_id__columns_get: {
-        parameters: {
-            query?: {
-                projectKey?: string | null;
-            };
-            header?: never;
-            path: {
-                board_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JiraBoardColumns"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_board_issues_api_jira_boards__board_id__issues_get: {
-        parameters: {
-            query?: {
-                q?: string | null;
-                projectKey?: string | null;
-            };
-            header?: never;
-            path: {
-                board_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JiraBoardIssues"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_issue_api_jira_issues__issue_key__get: {
-        parameters: {
-            query?: {
-                boardId?: string | null;
-                projectKey?: string | null;
-            };
-            header?: never;
-            path: {
-                issue_key: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JiraIssueDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    download_issue_attachment_api_jira_issues__issue_key__attachments__attachment_id__content_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                issue_key: string;
-                attachment_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_current_user_profile_me_get: {
         parameters: {
             query?: never;
@@ -18630,10 +18263,47 @@ export interface operations {
             };
         };
     };
+    preview_candidate_comparison_api_executions__workflow_id__checkpoint_branches_comparison_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchComparisonPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchComparisonPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     compare_checkpoint_branches_api_executions__workflow_id__checkpoint_branches__branch_id__compare_get: {
         parameters: {
             query: {
                 against: string;
+                objective?: string;
+                rubricId?: string;
             };
             header?: never;
             path: {

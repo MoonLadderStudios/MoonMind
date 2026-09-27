@@ -24,6 +24,7 @@ with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
 
 WORKFLOW_NAME = "MoonMind.OAuthSession"
+OAUTH_CREDENTIAL_VALIDATION_WORKFLOW_NAME = "MoonMind.OAuthCredentialValidation"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 RUNNER_ACTIVITY_TASK_QUEUE = "mm.activity.agent_runtime"
 
@@ -34,6 +35,11 @@ OAUTH_CREDENTIAL_MAINTENANCE_LEASE_PATCH = (
 OAUTH_CREDENTIAL_MAINTENANCE_ACTIVITY_PATCH = (
     "oauth-session-credential-maintenance-activity-v1"
 )
+OAUTH_FINAL_STATUS_AFTER_PREFLIGHT_PATCH = "oauth-session-final-status-after-preflight-v1"
+OAUTH_HOST_PREFLIGHT_REQUIRES_READY_PATCH = (
+    "oauth-session-host-preflight-requires-ready-v1"
+)
+OAUTH_DURABLE_TERMINAL_STATUS_PATCH = "oauth-session-durable-terminal-status-v1"
 
 # ---------------------------------------------------------------------------
 # Input / Output types
@@ -371,8 +377,12 @@ class MoonMindOAuthSessionWorkflow:
             )
 
         if self._api_finalize_succeeded:
-            await self._update_status("succeeded")
-            return await self._finish(
+            final_status_after_preflight = workflow.patched(
+                OAUTH_FINAL_STATUS_AFTER_PREFLIGHT_PATCH
+            )
+            if not final_status_after_preflight:
+                await self._update_status("succeeded")
+            output = await self._finish(
                 OAuthSessionOutput(
                     session_id=self._session_id,
                     status="succeeded",
@@ -380,6 +390,9 @@ class MoonMindOAuthSessionWorkflow:
                 ),
                 revalidate_bound_host=True,
             )
+            if final_status_after_preflight and output["status"] == "succeeded":
+                await self._update_status("succeeded")
+            return output
 
         # Step 6: Finalize — verify and register
         await self._update_status("verifying")
@@ -417,9 +430,12 @@ class MoonMindOAuthSessionWorkflow:
                     ),
                 )
 
-                await self._update_status("succeeded")
-
-                return await self._finish(
+                final_status_after_preflight = workflow.patched(
+                    OAUTH_FINAL_STATUS_AFTER_PREFLIGHT_PATCH
+                )
+                if not final_status_after_preflight:
+                    await self._update_status("succeeded")
+                output = await self._finish(
                     OAuthSessionOutput(
                         session_id=self._session_id,
                         status="succeeded",
@@ -427,6 +443,9 @@ class MoonMindOAuthSessionWorkflow:
                     ),
                     revalidate_bound_host=True,
                 )
+                if final_status_after_preflight and output["status"] == "succeeded":
+                    await self._update_status("succeeded")
+                return output
             else:
                 reason = verify_result.get("reason", "unknown")
                 await self._mark_failed(f"Volume verification failed: {reason}")
@@ -561,7 +580,7 @@ class MoonMindOAuthSessionWorkflow:
         safe_to_release = True
         if revalidate_bound_host and self._maintenance_lease_acquired:
             try:
-                await workflow.execute_activity(
+                validation = await workflow.execute_activity(
                     "oauth_session.revalidate_bound_host",
                     {
                         "session_id": self._session_id,
@@ -570,11 +589,34 @@ class MoonMindOAuthSessionWorkflow:
                         "provider_lease_id": self._maintenance_lease_id,
                     },
                     task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
-                    start_to_close_timeout=timedelta(seconds=180),
+                    start_to_close_timeout=timedelta(seconds=210),
                     retry_policy=RetryPolicy(
                         initial_interval=timedelta(seconds=3), maximum_attempts=3
                     ),
                 )
+                validation_status = validation.get("status")
+                require_ready = workflow.patched(
+                    OAUTH_HOST_PREFLIGHT_REQUIRES_READY_PATCH
+                )
+                probe_ready = (
+                    validation_status == "ready"
+                    and validation.get("validation_mode") == "credential_only"
+                )
+                if validation_status in {
+                    "credential_invalid",
+                    "validation_unavailable",
+                } or (require_ready and not probe_ready):
+                    failure_reason = (
+                        "Bound host OAuth credential validation failed"
+                        if validation_status == "credential_invalid"
+                        else "Bound host credential preflight unavailable"
+                    )
+                    await self._mark_failed(failure_reason)
+                    output = OAuthSessionOutput(
+                        session_id=self._session_id,
+                        status="failed",
+                        failure_reason=failure_reason,
+                    )
             except Exception as exc:
                 safe_to_release = False
                 failure_reason = _redact_workflow_failure(
@@ -592,6 +634,9 @@ class MoonMindOAuthSessionWorkflow:
 
     async def _update_status(self, status: str) -> None:
         """Update the session status in the database via activity."""
+        terminal = status in {"succeeded", "cancelled", "expired"} and workflow.patched(
+            OAUTH_DURABLE_TERMINAL_STATUS_PATCH
+        )
         try:
             await workflow.execute_activity(
                 "oauth_session.update_status",
@@ -600,10 +645,13 @@ class MoonMindOAuthSessionWorkflow:
                 start_to_close_timeout=timedelta(seconds=15),
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=1),
-                    maximum_attempts=3,
+                    maximum_interval=timedelta(seconds=30),
+                    maximum_attempts=0 if terminal else 3,
                 ),
             )
         except Exception:
+            if terminal:
+                raise
             workflow.logger.warning(
                 "Failed to update session %s status to %s",
                 self._session_id,
@@ -636,6 +684,7 @@ class MoonMindOAuthSessionWorkflow:
 
     async def _mark_failed(self, reason: str) -> None:
         """Mark the session as failed with a reason."""
+        terminal = workflow.patched(OAUTH_DURABLE_TERMINAL_STATUS_PATCH)
         try:
             await workflow.execute_activity(
                 "oauth_session.mark_failed",
@@ -644,12 +693,32 @@ class MoonMindOAuthSessionWorkflow:
                 start_to_close_timeout=timedelta(seconds=15),
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=1),
-                    maximum_attempts=3,
+                    maximum_interval=timedelta(seconds=30),
+                    maximum_attempts=0 if terminal else 3,
                 ),
             )
         except Exception:
+            if terminal:
+                raise
             workflow.logger.warning(
                 "Failed to mark session %s as failed",
                 self._session_id,
                 exc_info=True,
             )
+
+
+@workflow.defn(name=OAUTH_CREDENTIAL_VALIDATION_WORKFLOW_NAME)
+class MoonMindOAuthCredentialValidationWorkflow:
+    """Run the existing credential-only host probe for a saved profile."""
+
+    @workflow.run
+    async def run(self, request: dict[str, str]) -> dict[str, Any]:
+        return await workflow.execute_activity(
+            "oauth_session.revalidate_bound_host",
+            request,
+            task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
+            start_to_close_timeout=timedelta(seconds=210),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=3), maximum_attempts=3
+            ),
+        )

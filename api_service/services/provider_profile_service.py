@@ -342,7 +342,10 @@ FIRST_PARTY_OAUTH_PROFILES: dict[tuple[str, str], FirstPartyOAuthProfile] = {
         provider_id="anthropic",
         label_prefix="Claude",
         auth_strategy="claude_credential_methods",
-        home_path_keys=("CLAUDE_HOME",),
+        # The pinned Claude Code CLI ignores CLAUDE_HOME; CLAUDE_CONFIG_DIR
+        # is the supported steering variable, so finalized profiles persist
+        # both (and disconnect clears both).
+        home_path_keys=("CLAUDE_HOME", "CLAUDE_CONFIG_DIR"),
     ),
     ("codex_cli", "openai"): FirstPartyOAuthProfile(
         runtime_id="codex_cli",

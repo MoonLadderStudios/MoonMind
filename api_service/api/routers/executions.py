@@ -195,6 +195,8 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchArchiveRequest,
     CheckpointBranchApiSourceModel,
     CheckpointBranchCompareResponse,
+    CheckpointBranchComparisonPreviewRequest,
+    CheckpointBranchComparisonPreviewResponse,
     CheckpointBranchContinueRequest,
     CheckpointBranchCreateRequest,
     CheckpointBranchForkRequest,
@@ -320,7 +322,6 @@ from moonmind.workflows.executions.execution_contract import (
     allows_repository_publish_for_skill_context,
     build_authoritative_workflow_input_snapshot,
     is_non_repository_side_effect_skill,
-    is_self_managed_publish_skill,
     reject_removed_follow_up_fields,
     reject_retired_vector_fields,
     reject_workflow_capability_identity_versions,
@@ -1454,24 +1455,228 @@ def _bound_branch_follow_up_retrieval(
     return None
 
 
+# MoonLadderStudios/MoonMind#2215: the comparison report applies one explicit
+# rubric against one explicit objective. Deterministic gate verdicts and
+# authoritative output evidence outrank unsupported opinion, so the report only
+# ever names a best *observed* candidate and never a universal quality claim.
+_COMPARISON_DEFAULT_RUBRIC_ID = "checkpoint-branch-gates"
+_COMPARISON_PASS_VERDICTS = frozenset(
+    {
+        "pass",
+        "passed",
+        "success",
+        "succeeded",
+        "promotable",
+        "promoted",
+        # MoonLadderStudios/MoonMind#2215: persisted verifier vocabulary from
+        # CheckpointBranchService.record_remediation_verification, read when
+        # promotion gate evidence is absent.
+        "fully_implemented",
+    }
+)
+_COMPARISON_FAIL_VERDICTS = frozenset(
+    {
+        "fail",
+        "failed",
+        "failure",
+        "blocked",
+        "rejected",
+        "error",
+        "canceled",
+        "cancelled",
+        # MoonLadderStudios/MoonMind#2215: persisted verifier vocabulary; a
+        # completed verification that did not fully implement the head, or
+        # one whose workspace was contaminated mid-verification, is observed
+        # evidence against selecting that candidate.
+        "additional_work_needed",
+        "remediation_verifier_contamination",
+    }
+)
+_COMPARISON_INCOMPLETE_STATES = frozenset({"failed", "blocked", "canceled"})
+_COMPARISON_OBSERVED_COST_KEYS = (
+    "observedCostUsd",
+    "observed_cost_usd",
+    "costUsd",
+    "cost_usd",
+    "totalCostUsd",
+    "total_cost_usd",
+    "mm_cost_usd",
+)
+_COMPARISON_ESTIMATED_COST_KEYS = (
+    "costEstimateUsd",
+    "cost_estimate_usd",
+    "estimatedCostUsd",
+    "estimated_cost_usd",
+    "mm_cost_estimate_usd",
+    "moonmind.cost_estimate_usd",
+)
+_COMPARISON_MEASUREMENT_LIMITS = (
+    "deterministic_tests_and_authoritative_output_evidence_outrank_unsupported_opinion",
+    "best_observed_candidate_is_not_a_universal_quality_or_security_claim",
+    "no_universal_scoring_service",
+    "no_automatic_promotion_deploy_or_publication",
+)
+# MoonLadderStudios/MoonMind#2215: only these workspace policies start a
+# requested run from an isolated baseline. An omitted policy or
+# continue_from_previous_execution reuses previous execution state, so the
+# preview must not attest isolation for it.
+_COMPARISON_PREVIEW_ISOLATING_WORKSPACE_POLICIES = frozenset(
+    {
+        "restore_pre_execution",
+        "apply_previous_execution_diff_to_clean_baseline",
+        "start_from_last_passed_commit",
+        "fresh_branch_from_source",
+    }
+)
+
+
+def _comparison_cost_value(evidence: Mapping[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = evidence.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                return float(value.strip())
+            except ValueError:
+                continue
+    return None
+
+
+def _comparison_candidate_costs(
+    branch: WorkflowCheckpointBranch,
+) -> dict[str, float | None]:
+    evidence: dict[str, Any] = {}
+    for source in (branch.promotion_evidence or {}, branch.diagnostics or {}):
+        if isinstance(source, Mapping):
+            for key, value in source.items():
+                evidence.setdefault(key, value)
+    # MoonLadderStudios/MoonMind#2215: ordinary create/continue/fork admission
+    # persists the enforced budget under diagnostics["runtimeSelection"], not
+    # at the diagnostics top level; traverse that canonical producer shape
+    # before declaring the bound unavailable.
+    runtime_selection = (branch.diagnostics or {}).get("runtimeSelection")
+    if isinstance(runtime_selection, Mapping):
+        for key, value in runtime_selection.items():
+            evidence.setdefault(key, value)
+    gate_evidence = evidence.get("gateEvidence")
+    if isinstance(gate_evidence, Mapping):
+        for key, value in gate_evidence.items():
+            evidence.setdefault(key, value)
+    observed = _comparison_cost_value(evidence, _COMPARISON_OBSERVED_COST_KEYS)
+    estimated = _comparison_cost_value(evidence, _COMPARISON_ESTIMATED_COST_KEYS)
+    budget_bound = evidence.get("maxBudgetUsd")
+    if isinstance(budget_bound, bool) or budget_bound is None:
+        budget_bound_value: float | None = None
+    elif isinstance(budget_bound, (int, float)):
+        budget_bound_value = float(budget_bound)
+    else:
+        try:
+            budget_bound_value = float(str(budget_bound).strip())
+        except ValueError:
+            budget_bound_value = None
+    return {
+        "observedUsd": observed,
+        "estimatedUsd": estimated,
+        "budgetBoundUsd": budget_bound_value,
+    }
+
+
+def _comparison_winner(
+    *,
+    branch_id: str,
+    against_branch_id: str,
+    branch_state: str,
+    against_state: str,
+    branch_head: str | None,
+    against_head: str | None,
+    branch_verdict: str,
+    against_verdict: str,
+) -> dict[str, Any]:
+    if not branch_head or not against_head:
+        return {
+            "candidate": "none",
+            "reason": "head_evidence_missing",
+            "universalClaim": False,
+        }
+    if branch_state in _COMPARISON_INCOMPLETE_STATES or against_state in (
+        _COMPARISON_INCOMPLETE_STATES
+    ):
+        return {
+            "candidate": "none",
+            "reason": "candidate_failed_or_incomplete",
+            "universalClaim": False,
+        }
+    branch_side = branch_verdict.strip().lower()
+    against_side = against_verdict.strip().lower()
+    if branch_side in _COMPARISON_PASS_VERDICTS and against_side in (
+        _COMPARISON_FAIL_VERDICTS
+    ):
+        return {
+            "candidate": branch_id,
+            "reason": "best_observed_gate_verdict_pair",
+            "universalClaim": False,
+        }
+    if against_side in _COMPARISON_PASS_VERDICTS and branch_side in (
+        _COMPARISON_FAIL_VERDICTS
+    ):
+        return {
+            "candidate": against_branch_id,
+            "reason": "best_observed_gate_verdict_pair",
+            "universalClaim": False,
+        }
+    if branch_side == "unknown" or against_side == "unknown":
+        return {
+            "candidate": "none",
+            "reason": "unknown_gate_verdicts",
+            "universalClaim": False,
+        }
+    return {
+        "candidate": "none",
+        "reason": "insufficient_discriminating_evidence",
+        "universalClaim": False,
+    }
+
+
+def _comparison_gate_verdict(
+    branch: WorkflowCheckpointBranch,
+) -> tuple[str, str]:
+    """Resolve a candidate's gate verdict and where it was observed.
+
+    Promotion gate evidence decides when present. Otherwise the persisted
+    verifier result from
+    ``CheckpointBranchService.record_remediation_verification``
+    (``latest_verification_verdict``/``latest_verification_ref``) is the
+    authoritative verification for the normal pre-promotion path; only when
+    both are absent is the verdict honestly ``unknown``
+    (MoonLadderStudios/MoonMind#2215).
+    """
+
+    gate_evidence = (branch.promotion_evidence or {}).get("gateEvidence")
+    if isinstance(gate_evidence, Mapping):
+        verdict = str(
+            gate_evidence.get("verdict") or gate_evidence.get("status") or ""
+        ).strip()
+        if verdict and verdict.lower() != "unknown":
+            return verdict, "promotion_gate_evidence"
+    persisted = str(getattr(branch, "latest_verification_verdict", None) or "").strip()
+    if persisted:
+        return persisted, "persisted_verification_verdict"
+    return "unknown", "unavailable"
+
+
 def _branch_comparison_record(
     *,
     workflow_id: str,
     branch: WorkflowCheckpointBranch,
     other: WorkflowCheckpointBranch,
+    objective: str = "",
+    rubric_id: str = _COMPARISON_DEFAULT_RUBRIC_ID,
 ) -> dict[str, Any]:
-    branch_gate_evidence = (branch.promotion_evidence or {}).get("gateEvidence") or {}
-    other_gate_evidence = (other.promotion_evidence or {}).get("gateEvidence") or {}
-    branch_gate_verdict = str(
-        branch_gate_evidence.get("verdict")
-        or branch_gate_evidence.get("status")
-        or "unknown"
-    )
-    other_gate_verdict = str(
-        other_gate_evidence.get("verdict")
-        or other_gate_evidence.get("status")
-        or "unknown"
-    )
+    branch_gate_verdict, branch_verdict_provenance = _comparison_gate_verdict(branch)
+    other_gate_verdict, other_verdict_provenance = _comparison_gate_verdict(other)
     summary_text = (
         f"Branch {branch.branch_id} is {branch.state}; "
         f"comparison branch {other.branch_id} is {other.state}. "
@@ -1588,14 +1793,143 @@ def _branch_comparison_record(
         }.items()
         if value
     }
+    # MoonLadderStudios/MoonMind#2215: one explicit rubric against one explicit
+    # objective, with honest unavailable/incomparable states. Candidate identity
+    # is preserved; the report performs no inference, promotion, deployment, or
+    # publication of its own.
+    normalized_objective = str(objective or "").strip()[:500]
+    normalized_rubric_id = (
+        str(rubric_id or "").strip()[:200] or _COMPARISON_DEFAULT_RUBRIC_ID
+    )
+    candidates = [
+        {
+            "candidateId": branch.branch_id,
+            "workflowId": workflow_id,
+            "branchState": branch.state,
+            "headStepExecutionId": branch.current_head_step_execution_id,
+            "headCheckpointRef": branch.current_head_checkpoint_ref,
+            "headCommit": branch.current_head_commit,
+            "gateVerdict": branch_gate_verdict,
+            "gateVerdictProvenance": branch_verdict_provenance,
+        },
+        {
+            "candidateId": other.branch_id,
+            "workflowId": workflow_id,
+            "branchState": other.state,
+            "headStepExecutionId": other.current_head_step_execution_id,
+            "headCheckpointRef": other.current_head_checkpoint_ref,
+            "headCommit": other.current_head_commit,
+            "gateVerdict": other_gate_verdict,
+            "gateVerdictProvenance": other_verdict_provenance,
+        },
+    ]
+    source_differences = [
+        {"field": field, "branch": left, "against": right}
+        for field, left, right in (
+            ("sourceCheckpointRef", branch.source_checkpoint_ref, other.source_checkpoint_ref),
+            ("sourceCheckpointDigest", branch.source_checkpoint_digest, other.source_checkpoint_digest),
+            ("headCheckpointRef", branch.current_head_checkpoint_ref, other.current_head_checkpoint_ref),
+            ("headCommit", branch.current_head_commit, other.current_head_commit),
+            ("branchState", branch.state, other.state),
+        )
+        if (left or None) != (right or None)
+    ]
+    branch_costs = _comparison_candidate_costs(branch)
+    against_costs = _comparison_candidate_costs(other)
+    missing_evidence = [
+        code
+        for code, absent in (
+            (
+                "comparison_objective_unspecified",
+                not normalized_objective,
+            ),
+            (
+                "head_evidence_missing",
+                not branch.current_head_step_execution_id
+                or not other.current_head_step_execution_id,
+            ),
+            (
+                "gate_verdict_unavailable",
+                branch_gate_verdict == "unknown" or other_gate_verdict == "unknown",
+            ),
+            (
+                "cost_provenance_unavailable",
+                (branch_costs["observedUsd"] is None and branch_costs["estimatedUsd"] is None)
+                or (
+                    against_costs["observedUsd"] is None
+                    and against_costs["estimatedUsd"] is None
+                ),
+            ),
+        )
+        if absent
+    ]
+    comparability = (
+        {
+            "comparable": False,
+            "reason": "head_evidence_missing",
+        }
+        if "head_evidence_missing" in missing_evidence
+        else {
+            "comparable": True,
+            "reason": "explicit_candidates_resolved",
+        }
+    )
+    winner = _comparison_winner(
+        branch_id=branch.branch_id,
+        against_branch_id=other.branch_id,
+        branch_state=branch.state,
+        against_state=other.state,
+        branch_head=branch.current_head_step_execution_id,
+        against_head=other.current_head_step_execution_id,
+        branch_verdict=branch_gate_verdict,
+        against_verdict=other_gate_verdict,
+    )
     record_payload = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "recordType": "checkpoint_branch_comparison",
         "workflowId": workflow_id,
         "branchId": branch.branch_id,
         "againstBranchId": other.branch_id,
         "branchIds": [branch.branch_id, other.branch_id],
         "baseCheckpointRef": base_checkpoint_ref,
+        "objective": normalized_objective or "unspecified",
+        "rubricId": normalized_rubric_id,
+        "candidates": candidates,
+        "sourceDifferences": source_differences,
+        "missingEvidence": missing_evidence,
+        "measurementLimits": list(_COMPARISON_MEASUREMENT_LIMITS),
+        "costs": {
+            "branch": branch_costs,
+            "against": against_costs,
+            "provenance": "promotion_evidence_and_branch_diagnostics",
+        },
+        "comparability": comparability,
+        "winner": winner,
+        "sideEffects": {
+            "launchedNewWork": False,
+            "changedDefaults": False,
+            "deployed": False,
+            "promotedBranch": False,
+            "publishedCode": False,
+            "newInferenceAuthorized": False,
+        },
+        "provenance": {
+            "inputRefs": [
+                value
+                for value in (
+                    branch.source_checkpoint_ref,
+                    branch.current_head_checkpoint_ref,
+                    other.source_checkpoint_ref,
+                    other.current_head_checkpoint_ref,
+                )
+                if value
+            ],
+            "rubricId": normalized_rubric_id,
+            "costProvenance": "promotion_evidence_and_branch_diagnostics",
+            "store": "workflow_checkpoint_branch_operation:checkpoint_branch.compare",
+            "newStore": False,
+            "newEngine": False,
+        },
         "summaryText": summary_text,
         "summary": summary,
         "quality": quality,
@@ -9289,11 +9623,10 @@ def _resolve_workflow_publish_payload(
         and not allow_repository_publish
     ):
         requested_mode = None
-    if (
-        requested_mode is None
-        or (isinstance(requested_mode, str) and not requested_mode.strip())
-    ) and is_self_managed_publish_skill(skill_id):
-        requested_mode = "none"
+    # Omission for self-managed (auto-capable) skills stays omitted so the
+    # resolver applies the admitted Skill default (auto). It must never be
+    # rewritten to an explicit "none": explicit None is never promoted to
+    # Auto (PUBLISH-004) and would fail before mutation.
     try:
         publish_mode = resolve_publish_mode_for_skill(
             skill_id,
@@ -16534,6 +16867,150 @@ async def fork_checkpoint_branch(
     return _branch_to_model(forked)
 
 
+@router.post(
+    "/{workflow_id}/checkpoint-branches/comparison-preview",
+    response_model=CheckpointBranchComparisonPreviewResponse,
+)
+async def preview_candidate_comparison(
+    workflow_id: str,
+    payload: CheckpointBranchComparisonPreviewRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchComparisonPreviewResponse:
+    """Preview comparison-requested candidate generation without side effects.
+
+    MoonLadderStudios/MoonMind#2215: a request to compare saved results never
+    authorizes new inference, and requested runs reuse ordinary branch
+    admission with explicit bounded configurations, one shared source intent,
+    and the existing provider/resource budgets. The preview performs no
+    writes, launches no work, and expands no candidate matrix, so duplicate or
+    interrupted previews cannot duplicate completed compute.
+    """
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    objective = payload.objective.strip()
+    candidate_previews: list[dict[str, Any]] = []
+    total_budget = 0.0
+    per_candidate_budget: dict[str, float] = {}
+    for candidate in payload.candidates:
+        if candidate.branch_id:
+            branch = await _load_checkpoint_branch(
+                session, workflow_id=workflow_id, branch_id=candidate.branch_id
+            )
+            if not branch.current_head_step_execution_id:
+                # MoonLadderStudios/MoonMind#2215: a branch whose head step
+                # has not produced candidate output offers no saved result
+                # to compare; counting it as reusable would approve a plan
+                # that cannot yield the promised comparison.
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "comparison_branch_head_missing",
+                        "reason": "comparison_branch_without_completed_result",
+                        "candidateId": candidate.candidate_id,
+                        "branchId": branch.branch_id,
+                    },
+                )
+            candidate_previews.append(
+                {
+                    "candidateId": candidate.candidate_id,
+                    "reusesBranch": True,
+                    "branchId": branch.branch_id,
+                    "branchState": branch.state,
+                    "headStepExecutionId": branch.current_head_step_execution_id,
+                }
+            )
+            per_candidate_budget[candidate.candidate_id] = 0.0
+            continue
+        budget = float(candidate.max_budget_usd or 0.0)
+        total_budget += budget
+        per_candidate_budget[candidate.candidate_id] = budget
+        candidate_previews.append(
+            {
+                "candidateId": candidate.candidate_id,
+                "reusesBranch": False,
+                "sourceIntentRef": candidate.source_intent_ref,
+                "maxBudgetUsd": budget,
+                "workspacePolicy": candidate.workspace_policy,
+                "workspaceIsolationGuaranteed": (
+                    candidate.workspace_policy
+                    in _COMPARISON_PREVIEW_ISOLATING_WORKSPACE_POLICIES
+                ),
+                "runtimeContextPolicy": candidate.runtime_context_policy
+                or "fresh_agent_run",
+                "providerProfileRef": candidate.provider_profile_ref,
+                "model": candidate.model,
+                "effort": candidate.effort,
+            }
+        )
+    selected_run_count = sum(
+        0 if item["reusesBranch"] else 1 for item in candidate_previews
+    )
+    if selected_run_count:
+        requested_policies = [
+            candidate.workspace_policy
+            for candidate in payload.candidates
+            if not candidate.branch_id
+        ]
+        if all(
+            policy in _COMPARISON_PREVIEW_ISOLATING_WORKSPACE_POLICIES
+            for policy in requested_policies
+        ):
+            privacy_changes = [
+                "isolated_workspace_per_requested_run",
+                "no_shared_mutable_oauth_home",
+                "no_widened_repository_access",
+            ]
+        else:
+            privacy_changes = [
+                "requested_run_workspace_policy_not_isolated",
+                "no_shared_mutable_oauth_home",
+                "no_widened_repository_access",
+            ]
+        authority_changes = [
+            "fresh_agent_run_per_requested_run",
+            "existing_provider_resource_budgets",
+            "no_promotion_or_publication_without_separate_authorization",
+        ]
+    else:
+        privacy_changes = ["no_changes_for_saved_result_comparison"]
+        authority_changes = ["no_changes_for_saved_result_comparison"]
+    preview_digest = _operation_digest(
+        {
+            "workflowId": workflow_id,
+            "objective": objective,
+            "rubricId": payload.rubric_id,
+            "allowNewRuns": payload.allow_new_runs,
+            "candidates": candidate_previews,
+        }
+    )
+    return CheckpointBranchComparisonPreviewResponse(
+        workflowId=workflow_id,
+        objective=objective,
+        rubricId=payload.rubric_id,
+        selectedRunCount=selected_run_count,
+        reuseExistingCount=len(candidate_previews) - selected_run_count,
+        willLaunchNewWork=False,
+        authorizesNewInference=False,
+        noCartesianExpansion=True,
+        creationPath=[
+            f"POST /api/executions/{workflow_id}/checkpoint-branches",
+            f"POST /api/executions/{workflow_id}/checkpoint-branches/"
+            "{branchId}/continue",
+            f"POST /api/executions/{workflow_id}/checkpoint-branches/"
+            "{branchId}/fork",
+        ],
+        costDeltas={
+            "totalMaxBudgetUsd": total_budget,
+            "perCandidateMaxBudgetUsd": per_candidate_budget,
+        },
+        privacyChanges=privacy_changes,
+        authorityChanges=authority_changes,
+        candidates=candidate_previews,
+        previewDigest=preview_digest,
+    )
+
+
 @router.get(
     "/{workflow_id}/checkpoint-branches/{branch_id}/compare",
     response_model=CheckpointBranchCompareResponse,
@@ -16542,6 +17019,8 @@ async def compare_checkpoint_branches(
     workflow_id: str,
     branch_id: str,
     against: str = Query(...),
+    objective: str = Query(default="", max_length=500),
+    rubric_id: str = Query(default="", alias="rubricId", max_length=200),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
@@ -16554,26 +17033,57 @@ async def compare_checkpoint_branches(
         session, workflow_id=workflow_id, branch_id=against
     )
     _require_comparable_checkpoint_lineage(branch, other)
+    normalized_rubric_param = str(rubric_id or "").strip()
+    if (
+        normalized_rubric_param
+        and normalized_rubric_param != _COMPARISON_DEFAULT_RUBRIC_ID
+    ):
+        # MoonLadderStudios/MoonMind#2215: the report only applies the gate
+        # verdict rules, so it must not claim provenance for a rubric it
+        # never loads or evaluates.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_rubric",
+                "reason": "unsupported_comparison_rubric",
+                "supportedRubricId": _COMPARISON_DEFAULT_RUBRIC_ID,
+            },
+        )
     comparison_record = _branch_comparison_record(
-        workflow_id=workflow_id, branch=branch, other=other
+        workflow_id=workflow_id,
+        branch=branch,
+        other=other,
+        objective=objective,
+        rubric_id=rubric_id,
     )
     request_digest = _operation_digest(
         {
             "workflowId": workflow_id,
             "branchId": branch.branch_id,
             "againstBranchId": other.branch_id,
+            "objective": comparison_record.get("objective") or "unspecified",
+            "rubricId": comparison_record.get("rubricId")
+            or _COMPARISON_DEFAULT_RUBRIC_ID,
         }
     )
     branch_head = _checkpoint_branch_head_identity(branch)
     other_head = _checkpoint_branch_head_identity(other)
     branch_promotion_evidence_digest = _operation_digest(branch.promotion_evidence or {})
     other_promotion_evidence_digest = _operation_digest(other.promotion_evidence or {})
+    # MoonLadderStudios/MoonMind#2215: cost evidence is consumed from branch
+    # diagnostics after the head is fixed, so the ledger identity must cover
+    # diagnostics too; otherwise a repeat comparison replays a stale payload.
+    branch_diagnostics_digest = _operation_digest(branch.diagnostics or {})
+    other_diagnostics_digest = _operation_digest(other.diagnostics or {})
     idempotency_key = (
         f"checkpoint_branch.compare:v{comparison_record.get('schemaVersion', 1)}:"
         f"{branch.branch_id}:{branch_head}:"
         f"promotion:{branch_promotion_evidence_digest}:"
+        f"diagnostics:{branch_diagnostics_digest}:"
         f"against:{other.branch_id}:{other_head}:"
-        f"promotion:{other_promotion_evidence_digest}"
+        f"promotion:{other_promotion_evidence_digest}:"
+        f"diagnostics:{other_diagnostics_digest}:"
+        f"objective:{request_digest}"
     )
     existing_op = await session.execute(
         select(WorkflowCheckpointBranchOperation).where(

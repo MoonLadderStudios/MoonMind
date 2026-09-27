@@ -2,9 +2,8 @@
 
 Source: MoonLadderStudios/MoonMind#3708 ([Omnigent control plane 7/11]).
 
-Covers fail-closed admission, the requirement that historical reads and cleanup
-stay available, and the incident cases where a missing WebSocket runtime
-capability and image-compatibility drift must be visible before admission.
+Covers fail-closed operational admission, the requirement that historical reads
+and cleanup stay available, and separate release-support diagnostics.
 """
 
 from __future__ import annotations
@@ -67,7 +66,9 @@ def test_historical_reads_and_cleanup_stay_available_even_when_blocked():
 
 
 def test_missing_websocket_capability_visible_and_blocks_admission():
-    readiness = evaluate_admission_readiness(_all_ready_inputs(websocket_available=False))
+    readiness = evaluate_admission_readiness(
+        _all_ready_inputs(websocket_available=False)
+    )
     assert readiness.admit_new is False
     assert ReadinessCapability.WEBSOCKET in readiness.blocking
     ws = readiness.capability(ReadinessCapability.WEBSOCKET)
@@ -75,26 +76,40 @@ def test_missing_websocket_capability_visible_and_blocks_admission():
     assert ws.detail  # actionable detail present
 
 
-def test_image_compatibility_drift_visible_before_admission():
-    readiness = evaluate_admission_readiness(_all_ready_inputs(exact_image_conformant=False))
-    assert readiness.admit_new is False
-    assert ReadinessCapability.EXACT_IMAGE in readiness.blocking
+def test_image_conformance_drift_is_visible_without_blocking_a_new_launch():
+    readiness = evaluate_admission_readiness(
+        _all_ready_inputs(exact_image_conformant=False)
+    )
+    assert readiness.admit_new is True
+    assert (
+        readiness.capability(ReadinessCapability.EXACT_IMAGE).state
+        is ReadinessState.NOT_READY
+    )
+    assert ReadinessCapability.EXACT_IMAGE not in readiness.blocking
 
 
-def test_stale_protected_live_evidence_blocks_admission():
+def test_stale_protected_live_evidence_does_not_block_local_launch():
     readiness = evaluate_admission_readiness(
         _all_ready_inputs(protected_live_evidence_age=timedelta(hours=48))
     )
-    assert readiness.admit_new is False
-    assert ReadinessCapability.PROTECTED_LIVE_EVIDENCE in readiness.blocking
+    assert readiness.admit_new is True
+    assert (
+        readiness.capability(ReadinessCapability.PROTECTED_LIVE_EVIDENCE).state
+        is ReadinessState.NOT_READY
+    )
+    assert ReadinessCapability.PROTECTED_LIVE_EVIDENCE not in readiness.blocking
 
 
-def test_stale_observation_freshness_blocks_admission():
+def test_stale_prior_observation_does_not_block_local_launch():
     readiness = evaluate_admission_readiness(
         _all_ready_inputs(observation_age=timedelta(hours=1))
     )
-    assert readiness.admit_new is False
-    assert ReadinessCapability.OBSERVATION_FRESHNESS in readiness.blocking
+    assert readiness.admit_new is True
+    assert (
+        readiness.capability(ReadinessCapability.OBSERVATION_FRESHNESS).state
+        is ReadinessState.NOT_READY
+    )
+    assert ReadinessCapability.OBSERVATION_FRESHNESS not in readiness.blocking
 
 
 def test_readiness_to_dict_is_bounded_and_serializable():

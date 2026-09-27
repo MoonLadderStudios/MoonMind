@@ -4,11 +4,11 @@
 **Viewpoint:** System / Feature Design View  
 **Status:** Proposed (legacy cutover §12 implemented; remainder desired behavior)  
 **Owners:** MoonMind Platform + Workflow Runtime + GitHub Integration  
-**Updated:** 2026-09-16\
+**Updated:** 2026-09-26\
 **Audience:** Workflow, preset, GitHub adapter, recovery, and dashboard contributors and operators  
 **Authority:** GitHub issue lifecycle labels, selection eligibility, attempt handoffs, and cross-deployment recovery behavior. Existing execution, checkpoint, publishing, and merge contracts retain their respective authority.  
 **Owning Surface:** Trusted GitHub issue operations and workflow terminal/reconciliation boundaries  
-**Related Implementation:** `moonmind/workflows/temporal/github_issue_lifecycle.py`, `moonmind/workflows/temporal/github_issue_legacy_cutover.py`, `moonmind/workflows/temporal/activities/github_issue_legacy_cutover_activities.py`, `moonmind/workflows/temporal/github_issue_search.py`, `moonmind/workflows/temporal/story_output_tools.py`, `moonmind/workflows/adapters/github_service.py`, and `api_service/data/presets/github-issue-*.yaml`. Legacy reconciliation behavior is specified in [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md).
+**Related Implementation:** `moonmind/workflows/temporal/github_issue_lifecycle.py`, `moonmind/workflows/temporal/github_issue_legacy_cutover.py`, `moonmind/workflows/temporal/activities/github_issue_legacy_cutover_activities.py`, `moonmind/workflows/temporal/github_issue_search.py`, `moonmind/workflows/temporal/github_issue_attempts.py`, `moonmind/workflows/temporal/github_issue_claim_recovery.py`, `moonmind/workflows/temporal/github_issue_retry_reset.py`, `moonmind/workflows/temporal/story_output_tools.py`, `moonmind/workflows/adapters/github_service.py`, `tools/reset_issue_retry_allowance.py`, and `api_service/data/presets/github-issue-*.yaml`. Legacy reconciliation behavior is specified in [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md).
 
 **Related Docs:** [Workflow Presets System](WorkflowPresetsSystem.md), [Workflow Publishing](WorkflowPublishing.md), [Checkpoint Branch System](CheckpointBranchSystem.md), [Workflow Remediation](WorkflowRemediation.md), [Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md), and [PR Merge Automation](PrMergeAutomation.md).
 
@@ -66,6 +66,19 @@ not proof of current writer status. A scan blocked by attempt ownership reports
 retrying. Removing a status label alone never releases an attempt. `selectedIssueAuthor`
 is present only after the candidate reservation succeeds.
 
+An idle search reports that it completed without selecting an issue, followed by
+how many matching candidates each cause blocked, largest first -- for example,
+"65 matching issues were blocked by historical attempt limits, 7 by lifecycle
+status, 1 by a prerequisite, and 1 by cooldown." Retry-history exclusions
+(`budget_exhausted`, `cooling_down`) keep their samples ahead of bare label
+rejections, and each sample carries the retry explanation: the allowance, every
+charged attempt with its recorded outcome, and how many of those never recorded
+a terminal outcome. `unfinishedAttemptAccounting` counts the budget exclusions
+that rest on such records. Author scope is validated before these checks, so
+including other authors never changes a budget exclusion, and an
+authenticated-author search whose candidates were blocked by retry history
+reports `retry_history_exclusions` rather than `no_eligible_self_authored_issue`.
+
 The existing configured `status: done` label may accompany verified completed closure. It is terminal presentation, not another open-work admission state. A closed issue with a not-planned disposition is not reported as successfully implemented. An open issue carrying `status: done` is inconsistent and is not silently treated as available.
 
 ### 2.1 State interpretation
@@ -104,7 +117,9 @@ The retry allowance bounds work attempts on one issue, so only attempts that cou
 
 Selection announces an attempt with the short `preparing` lease and holds that deadline until dispatch; the first execution renewal promotes the handoff to `active`. A handoff still reading `preparing` after its lease expired therefore never reached dispatch and could not have produced work -- the same fault, reached before the attempt could write it down. Nothing else resolves that record: reservation reclamation retires the advisory label and claims no terminal authority over another deployment's attempt, and the bounded reconciliation scan is scoped by lifecycle state, so the issue reads Available once the label is gone. Such a lapsed pre-dispatch announcement is therefore read the way `runtime_unavailable` is read: retained in lineage, not charged to the allowance, and carrying the same portable back-off from the instant its lease lapsed.
 
-An expired `active` attempt is not exempt. Its execution lease was granted, so GitHub evidence alone cannot prove that no agent ever ran, and an attempt that crashed mid-run must still consume the allowance; exempting it would let a crash loop retry without bound while repeatedly discarding unrecovered work. Proving that no runtime started requires the full controlling history, which is the evidence the local claim sweep uses to record the `runtime_unavailable` outcome. Recorded work -- a pull request, a saved branch, or a saved revision -- is likewise evidence about the issue, so an announcement carrying any still costs an attempt, as do version-1 handoffs, whose writers never agreed to an expiry, and every terminal outcome.
+An expired `active` attempt is not exempt. Its execution lease was granted, so GitHub evidence alone cannot prove that no agent ever ran, and an attempt that crashed mid-run must still consume the allowance; exempting it would let a crash loop retry without bound while repeatedly discarding unrecovered work. Proving that no runtime started requires the full controlling history, which is the evidence the local claim sweep uses to record the `runtime_unavailable` outcome -- including for an agent run that promoted the claim to `active` and then failed to launch, leaving no provider session or workspace. Recorded work -- a pull request, a saved branch, or a saved revision -- is likewise evidence about the issue, so an announcement carrying any still costs an attempt, as do version-1 handoffs, whose writers never agreed to an expiry, and every terminal outcome.
+
+Charging an attempt that never recorded a terminal outcome is not a claim that it failed. Retry decisions therefore name the allowance, each charged attempt and its outcome, and how many charged attempts are unfinished accounting (`in_progress` with no live lease). Reservation expiry ends ownership but does not finish that accounting: the owning deployment's claim sweep records the outcome from its execution evidence (section 6.1), and where that evidence is gone an operator records an audited retry reset (section 5.3).
 
 A workflow whose admitted finish target is a completed PR handoff may end successfully in Code review without an active implementation owner. A PR-and-merge parent can remain awaiting review under its existing contract. Lack of new code during that wait is not by itself a stalled attempt.
 
@@ -223,7 +238,7 @@ There is no `status: claiming` label or per-device status-label family. Extra la
 
 Fresh workflow IDs, device changes, and label removal do not reset the issue's automatic retry allowance. Admission evaluates linked attempt history and the applicable bounded policy. A continuation retains prior failures and no-progress evidence. Internal step retries are not separate issue attempts.
 
-An operator-authorized retry reset is recorded explicitly. Conflicting lineage or policy evidence fails to attention rather than inventing a fresh budget. Exact global retry-count enforcement is not claimed under simultaneous duplicate starts. It is likewise not claimed when attempt evidence was deleted without a tombstone: an Available issue with no observable attempt comments is indistinguishable from one that was never attempted, so admission treats it as no observable history and does not claim the shared retry/cooldown budget was verified. Strict-budget operators must rely on tombstones and explicit reset records, not on the absence of comments.
+An operator-authorized retry reset is recorded explicitly, as one released attempt record with the `retry_reset` outcome, posted by the authenticated operator account. It names who authorized it, when, why, and the attempts it supersedes. Trusted provenance is not reset authority: admission and the claim sweep honor a reset only when it was posted by the authenticated account the deployment itself posts as and its authorization names that account; a reset record from any other poster, including a collaborator or configured trusted poster, stays in lineage and resets nothing, and the retry explanation counts it in `unauthorizedResets`. Lineage is read in the order GitHub recorded it: the attempts a reset names that were recorded before it, and their back-offs, stay visible for prior-work assessment but are no longer charged. Every other attempt counts normally, including one recorded after the operator reviewed the history but before the reset was posted. A reset never releases an operator hold, and lifecycle tool inputs cannot mint one. `tools/reset_issue_retry_allowance.py` inventories the configured repository by default and writes nothing; it plans a reset only for issues whose exhausted allowance includes unfinished accounting (recorded outcomes need `--include-recorded-outcomes`), refuses live reservations, holds, and unreadable or conflicting evidence, and with `--apply --reason` re-verifies each plan against fresh GitHub evidence before posting and confirming the record. When the exhausted allowance is what sent the issue to Needs attention -- its latest attempt was finalized there with writers stopped and no allowance remaining -- the same authorized decision first resolves that attention through the `needs_attention -> available` guard and confirms it by read-back; a failed resolution posts no reset, so the command can simply be re-run. Attention that the retry history does not explain is refused as `attention_not_from_retry_budget` and left for its own resolution. The command never deletes or rewrites comments and touches no other labels. It exits 0 when every requested reset was recorded, 1 when `--apply` recorded nothing, and 2 when a reset could not be recorded or confirmed. Conflicting lineage or policy evidence fails to attention rather than inventing a fresh budget. Exact global retry-count enforcement is not claimed under simultaneous duplicate starts. It is likewise not claimed when attempt evidence was deleted without a tombstone: an Available issue with no observable attempt comments is indistinguishable from one that was never attempted, so admission treats it as no observable history and does not claim the shared retry/cooldown budget was verified. Strict-budget operators must rely on tombstones and explicit reset records, not on the absence of comments.
 
 ## 6. Failure handling and recovery
 
@@ -246,7 +261,13 @@ from permanently starving later issues. Shared lease decisions use GitHub only.
 The same route additionally rotates through at most 25 local claims, including
 claims whose advisory labels are missing. A failed controlling execution and all
 of its descendants must have been closed for at least five minutes before release
-is considered. For a small backlog with healthy services, verified no-work claims
+is considered. A completed owner is reconciled the same way when its attempt
+comment still records `in_progress`: with the owner and every descendant closed,
+no finalizer remains to record that outcome. A completed owner that already
+recorded a terminal handoff, such as awaiting review, keeps that journey. When
+Temporal no longer holds the controlling history, the sweep reports
+`execution_history_unavailable`; that accounting can then be finished only by an
+audited retry reset. For a small backlog with healthy services, verified no-work claims
 therefore become retryable on the next sweep after that grace period (normally
 five to ten minutes after terminal closure and runtime cleanup).
 Each claim has a 30-second observation/finalization budget; the sweep stops
@@ -386,6 +407,7 @@ Tests exercise three isolated deployments with no shared database, Temporal serv
 | Multiple competing or closed-unmerged PRs | No silent canonical selection, reopening, merge, or overwrite |
 | Private-only checkpoint | Cross-device continuation is not falsely offered as available |
 | Retry moves across devices | Prior failures, no-progress evidence, cooldown, and holds are retained |
+| Charged attempts never recorded an outcome | The rejection names the allowance, charged attempts, and unfinished accounting; the owner's sweep records outcomes from its evidence; an audited reset readmits the issue without deleting history |
 | Intentional cancellation | No automatic replacement is launched |
 | Deleted (detectable, for example lineage gap, label without handoff, or tombstone) or contradictory attempt evidence | Admission requests attention rather than inferring a clean slate. Sole-history deletion on an Available issue without a tombstone is indistinguishable from never-attempted and is an explicit limitation (§§4.2 and 5.3), not a needs-attention trigger |
 | GitHub outage, rate limit, or incomplete comment scan | No local-only claim or unsafe interpretation of missing evidence |

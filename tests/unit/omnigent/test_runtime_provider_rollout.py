@@ -249,7 +249,8 @@ def test_promoted_state_fails_closed_on_missing_readiness(
     assert expected_reason in decision.unavailable_reasons
 
 
-def test_missing_and_stale_support_evidence_deny_promotion():
+def test_missing_and_stale_support_evidence_deny_promotion(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
     policy = _policy({_CODEX_GATE: "true"})
     evidence_required = policy.model_copy(
         update={
@@ -297,7 +298,8 @@ def test_missing_and_stale_support_evidence_deny_promotion():
     assert fresh.state is RolloutState.new_work_default
 
 
-def test_a_recorded_non_pass_support_row_denies_promotion():
+def test_a_recorded_non_pass_support_row_denies_promotion(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
     """A present, unexpired row that admission refuses must still demote.
 
     MoonLadderStudios/MoonMind#3885 made ``failed``/``blocked``/``unavailable``/
@@ -341,7 +343,8 @@ def test_a_recorded_non_pass_support_row_denies_promotion():
     )
 
 
-def test_an_unusable_row_is_denied_before_the_rule_age_window():
+def test_an_unusable_row_is_denied_before_the_rule_age_window(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
     """Usability is checked on its own, not folded into the age window."""
 
     policy = _policy({_CODEX_GATE: "true"})
@@ -667,7 +670,12 @@ def test_changing_the_live_policy_does_not_reinterpret_a_frozen_record():
 # --- Deployment-owned configuration ----------------------------------------
 
 
-def test_deployment_policy_document_overrides_the_built_in_rows():
+def test_deployment_policy_document_overrides_the_built_in_rows(monkeypatch):
+    # MoonLadderStudios/MoonMind#4560: ordinary admission is
+    # certificate-independent, so an authored promotion no longer fails
+    # closed for missing optional evidence; explicit strict certification
+    # keeps the denial.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
     document = {
         "policyVersion": RUNTIME_PROVIDER_ROLLOUT_POLICY_VERSION,
         "generation": 7,
@@ -689,16 +697,28 @@ def test_deployment_policy_document_overrides_the_built_in_rows():
         env={RUNTIME_PROVIDER_ROLLOUT_ENV: json.dumps(document)}
     )
     assert policy.generation == 7
-    # A deployment-authored rule requires support evidence by default, so an
-    # authored promotion still fails closed without it.
+    # Ordinary admission: an authored promotion stays promoted without
+    # optional evidence.
     without_evidence = resolve_rollout_decision(
         policy=policy, combination=_combination()
     )
-    assert without_evidence.state is RolloutState.explicit_only
+    assert without_evidence.state is RolloutState.preferred
     assert (
         RolloutReason.support_evidence_missing
-        in without_evidence.unavailable_reasons
+        not in without_evidence.unavailable_reasons
     )
+
+    # Explicit strict certification keeps failing closed without evidence.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+    strict_without_evidence = resolve_rollout_decision(
+        policy=policy, combination=_combination()
+    )
+    assert strict_without_evidence.state is RolloutState.explicit_only
+    assert (
+        RolloutReason.support_evidence_missing
+        in strict_without_evidence.unavailable_reasons
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
 
     decision = resolve_rollout_decision(
         policy=policy,

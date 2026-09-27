@@ -119,9 +119,9 @@ def test_static_rows_share_common_hardening_and_topology() -> None:
         names = set(networks) if isinstance(networks, list) else set(networks)
         assert names == {"omnigent-egress-network"}
         assert service["restart"] == "unless-stopped"
-        assert service["depends_on"]["omnigent-tools-init"] == {
-            "condition": "service_completed_successfully"
-        }
+        # MoonLadderStudios/MoonMind#4558: no tools initializer remains on the
+        # shared-host path; the selected image owns its tools.
+        assert "omnigent-tools-init" not in service.get("depends_on", {})
         assert service["depends_on"]["sandbox-egress-proxy"] == {
             "condition": "service_healthy"
         }

@@ -234,6 +234,18 @@ describe('GithubTokenProbePanel', () => {
     ).toBeTruthy();
   });
 
+  it('contains the permission checklist table in a scrollable region on narrow viewports', async () => {
+    stubFetch(PUBLISH_RESPONSE);
+    renderPanel({ initialRepo: 'owner/repo' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
+
+    const permissionCell = await screen.findByText('Contents');
+    const table = permissionCell.closest('table');
+    expect(table).toBeTruthy();
+    expect(table?.parentElement?.className).toContain('overflow-x-auto');
+  });
+
   it('renders backend error responses with their detail and surfaces a notice', async () => {
     stubFetch({ detail: 'Permission denied' }, { ok: false, status: 403 });
     const onNotice = vi.fn();

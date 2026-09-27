@@ -7,32 +7,8 @@ from scripts.create_issue_implement_preset_workflows import (
     build_expand_payload,
     build_payload,
     build_runtime_block,
-    extract_column_issue_keys,
     post_json,
 )
-
-
-def _board_issues_fixture() -> dict:
-    """Mimic the GET /api/jira/boards/{id}/issues response shape."""
-    return {
-        "boardId": "15",
-        "columns": [
-            {"id": "backlog", "name": "Backlog", "order": 0, "count": 0, "statusIds": []},
-            {"id": "to-do", "name": "To Do", "order": 1, "count": 2, "statusIds": ["10013"]},
-            {"id": "in-progress", "name": "In Progress", "order": 2, "count": 1, "statusIds": ["3"]},
-            {"id": "done", "name": "Done", "order": 3, "count": 1, "statusIds": ["10014"]},
-        ],
-        "itemsByColumn": {
-            "to-do": [
-                {"issueKey": "MM-874", "summary": "First", "columnId": "to-do"},
-                {"issueKey": "MM-880", "summary": "Second", "columnId": "to-do"},
-                {"issueKey": "MM-874", "summary": "Duplicate", "columnId": "to-do"},
-            ],
-            "in-progress": [{"issueKey": "MM-900", "summary": "Active", "columnId": "in-progress"}],
-            "done": [{"issueKey": "MM-100", "summary": "Closed", "columnId": "done"}],
-        },
-        "unmappedItems": [],
-    }
 
 
 def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
@@ -254,29 +230,12 @@ def test_build_payload_without_overrides_keeps_runtime_only_and_stable_key() -> 
     )
 
 
-def test_extract_column_issue_keys_returns_to_do_issues_in_order() -> None:
-    keys = extract_column_issue_keys(_board_issues_fixture(), "To Do")
-    assert keys == ["MM-874", "MM-880"]
-
-
-def test_extract_column_issue_keys_is_case_insensitive() -> None:
-    assert extract_column_issue_keys(_board_issues_fixture(), "to do") == ["MM-874", "MM-880"]
-
-
-def test_extract_column_issue_keys_unknown_column_is_empty() -> None:
-    assert extract_column_issue_keys(_board_issues_fixture(), "Nonexistent") == []
-
-
-def test_main_discovers_board_to_do_issues(monkeypatch, capsys) -> None:
+def test_main_queues_positional_issues_with_runtime_overrides(monkeypatch, capsys) -> None:
     expanded = {
         "steps": [{"title": f"Step {index}"} for index in range(8)],
         "appliedTemplate": {"slug": "jira-implement", "presetDigest": "digest123"},
     }
     submitted: list[dict] = []
-
-    def fake_fetch_board_issues(**kwargs):
-        assert kwargs["board_id"] == "15"
-        return _board_issues_fixture()
 
     def fake_expand_issue_implement(**kwargs):
         return expanded
@@ -293,7 +252,6 @@ def test_main_discovers_board_to_do_issues(monkeypatch, capsys) -> None:
             },
         }
 
-    monkeypatch.setattr(module, "fetch_board_issues", fake_fetch_board_issues)
     monkeypatch.setattr(module, "expand_issue_implement", fake_expand_issue_implement)
     monkeypatch.setattr(module, "post_json", fake_post_json)
     monkeypatch.setattr(
@@ -301,14 +259,12 @@ def test_main_discovers_board_to_do_issues(monkeypatch, capsys) -> None:
         "argv",
         [
             "create_issue_implement_preset_workflows.py",
+            "mm-874",
+            "MM-880",
             "--provider",
             "jira",
             "--base-url",
             "http://moonmind.test",
-            "--board-id",
-            "15",
-            "--project-key",
-            "MM",
             "--runtime",
             "claude_code",
             "--model",
@@ -320,11 +276,6 @@ def test_main_discovers_board_to_do_issues(monkeypatch, capsys) -> None:
 
     assert module.main() == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["discovery"] == {
-        "boardId": "15",
-        "column": "To Do",
-        "discoveredIssues": ["MM-874", "MM-880"],
-    }
     assert report["model"] == "claude-opus-4-8"
     assert report["effort"] == "xhigh"
     assert [record["issue"] for record in report["results"]] == ["MM-874", "MM-880"]
@@ -341,11 +292,7 @@ def test_main_discovers_board_to_do_issues(monkeypatch, capsys) -> None:
         assert task["publish"] == {"mode": "pr", "mergeAutomation": {"enabled": True}}
 
 
-def test_main_errors_when_board_column_has_no_issues(monkeypatch, capsys) -> None:
-    def fake_fetch_board_issues(**kwargs):
-        return {"columns": [{"id": "to-do", "name": "To Do"}], "itemsByColumn": {"to-do": []}}
-
-    monkeypatch.setattr(module, "fetch_board_issues", fake_fetch_board_issues)
+def test_main_errors_when_no_issues_are_given(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
@@ -353,8 +300,6 @@ def test_main_errors_when_board_column_has_no_issues(monkeypatch, capsys) -> Non
             "create_issue_implement_preset_workflows.py",
             "--base-url",
             "http://moonmind.test",
-            "--board-id",
-            "15",
         ],
     )
 

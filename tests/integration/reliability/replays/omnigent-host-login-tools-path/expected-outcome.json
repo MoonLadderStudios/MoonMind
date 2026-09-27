@@ -1,5 +1,5 @@
 {
-  "invariant": "on-demand and static OAuth hosts mount the same portable profile.d script so login shells retain the mounted tool path",
+  "invariant": "the login-shell PATH snippet is image-owned at /etc/profile.d/moonmind-tools.sh, so no bind mount overlays it; the launch still leads PATH with the image-owned tools directory for ordinary processes",
   "sourceName": "moonmind-tools.sh",
   "containerPath": "/etc/profile.d/moonmind-tools.sh"
 }

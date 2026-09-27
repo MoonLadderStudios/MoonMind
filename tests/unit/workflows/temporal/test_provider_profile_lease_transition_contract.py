@@ -30,6 +30,7 @@ from temporalio import exceptions
 
 from moonmind.provider_profiles.lease_client import (
     CredentialLeaseMode,
+    CredentialLeasePurpose,
     DurableLeaseState,
     LeaseTransitionOutcome,
 )
@@ -38,6 +39,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     DURABLE_LEASE_GRANT_PATCH,
     LEASE_TRANSITION_CONTRACT_PATCH,
     PROVIDER_INCREMENTAL_LEASE_PATCH,
+    VALIDATION_LEASE_EXPIRY_PATCH,
     CapacityScopeState,
     MoonMindProviderProfileManagerWorkflow,
     PendingRequest,
@@ -205,6 +207,37 @@ async def test_a_maintenance_grant_records_its_own_compatibility_class() -> None
     row = ledger.rows_for("grant")[0]
     assert row["compatibility_class"] == CredentialLeaseMode.EXCLUSIVE_MAINTENANCE.value
     assert row["scope_generation"] == 2
+
+
+@pytest.mark.asyncio
+async def test_validation_expiry_change_preserves_old_grants_on_replay() -> None:
+    """Only a history with the new marker records the shorter expiry."""
+
+    payload = {
+        "runtime_id": "opencode",
+        "execution_profile_ref": PROFILE_ID,
+        "requester_workflow_id": "validation-owner",
+        "purpose": CredentialLeasePurpose.CREDENTIAL_VALIDATION.value,
+        "metadata": {"workflowId": "http:validation-owner", "ownerIsWorkflow": False},
+    }
+    for expiry_patch_enabled, expected_seconds in ((False, 5400), (True, 900)):
+        ledger = _Ledger({"grant": {"granted": True, "duplicate": False}})
+        wf = _manager(profile=_profile(max_parallel_runs=1))
+        enabled = {
+            DB_LEASE_PERSISTENCE_PATCH,
+            DURABLE_LEASE_GRANT_PATCH,
+            PROVIDER_INCREMENTAL_LEASE_PATCH,
+            LEASE_TRANSITION_CONTRACT_PATCH,
+        }
+        if expiry_patch_enabled:
+            enabled.add(VALIDATION_LEASE_EXPIRY_PATCH)
+        with _patched(ledger, enabled=enabled):
+            result = await wf.acquire_credential_maintenance_lease(payload)
+        assert result["already_held"] is False
+        row = ledger.rows_for("grant")[0]
+        assert datetime.fromisoformat(row["expiresAt"]) == NOW + timedelta(
+            seconds=expected_seconds
+        )
 
 
 def test_no_credential_value_can_reach_a_lease_row() -> None:

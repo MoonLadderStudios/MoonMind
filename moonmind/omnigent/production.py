@@ -267,6 +267,13 @@ def build_generic_omnigent_execution_services(
         state: str,
         reason: str,
     ) -> None:
+        # MoonLadderStudios/MoonMind#1088: retained-for-old-histories /
+        # mixed-worker compatibility. This Activity-side notifier signals
+        # only the classified legacy ``child_state_changed`` name consumed
+        # by the retained ``MoonMindUserWorkflow.child_state_changed``
+        # handler; it is not a new-write path (new Temporal child
+        # histories use the typed ``agent_run_progress`` projection via
+        # the cutover gate in ``agent_run.py``).
         handle = await temporal_adapter.get_workflow_handle(workflow_id)
         await handle.signal(
             "child_state_changed",

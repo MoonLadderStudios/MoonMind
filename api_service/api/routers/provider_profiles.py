@@ -2686,6 +2686,35 @@ async def validate_claude_oauth_profile(
             detail=f"{mapping.label_prefix} OAuth validation requires OAuth volume metadata.",
         )
 
+    if profile.runtime_id == "codex_cli":
+        from api_service.services.oauth_session_service import (
+            validate_oauth_profile_on_host,
+        )
+
+        try:
+            host_validation = await validate_oauth_profile_on_host(
+                profile_id=profile.profile_id,
+                provider_lease_id=_maintenance_guard.lease.lease_id,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Codex OAuth host validation unavailable.",
+            ) from exc
+        host_status = host_validation.get("status")
+        if (
+            host_status != "ready"
+            or host_validation.get("validation_mode") != "credential_only"
+        ):
+            raise HTTPException(
+                status_code=400 if host_status == "credential_invalid" else 503,
+                detail=(
+                    "Codex OAuth login was rejected. Reconnect OAuth and retry."
+                    if host_status == "credential_invalid"
+                    else "Codex OAuth host validation unavailable."
+                ),
+            )
+
     try:
         from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
             verify_volume_credentials,

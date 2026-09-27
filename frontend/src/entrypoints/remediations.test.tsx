@@ -41,9 +41,12 @@ describe('Remediations', () => {
   it('distinguishes empty and filtered-empty inventory states', async () => {
     vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ items: [] }) } as Response);
     renderPage();
-    expect(await screen.findByText('No remediation workflows are visible.')).toBeTruthy();
+    // DataTable renders the empty state in both the desktop table and the
+    // mobile cards in jsdom (the browser suite proves a single representation
+    // per width), so assert presence plurally like omnigent-inventory.test.tsx.
+    expect((await screen.findAllByText('No remediation workflows are visible.')).length).toBeGreaterThanOrEqual(1);
     fireEvent.change(screen.getByLabelText('Filter remediations'), { target: { value: 'missing' } });
-    expect(screen.getByText('No remediations match the current filter.')).toBeTruthy();
+    expect(screen.getAllByText('No remediations match the current filter.').length).toBeGreaterThanOrEqual(1);
   });
 
   it('preserves the route shell and offers retry for unauthorized reads', async () => {
@@ -119,7 +122,7 @@ describe('Remediations', () => {
 
     renderPage();
 
-    expect(await screen.findByText('No remediation workflows are visible.')).toBeTruthy();
+    expect((await screen.findAllByText('No remediation workflows are visible.')).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole('link', { name: /Unauthorized repair/ })).toBeNull();
   });
 });

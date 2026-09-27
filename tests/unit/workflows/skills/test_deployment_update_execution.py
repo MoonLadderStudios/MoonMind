@@ -1062,8 +1062,9 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
     assert result.status == "COMPLETED"
     assert len(store.records) == 1
     pull_command = runner.commands[0][1]
-    one_shot_command = runner.commands[1][1]
-    up_command = runner.commands[2][1]
+    missing_pull_command = runner.commands[1][1]
+    one_shot_command = runner.commands[2][1]
+    up_command = runner.commands[3][1]
     assert pull_command[-4:] == (
         "temporal-worker-agent-runtime",
         "init-db",
@@ -1078,6 +1079,19 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
         "temporal-worker-agent-runtime",
         "api",
         "new-worker",
+    )
+    # Infrastructure the release reconciles is acquired only when absent,
+    # so `up --pull never` cannot fail on a newly pinned infrastructure image.
+    assert missing_pull_command == (
+        "docker",
+        "compose",
+        "pull",
+        "--policy",
+        "missing",
+        "--ignore-buildable",
+        "postgres",
+        "docker-proxy",
+        "temporal",
     )
     assert "temporal-worker-deployment-control" not in up_command
     assert "init-db" not in up_command
@@ -1284,7 +1298,7 @@ def test_remove_services_from_command_args_preserves_option_values() -> None:
     )
 
 
-def test_update_plan_reconciles_configured_infrastructure_without_pulling_it() -> None:
+def test_update_plan_reconciles_infrastructure_pulling_only_missing_images() -> None:
     plan = ComposeCommandPlan(
         runner_mode="privileged_worker",
         pull_args=("docker", "compose", "pull"),
@@ -1313,6 +1327,17 @@ def test_update_plan_reconciles_configured_infrastructure_without_pulling_it() -
         "compose",
         "pull",
         "temporal-worker-agent-runtime",
+    )
+    # Present infrastructure images are never refreshed; an image the release
+    # newly pins (for example a MinIO digest change) is fetched before
+    # `up --pull never` instead of failing with "No such image".
+    assert targeted.missing_pull_args == (
+        "docker",
+        "compose",
+        "pull",
+        "--policy",
+        "missing",
+        "sandbox-egress-proxy",
     )
     assert targeted.up_args == (
         "docker",
@@ -2944,11 +2969,15 @@ async def test_update_skips_substrate_stage_when_already_converged(monkeypatch) 
     result = await executor.execute(_inputs())
 
     assert result.status == "COMPLETED"
-    # Converged substrate still runs no staged pass. The egress gateway is
-    # recreated unconditionally before the main up, with no pull of its own;
-    # Compose leaves it alone when it already matches the incoming
-    # configuration.
-    assert [command[0] for command in runner.commands] == ["pull", "up", "up"]
+    # Converged substrate still runs no staged pass. The gateway image is
+    # staged with the missing policy before the unconditional pre-pass
+    # alignment: a no-op when already present, and the missing-image
+    # guarantee when the release newly pins it. Compose leaves an
+    # already-matching gateway alone during the alignment itself.
+    assert [command[0] for command in runner.commands] == ["pull", "pull", "up", "up"]
+    missing_pull = runner.commands[1][1]
+    assert "sandbox-egress-proxy" in tuple(missing_pull)
+    assert "missing" in tuple(missing_pull)
     gateway_up, main_up = (command[1] for command in runner.commands if command[0] == "up")
     assert "sandbox-egress-proxy" in tuple(gateway_up)
     assert "sandbox-egress-proxy" not in tuple(main_up)
@@ -3129,3 +3158,44 @@ async def test_egress_gateway_is_aligned_under_the_documented_default_exclusions
     # The recorded infrastructure-reconciliation incident: the main up must
     # still reconcile the gateway, or the network it defines goes absent.
     assert "sandbox-egress-proxy" in main_up
+
+
+def test_excluded_gateway_is_staged_by_missing_pull() -> None:
+    """An excluded attested gateway with a newly pinned image must be staged.
+
+    The legacy updater excludes the egress gateway from the main update, and
+    the missing-image pull only covered reconciled infrastructure services.
+    The gateway pre-pass then runs `up --pull never` with nothing staging its
+    new image, so the update still fails with a missing-image error. The
+    gateway pre-pass targets must be staged without joining the main
+    recreation set.
+    """
+    plan = ComposeCommandPlan(
+        runner_mode="privileged_worker",
+        pull_args=("docker", "compose", "pull"),
+        up_args=("docker", "compose", "up", "-d", "--remove-orphans", "--wait"),
+    )
+    targeted = _command_plan_targeting_stack_services(
+        plan,
+        before_state={
+            "configuredServices": [
+                "temporal-worker-agent-runtime",
+                "sandbox-egress-proxy",
+            ],
+            "configuredServiceImages": {
+                "temporal-worker-agent-runtime": (
+                    "ghcr.io/moonladderstudios/moonmind:latest"
+                ),
+                "sandbox-egress-proxy": "ubuntu/squid:latest",
+            },
+        },
+        requested_repository="ghcr.io/moonladderstudios/moonmind",
+        excluded_services=(
+            "docker-proxy",
+            "sandbox-egress-proxy",
+            "postgres",
+        ),
+    )
+
+    assert "sandbox-egress-proxy" in targeted.missing_pull_args
+    assert "sandbox-egress-proxy" not in targeted.up_args

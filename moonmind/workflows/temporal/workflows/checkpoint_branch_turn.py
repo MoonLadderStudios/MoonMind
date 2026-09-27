@@ -35,6 +35,7 @@ with workflow.unsafe.imports_passed_through():
         AgentExecutionRequest,
         AgentRunResult,
     )
+    from moonmind.schemas.saved_work_models import commit_saved_work_manifest
     from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
     from moonmind.security.outbound_scan import scan_outbound_text
     from moonmind.workflows.temporal.activity_catalog import (
@@ -383,6 +384,143 @@ def checkpoint_branch_turn_terminal_disposition(
     if not checkpoint_ref:
         return "terminal_checkpoint_missing"
     return "verification_pending"
+
+
+_BRANCH_TURN_VERIFICATION_HANDOFF_SCHEMA_VERSION = (
+    "checkpoint-branch-verification-handoff/v1"
+)
+# Result-verification handoff owned by MoonLadderStudios/MoonMind#3622
+# (moonmind.workflows.temporal.remediation_verification): creating a branch
+# turn produces a *candidate*; the target objective is resolved only when the
+# target itself reaches success. This module stays free of that owner's
+# database coupling; the unit boundary asserts these identifiers agree with
+# the owning verification contract.
+_BRANCH_TURN_VERIFICATION_ACTION_KIND = (
+    "checkpoint_branch.create_from_remediation_context"
+)
+_BRANCH_TURN_VERIFICATION_VERIFIER = "checkpoint_branch"
+
+
+def commit_branch_turn_save(
+    *,
+    agent_result_ref: str | None,
+    diagnostics_ref: str | None,
+    manifest_digest: str | None = None,
+    preview_failures: list[str] | None = None,
+) -> dict[str, Any]:
+    """Commit the branch-turn save through the shared save-before-cleanup result.
+
+    Consumes :func:`moonmind.schemas.saved_work_models.commit_saved_work_manifest`
+    (the shared helper owned by the saved-work manifest family for #4016
+    finalization semantics): a terminal save without its required usable refs
+    stays ``incomplete`` with
+    ``orphanAction: reconcile-with-finalization-owner`` instead of silently
+    succeeding on local persistence alone. A missing terminal checkpoint does
+    not fail the save: useful failed/canceled work is retained where policy
+    permits.
+    """
+
+    manifest = {
+        "manifestDigest": manifest_digest,
+        "outputs": [
+            {
+                "format": "agent_result",
+                "status": "self_contained" if agent_result_ref else "incomplete",
+            },
+            {
+                "format": "diagnostics",
+                "status": "self_contained" if diagnostics_ref else "incomplete",
+            },
+        ],
+        "requiredFormats": ["agent_result", "diagnostics"],
+    }
+    return commit_saved_work_manifest(
+        manifest,
+        required_refs_available={
+            "agent_result": bool(agent_result_ref),
+            "terminal_diagnostics": bool(diagnostics_ref),
+        },
+        preview_failures=preview_failures,
+    )
+
+
+def attach_upstream_save_claim(
+    save_commit: Mapping[str, Any],
+    upstream_save_claim: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Nest the upstream save claim and preserve an incomplete workspace save.
+
+    The terminal save commits agent-result/diagnostics refs, but when the
+    upstream workspace save reports ``incomplete`` the useful workspace was
+    not durably captured. The incomplete status stays at the top level
+    instead of letting metadata artifacts masquerade as the saved workspace;
+    the upstream claim is always preserved alongside for reconciliation.
+    """
+
+    if not upstream_save_claim:
+        return dict(save_commit)
+    merged = {**save_commit, "upstreamClaim": dict(upstream_save_claim)}
+    if (
+        str(upstream_save_claim.get("status") or "").strip().lower()
+        == "incomplete"
+        and str(merged.get("status") or "").strip().lower() == "committed"
+    ):
+        merged["status"] = "incomplete"
+        merged["reason"] = (
+            upstream_save_claim.get("reason") or "upstream-save-incomplete"
+        )
+        merged["orphanAction"] = (
+            upstream_save_claim.get("orphanAction")
+            or merged.get("orphanAction")
+            or "reconcile-with-finalization-owner"
+        )
+    return merged
+
+
+def build_branch_turn_verification_handoff(
+    *,
+    branch_id: str,
+    branch_turn_id: str,
+    agent_result_ref: str,
+    diagnostics_ref: str | None,
+    checkpoint_ref: str | None,
+    checkpoint_digest: str | None,
+    terminal_disposition: str,
+    delivery_outcome: str,
+    source_namespace: str,
+    source_workflow_id: str,
+    source_run_id: str,
+    verification_pending: bool,
+) -> dict[str, Any]:
+    """Pass the exact resulting candidate plus the original objective onward.
+
+    Hands the exact terminal candidate (not a summary) together with the
+    source objective identity to the #3622 result-verification owner.
+    ``verificationPending`` marks that verification is still owed; pending is
+    not graph success and never permits rerunning the branch.
+    """
+
+    return {
+        "schemaVersion": _BRANCH_TURN_VERIFICATION_HANDOFF_SCHEMA_VERSION,
+        "actionKind": _BRANCH_TURN_VERIFICATION_ACTION_KIND,
+        "verifier": _BRANCH_TURN_VERIFICATION_VERIFIER,
+        "verificationPending": verification_pending,
+        "candidate": {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "agentResultRef": agent_result_ref,
+            "diagnosticsRef": diagnostics_ref,
+            "checkpointRef": checkpoint_ref,
+            "checkpointDigest": checkpoint_digest,
+            "terminalDisposition": terminal_disposition,
+            "deliveryOutcome": delivery_outcome,
+        },
+        "objective": {
+            "sourceNamespace": source_namespace,
+            "sourceWorkflowId": source_workflow_id,
+            "sourceRunId": source_run_id,
+        },
+    }
 
 
 async def _load_authority_chain(bridge_session_id: str | None) -> dict[str, Any]:
@@ -1011,6 +1149,12 @@ async def persist_checkpoint_branch_turn_terminal(
             source_run_id=source_run_id,
             branch_turn_id=branch_turn_id,
         )
+        # Commit the terminal save through the shared save-before-cleanup
+        # result (#4016 finalization semantics) rather than relying on local
+        # persistence alone. Computed after both terminal artifacts exist so
+        # the commit reflects refs that were actually written; a
+        # caller-supplied upstream claim (for example a workspace-capture
+        # failure recorded by the workflow) is preserved alongside it.
         diagnostics_payload = {
             "schemaVersion": "checkpoint-branch-terminal-diagnostics/v1",
             "deliveryOutcome": outcome,
@@ -1039,6 +1183,29 @@ async def persist_checkpoint_branch_turn_terminal(
             source_run_id=source_run_id,
             branch_turn_id=branch_turn_id,
         )
+        save_commit = commit_branch_turn_save(
+            agent_result_ref=agent_result_ref,
+            diagnostics_ref=diagnostics_ref,
+            manifest_digest=_sha256(
+                json.dumps(result_payload, sort_keys=True).encode()
+            ),
+        )
+        upstream_save_claim = _mapping(payload.get("saveCommit"))
+        save_commit = attach_upstream_save_claim(save_commit, upstream_save_claim)
+        verification_handoff = build_branch_turn_verification_handoff(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            agent_result_ref=agent_result_ref,
+            diagnostics_ref=diagnostics_ref,
+            checkpoint_ref=checkpoint_ref,
+            checkpoint_digest=checkpoint_digest,
+            terminal_disposition=disposition,
+            delivery_outcome=outcome,
+            source_namespace=source_namespace,
+            source_workflow_id=workflow_id,
+            source_run_id=source_run_id,
+            verification_pending=outcome == "succeeded",
+        )
         turn = await service.finalize_turn_execution(
             workflow_id=workflow_id,
             branch_id=branch_id,
@@ -1052,6 +1219,8 @@ async def persist_checkpoint_branch_turn_terminal(
             terminal_ref=terminal_ref,
             output_refs=safe_output_refs,
             terminal_disposition=disposition,
+            save_commit=save_commit,
+            verification_handoff=verification_handoff,
         )
         # Branch terminality is its own plane (#3707 §3): recording it must not
         # terminalize the canonical session, erase its historical-read
@@ -1073,6 +1242,8 @@ async def persist_checkpoint_branch_turn_terminal(
             "diagnosticsRef": diagnostics_ref,
             "checkpointRef": checkpoint_ref,
             "terminalRef": terminal_ref,
+            "saveCommit": save_commit,
+            "verificationHandoff": verification_handoff,
         }
 
 
@@ -1213,6 +1384,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
         result: AgentRunResult,
         outcome: str,
         checkpoint: Mapping[str, Any] | None = None,
+        save_commit: Mapping[str, Any] | None = None,
         cancellation_type: ActivityCancellationType | None = None,
     ) -> dict[str, Any]:
         activity_options: dict[str, Any] = self._persistence_route_options()
@@ -1230,6 +1402,9 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 by_alias=True, mode="json", exclude_none=True
             ),
             "checkpoint": dict(checkpoint or {}),
+            **(
+                {"saveCommit": dict(save_commit)} if save_commit is not None else {}
+            ),
         }
         try:
             return _mapping(
@@ -1354,6 +1529,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
             )
             return self._result
         terminal_handoff_started = False
+        preserved_child_result: AgentRunResult | None = None
         try:
             self._phase = "running"
             raw_result = await workflow.execute_child_workflow(
@@ -1376,6 +1552,13 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 )
                 terminal_handoff_started = False
                 return self._result
+
+            # Successful child compute is preserved from here on: a later
+            # save-before-cleanup failure (workspace capture, checkpoint
+            # creation) terminalizes the exact child candidate with
+            # save-incomplete evidence for the finalization owner instead of
+            # discarding it for a synthetic error.
+            preserved_child_result = result
 
             self._phase = "capturing_workspace"
             step = agent_request.step_execution
@@ -1414,49 +1597,80 @@ class MoonMindCheckpointBranchTurnWorkflow:
             if capture.get("status") != "captured" or not isinstance(
                 capture.get("workspace"), Mapping
             ):
-                raise ValueError("branch workspace checkpoint capture failed")
+                self._phase = "failed"
+                terminal_handoff_started = True
+                self._result = await self._persist_terminal(
+                    payload,
+                    result=result,
+                    outcome="failed",
+                    save_commit={
+                        "status": "incomplete",
+                        "reason": "workspace-capture-failed",
+                        "orphanAction": "reconcile-with-finalization-owner",
+                    },
+                )
+                terminal_handoff_started = False
+                return self._result
             self._phase = "persisting_checkpoint"
             omnigent_capture = _mapping(
                 result.metadata.get("omnigentCheckpointCapture")
             )
             omnigent_capture["workspaceLocator"] = payload["workspaceLocator"]
             omnigent_capture["instructionRefs"] = [payload["instructionRef"]]
-            checkpoint = _mapping(
-                await workflow.execute_activity(
-                    "step_checkpoint.create_v2",
-                    {
-                        "identity": identity,
-                        "boundary": "after_execution",
-                        "taskInputSnapshotRef": payload["instructionRef"],
-                        "workspace": capture["workspace"],
-                        "omnigentCheckpointCapture": omnigent_capture,
-                        "createdAt": workflow.now().astimezone(UTC).isoformat(),
-                        "planDigest": (
-                            agent_request.step_execution.context_bundle_digest
-                        ),
-                        "preparedInputRefs": agent_request.input_refs,
-                        "stepOutputs": {
-                            "outputRefs": result.output_refs,
-                            "terminalRef": omnigent_capture.get("terminalRef"),
+            try:
+                checkpoint = _mapping(
+                    await workflow.execute_activity(
+                        "step_checkpoint.create_v2",
+                        {
+                            "identity": identity,
+                            "boundary": "after_execution",
+                            "taskInputSnapshotRef": payload["instructionRef"],
+                            "workspace": capture["workspace"],
+                            "omnigentCheckpointCapture": omnigent_capture,
+                            "createdAt": workflow.now().astimezone(UTC).isoformat(),
+                            "planDigest": (
+                                agent_request.step_execution.context_bundle_digest
+                            ),
+                            "preparedInputRefs": agent_request.input_refs,
+                            "stepOutputs": {
+                                "outputRefs": result.output_refs,
+                                "terminalRef": omnigent_capture.get("terminalRef"),
+                            },
+                            "diagnosticRefs": [
+                                ref
+                                for ref in [
+                                    result.diagnostics_ref,
+                                    *capture.get("diagnosticRefs", []),
+                                ]
+                                if ref
+                            ],
+                            "idempotencyKey": (
+                                f"{step.step_execution_id}:checkpoint:after_execution"
+                            ),
                         },
-                        "diagnosticRefs": [
-                            ref
-                            for ref in [
-                                result.diagnostics_ref,
-                                *capture.get("diagnosticRefs", []),
-                            ]
-                            if ref
-                        ],
-                        "idempotencyKey": (
-                            f"{step.step_execution_id}:checkpoint:after_execution"
-                        ),
-                    },
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    start_to_close_timeout=timedelta(minutes=2),
-                    schedule_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=_RETRY,
+                        task_queue=ARTIFACTS_TASK_QUEUE,
+                        start_to_close_timeout=timedelta(minutes=2),
+                        schedule_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=_RETRY,
+                    )
                 )
-            )
+            except Exception as checkpoint_exc:
+                if _is_cancellation_failure(checkpoint_exc):
+                    raise
+                self._phase = "failed"
+                terminal_handoff_started = True
+                self._result = await self._persist_terminal(
+                    payload,
+                    result=result,
+                    outcome="failed",
+                    save_commit={
+                        "status": "incomplete",
+                        "reason": "terminal-checkpoint-failed",
+                        "orphanAction": "reconcile-with-finalization-owner",
+                    },
+                )
+                terminal_handoff_started = False
+                return self._result
             self._phase = "verification_handoff"
             terminal_handoff_started = True
             self._result = await self._persist_terminal(
@@ -1487,17 +1701,30 @@ class MoonMindCheckpointBranchTurnWorkflow:
             if terminal_handoff_started:
                 raise
             self._phase = "failed"
-            self._result = await self._persist_terminal(
-                payload,
-                result=AgentRunResult(
-                    summary=(
-                        "Checkpoint Branch turn failed before terminal delivery."
+            preserved = preserved_child_result
+            if preserved is not None:
+                self._result = await self._persist_terminal(
+                    payload,
+                    result=preserved,
+                    outcome="failed",
+                    save_commit={
+                        "status": "incomplete",
+                        "reason": "save-before-cleanup-failed",
+                        "orphanAction": "reconcile-with-finalization-owner",
+                    },
+                )
+            else:
+                self._result = await self._persist_terminal(
+                    payload,
+                    result=AgentRunResult(
+                        summary=(
+                            "Checkpoint Branch turn failed before terminal delivery."
+                        ),
+                        failureClass="system_error",
+                        providerErrorCode=type(exc).__name__,
                     ),
-                    failureClass="system_error",
-                    providerErrorCode=type(exc).__name__,
-                ),
-                outcome="failed",
-            )
+                    outcome="failed",
+                )
             return self._result
 
 

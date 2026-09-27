@@ -88,6 +88,15 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
                 "supported",
             ),
         )
+        if reader == "retained":
+            # The retained fleet predates certificate-independent admission
+            # and rejects the new authority shape via `extra="forbid"`.
+            # Only a strict plan keeps the historical wire shape it can
+            # parse, so the retained case compiles under explicit strict
+            # certification. An ordinary uncertified plan must fail closed
+            # on the retained reader (asserted below), never misread as
+            # certified.
+            monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
         compiled = await _compile_opencode_plan(
             monkeypatch,
             artifacts=artifacts,
@@ -165,6 +174,29 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
             with pytest.raises(retained_preflight.OmnigentDeploymentIdentityConflict):
                 retained_preflight.assert_plan_matches_deployed_runtime(loaded.payload)
             assert loaded.planRef == compiled.envelope.planRef
+            # The strict plan keeps the historical wire shape: no new
+            # authority marker for the retained reader to reject.
+            assert "admissionMode" not in serialized["payload"]["admissionAuthority"]
+            # Skew direction: an ordinary uncertified plan keeps its new
+            # authority marker on the wire, so the retained reader must
+            # fail closed instead of misreading uncertified admission as
+            # certified. Rolling upgrades stay safe in both directions:
+            # strict plans admit, uncertified plans reject.
+            import copy
+
+            ordinary_wire = copy.deepcopy(serialized)
+            authority = compiled.envelope.payload.admissionAuthority
+            ordinary_wire["payload"]["admissionAuthority"] = {
+                "admissionMode": "ordinary",
+                "supportEvidenceRef": "",
+                "supportEvidenceDigest": "",
+                "supportTier": "uncertified",
+                "featureGeneration": authority.featureGeneration,
+                "replayCompatibilityVersion": authority.replayCompatibilityVersion,
+                "rollbackPolicyVersion": authority.rollbackPolicyVersion,
+            }
+            with pytest.raises(Exception):
+                retained_reader.verify_execution_plan_envelope(ordinary_wire)
         serialized["payload"]["model"]["effort"] = "changed"
         artifacts.payloads[compiled.binding.plan_artifact_ref] = json.dumps(
             serialized
