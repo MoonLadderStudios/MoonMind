@@ -3,7 +3,7 @@
 **Status:** Shared image, runtime packs, Codex/Claude Host Classes, OAuth-home materializers, and rollout mechanisms implemented; exact qualification, deployment promotion, and retirement remain evidence-gated
 **Document Class:** System / Operator Guide
 **Owners:** MoonMind Platform
-**Last updated:** 2026-09-06
+**Last updated:** 2026-09-23
 **Authority:** Shared host image contract and runtime-pack descriptor authority for the Omnigent primary-runtime program
 
 ## Related documents
@@ -82,15 +82,22 @@ The image derives from the digest-pinned stock Omnigent host base and installs a
 
 ```text
 @openai/codex@0.104.0
-@anthropic-ai/claude-code@2.1.257
+@anthropic-ai/claude-code@2.1.281
 opencode-ai@1.18.11
+gh (pinned by services/omnigent/tools/manifest.lock.json, e.g. 2.76.2)
+moonmind (copied from services/omnigent/scripts/moonmind-container-cli.py)
 ```
+
+The Claude Code 2.1.281 pin supports Opus 5.5, which rejects clients older
+than 2.1.280.
 
 Workflow launches never install runtimes. Every installed vendor version must sit inside its runtime-pack supported range (inclusive lower, exclusive upper); a drifted runtime fails the image build instead of becoming launch authority.
 
+`gh` and `moonmind` live image-owned at `/opt/moonmind-tools/bin` (with the non-secret manifest at `/opt/moonmind-tools/manifest.json` and the login-shell snippet at `/etc/profile.d/moonmind-tools.sh`), installed and probed by `services/omnigent/moonmind-host/install_moonmind_tools.py` from the `manifest.lock.json` pins. The selected image owns its tool contents for the host's lifetime: new tool contents require a new image build, and host launch never downloads, installs, or copies shared tool binaries. There is no tools initializer, tools mount, or tools volume on the shared-host path (MoonLadderStudios/MoonMind#4558); stale volume settings in an existing `.env` are ignored. Full tool-delivery semantics live in [`OmnigentHostMountedTools.md`](./OmnigentHostMountedTools.md).
+
 ### Publication
 
-`.github/workflows/docker-publish-moonmind-host.yml` builds and publishes the multi-arch (`linux/amd64`, `linux/arm64`) image to GHCR with provenance and SBOM. It is the same release pattern as the `omnigent-host-opencode` workflow: resolve the digest-pinned base, build by digest per platform, verify every vendor runtime and the warm OpenCode plugin npm cache inside the image, merge the manifest list, and print the digest-pinned deployment ref.
+`.github/workflows/docker-publish-moonmind-host.yml` builds and publishes the multi-arch (`linux/amd64`, `linux/arm64`) image to GHCR with provenance and SBOM. It is the same release pattern as the `omnigent-host-opencode` workflow: resolve the digest-pinned base, build by digest per platform, verify every vendor runtime and the warm OpenCode plugin npm cache inside the image, verify the image-owned `gh`/`moonmind` offline (no network, no volumes) through ordinary and login shells, merge the manifest list, and print the digest-pinned deployment ref. Changes to either executable's source, the build definition, or the manifest pins rebuild the image, including MoonMind CLI-only changes with no `gh` version bump.
 
 ### Deployment configuration
 
@@ -127,7 +134,7 @@ A runtime pack is trusted deployment data, never workflow-authored. The registry
 | Pack | Harness | Vendor runtime | Credential home |
 | --- | --- | --- | --- |
 | `codex-native-pack@1` | `codex-native` | `codex >=0.100.0,<0.200.0` (pin `0.104.0`) | `/home/app/.codex` |
-| `claude-native-pack@1` | `claude-native` | `claude >=2.0.0,<3.0.0` (pin `2.1.257`) | `/home/app/.claude` |
+| `claude-native-pack@1` | `claude-native` | `claude >=2.0.0,<3.0.0` (pin `2.1.281`) | `/home/app/.claude` |
 | `opencode-native-pack@1` | `opencode-native` | `opencode >=1.17.7,<1.19.0` (pin `1.18.11`) | `/home/app/.local/share/opencode` |
 
 Each pack declares the vendor version command, the supported range, the credential-home layout (target path, writability, uid/gid ownership), the bounded environment the generic startup may shape, the ambient environment keys the row must reject, and the exact-host readiness probe kind.

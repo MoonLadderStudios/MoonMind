@@ -60,7 +60,7 @@ def _admission_kwargs(row_id: str, **overrides):
 def _observed_binaries():
     return (
         {"name": "codex", "version": "0.104.0"},
-        {"name": "claude", "version": "2.1.257"},
+        {"name": "claude", "version": "2.1.281"},
         {"name": "opencode", "version": "1.18.11"},
     )
 
@@ -143,7 +143,7 @@ def test_shared_image_inventory_proves_contents_only():
             architecture="linux/amd64",
             observed_runtime_binaries=(
                 {"name": "codex", "version": "9.999.0"},
-                {"name": "claude", "version": "2.1.257"},
+                {"name": "claude", "version": "2.1.281"},
                 {"name": "opencode", "version": "1.18.11"},
             ),
             omnigent_build_digest=_BUILD,

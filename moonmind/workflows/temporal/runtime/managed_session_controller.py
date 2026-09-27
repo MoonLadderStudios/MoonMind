@@ -4049,32 +4049,39 @@ class DockerCodexManagedSessionController:
         """Return live Docker references that must protect retained state."""
         from moonmind.workflows.temporal.runtime.cleanup import DockerReferenceState
 
-        returncode, stdout, stderr = await self._command_runner(
-            (self._docker_binary, "ps", "-q"),
-            env=self._docker_env(),
-        )
-        if returncode != 0:
-            details = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+        # Containers can exit between listing and inspection. Restrict inspect
+        # to containers so Docker does not probe image/volume/plugin endpoints
+        # for a vanished ID, then retry a bounded number of changing snapshots.
+        for _ in range(3):
+            returncode, stdout, stderr = await self._command_runner(
+                (self._docker_binary, "ps", "-q"),
+                env=self._docker_env(),
+            )
+            if returncode != 0:
+                details = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+                return DockerReferenceState(
+                    failed=True,
+                    reason=f"docker reference scan failed: {details}",
+                )
+            container_ids = [line.strip() for line in stdout.splitlines() if line.strip()]
+            if not container_ids:
+                return DockerReferenceState()
+            inspect_rc, inspect_out, inspect_err = await self._command_runner(
+                (self._docker_binary, "container", "inspect", *container_ids),
+                env=self._docker_env(),
+            )
+            if inspect_rc == 0:
+                break
+            details = inspect_err.strip() or inspect_out.strip() or f"exit code {inspect_rc}"
+            if "no such container" not in details.lower():
+                return DockerReferenceState(
+                    failed=True,
+                    reason=f"docker reference scan failed: {details}",
+                )
+        else:
             return DockerReferenceState(
                 failed=True,
-                reason=f"docker reference scan failed: {details}",
-            )
-        container_ids = [line.strip() for line in stdout.splitlines() if line.strip()]
-        if not container_ids:
-            return DockerReferenceState()
-        inspect_rc, inspect_out, inspect_err = await self._command_runner(
-            (self._docker_binary, "inspect", *container_ids),
-            env=self._docker_env(),
-        )
-        if inspect_rc != 0:
-            details = (
-                inspect_err.strip()
-                or inspect_out.strip()
-                or f"exit code {inspect_rc}"
-            )
-            return DockerReferenceState(
-                failed=True,
-                reason=f"docker reference scan failed: {details}",
+                reason="docker reference scan failed: containers changed during retries",
             )
         try:
             items = json.loads(inspect_out) if inspect_out.strip() else []

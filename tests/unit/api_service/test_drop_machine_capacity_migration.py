@@ -51,9 +51,9 @@ def test_migration_graph_keeps_single_head_at_new_revision() -> None:
     # PR #4461 merged the two 386 branches (machine-capacity drain and the
     # single-user conversion ledger) into 387_merge_386_heads_4461; the GitHub
     # event delivery receipts migration (#3967) extended that chain, and the
-    # OpenCode validation repair (#4526) now extends it further as the
-    # single head.
-    assert tuple(script.get_heads()) == ("389_opencode_validation_repair",)
+    # OpenCode validation repair (#4526) and the account-free preset catalog
+    # (#4350) now extend it further as the single head.
+    assert tuple(script.get_heads()) == ("390_preset_catalog_account_free",)
 
 
 def test_upgrade_drops_only_retired_table_and_keeps_unrelated_rows(

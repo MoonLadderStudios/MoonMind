@@ -142,36 +142,6 @@ async def _dedupe_async(
     finally:
         inflight.pop(key, None)
 
-_JIRA_CREATE_PAGE_SOURCES = {
-    "connections": "/api/jira/connections/verify",
-    "projects": "/api/jira/projects",
-    "boards": "/api/jira/projects/{projectKey}/boards",
-    "columns": "/api/jira/boards/{boardId}/columns",
-    "issues": "/api/jira/boards/{boardId}/issues",
-    "issue": "/api/jira/issues/{issueKey}",
-}
-
-def _validate_jira_source_templates(sources: Mapping[str, str]) -> None:
-    invalid = [
-        name
-        for name, value in sources.items()
-        for normalized in (value.strip(),)
-        if (
-            value != normalized
-            or not normalized
-            or not normalized.startswith("/api/")
-            or "://" in normalized
-        )
-    ]
-    if invalid:
-        invalid_names = ", ".join(sorted(invalid))
-        raise ValueError(
-            "Jira Create-page sources must be MoonMind API path templates: "
-            f"{invalid_names}"
-        )
-
-_validate_jira_source_templates(_JIRA_CREATE_PAGE_SOURCES)
-
 @dataclass(frozen=True, slots=True)
 class RepositoryOption:
     """Browser-safe repository suggestion for the Create page."""
@@ -201,11 +171,6 @@ class BranchOption:
             "label": self.label,
             "source": self.source,
         }
-
-def _build_jira_sources() -> dict[str, str]:
-    """Return MoonMind-owned Jira browser endpoint templates."""
-
-    return dict(_JIRA_CREATE_PAGE_SOURCES)
 
 def _normalize_repository_value(value: object) -> str | None:
     """Return a browser-safe owner/repo value, or ``None`` when invalid."""
@@ -1410,11 +1375,6 @@ def build_repository_issue_options(repository: str, query: str = "") -> dict[str
 
     return {"items": items, "error": None}
 
-def _jira_create_page_enabled() -> bool:
-    """Return whether the Create-page Jira browser rollout is enabled."""
-
-    return bool(settings.feature_flags.jira_create_page_enabled)
-
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "temporal": {
         "scheduled": "queued",
@@ -1522,22 +1482,6 @@ def _build_dashboard_system_metadata() -> dict[str, str | None]:
         "buildId": build_id,
     }
 
-def _build_jira_runtime_config() -> dict[str, Any] | None:
-    """Build Create-page Jira browser config when the UI rollout is enabled."""
-
-    if not _jira_create_page_enabled():
-        return None
-
-    return {
-        "sources": _build_jira_sources(),
-        "system": {
-            "enabled": True,
-            "defaultProjectKey": settings.feature_flags.jira_create_page_default_project_key,
-            "defaultBoardId": settings.feature_flags.jira_create_page_default_board_id,
-            "rememberLastBoardInSession": settings.feature_flags.jira_create_page_remember_last_board_in_session,
-        },
-    }
-
 def build_runtime_config(
     initial_path: str,
     *,
@@ -1604,15 +1548,6 @@ def build_runtime_config(
     )
 
     system_metadata = _build_dashboard_system_metadata()
-    jira_runtime_config = _build_jira_runtime_config()
-    jira_sources = (
-        {"jira": jira_runtime_config["sources"]} if jira_runtime_config else {}
-    )
-    jira_system = (
-        {"jiraIntegration": jira_runtime_config["system"]}
-        if jira_runtime_config
-        else {}
-    )
     return {
         "initialPath": initial_path,
         "pollIntervalsMs": {
@@ -1665,7 +1600,6 @@ def build_runtime_config(
                 "artifactSessionControl": "/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control",
                 "sessionResources": "/api/sessions/{sessionId}/resources",
             },
-            **jira_sources,
             "github": {
                 "branches": "/api/github/branches?repository={repository}",
                 "branchResolve": "/api/github/branches/resolve?repository={repository}&branch={branch}",
@@ -1742,7 +1676,6 @@ def build_runtime_config(
                     }
                 ),
             },
-            **jira_system,
         },
     }
 

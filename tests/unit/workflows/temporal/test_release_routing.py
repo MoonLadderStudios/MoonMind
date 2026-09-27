@@ -131,6 +131,12 @@ class _FakeWorkflowService:
         return self._server.deployment_snapshot()
 
     async def describe_worker_deployment_version(self, request):
+        if request.version == "__unversioned__":
+            raise RPCError(
+                "WorkerDeploymentName cannot be empty",
+                RPCStatusCode.INVALID_ARGUMENT,
+                None,
+            )
         return self._server.version_snapshot(request.version)
 
     async def describe_task_queue(self, request):
@@ -220,6 +226,24 @@ def _server_with_current_old_new():
     new = server.add_version("new", queues=registered)
     server.current = old
     return server, old, new
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_promotes_unversioned_sentinel_with_changed_time(monkeypatch):
+    """A timestamped Temporal sentinel is not a describable worker version."""
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    server, _old, new = _server_with_current_old_new()
+    server.current = "__unversioned__"
+    assert server.deployment_snapshot().worker_deployment_info.routing_config.HasField(
+        "current_version_changed_time"
+    )
+
+    result = await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+
+    assert result == {"status": "current", "currentVersion": new}
+    assert server.current == new
+    assert server.set_current_calls == [new]
+    assert len(server.canaries_started) == 2
 
 
 @pytest.mark.asyncio

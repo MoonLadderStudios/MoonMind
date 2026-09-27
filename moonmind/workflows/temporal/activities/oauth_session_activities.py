@@ -17,7 +17,6 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
-from uuid import UUID
 
 from temporalio import activity, exceptions
 
@@ -30,12 +29,87 @@ from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_r
 from moonmind.provider_profiles.oauth_policy import (
     effective_oauth_capacity_for_finalization,
 )
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider_bootstrap_command,
     get_provider_default,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _create_oauth_validation_binding(
+    repository: Any, profile_id: str, binding: Any = None
+) -> Any:
+    """Resolve missing launch metadata from persisted policy, preserving choices."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import ManagedAgentProviderProfile
+    from api_service.services.omnigent_policies import OmnigentPolicyService
+    from moonmind.omnigent.execution_profiles import PROFILES
+    from moonmind.omnigent.profile_bound_execution import (
+        _compile_persisted_effective_launch,
+    )
+
+    async with async_session_maker() as db:
+        profile = await db.get(ManagedAgentProviderProfile, profile_id)
+        if profile is None:
+            raise ValueError("OAuth Provider Profile no longer exists")
+        provider_slug = {"codex_cli": "codex", "claude_code": "claude"}.get(
+            profile.runtime_id
+        )
+        if provider_slug is None:
+            raise ValueError("OAuth Provider Profile runtime is unsupported")
+        execution_profile_ref = (
+            binding.execution_profile_ref if binding else None
+        ) or f"omnigent-{provider_slug}@1"
+        execution_profile = PROFILES[execution_profile_ref]
+        policies = OmnigentPolicyService(db)
+        if binding and binding.launch_policy_ref:
+            policy_snapshot = await policies.resolve_runtime_snapshot(
+                binding.launch_policy_ref
+            )
+        else:
+            # Pre-snapshot bindings used host_launch_profile_ref as a substrate
+            # selector, not a policy ref. Only its presence determines host mode.
+            if binding:
+                mode = "on-demand" if binding.host_launch_profile_ref else "static"
+                policy_id = f"{provider_slug}-{mode}"
+            else:
+                policy_id = execution_profile.default_policy_ref.rsplit("@", 1)[0]
+            policy_snapshot = await policies.resolve_default_runtime_snapshot(policy_id)
+        policy_ref = policy_snapshot["policyRef"]
+        effective_launch = _compile_persisted_effective_launch(
+            policy_snapshot, provider_profile_id=profile_id
+        )
+        if binding:
+            expected_mode = (
+                "on_demand_docker"
+                if binding.host_launch_profile_ref
+                else "static_compose"
+            )
+            if effective_launch["hostMode"] != expected_mode:
+                raise ValueError(
+                    f"OAuth policy {policy_ref} conflicts with bound host mode {expected_mode}"
+                )
+
+    return await repository.create_or_update_static_binding(
+        profile_id=profile_id,
+        endpoint_ref=(
+            binding.endpoint_ref if binding else execution_profile.endpoint_ref
+        ),
+        static_host_id=(
+            binding.static_host_id
+            if binding and effective_launch["hostMode"] == "static_compose"
+            else None
+        ),
+        host_launch_profile_ref=(
+            policy_ref if effective_launch["hostMode"] == "on_demand_docker" else None
+        ),
+        execution_profile_ref=execution_profile_ref,
+        launch_policy_ref=policy_ref,
+        effective_launch_snapshot=effective_launch,
+    )
 
 
 @activity.defn(name="oauth_session.prepare_credential_maintenance")
@@ -132,8 +206,29 @@ async def oauth_session_revalidate_bound_host(
         raise ValueError("profile_id, provider_lease_id, and session_id are required")
     repository = OmnigentOAuthHostRepository(async_session_maker)
     binding = await repository.refresh_binding_generation(profile_id)
-    if binding is None:
-        return {"profile_id": profile_id, "status": "no_binding"}
+    if binding is None or not binding.effective_launch_snapshot:
+        try:
+            binding = await _create_oauth_validation_binding(
+                repository, profile_id, binding
+            )
+        except Exception as exc:
+            logger.warning(
+                "OAuth host binding unavailable before credential validation: "
+                "profile_id=%s execution_profile_ref=%s launch_policy_ref=%s "
+                "error_type=%s detail=%s",
+                profile_id,
+                getattr(binding, "execution_profile_ref", None),
+                getattr(binding, "launch_policy_ref", None),
+                type(exc).__name__,
+                redact_sensitive_text(SecretRedactor.from_environ().scrub(str(exc)))[
+                    :500
+                ],
+            )
+            return {
+                "profile_id": profile_id,
+                "status": "validation_unavailable",
+                "validation_mode": "credential_only",
+            }
     lease = await repository.create_or_get_host_lease(
         binding=binding,
         provider_lease_id=provider_lease_id,
@@ -152,6 +247,7 @@ async def oauth_session_revalidate_bound_host(
             new_status="starting",
         )
     credential_validation_failed = False
+    cleanup_proven = False
     try:
         async with pooled_http_client() as http_client:
             client = OmnigentHttpClient(
@@ -163,21 +259,50 @@ async def oauth_session_revalidate_bound_host(
             runtime = OmnigentOAuthHostRuntime(client=client)
             preflight_error: BaseException | None = None
             preflight: dict[str, Any] | None = None
-            try:
-                preflight = await runtime.validate_credential_mount(
-                    binding=binding,
-                    host_lease=lease,
-                    effective_launch=(
-                        lease.effective_launch_snapshot
-                        or binding.effective_launch_snapshot
-                    ),
-                )
-            except (Exception, asyncio.CancelledError) as exc:
-                preflight_error = exc
-                credential_validation_failed = (
-                    isinstance(exc, OmnigentOAuthHostError)
-                    and exc.code == HostPreflightFailure.LOGIN_STATUS_FAILED.value
-                )
+            for attempt in range(3):
+                try:
+                    preflight = await runtime.validate_credential_mount(
+                        binding=binding,
+                        host_lease=lease,
+                        effective_launch=(
+                            lease.effective_launch_snapshot
+                            or binding.effective_launch_snapshot
+                        ),
+                    )
+                    preflight_error = None
+                    break
+                except (Exception, asyncio.CancelledError) as exc:
+                    preflight_error = exc
+                    logger.warning(
+                        "OAuth credential preflight unavailable: profile_id=%s "
+                        "attempt=%s error_type=%s failure_code=%s",
+                        profile_id,
+                        attempt + 1,
+                        type(exc).__name__,
+                        (
+                            exc.code
+                            if isinstance(exc, OmnigentOAuthHostError)
+                            else "unclassified"
+                        ),
+                    )
+                    retryable = isinstance(
+                        exc, OmnigentOAuthHostError
+                    ) and exc.code in {
+                        HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                        HostPreflightFailure.VALIDATION_UNAVAILABLE.value,
+                    }
+                    if not retryable or attempt == 2:
+                        break
+                    try:
+                        await asyncio.sleep(2**attempt)
+                    except asyncio.CancelledError as cancelled:
+                        preflight_error = cancelled
+                        break
+            credential_validation_failed = (
+                isinstance(preflight_error, OmnigentOAuthHostError)
+                and preflight_error.code
+                == HostPreflightFailure.LOGIN_STATUS_FAILED.value
+            )
 
             cleanup_error: BaseException | None = None
             try:
@@ -197,6 +322,7 @@ async def oauth_session_revalidate_bound_host(
                     raise cleanup_error from preflight_error
                 raise cleanup_error
             await repository.mark_host_lease_stopped(lease.lease_id)
+            cleanup_proven = True
             if preflight_error is not None:
                 raise preflight_error
     except (Exception, asyncio.CancelledError):
@@ -240,6 +366,17 @@ async def oauth_session_revalidate_bound_host(
                     await sync_provider_profile_manager(
                         session=db, runtime_id=profile.runtime_id
                     )
+        if cleanup_proven:
+            return {
+                "profile_id": profile_id,
+                "status": (
+                    "credential_invalid"
+                    if credential_validation_failed
+                    else "validation_unavailable"
+                ),
+                "credential_generation": lease.credential_generation,
+                "validation_mode": "credential_only",
+            }
         raise
     if preflight is None:
         raise RuntimeError("OAuth credential preflight produced no result")

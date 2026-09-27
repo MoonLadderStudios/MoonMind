@@ -50,7 +50,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 #: Historical non-expiring format, retained for persisted attempt handoffs.
 ATTEMPT_HANDOFF_FORMAT_VERSION = 1
@@ -124,6 +124,19 @@ ATTEMPT_OUTCOMES = frozenset(
         OUTCOME_RUNTIME_UNAVAILABLE,
     }
 )
+
+#: Outcomes charged against the issue's retry allowance.
+CHARGED_OUTCOMES = frozenset(
+    {"in_progress", "implemented", "no_work", "failed", "cancelled", "held"}
+)
+
+#: An operator's audited retry reset. It is not an attempt and is never
+#: charged: it ends the charged window so every earlier attempt stays in
+#: lineage without counting against the allowance. Deliberately absent from
+#: :data:`ATTEMPT_OUTCOMES`, so lifecycle tool inputs that flow through
+#: :func:`build_attempt_handoff` can never mint one; only
+#: :func:`build_retry_reset_handoff` does.
+OUTCOME_RETRY_RESET = "retry_reset"
 
 #: Machine marker prefix. The attempt id is embedded so uncertain creation
 #: can reconcile by stable marker before retrying.
@@ -478,6 +491,59 @@ def build_attempt_handoff(
     )
 
 
+def build_retry_reset_handoff(
+    *,
+    attempt_id: str,
+    deployment_id: str,
+    repository: str,
+    issue_number: int,
+    authorized_by: str,
+    authorized_at: str,
+    reason: str,
+    predecessor_attempt_id: str = "",
+    predecessor_comment_id: str = "",
+    superseded_attempt_ids: Sequence[Any] = (),
+    allowance: int = 3,
+) -> AttemptHandoff:
+    """Build an operator's audited retry-reset record.
+
+    The record is released history, not an attempt: it reserves nothing and
+    is never charged. It names who authorized the reset, when, why, and
+    which attempts it supersedes; those attempts stay in lineage. Built
+    directly rather than through :func:`build_attempt_handoff` so lifecycle
+    tool inputs can never mint one.
+    """
+    who = _truncate_text(authorized_by, 100)
+    when = _truncate_text(authorized_at, 64)
+    why = _truncate_text(reason)
+    if not who or not when or not why:
+        raise ValueError(
+            "retry_reset_unauthorized: a retry reset requires the authorizing "
+            "operator, the instant, and a reason"
+        )
+    superseded = tuple(_truncate_list(list(superseded_attempt_ids)))
+    return AttemptHandoff(
+        attempt_id=_truncate_text(attempt_id, 200),
+        deployment_id=_truncate_text(deployment_id, 200),
+        repository=_truncate_text(repository, 200),
+        issue_number=int(issue_number) if int(issue_number) > 0 else 0,
+        predecessor_attempt_id=_truncate_text(predecessor_attempt_id, 200),
+        predecessor_comment_id=_truncate_text(predecessor_comment_id, 200),
+        activity=ATTEMPT_ACTIVITY_RELEASED,
+        last_report=why,
+        outcome=OUTCOME_RETRY_RESET,
+        next_action="fresh_retry",
+        verification_summary=(
+            f"Retry reset supersedes {len(superseded)} earlier attempt record(s); "
+            "they remain in history but no longer count against the retry allowance."
+        ),
+        retry_history=superseded,
+        retry_allowance=max(0, int(allowance)),
+        retry_remaining=max(0, int(allowance)),
+        reset_authorization=_truncate_text(f"{who} at {when}", 200),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Redaction (existing outbound scanning)
 # ---------------------------------------------------------------------------
@@ -503,6 +569,11 @@ def redacted_error_summary(summary: str) -> str:
 
 
 def _readable_summary(handoff: AttemptHandoff, issue_ref: str) -> str:
+    if is_retry_reset(handoff):
+        return (
+            f"An operator recorded an audited retry reset for {issue_ref}. Earlier "
+            "attempts stay in this history but no longer count against the retry allowance."
+        )
     if handoff.pr_url and handoff.activity == ATTEMPT_ACTIVITY_AWAITING_REVIEW:
         return f"Implementation pull request: {handoff.pr_url}"
     summaries = {
@@ -560,6 +631,8 @@ def render_attempt_comment(handoff: AttemptHandoff) -> str:
         lines.append(f"Operator hold: {handoff.operator_hold_reason or 'held'}.")
     elif handoff.cooldown_until:
         lines.append(f"Cooldown until: {handoff.cooldown_until}.")
+    if is_retry_reset(handoff):
+        lines.append(f"Retry reset authorized by {handoff.reset_authorization}.")
     lines.append(f"Retry: {handoff.retry_remaining}/{handoff.retry_allowance} remaining.")
     lines.append("")
     metadata = json.dumps(handoff.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -992,7 +1065,16 @@ def check_cross_attempt_overwrite(*, target_attempt_id: str, writer_attempt_id: 
 
 @dataclass(frozen=True)
 class RetryDecision:
-    """Effective retry allowance derived from portable lineage only."""
+    """Effective retry allowance derived from portable lineage only.
+
+    ``charged_attempts`` names every attempt charged against ``allowance``
+    with its recorded outcome; ``unresolved_attempts`` counts the charged
+    ones that never recorded a terminal outcome and hold no live lease, so a
+    rejection can say whether it rests on unfinished attempt accounting
+    rather than on proven outcomes. ``unauthorized_resets`` counts reset
+    records that were ignored because the authenticated operator account
+    did not post them.
+    """
 
     allowed: bool
     reason_code: str
@@ -1001,6 +1083,11 @@ class RetryDecision:
     cooldown_until: str = ""
     operator_hold: bool = False
     simultaneous_races_possible: bool = True
+    allowance: int = 0
+    charged_attempts: tuple[dict[str, Any], ...] = ()
+    unresolved_attempts: int = 0
+    reset_authorization: str = ""
+    unauthorized_resets: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1011,7 +1098,89 @@ class RetryDecision:
             "cooldownUntil": self.cooldown_until,
             "operatorHold": self.operator_hold,
             "simultaneousRacesPossible": self.simultaneous_races_possible,
+            "allowance": self.allowance,
+            "chargedAttempts": [dict(item) for item in self.charged_attempts[:MAX_LIST_ITEMS]],
+            "chargedAttemptsTruncated": len(self.charged_attempts) > MAX_LIST_ITEMS,
+            "unresolvedAttempts": self.unresolved_attempts,
+            "resetAuthorization": self.reset_authorization,
+            "unauthorizedResets": self.unauthorized_resets,
         }
+
+
+def is_retry_reset(handoff: AttemptHandoff) -> bool:
+    """Return True for an operator's audited retry-reset record."""
+    return (
+        handoff.outcome == OUTCOME_RETRY_RESET
+        and handoff.activity == ATTEMPT_ACTIVITY_RELEASED
+        and bool(_string(handoff.reset_authorization))
+    )
+
+
+def _reset_bound_to_poster(handoff: AttemptHandoff, poster_login: str) -> bool:
+    """Return True when a reset's authorization names the account that posted it.
+
+    :func:`build_retry_reset_handoff` records ``"<login> at <instant>"`` and
+    a reason. A record naming anyone else, or missing either, is a
+    self-declared field, not the authenticated operator's decision.
+    """
+    from datetime import datetime
+
+    who, separator, when = handoff.reset_authorization.partition(" at ")
+    poster = _string(poster_login)
+    if not separator or not poster or _string(who).casefold() != poster.casefold():
+        return False
+    try:
+        datetime.fromisoformat(when.strip())
+    except ValueError:
+        return False
+    return bool(_string(handoff.last_report))
+
+
+def _unfinished_accounting(handoff: AttemptHandoff, now_epoch: float) -> bool:
+    """Return True when a charged attempt never recorded a terminal outcome.
+
+    An attempt whose valid lease is still running is simply in progress. Any
+    other ``in_progress`` record -- an expired lease, a version-1 handoff, or
+    a caller with no clock to prove liveness -- is accounting that its owner
+    never finished, not a recorded implementation outcome.
+    """
+    if handoff.outcome != "in_progress":
+        return False
+    try:
+        now = float(now_epoch)
+    except (TypeError, ValueError):
+        now = 0.0
+    if now <= 0 or not handoff.lease_expires_at:
+        return True
+    from moonmind.workflows.temporal.github_issue_claim_lease import (
+        parse_time,
+        valid_lease,
+    )
+
+    expires = parse_time(handoff.lease_expires_at)
+    return not (valid_lease(handoff) and expires is not None and expires.timestamp() > now)
+
+
+def _budget_exhausted_summary(
+    charged: Sequence[Mapping[str, Any]], *, allowance: int, unresolved: int
+) -> str:
+    if unresolved:
+        return (
+            f"{len(charged)} attempt(s) are charged against the retry allowance of "
+            f"{allowance}; {unresolved} of them never recorded a terminal outcome. That "
+            "is unfinished attempt accounting, not a proven implementation failure: the "
+            "owning deployment's claim sweep records the outcome from its execution "
+            "evidence, and where that evidence is gone an operator can record an "
+            "audited retry reset. No exact global count is claimed under simultaneous races."
+        )
+    outcomes: dict[str, int] = {}
+    for item in charged:
+        outcomes[str(item["outcome"])] = outcomes.get(str(item["outcome"]), 0) + 1
+    recorded = ", ".join(f"{outcome}: {count}" for outcome, count in outcomes.items())
+    return (
+        f"Recorded attempt outcomes ({recorded}) exhaust the retry allowance of "
+        f"{allowance}; no exact global count is claimed under simultaneous races."
+    )
 
 
 def _cooldown_is_live(cooldown_until: str, now_epoch: float) -> bool:
@@ -1121,23 +1290,28 @@ def compute_effective_retry(
     max_attempts: int,
     now_epoch: float = 0.0,
     cooldown_seconds: float = 0.0,
-    reset_authorization: str = "",
+    authorized_resets: Collection[str] = (),
 ) -> RetryDecision:
     """Compute the retry decision from portable handoff lineage only.
 
-    Fresh workflow ids, device changes, and label removal never reset this
-    budget: only observed handoff lineage counts. Internal retries stay
-    within the controlling attempt and never consume a new attempt slot.
-    Missing or incompatible policy lineage blocks automatic recovery.
-    Counts are reported as observed lower bounds: no exact global counter
-    is claimed under simultaneous races.
+    *handoffs* are in the order GitHub recorded them. Fresh workflow ids,
+    device changes, and label removal never reset this budget: only observed
+    handoff lineage counts, and the only reset is an operator's audited
+    reset record in that lineage whose attempt id the caller authenticated
+    in *authorized_resets*. Internal retries stay within the
+    controlling attempt and never consume a new attempt slot. Missing or
+    incompatible policy lineage blocks automatic recovery. Counts are
+    reported as observed lower bounds: no exact global counter is claimed
+    under simultaneous races.
     """
     ordered = list(handoffs)
+    allowance = max(0, int(max_attempts))
     if not ordered:
         return RetryDecision(
             allowed=False,
             reason_code="missing_lineage",
             summary="No portable attempt lineage is observable; automatic recovery is blocked.",
+            allowance=allowance,
         )
     for handoff in ordered:
         if handoff.retry_policy_version != RETRY_POLICY_VERSION:
@@ -1145,7 +1319,9 @@ def compute_effective_retry(
                 allowed=False,
                 reason_code="incompatible_policy",
                 summary="Incompatible retry policy lineage blocks automatic recovery.",
+                allowance=allowance,
             )
+    # A retry reset never releases a hold: holds are resolved on their own.
     if any(handoff.operator_hold for handoff in ordered):
         reason = next(
             (handoff.operator_hold_reason for handoff in ordered if handoff.operator_hold and handoff.operator_hold_reason),
@@ -1156,35 +1332,48 @@ def compute_effective_retry(
             reason_code="operator_hold",
             summary=f"Operator hold survives new ids and devices: {reason}. Authorized resolution is required.",
             operator_hold=True,
+            allowance=allowance,
         )
-    if _string(reset_authorization):
-        # An audited reset decision is the only lineage reset path; the
-        # authorization token itself travels in the new handoff.
-        return RetryDecision(
-            allowed=True,
-            reason_code="authorized_reset",
-            summary="Authorized audited reset establishes a fresh allowance.",
-            remaining=max(0, int(max_attempts)),
-        )
+    # An authenticated reset clears exactly the attempts it names that were
+    # recorded before it. They stay in lineage for prior-work assessment, but
+    # neither they nor their back-offs count any more. An attempt recorded
+    # after the operator reviewed the history is not named, so it still counts.
+    authorized = {_string(item) for item in authorized_resets}
+    resets = [(index, handoff) for index, handoff in enumerate(ordered) if is_retry_reset(handoff)]
+    honored = [(index, handoff) for index, handoff in resets if handoff.attempt_id in authorized]
+    cleared: set[str] = set()
+    for index, reset in honored:
+        cleared.update({item.attempt_id for item in ordered[:index]}.intersection(reset.retry_history))
+    reset_authorization = honored[-1][1].reset_authorization if honored else ""
+    unauthorized_resets = len(resets) - len(honored)
+    window = [
+        handoff
+        for handoff in ordered
+        if handoff.attempt_id not in cleared and not is_retry_reset(handoff)
+    ]
     # An attempt whose deployment never started a runtime says nothing about
     # this issue, so it is retained as lineage but never charged to the
     # allowance. Charging it lets one broken deployment exhaust every issue.
     # A pre-dispatch announcement that lapsed without ever recording an
     # outcome is the same fault reached before the attempt could name it:
     # also retained, also uncharged, and backed off the same way below.
-    # An expired ``active`` attempt reached dispatch and still counts.
-    lapses = [_lapsed_announcement_at(handoff, now_epoch) for handoff in ordered]
-    counted = [
-        handoff
-        for handoff, lapsed in zip(ordered, lapses)
-        if handoff.outcome != OUTCOME_RUNTIME_UNAVAILABLE and not lapsed
-    ]
-    failures = sum(1 for handoff in counted if handoff.outcome in {"failed", "cancelled", "held"})
-    no_progress = sum(1 for handoff in counted if handoff.outcome == "no_work")
-    observed_attempts = failures + no_progress + sum(1 for handoff in counted if handoff.outcome in {"implemented", "in_progress"})
-    remaining = max(0, int(max_attempts) - observed_attempts)
+    # An expired ``active`` attempt reached dispatch and still counts, but it
+    # is reported as unfinished accounting rather than a recorded outcome.
+    lapses = [_lapsed_announcement_at(handoff, now_epoch) for handoff in window]
+    charged = tuple(
+        {
+            "attemptId": handoff.attempt_id,
+            "outcome": handoff.outcome,
+            "activity": handoff.activity,
+            "unresolved": _unfinished_accounting(handoff, now_epoch),
+        }
+        for handoff, lapsed in zip(window, lapses)
+        if handoff.outcome in CHARGED_OUTCOMES and not lapsed
+    )
+    unresolved = sum(1 for item in charged if item["unresolved"])
+    remaining = max(0, allowance - len(charged))
     latest_cooldown = ""
-    for handoff, lapsed in zip(ordered, lapses):
+    for handoff, lapsed in zip(window, lapses):
         recorded = [
             handoff.cooldown_until,
             _announcement_backoff_until(lapsed) if lapsed else "",
@@ -1193,16 +1382,27 @@ def compute_effective_retry(
             if candidate and candidate > latest_cooldown:
                 latest_cooldown = candidate
     _ = cooldown_seconds
+    explanation = {
+        "allowance": allowance,
+        "charged_attempts": charged,
+        "unresolved_attempts": unresolved,
+        "reset_authorization": reset_authorization,
+        "unauthorized_resets": unauthorized_resets,
+    }
     if remaining <= 0:
+        summary = _budget_exhausted_summary(charged, allowance=allowance, unresolved=unresolved)
+        if unauthorized_resets:
+            summary += (
+                f" {unauthorized_resets} retry reset record(s) were ignored: they were "
+                "not posted by the authenticated operator account they name."
+            )
         return RetryDecision(
             allowed=False,
             reason_code="budget_exhausted",
-            summary=(
-                "Observed portable failures exhaust the retry allowance; "
-                "no exact global count is claimed under simultaneous races."
-            ),
+            summary=summary,
             remaining=0,
             cooldown_until=latest_cooldown,
+            **explanation,
         )
     # A supplied clock enforces the recorded back-off. Callers that pass no
     # clock keep reporting the cooldown without acting on it.
@@ -1216,6 +1416,7 @@ def compute_effective_retry(
             ),
             remaining=remaining,
             cooldown_until=latest_cooldown,
+            **explanation,
         )
     return RetryDecision(
         allowed=True,
@@ -1223,6 +1424,7 @@ def compute_effective_retry(
         summary="Portable lineage retains retry allowance.",
         remaining=remaining,
         cooldown_until=latest_cooldown,
+        **explanation,
     )
 
 
@@ -1325,6 +1527,7 @@ class Reconstruction:
     retry_remaining: int = 0
     cooldown_until: str = ""
     operator_hold: bool = False
+    retry: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1336,6 +1539,7 @@ class Reconstruction:
             "retryRemaining": self.retry_remaining,
             "cooldownUntil": self.cooldown_until,
             "operatorHold": self.operator_hold,
+            "retry": dict(self.retry) if self.retry is not None else None,
         }
 
 
@@ -1347,17 +1551,29 @@ def reconstruct_from_comments(
     trusted_posters: Sequence[str] | None,
     max_attempts: int = 3,
     now_epoch: float = 0.0,
+    reset_authorizer_id: Any = "",
 ) -> Reconstruction:
     """Reconstruct remaining work and retry restrictions from GitHub alone.
 
     Private logs are never required. Missing or incompatible lineage,
     conflicting copies, and untrusted provenance produce explicit
     attention outcomes instead of a silently inferred fresh start.
+
+    Trusted provenance is not reset authority. A retry reset counts only
+    when the comment was posted by *reset_authorizer_id* -- the
+    authenticated account id this deployment posts and reads as -- and its
+    authorization names that same account. Any other reset record stays in
+    lineage without resetting anything.
     """
     parsed: list[ParsedAttempt] = []
+    poster_ids: dict[str, str] = {}
     for comment in comments:
         if not isinstance(comment, Mapping):
             continue
+        user = comment.get("user")
+        poster_ids[_string(comment.get("id"))] = (
+            _string(user.get("id")) if isinstance(user, Mapping) else ""
+        )
         parsed.append(
             parse_attempt_comment(
                 comment.get("body"),
@@ -1418,11 +1634,26 @@ def reconstruct_from_comments(
                 reason_code="conflicting_copies",
                 summary=f"Conflicting copies of attempt {attempt_id} require attention.",
             )
-    # Chain from roots (no predecessor) for a stable lineage view.
-    lineage = sorted(handoffs, key=lambda item: (item.predecessor_attempt_id != "", item.attempt_id))
+    # Identical same-ID copies are one logical attempt, never extra charges.
+    # GitHub lists comments oldest first, so lineage keeps recorded order and
+    # a reset record clears only attempts recorded before it.
+    lineage = [copies[0] for copies in by_attempt.values()]
     latest = lineage[-1]
+    authorizer = _string(reset_authorizer_id)
+    authorized_resets = {
+        item.attempt_id
+        for item in marked
+        if authorizer
+        and item.handoff is not None
+        and is_retry_reset(item.handoff)
+        and poster_ids.get(_string(item.comment_id)) == authorizer
+        and _reset_bound_to_poster(item.handoff, item.author_login)
+    }
     retry = compute_effective_retry(
-        lineage, max_attempts=max_attempts, now_epoch=now_epoch
+        lineage,
+        max_attempts=max_attempts,
+        now_epoch=now_epoch,
+        authorized_resets=authorized_resets,
     )
     if not retry.allowed and retry.reason_code in {"missing_lineage", "incompatible_policy"}:
         return Reconstruction(
@@ -1430,6 +1661,7 @@ def reconstruct_from_comments(
             reason_code=retry.reason_code,
             summary=retry.summary,
             lineage=tuple(item.to_dict() for item in lineage),
+            retry=retry.to_dict(),
         )
     return Reconstruction(
         outcome="reconstructed" if retry.allowed else "needs_attention",
@@ -1443,6 +1675,7 @@ def reconstruct_from_comments(
         retry_remaining=retry.remaining,
         cooldown_until=retry.cooldown_until or latest.cooldown_until,
         operator_hold=retry.operator_hold or latest.operator_hold,
+        retry=retry.to_dict(),
     )
 
 
@@ -1458,6 +1691,8 @@ __all__ = [
     "ATTEMPT_HANDOFF_FORMAT_VERSION",
     "ATTEMPT_NEXT_ACTIONS",
     "ATTEMPT_OUTCOMES",
+    "CHARGED_OUTCOMES",
+    "OUTCOME_RETRY_RESET",
     "OUTCOME_RUNTIME_UNAVAILABLE",
     "RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS",
     "HANDOFF_CODE_FENCE",
@@ -1474,6 +1709,7 @@ __all__ = [
     "RetryDecision",
     "activity_for_lifecycle_mode",
     "build_attempt_handoff",
+    "build_retry_reset_handoff",
     "check_cross_attempt_overwrite",
     "compute_effective_retry",
     "confirm_release",
@@ -1482,6 +1718,7 @@ __all__ = [
     "find_attempt_comments",
     "get_or_create_installation_id",
     "internal_retry_within_attempt",
+    "is_retry_reset",
     "is_terminal_activity",
     "new_attempt_id",
     "normalize_activity",

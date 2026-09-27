@@ -50,7 +50,7 @@ cmd_sync() {
     echo "Error: No Claude credential directory found at ${HOST_CLAUDE_DIR}" >&2
     echo "" >&2
     echo "Either:" >&2
-    echo "  1. Run 'claude login' locally to authenticate, then re-run this script." >&2
+    echo "  1. Run 'claude auth login' locally to authenticate, then re-run this script." >&2
     echo "  2. Run '$0 --login' to authenticate interactively inside the container." >&2
     exit 1
   fi
@@ -104,9 +104,10 @@ cmd_login() {
     -e CLAUDE_API_KEY= \
     -e TERM="${CLAUDE_TERM}" \
     -e CLAUDE_HOME="${CLAUDE_HOME}" \
+    -e CLAUDE_CONFIG_DIR="${CLAUDE_HOME}" \
     -e CLAUDE_VOLUME_NAME="${CLAUDE_VOLUME_NAME}" \
     "$AUTH_SERVICE" \
-    -lc 'unset ANTHROPIC_API_KEY CLAUDE_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${CLAUDE_HOME:-/home/app/.claude}"; exec claude login'
+    -lc 'unset ANTHROPIC_API_KEY CLAUDE_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${CLAUDE_HOME:-/home/app/.claude}"; exec claude auth login'
 }
 
 # ---------------------------------------------------------------------------

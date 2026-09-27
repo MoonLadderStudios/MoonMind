@@ -2240,3 +2240,608 @@ async def test_checkpoint_branch_compare_refreshes_when_branch_head_changes(
         )
         operations = result.scalars().all()
     assert len(operations) == 2
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_reports_objective_rubric_provenance_without_side_effects(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: explicit pair + objective read/report journey."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-provenance"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for provenance comparison."},
+            "idempotencyKey": "mm-2215:fork-provenance",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={
+            "against": fork_id,
+            "objective": "Decide which candidate keeps the API contract fix.",
+            "rubricId": "checkpoint-branch-gates",
+        },
+    )
+
+    assert compared.status_code == 200
+    body = compared.json()
+    record = body["comparisonRecord"]
+    assert record["objective"] == "Decide which candidate keeps the API contract fix."
+    assert record["rubricId"] == "checkpoint-branch-gates"
+    candidate_ids = {item["candidateId"] for item in record["candidates"]}
+    assert candidate_ids == {branch_id, fork_id}
+    assert all(
+        item["workflowId"] == "mm:wf-branch" for item in record["candidates"]
+    )
+    assert record["evidenceRefs"]["branchCheckpointRef"].startswith("artifact://")
+    assert record["evidenceRefs"]["againstCheckpointRef"].startswith("artifact://")
+    assert body["diagnosticsRefs"]
+    assert record["provenance"]["newStore"] is False
+    assert record["provenance"]["newEngine"] is False
+    assert (
+        "checkpoint_branch.compare" in record["provenance"]["store"]
+    )
+    assert record["sideEffects"] == {
+        "launchedNewWork": False,
+        "changedDefaults": False,
+        "deployed": False,
+        "promotedBranch": False,
+        "publishedCode": False,
+        "newInferenceAuthorized": False,
+    }
+    assert "observedUsd" in record["costs"]["branch"]
+    assert "estimatedUsd" in record["costs"]["branch"]
+    assert record["costs"]["provenance"]
+    assert record["measurementLimits"]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_reports_no_winner_for_failed_candidate(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: failed samples stay observations with no winner."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-no-winner"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for no-winner comparison."},
+            "idempotencyKey": "mm-2215:fork-no-winner",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        right = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == fork_id
+                )
+            )
+        ).scalar_one()
+        right.state = "failed"
+        await session.commit()
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={
+            "against": fork_id,
+            "objective": "Observe a failed candidate without declaring success.",
+        },
+    )
+
+    assert compared.status_code == 200
+    record = compared.json()["comparisonRecord"]
+    assert record["winner"]["candidate"] == "none"
+    assert record["winner"]["universalClaim"] is False
+    assert record["winner"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_resumes_same_report_for_same_objective(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: resuming a report reruns no candidate."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-resume"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for resume comparison."},
+            "idempotencyKey": "mm-2215:fork-resume",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+
+    async def _compare(objective: str) -> dict:
+        response = await checkpoint_branch_client.get(
+            f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+            params={"against": fork_id, "objective": objective},
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    first = await _compare("Which candidate is closer to the fix?")
+    second = await _compare("Which candidate is closer to the fix?")
+    assert second["summaryRef"] == first["summaryRef"]
+    third = await _compare("A different explicit objective.")
+    assert third["summaryRef"] != first["summaryRef"]
+    assert third["comparisonRecord"]["objective"] == "A different explicit objective."
+
+
+async def _count_compare_operations(client: AsyncClient) -> int:
+    async for session in client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(
+            select(WorkflowCheckpointBranchOperation).where(
+                WorkflowCheckpointBranchOperation.operation
+                == "checkpoint_branch.compare"
+            )
+        )
+        return len(result.scalars().all())
+    raise AssertionError("unreachable")
+
+
+async def _count_branches(client: AsyncClient) -> int:
+    async for session in client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(select(WorkflowCheckpointBranch))
+        return len(result.scalars().all())
+    raise AssertionError("unreachable")
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_comparison_preview_reports_bounded_preview_without_launch(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: previewing saved results launches nothing."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-preview"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for preview comparison."},
+            "idempotencyKey": "mm-2215:fork-preview",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+    branches_before = await _count_branches(checkpoint_branch_client)
+    operations_before = await _count_compare_operations(checkpoint_branch_client)
+
+    previewed = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Compare two saved candidates.",
+            "rubricId": "checkpoint-branch-gates",
+            "allowNewRuns": False,
+            "candidates": [
+                {"candidateId": "left", "branchId": branch_id},
+                {"candidateId": "right", "branchId": fork_id},
+            ],
+        },
+    )
+
+    assert previewed.status_code == 200
+    preview = previewed.json()
+    assert preview["selectedRunCount"] == 0
+    assert preview["reuseExistingCount"] == 2
+    assert preview["willLaunchNewWork"] is False
+    assert preview["authorizesNewInference"] is False
+    assert preview["noCartesianExpansion"] is True
+    assert preview["creationPath"]
+    assert await _count_branches(checkpoint_branch_client) == branches_before
+    assert await _count_compare_operations(checkpoint_branch_client) == (
+        operations_before
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_comparison_preview_rejects_cartesian_expansion(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: no eager expansion across model/provider grids."""
+
+    matrix = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Compare everything.",
+            "allowNewRuns": True,
+            "expandCartesian": True,
+            "candidates": [
+                {"candidateId": "left", "sourceIntentRef": "artifact://intent/a"},
+                {"candidateId": "right", "sourceIntentRef": "artifact://intent/a"},
+            ],
+        },
+    )
+    assert matrix.status_code == 422
+
+    oversized = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Compare too many candidates.",
+            "allowNewRuns": False,
+            "candidates": [
+                {"candidateId": f"candidate-{index}"} for index in range(5)
+            ],
+        },
+    )
+    assert oversized.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_comparison_preview_requires_bounded_configs_for_new_runs(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: requested runs need bounds, shared intent, budgets."""
+
+    unbounded = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Request new candidates without bounds.",
+            "allowNewRuns": True,
+            "candidates": [
+                {
+                    "candidateId": "left",
+                    "sourceIntentRef": "artifact://intent/shared",
+                },
+                {
+                    "candidateId": "right",
+                    "sourceIntentRef": "artifact://intent/shared",
+                    "maxBudgetUsd": 2.0,
+                },
+            ],
+        },
+    )
+    assert unbounded.status_code == 422
+
+    diverged = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Request new candidates with diverged intent.",
+            "allowNewRuns": True,
+            "candidates": [
+                {
+                    "candidateId": "left",
+                    "sourceIntentRef": "artifact://intent/one",
+                    "maxBudgetUsd": 2.0,
+                },
+                {
+                    "candidateId": "right",
+                    "sourceIntentRef": "artifact://intent/two",
+                    "maxBudgetUsd": 2.0,
+                },
+            ],
+        },
+    )
+    assert diverged.status_code == 422
+
+    branches_before = await _count_branches(checkpoint_branch_client)
+    bounded = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Request two bounded candidates.",
+            "allowNewRuns": True,
+            "candidates": [
+                {
+                    "candidateId": "left",
+                    "sourceIntentRef": "artifact://intent/shared",
+                    "maxBudgetUsd": 2.0,
+                },
+                {
+                    "candidateId": "right",
+                    "sourceIntentRef": "artifact://intent/shared",
+                    "maxBudgetUsd": 3.0,
+                },
+            ],
+        },
+    )
+    assert bounded.status_code == 200
+    preview = bounded.json()
+    assert preview["selectedRunCount"] == 2
+    assert preview["willLaunchNewWork"] is False
+    assert preview["authorizesNewInference"] is False
+    assert preview["costDeltas"]["totalMaxBudgetUsd"] == 5.0
+    assert preview["privacyChanges"]
+    assert preview["authorityChanges"]
+    assert await _count_branches(checkpoint_branch_client) == branches_before
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_uses_persisted_verifier_verdicts(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: persisted verification decides the observed winner."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-verifier-verdict"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for verifier verdict comparison."},
+            "idempotencyKey": "mm-2215:fork-verifier-verdict",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        for target_id, verdict in (
+            (branch_id, "FULLY_IMPLEMENTED"),
+            (fork_id, "ADDITIONAL_WORK_NEEDED"),
+        ):
+            result = await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == target_id
+                )
+            )
+            branch = result.scalar_one()
+            branch.latest_verification_verdict = verdict
+            branch.latest_verification_ref = f"artifact://verdict/{target_id}"
+        await session.commit()
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={
+            "against": fork_id,
+            "objective": "Prefer the verified candidate.",
+        },
+    )
+
+    assert compared.status_code == 200
+    record = compared.json()["comparisonRecord"]
+    assert "gate_verdict_unavailable" not in record["missingEvidence"]
+    assert record["winner"]["candidate"] == branch_id
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_refreshes_when_diagnostics_change(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: new cost evidence invalidates the cached report."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-diagnostics-refresh"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for diagnostics refresh comparison."},
+            "idempotencyKey": "mm-2215:fork-diagnostics-refresh",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+
+    first_compare = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": fork_id, "objective": "Track cost evidence."},
+    )
+    assert first_compare.status_code == 200
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id == branch_id
+            )
+        )
+        branch = result.scalar_one()
+        branch.diagnostics = {
+            **(branch.diagnostics or {}),
+            "observedCostUsd": 4.5,
+        }
+        await session.commit()
+
+    second_compare = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": fork_id, "objective": "Track cost evidence."},
+    )
+    assert second_compare.status_code == 200
+    assert second_compare.json()["summaryRef"] != first_compare.json()["summaryRef"]
+    assert (
+        second_compare.json()["comparisonRecord"]["costs"]["branch"]["observedUsd"]
+        == 4.5
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_reads_budget_from_runtime_selection(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: ordinary admission budgets appear in provenance."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-runtime-budget"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for budget provenance comparison."},
+            "idempotencyKey": "mm-2215:fork-runtime-budget",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id == branch_id
+            )
+        )
+        branch = result.scalar_one()
+        branch.diagnostics = {
+            **(branch.diagnostics or {}),
+            "runtimeSelection": {
+                **((branch.diagnostics or {}).get("runtimeSelection") or {}),
+                "maxBudgetUsd": 7.5,
+            },
+        }
+        await session.commit()
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": fork_id, "objective": "Track budget provenance."},
+    )
+
+    assert compared.status_code == 200
+    assert (
+        compared.json()["comparisonRecord"]["costs"]["branch"]["budgetBoundUsd"]
+        == 7.5
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_rejects_unsupported_rubric(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: unapplied rubrics cannot be claimed."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-rubric-reject"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for rubric rejection."},
+            "idempotencyKey": "mm-2215:fork-rubric-reject",
+        },
+    )
+    fork_id = forked.json()["branchId"]
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": fork_id, "rubricId": "custom-quality-rubric"},
+    )
+
+    assert compared.status_code in {422, 409}
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_comparison_preview_honest_workspace_privacy(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: isolation is attested only when guaranteed."""
+
+    previewed = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Request runs without an isolating workspace policy.",
+            "allowNewRuns": True,
+            "candidates": [
+                {
+                    "candidateId": "left",
+                    "sourceIntentRef": "artifact://intent/shared",
+                    "maxBudgetUsd": 2.0,
+                },
+                {
+                    "candidateId": "right",
+                    "sourceIntentRef": "artifact://intent/shared",
+                    "maxBudgetUsd": 2.0,
+                    "workspacePolicy": "continue_from_previous_execution",
+                },
+            ],
+        },
+    )
+
+    assert previewed.status_code == 200
+    assert (
+        "isolated_workspace_per_requested_run"
+        not in previewed.json()["privacyChanges"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_comparison_preview_rejects_headless_branch_reuse(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#2215: branches without completed results are not reusable."""
+
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-headless-reuse"),
+    )
+    branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
+    second = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-2215:create-headless-reuse-second"),
+    )
+    second_id = second.json()["branchId"]
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id == second_id
+            )
+        )
+        branch = result.scalar_one()
+        branch.current_head_step_execution_id = None
+        await session.commit()
+
+    previewed = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches/comparison-preview",
+        json={
+            "objective": "Reuse a branch with no completed result.",
+            "allowNewRuns": False,
+            "candidates": [
+                {"candidateId": "left", "branchId": branch_id},
+                {"candidateId": "right", "branchId": second_id},
+            ],
+        },
+    )
+
+    assert previewed.status_code in {404, 409, 422}

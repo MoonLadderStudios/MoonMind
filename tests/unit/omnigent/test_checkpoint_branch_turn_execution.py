@@ -15,8 +15,16 @@ from api_service.services.checkpoint_branch_service import CheckpointBranchServi
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     CheckpointBranchTurnLaunchError,
+    _launch_retry_payloads_equivalent,
     build_branch_turn_execution_identity,
 )
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_contract_for,
+)
+from moonmind.workflows.temporal.workflows import (
+    checkpoint_branch_turn as branch_turn_module,
+)
+from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.omnigent.checkpoints import CandidateWorkspaceAuthority
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.profile_bound_execution import (
@@ -453,6 +461,348 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
 
 
 @pytest.mark.asyncio
+async def test_source_and_destination_validation_are_separate_boundaries() -> None:
+    """The shared owner validates saved content before live authority."""
+
+    session = _Session()
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
+    events: list[str] = []
+
+    async def _source(**_kwargs):
+        events.append("source")
+        return (checkpoint, None)
+
+    async def _destination(**_kwargs):
+        events.append("destination")
+        return (profile, policy)
+
+    owner._validate_source_content = _source  # type: ignore[method-assign]
+    owner._validate_destination_authority = _destination  # type: ignore[method-assign]
+
+    result = await owner._validate_source_authority(
+        branch=branch,
+        turn=turn,
+        binding=binding,
+        source=source,
+        expected_head_version=1,
+    )
+
+    assert events == ["source", "destination"]
+    assert result == (checkpoint, profile, policy)
+
+    async def _failing_source(**_kwargs):
+        events.append("source")
+        raise CheckpointBranchTurnLaunchError(
+            "instruction_digest_mismatch", "branch instructions changed"
+        )
+
+    owner._validate_source_content = _failing_source  # type: ignore[method-assign]
+    with pytest.raises(CheckpointBranchTurnLaunchError) as exc_info:
+        await owner._validate_source_authority(
+            branch=branch,
+            turn=turn,
+            binding=binding,
+            source=source,
+            expected_head_version=1,
+        )
+
+    assert exc_info.value.code == "instruction_digest_mismatch"
+    assert events == ["source", "destination", "source"]
+
+
+def _restorable_checkpoint_bytes(
+    *,
+    credential_generation: int = 1,
+    policy: dict | None = None,
+) -> tuple[bytes, bytes, dict[str, bytes]]:
+    """Build digest-consistent checkpoint bytes for the real restore path."""
+
+    base_bytes, instruction_bytes = _valid_source_checkpoint()
+    payload = json.loads(base_bytes)
+    referenced = {
+        "artifact://external-state": b"external-state-bytes",
+        "artifact://head": b"head-bytes",
+        "artifact://workspace": b"workspace-bytes",
+    }
+    omnigent = payload["omnigentCheckpoint"]
+    omnigent["externalStateDigest"] = (
+        "sha256:" + hashlib.sha256(referenced["artifact://external-state"]).hexdigest()
+    )
+    omnigent["headDigest"] = (
+        "sha256:" + hashlib.sha256(referenced["artifact://head"]).hexdigest()
+    )
+    omnigent["workspaceCheckpointDigest"] = (
+        "sha256:"
+        + hashlib.sha256(referenced["artifact://workspace"]).hexdigest()
+    )
+    omnigent["credentialGeneration"] = credential_generation
+    if policy is not None:
+        omnigent["policyId"] = policy["policyId"]
+        omnigent["policyVersion"] = policy["policyVersion"]
+        omnigent["policyRef"] = policy["policyRef"]
+        omnigent["policyDigest"] = policy["policyDigest"]
+        omnigent["policySnapshotRef"] = policy["snapshotRef"]
+        omnigent["policyValidation"] = policy["validation"]
+    checkpoint_bytes = json.dumps(payload).encode()
+    return checkpoint_bytes, instruction_bytes, referenced
+
+
+def _branch_policy_snapshot() -> dict:
+    return {
+        "policyId": "policy-1",
+        "policyVersion": 1,
+        "policyRef": "policy-1@1",
+        "policyDigest": "sha256:" + "c" * 64,
+        "snapshotRef": "omnigent-policy:sha256:" + "c" * 64,
+        "validation": {"valid": True},
+        "boundaries": {"execution": {"profileRef": "profile-1"}},
+    }
+
+
+async def _validate_split_owner(
+    owner: CheckpointBranchTurnExecutionOwner,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    checkpoint_bytes: bytes,
+    instruction_bytes: bytes,
+    referenced: dict[str, bytes],
+    policy: dict,
+    credential_generation: int,
+) -> tuple:
+    """Run real source-content then destination-authority validation."""
+
+    branch, turn, binding, source, *_rest = _authority_graph()
+    turn.source_checkpoint_digest = branch.source_checkpoint_digest = (
+        "sha256:" + hashlib.sha256(checkpoint_bytes).hexdigest()
+    )
+    turn.instruction_digest = (
+        "sha256:" + hashlib.sha256(instruction_bytes).hexdigest()
+    )
+    owner._session.profile.credential_generation = credential_generation
+
+    async def _read_ref(ref: str, *, field_name: str) -> bytes:
+        if ref == turn.source_checkpoint_ref:
+            return checkpoint_bytes
+        if ref == turn.instruction_ref:
+            return instruction_bytes
+        return referenced[ref]
+
+    owner._read_ref = _read_ref  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        OmnigentPolicyService,
+        "resolve_runtime_snapshot",
+        AsyncMock(return_value=policy),
+    )
+    checkpoint, follow_up_retrieval = await owner._validate_source_content(
+        branch=branch, turn=turn, binding=binding, source=source,
+        expected_head_version=1,
+    )
+    assert follow_up_retrieval is None
+    profile, resolved = await owner._validate_destination_authority(
+        branch=branch,
+        turn=turn,
+        binding=binding,
+        checkpoint=checkpoint,
+        follow_up_retrieval=follow_up_retrieval,
+    )
+    return profile, resolved, checkpoint
+
+
+@pytest.mark.asyncio
+async def test_destination_authority_accepts_cold_restore_without_live_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Source-host/session removal must not invalidate saved content."""
+
+    session = _Session()
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    policy = _branch_policy_snapshot()
+    checkpoint_bytes, instruction_bytes, referenced = _restorable_checkpoint_bytes(
+        policy=policy
+    )
+
+    profile, resolved, _checkpoint = await _validate_split_owner(
+        owner,
+        monkeypatch,
+        checkpoint_bytes=checkpoint_bytes,
+        instruction_bytes=instruction_bytes,
+        referenced=referenced,
+        policy=policy,
+        credential_generation=1,
+    )
+
+    assert profile.profile_id == "profile-1"
+    assert resolved == policy
+    assert owner._destination_authority_notes == []
+
+
+@pytest.mark.asyncio
+async def test_destination_authority_tolerates_authorized_credential_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rotation of a still-authorized Profile must not invalidate content."""
+
+    from moonmind.omnigent.checkpoints import validate_restore_material as real_validate
+
+    session = _Session()
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    policy = _branch_policy_snapshot()
+    checkpoint_bytes, instruction_bytes, referenced = _restorable_checkpoint_bytes(
+        policy=policy
+    )
+    seen: dict[str, object] = {}
+
+    def _recording_validate(checkpoint, **kwargs):
+        seen.update(kwargs)
+        return real_validate(checkpoint, **kwargs)
+
+    monkeypatch.setattr(
+        "api_service.services.checkpoint_branch_turn_execution.validate_restore_material",
+        _recording_validate,
+    )
+
+    profile, _resolved, checkpoint = await _validate_split_owner(
+        owner,
+        monkeypatch,
+        checkpoint_bytes=checkpoint_bytes,
+        instruction_bytes=instruction_bytes,
+        referenced=referenced,
+        policy=policy,
+        credential_generation=2,
+    )
+
+    assert profile.profile_id == "profile-1"
+    # The live generation reaches the real restore path; only the benign
+    # rotation reason is tolerated, and the tolerance is recorded.
+    assert seen.get("credential_generation") == 2
+    assert owner._destination_authority_notes == ["credential_generation_rotated"]
+    # The tolerated rotation must be carried into the restore contract: the
+    # launch embeds this checkpoint copy, and the downstream
+    # branch_from_checkpoint boundary compares its generation with the live
+    # one. Leaving the stale value would fail one boundary later.
+    assert checkpoint.omnigent is not None
+    assert checkpoint.omnigent.credential_generation == 2
+
+
+@pytest.mark.asyncio
+async def test_destination_authority_still_rejects_incompatible_live_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tolerance covers rotation alone, not incompatible live authority."""
+
+    session = _Session()
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    policy = _branch_policy_snapshot()
+    checkpoint_bytes, instruction_bytes, referenced = _restorable_checkpoint_bytes(
+        policy=policy
+    )
+    referenced = dict(referenced)
+    referenced["artifact://head"] = b"tampered-head-bytes"
+
+    with pytest.raises(CheckpointBranchTurnLaunchError) as exc_info:
+        await _validate_split_owner(
+            owner,
+            monkeypatch,
+            checkpoint_bytes=checkpoint_bytes,
+            instruction_bytes=instruction_bytes,
+            referenced=referenced,
+            policy=policy,
+            credential_generation=2,
+        )
+
+    assert exc_info.value.code == "checkpoint_restore_validation_failed"
+    assert owner._destination_authority_notes == []
+
+
+@pytest.mark.asyncio
+async def test_launch_emits_destination_publish_spelling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An authorized pull_request intent must survive the destination handoff."""
+
+    session = _Session()
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        turn_command_service=SimpleNamespace(
+            claim_with_repositories=AsyncMock(
+                return_value=SimpleNamespace(outcome=ControlPlaneOutcome.APPLIED)
+            ),
+            settle=AsyncMock(),
+        ),
+    )
+    branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
+    branch.diagnostics["runtimeSelection"]["publishMode"] = "pull_request"
+    owner._load_graph_authority = AsyncMock(  # type: ignore[method-assign]
+        return_value=(branch, turn, binding, source)
+    )
+    owner._validate_source_authority = AsyncMock(  # type: ignore[method-assign]
+        return_value=(checkpoint, profile, policy)
+    )
+    written: dict[str, bytes] = {}
+
+    async def _write_artifact(*, content_type, payload, kind, branch_turn_id):
+        written[kind] = payload
+        return f"artifact://test/{kind}"
+
+    async def _claim(_service, **kwargs):
+        turn.created_step_execution_id = kwargs["created_step_execution_id"]
+        turn.runtime_agent_run_id = kwargs["runtime_agent_run_id"]
+        turn.context_bundle_ref = kwargs["context_bundle_ref"]
+        turn.step_execution_manifest_ref = kwargs["step_execution_manifest_ref"]
+        turn.diagnostics = {
+            **turn.diagnostics,
+            "executionWorkflowId": kwargs["execution_workflow_id"],
+        }
+        return turn
+
+    owner._write_artifact = _write_artifact  # type: ignore[method-assign]
+    owner._start_claimed_turn = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(CheckpointBranchService, "claim_turn_execution", _claim)
+
+    await owner.launch(
+        workflow_id="source-workflow",
+        branch_id="branch-1",
+        branch_turn_id="turn-1",
+        intent={"idempotencyKey": "operator-launch-1"},
+    )
+
+    manifest = json.loads(
+        written["output.branch_turn.step_execution_manifest.json"]
+    )
+    request = manifest["agentExecutionRequest"]
+    assert request["parameters"]["publishMode"] == "pr"
+    assert request["stepExecution"]["runtimeSelection"]["publishMode"] == (
+        "pull_request"
+    )
+    context = json.loads(written["runtime.branch_turn.context_bundle.json"])
+    assert context["runtimeSelection"]["publishMode"] == "pull_request"
+
+
+@pytest.mark.asyncio
 async def test_owner_validates_turn_owned_remediation_context_binding() -> None:
     record = SimpleNamespace(artifact_ref="artifact://remediation/context")
     result = SimpleNamespace(scalar_one_or_none=lambda: record)
@@ -496,7 +846,7 @@ async def test_owner_rejects_stale_authority_before_claim_or_start(
     )
     owner._validate_source_authority = AsyncMock(  # type: ignore[method-assign]
         side_effect=CheckpointBranchTurnLaunchError(
-            "credential_generation_changed", "credential generation changed"
+            "provider_profile_not_ready", "Provider Profile is not launch ready"
         )
     )
     claim = AsyncMock()
@@ -512,7 +862,7 @@ async def test_owner_rejects_stale_authority_before_claim_or_start(
             intent={"idempotencyKey": "operator-launch-1"},
         )
 
-    assert exc_info.value.code == "credential_generation_changed"
+    assert exc_info.value.code == "provider_profile_not_ready"
     claim.assert_not_awaited()
     start.assert_not_awaited()
     session.commit.assert_not_awaited()
@@ -731,7 +1081,10 @@ async def test_owner_rejects_stored_authority_mismatches_before_artifact_or_runt
         ("provider_profile", "provider_profile_mismatch"),
         ("execution_profile", "execution_profile_mismatch"),
         ("execution_plan", "execution_plan_mismatch"),
-        ("credential_generation", "credential_generation_changed"),
+        # Rotation of a still-authorized Profile is tolerated by the
+        # destination-authority boundary (see
+        # test_destination_authority_tolerates_authorized_credential_rotation);
+        # revocation still rejects via "profile_readiness" below.
         ("profile_readiness", "provider_profile_not_ready"),
         ("repository_baseline", "repository_baseline_mismatch"),
         ("retrieval", "retrieval_authority_invalid"),
@@ -843,3 +1196,165 @@ async def test_owner_rejects_complete_authority_mismatch_matrix_before_mutation(
     owner._write_artifact.assert_not_awaited()
     claim.assert_not_awaited()
     start.assert_not_awaited()
+
+
+def test_branch_turn_save_commit_consumes_shared_save_before_cleanup_result() -> None:
+    """The branch finalization path commits through the shared save helper."""
+
+    committed = branch_turn_module.commit_branch_turn_save(
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref="artifact://diagnostics/turn-1",
+        manifest_digest="sha256:" + "c" * 64,
+    )
+    assert committed["status"] == "committed"
+    assert committed["reason"] is None
+
+    incomplete = branch_turn_module.commit_branch_turn_save(
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref=None,
+        manifest_digest="sha256:" + "c" * 64,
+    )
+    assert incomplete["status"] == "incomplete"
+    assert (
+        incomplete["orphanAction"] == "reconcile-with-finalization-owner"
+    ), "an incomplete branch save must route orphans to the finalization owner"
+
+
+def test_branch_turn_verification_handoff_carries_exact_candidate_and_objective() -> (
+    None
+):
+    """The terminal handoff passes the exact candidate + objective to #3622."""
+
+    handoff = branch_turn_module.build_branch_turn_verification_handoff(
+        branch_id="branch-1",
+        branch_turn_id="turn-1",
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref="artifact://diagnostics/turn-1",
+        checkpoint_ref="artifact://checkpoint/turn-1",
+        checkpoint_digest="sha256:" + "d" * 64,
+        terminal_disposition="verification_pending",
+        delivery_outcome="succeeded",
+        source_namespace="default",
+        source_workflow_id="source-workflow",
+        source_run_id="source-run",
+        verification_pending=True,
+    )
+    assert handoff["candidate"]["agentResultRef"] == "artifact://agent-result/turn-1"
+    assert handoff["candidate"]["checkpointRef"] == "artifact://checkpoint/turn-1"
+    assert handoff["candidate"]["checkpointDigest"] == "sha256:" + "d" * 64
+    assert handoff["objective"]["sourceWorkflowId"] == "source-workflow"
+    assert handoff["objective"]["sourceRunId"] == "source-run"
+    assert handoff["verificationPending"] is True
+
+    contract = verification_contract_for(
+        "checkpoint_branch.create_from_remediation_context"
+    )
+    assert contract.automatically_verifiable is True
+    assert handoff["verifier"] == contract.verifier
+    assert handoff["actionKind"] == contract.action_kind
+
+
+def test_branch_turn_verification_pending_is_not_graph_success() -> None:
+    """Pending verification never reads as repair success for the graph."""
+
+    handoff = branch_turn_module.build_branch_turn_verification_handoff(
+        branch_id="branch-1",
+        branch_turn_id="turn-1",
+        agent_result_ref="artifact://agent-result/turn-1",
+        diagnostics_ref="artifact://diagnostics/turn-1",
+        checkpoint_ref=None,
+        checkpoint_digest=None,
+        terminal_disposition="terminal_checkpoint_missing",
+        delivery_outcome="failed",
+        source_namespace="default",
+        source_workflow_id="source-workflow",
+        source_run_id="source-run",
+        verification_pending=False,
+    )
+    assert handoff["verificationPending"] is False
+    assert handoff["candidate"]["checkpointRef"] is None
+
+
+def test_launch_retry_tolerates_historical_publish_mode_spelling() -> None:
+    """An upgrade must not strand a retry on the publishMode spelling.
+
+    Turns launched before the destination-spelling handoff stored the
+    canonical ``pull_request`` spelling in their owned launch artifacts;
+    retries serialize ``pr`` for the same authorized intent. The bytes
+    differ but the publication grant is identical, so the retry must
+    reattach instead of raising ``launch_artifact_conflict``.
+    """
+
+    old = json.dumps(
+        {"parameters": {"publishMode": "pull_request"}, "other": [1, 2]},
+        sort_keys=True,
+    ).encode()
+    new = json.dumps(
+        {"parameters": {"publishMode": "pr"}, "other": [1, 2]}, sort_keys=True
+    ).encode()
+    assert _launch_retry_payloads_equivalent(old, new) is True
+    assert _launch_retry_payloads_equivalent(new, old) is True
+    assert _launch_retry_payloads_equivalent(old, old) is True
+
+
+def test_launch_retry_still_rejects_unrelated_artifact_changes() -> None:
+    """Only the known spelling migration is tolerated, nothing else."""
+
+    base = json.dumps(
+        {"parameters": {"publishMode": "pr"}, "other": [1, 2]}, sort_keys=True
+    ).encode()
+    changed_intent = json.dumps(
+        {"parameters": {"publishMode": "branch"}, "other": [1, 2]}, sort_keys=True
+    ).encode()
+    changed_other = json.dumps(
+        {"parameters": {"publishMode": "pr"}, "other": [1, 3]}, sort_keys=True
+    ).encode()
+    assert _launch_retry_payloads_equivalent(base, changed_intent) is False
+    assert _launch_retry_payloads_equivalent(base, changed_other) is False
+    assert _launch_retry_payloads_equivalent(base, b"not-json") is False
+    assert _launch_retry_payloads_equivalent(b"not-json", b"not-json") is True
+
+
+def test_terminal_save_preserves_upstream_incomplete_status() -> None:
+    """A failed workspace capture must not read as a committed save.
+
+    Terminal persistence commits agent-result/diagnostics refs, but when the
+    upstream workspace save reports incomplete the useful workspace was not
+    durably captured. The incomplete status stays at the top level instead
+    of letting metadata artifacts masquerade as the saved workspace.
+    """
+
+    committed = {"status": "committed", "manifestDigest": "sha256:abc"}
+    upstream = {
+        "status": "incomplete",
+        "reason": "terminal-checkpoint-failed",
+        "orphanAction": "reconcile-with-finalization-owner",
+    }
+    merged = branch_turn_module.attach_upstream_save_claim(committed, upstream)
+    assert merged["status"] == "incomplete"
+    assert merged["reason"] == "terminal-checkpoint-failed"
+    assert merged["upstreamClaim"] == upstream
+
+
+def test_terminal_save_keeps_local_failure_and_nests_upstream_claim() -> None:
+    """An already-incomplete terminal save keeps its own reason."""
+
+    incomplete = {
+        "status": "incomplete",
+        "reason": "missing-required-objects",
+        "orphanAction": "reconcile-with-finalization-owner",
+    }
+    upstream = {"status": "incomplete", "reason": "terminal-checkpoint-failed"}
+    merged = branch_turn_module.attach_upstream_save_claim(incomplete, upstream)
+    assert merged["status"] == "incomplete"
+    assert merged["reason"] == "missing-required-objects"
+    assert merged["upstreamClaim"] == upstream
+
+
+def test_terminal_save_without_upstream_claim_is_unchanged() -> None:
+    """No upstream claim means the terminal commit stands as computed."""
+
+    committed = {"status": "committed", "manifestDigest": "sha256:abc"}
+    assert branch_turn_module.attach_upstream_save_claim(committed, {}) == (
+        committed
+    )
