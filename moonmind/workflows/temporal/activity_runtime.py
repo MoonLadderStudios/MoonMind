@@ -2604,7 +2604,9 @@ class TemporalSkillActivities:
             idempotency_key=idempotency_key,
         )
         heartbeat_timeout = (
-            activity.info().heartbeat_timeout if activity.in_activity() else None
+            getattr(activity.info(), "heartbeat_timeout", None)
+            if activity.in_activity()
+            else None
         )
         if heartbeat_timeout:
             # Cover registry reads and slow pre-launch pulls as well as the
