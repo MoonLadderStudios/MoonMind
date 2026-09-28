@@ -176,6 +176,38 @@ def test_deployment_inputs_keep_compose_shell_image_override(
     assert inputs["OMNIGENT_SHARED_HOST_IMAGE_TAG"] == "qualified"
 
 
+def test_first_updater_from_previous_compose_resolves_default_image_inputs(
+    release_module, monkeypatch, tmp_path
+):
+    """The first update launches its updater from the installed Compose file.
+
+    That previous service definition carries no image inputs, only the
+    generated refs from .env.deploy, so the resolver itself must supply the
+    same mutable defaults as Compose or the stale host image is retained.
+    """
+    for key in release_module.OMNIGENT_RELEASE_INPUT_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", LIVE_HOST)
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    drivers = release_module.production_drivers(
+        runner=SimpleNamespace(local_project_dir=str(tmp_path)),
+        moonmind_image="moonmind:updated",
+        actor="release",
+    )
+    inputs = asyncio.run(drivers.deployment_inputs())
+    assert inputs == {
+        "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+        "OMNIGENT_IMAGE_TAG": "latest",
+        "OMNIGENT_HOST_IMAGE": "ghcr.io/omnigent-ai/omnigent-host",
+        "OMNIGENT_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        "OMNIGENT_OPENCODE_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_PI_HOST_IMAGE_TAG": "latest",
+    }
+
+
 @pytest.mark.parametrize("configuration", ["omitted", "explicit_defaults", "custom"])
 def test_compose_updater_supplies_refreshable_image_inputs(
     release_module, monkeypatch, tmp_path, configuration
