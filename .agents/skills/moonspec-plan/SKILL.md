@@ -242,19 +242,15 @@ Quickstart guidance:
 
 ## Agent Context
 
-After Phase 1 artifacts are generated and `plan.md` is updated, run the agent context update script:
+Keep this feature's technology, status, and decisions in `plan.md` and its feature artifacts. Planning does not edit lasting agent guidance such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`.
+
+Only when the user explicitly asks to record this plan in lasting agent guidance, run:
 
 ```bash
-.specify/scripts/bash/update-agent-context.sh __AGENT__
+.specify/scripts/bash/update-agent-context.sh --write [agent]
 ```
 
-Replace `__AGENT__` with the active integration key when known. If unknown, run the script without an agent argument so it updates existing agent files.
-
-The script should:
-
-- Parse the current `plan.md`
-- Add only new technology from the current plan
-- Preserve manual additions between managed markers
+Omit `[agent]` to update the existing agent files. The script adds only new technology from the current plan, keeps manual additions between the managed markers, and writes through symlinked agent files. Without `--write` it changes nothing.
 
 ## Stop Point
 
