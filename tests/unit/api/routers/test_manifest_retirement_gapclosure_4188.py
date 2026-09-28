@@ -337,7 +337,8 @@ def test_http_create_manifest_ingest_rejected_before_service_effects(
 def test_http_rerun_from_manifest_source_rejected_without_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """POST /api/executions/{id}/rerun on a ManifestIngest row returns 422."""
+    """POST /api/executions/{id}/rerun on a historical ManifestIngest row is
+    denied as a permanent 409 before any launch (MoonLadderStudios/MoonMind#4189)."""
     from api_service.api.routers import executions as executions_module
     from api_service.api.routers.executions import _get_service, router
     from api_service.db.base import get_async_session
@@ -387,8 +388,10 @@ def test_http_rerun_from_manifest_source_rejected_without_launch(
     with TestClient(app, raise_server_exceptions=False) as test_client:
         response = test_client.post(f"/api/executions/{source.workflow_id}/rerun")
 
-    assert response.status_code == 422, response.text
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "execution_historical"
     assert "was retired" in response.text
+    service.create_execution.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
