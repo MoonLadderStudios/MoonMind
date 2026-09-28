@@ -695,6 +695,27 @@ def test_dependency_phases_require_verified_evidence() -> None:
     assert len(releasable) == 1 and blocked == []
 
 
+def test_blocked_dependent_lists_each_unsatisfied_dependency_once() -> None:
+    module = _load_targets_module()
+    normalized = _normalize(
+        module,
+        [
+            _targets_module_entry(repository="acme/base"),
+            _targets_module_entry(
+                repository="acme/app",
+                connectionRef="conn-app",
+                dependsOn=["https://github.com#acme/base"],
+                evidenceKind="revision",
+            ),
+        ],
+    )
+    phases = module.resolve_target_phases(normalized.targets)
+    assert len(phases) == 2
+    releasable, blocked = module.gate_dependent_targets(phases[1])
+    assert releasable == [] and len(blocked) == 1
+    assert blocked[0]["unsatisfied"] == "https://github.com#acme/base"
+
+
 def test_dependency_cycles_and_unknown_refs_rejected() -> None:
     module = _load_targets_module()
     with pytest.raises(module.RepositoryBatchError) as exc:
