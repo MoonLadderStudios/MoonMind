@@ -5,11 +5,10 @@ continuation support stay governed by the existing action-capability owners.
 These tests pin the conjunction: the product-visible type passes projection
 while the capability matrix still denies an unsupported control. They also
 pin the current historical-type interpretation (retired ManifestIngest rows
-are never current product UserWorkflows) and the quiesce-enumeration binding
+are readable but never current product UserWorkflows) and the quiesce-enumeration binding
 (running-UserWorkflow point-in-time set only).
 """
 
-import pytest
 
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.workflows.temporal.remediation_actions import (
@@ -17,7 +16,7 @@ from moonmind.workflows.temporal.remediation_actions import (
     remediation_action_capability,
 )
 from moonmind.workflows.temporal.workflow_registry import (
-    WorkflowProjectionExcluded,
+    product_read_workflow_types,
     product_workflow_types,
     require_product_projection,
     workflow_projection_scope,
@@ -53,14 +52,17 @@ def test_product_visible_type_denied_policy_unlisted_action() -> None:
 
 def test_retired_manifest_ingest_is_never_a_current_product_workflow() -> None:
     # MoonLadderStudios/MoonMind#4192 retired the native ManifestIngest
-    # product. Old rows stay readable as replay/drain evidence but are never
-    # registered product types and must not be coerced into UserWorkflows.
+    # product. Old rows stay readable through product views (#4189) as a
+    # historical scope, but the type is never registered, launchable, or
+    # coerced into a UserWorkflow.
     assert product_workflow_types() == ("MoonMind.UserWorkflow",)
-    assert workflow_projection_scope("MoonMind.ManifestIngest") == "unknown"
-    with pytest.raises(WorkflowProjectionExcluded) as failure:
-        require_product_projection("MoonMind.ManifestIngest")
-    assert failure.value.scope == "unknown"
-    assert failure.value.code == "workflow_type_unknown"
+    assert "MoonMind.ManifestIngest" not in workflow_projection_scopes()
+    assert workflow_projection_scope("MoonMind.ManifestIngest") == "historical"
+    assert product_read_workflow_types() == (
+        "MoonMind.UserWorkflow",
+        "MoonMind.ManifestIngest",
+    )
+    require_product_projection("MoonMind.ManifestIngest")
 
 
 def test_quiesce_enumeration_type_matches_only_product_scope() -> None:

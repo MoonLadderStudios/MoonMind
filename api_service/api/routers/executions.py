@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from moonmind.workflows.temporal.workflow_registry import (
     WorkflowProjectionExcluded,
+    is_historical_workflow_type,
     product_workflow_types,
 )
 
@@ -216,6 +217,7 @@ from moonmind.workflows.checkpoint_branches import (
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
+    TemporalExecutionHistoricalTypeError,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionRerunPlanError,
@@ -3445,6 +3447,19 @@ def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
     owner_id = str(record.owner_id or "").strip().lower()
     return "system" if owner_id == "system" or not owner_id else "user"
 
+def _execution_owner(record, search_attributes: dict[str, object]) -> tuple[str, str]:
+    """Return ``(ownerType, ownerId)`` from recorded owner evidence."""
+
+    owner_id = search_attributes.get("mm_owner_id") or getattr(record, "owner_id", None)
+    if not owner_id and is_historical_workflow_type(getattr(record, "workflow_type", None)):
+        # MoonLadderStudios/MoonMind#4189: a retired historical row without
+        # recorded owner evidence keeps its persisted owner type and reports
+        # the owner as unavailable rather than acquiring system ownership.
+        owner_type = _enum_value(getattr(record, "owner_type", None))
+        if owner_type in _ALLOWED_OWNER_TYPES:
+            return owner_type, ""
+    return _normalize_owner_type(record, search_attributes), str(owner_id or "system")
+
 def _coerce_temporal_scalar(value: object | None) -> str:
     if isinstance(value, (list, tuple)):
         for item in value:
@@ -4117,12 +4132,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         "mm_continue_as_new_cause"
     )
     raw_state = state_value
-    owner_type = _normalize_owner_type(record, search_attributes)
-    owner_id = str(
-        search_attributes.get("mm_owner_id")
-        or getattr(record, "owner_id", None)
-        or "system"
-    )
+    owner_type, owner_id = _execution_owner(record, search_attributes)
     title = str(memo.get("title") or "").strip() or workflow_type_value
 
     waiting_reason = (
@@ -4340,8 +4350,7 @@ def _serialize_execution(
     # retired. No status snapshot is built; record-attribute fallbacks below
     # preserve historical lineage refs for old-release executions.
     manifest_status = None
-    owner_type = _normalize_owner_type(record, search_attributes)
-    owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
+    owner_type, owner_id = _execution_owner(record, search_attributes)
     entry = _resolve_execution_entry(record, search_attributes)
     title = str(memo.get("title") or "").strip() or workflow_type_value
     summary = str(memo.get("summary") or "").strip() or "Execution updated."
@@ -19434,6 +19443,15 @@ async def cancel_execution(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "cancel_rejected",
+                "message": str(exc),
+            },
+        ) from exc
+    except TemporalExecutionHistoricalTypeError as exc:
+        # A retired historical run is read-only; retrying cannot succeed.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "execution_historical",
                 "message": str(exc),
             },
         ) from exc

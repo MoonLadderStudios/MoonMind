@@ -33,6 +33,12 @@ class WorkflowRegistrationError(ValueError):
 PROJECTION_SCOPES = ("product", "operator", "excluded")
 
 
+# MoonLadderStudios/MoonMind#4189: retired product types whose old-release rows
+# stay readable through product execution views. They have no registration,
+# worker, or launch path, and every control on them is rejected.
+HISTORICAL_PRODUCT_WORKFLOW_TYPES = ("MoonMind.ManifestIngest",)
+
+
 USER_WORKFLOW_REGISTRATION = WorkflowRegistration(
     "moonmind.workflows.temporal.workflows.run",
     "MoonMindUserWorkflow",
@@ -287,11 +293,25 @@ def workflow_projection_scopes() -> dict[str, str]:
 
 
 def workflow_projection_scope(workflow_type: str | None) -> str:
-    return workflow_projection_scopes().get(workflow_type or "", "unknown")
+    name = str(getattr(workflow_type, "value", workflow_type) or "")
+    scope = workflow_projection_scopes().get(name)
+    if scope is None and name in HISTORICAL_PRODUCT_WORKFLOW_TYPES:
+        return "historical"
+    return scope or "unknown"
 
 
 def product_workflow_types() -> tuple[str, ...]:
+    """Registered product types: the launchable and controllable set."""
     return tuple(name for name, scope in workflow_projection_scopes().items() if scope == "product")
+
+
+def product_read_workflow_types() -> tuple[str, ...]:
+    """Types admitted to product read views, including retired history."""
+    return (*product_workflow_types(), *HISTORICAL_PRODUCT_WORKFLOW_TYPES)
+
+
+def is_historical_workflow_type(workflow_type: str | None) -> bool:
+    return workflow_projection_scope(workflow_type) == "historical"
 
 
 class WorkflowProjectionExcluded(ValueError):
@@ -304,7 +324,8 @@ class WorkflowProjectionExcluded(ValueError):
 
 
 def require_product_projection(workflow_type: str | None) -> None:
-    if workflow_projection_scope(workflow_type) != "product":
+    """Admit product and historical types to product read views."""
+    if workflow_projection_scope(workflow_type) not in ("product", "historical"):
         raise WorkflowProjectionExcluded(workflow_type)
 
 
