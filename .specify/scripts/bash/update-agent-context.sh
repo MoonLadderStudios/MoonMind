@@ -5,6 +5,10 @@
 # This script maintains AI agent context files by parsing feature specifications 
 # and updating agent-specific configuration files with project information.
 #
+# Agent context files are lasting repository guidance. Routine planning keeps
+# feature technology and status in plan.md, so this script changes nothing
+# unless --write records an explicit request for a lasting guidance edit.
+#
 # MAIN FUNCTIONS:
 # 1. Environment Validation
 #    - Verifies git repository structure and branch information
@@ -20,6 +24,7 @@
 #    - Creates new agent context files from templates when needed
 #    - Updates existing agent files with new project information
 #    - Preserves manual additions and custom configurations
+#    - Writes through symlinked agent files instead of replacing them
 #    - Supports multiple AI agent formats and directory structures
 #
 # 4. Content Generation
@@ -34,9 +39,9 @@
 #    - Can update single agents or all existing agent files
 #    - Creates default Claude file if no agent files exist
 #
-# Usage: ./update-agent-context.sh [agent_type]
+# Usage: ./update-agent-context.sh --write [agent_type]
 # Agent types: claude|gemini|copilot|cursor-agent|qwen|opencode|codex|windsurf|kilocode|auggie|shai|q|bob
-# Leave empty to update all existing agent files
+# Leave agent_type empty to update all existing agent files
 
 set -e
 
@@ -56,7 +61,22 @@ source "$SCRIPT_DIR/common.sh"
 eval $(get_feature_paths)
 
 NEW_PLAN="$IMPL_PLAN"  # Alias for compatibility with existing code
-AGENT_TYPE="${1:-}"
+WRITE_AUTHORIZED=false
+AGENT_TYPE=""
+for arg in "$@"; do
+    case "$arg" in
+        --write)
+            WRITE_AUTHORIZED=true
+            ;;
+        *)
+            if [[ -n "$AGENT_TYPE" ]]; then
+                echo "ERROR: Expected at most one agent type, got '$AGENT_TYPE' and '$arg'" >&2
+                exit 1
+            fi
+            AGENT_TYPE="$arg"
+            ;;
+    esac
+done
 
 # Agent-specific file paths  
 CLAUDE_FILE="$REPO_ROOT/CLAUDE.md"
@@ -77,6 +97,9 @@ BOB_FILE="$REPO_ROOT/AGENTS.md"
 
 # Template file
 TEMPLATE_FILE="$REPO_ROOT/.specify/templates/agent-file-template.md"
+
+# Resolved agent files already updated in this run
+UPDATED_AGENT_FILES=""
 
 # Global variables for parsed plan data
 NEW_LANG=""
@@ -266,6 +289,29 @@ get_language_conventions() {
     echo "$lang: Follow standard conventions"
 }
 
+resolve_agent_file() {
+    local path="$1"
+    local link
+
+    while [[ -L "$path" ]]; do
+        link=$(readlink "$path")
+        if [[ "$link" == /* ]]; then
+            path="$link"
+        else
+            path="$(dirname "$path")/$link"
+        fi
+    done
+
+    if [[ -d "$(dirname "$path")" ]]; then
+        path="$(CDPATH="" cd "$(dirname "$path")" && pwd -P)/$(basename "$path")"
+    fi
+    echo "$path"
+}
+
+is_manual_additions_start() {
+    [[ "$1" == "<!-- MANUAL ADDITIONS START -->" ]]
+}
+
 agent_file_accepts_plan_history() {
     local target_file="$1"
     [[ "$(basename "$target_file")" != "AGENTS.md" ]]
@@ -387,7 +433,8 @@ update_existing_agent_file() {
     }
     
     # Process the file in one pass
-    local tech_stack=$(format_technology_stack "$NEW_LANG" "$NEW_FRAMEWORK")
+    local tech_stack
+    tech_stack=$(format_technology_stack "$NEW_LANG" "$NEW_FRAMEWORK")
     local new_tech_entries=()
     local new_change_entry=""
     local accepts_plan_history=false
@@ -411,6 +458,12 @@ update_existing_agent_file() {
         new_change_entry="- $CURRENT_BRANCH: Added $NEW_DB"
     fi
     
+    if [[ ${#new_tech_entries[@]} -eq 0 ]] && [[ -z "$new_change_entry" ]]; then
+        log_info "No new plan context for $target_file"
+        rm -f "$temp_file"
+        return 0
+    fi
+
     # Check if sections exist in the file
     local has_active_technologies=0
     local has_recent_changes=0
@@ -436,16 +489,16 @@ update_existing_agent_file() {
         if [[ "$line" == "## Active Technologies" ]]; then
             echo "$line" >> "$temp_file"
             in_tech_section=true
+            in_changes_section=false
             continue
-        elif [[ $in_tech_section == true ]] && [[ "$line" =~ ^##[[:space:]] ]]; then
-            # Add new tech entries before closing the section
+        elif [[ $in_tech_section == true ]] && { [[ "$line" =~ ^##[[:space:]] ]] || is_manual_additions_start "$line"; }; then
+            # Add new tech entries before closing the section, then let the
+            # following handlers process the line that closed it
             if [[ $tech_entries_added == false ]] && [[ ${#new_tech_entries[@]} -gt 0 ]]; then
                 printf '%s\n' "${new_tech_entries[@]}" >> "$temp_file"
                 tech_entries_added=true
             fi
-            echo "$line" >> "$temp_file"
             in_tech_section=false
-            continue
         elif [[ $in_tech_section == true ]] && [[ -z "$line" ]]; then
             # Add new tech entries before empty line in tech section
             if [[ $tech_entries_added == false ]] && [[ ${#new_tech_entries[@]} -gt 0 ]]; then
@@ -466,7 +519,7 @@ update_existing_agent_file() {
             in_changes_section=true
             changes_entries_added=true
             continue
-        elif [[ $in_changes_section == true ]] && [[ "$line" =~ ^##[[:space:]] ]]; then
+        elif [[ $in_changes_section == true ]] && { [[ "$line" =~ ^##[[:space:]] ]] || is_manual_additions_start "$line"; }; then
             echo "$line" >> "$temp_file"
             in_changes_section=false
             continue
@@ -508,12 +561,13 @@ update_existing_agent_file() {
         changes_entries_added=true
     fi
     
-    # Move temp file to target atomically
-    if ! mv "$temp_file" "$target_file"; then
+    # Rewrite in place so the target keeps its mode
+    if ! cat "$temp_file" > "$target_file"; then
         log_error "Failed to update target file"
         rm -f "$temp_file"
         return 1
     fi
+    rm -f "$temp_file"
     
     return 0
 }
@@ -530,6 +584,13 @@ update_agent_file() {
         return 1
     fi
     
+    target_file=$(resolve_agent_file "$target_file")
+    if [[ "$UPDATED_AGENT_FILES" == *$'\n'"$target_file"$'\n'* ]]; then
+        log_info "Skipping $agent_name context file already updated: $target_file"
+        return 0
+    fi
+    UPDATED_AGENT_FILES="${UPDATED_AGENT_FILES:-$'\n'}$target_file"$'\n'
+
     log_info "Updating $agent_name context file: $target_file"
     
     local project_name
@@ -556,7 +617,8 @@ update_agent_file() {
         }
         
         if create_new_agent_file "$target_file" "$temp_file" "$project_name" "$current_date"; then
-            if mv "$temp_file" "$target_file"; then
+            if cat "$temp_file" > "$target_file"; then
+                rm -f "$temp_file"
                 log_success "Created new $agent_name context file"
             else
                 log_error "Failed to move temporary file to $target_file"
@@ -753,7 +815,7 @@ print_summary() {
     
     echo
 
-    log_info "Usage: $0 [claude|gemini|copilot|cursor-agent|qwen|opencode|codex|windsurf|kilocode|auggie|codebuddy|shai|q|bob]"
+    log_info "Usage: $0 --write [claude|gemini|copilot|cursor-agent|qwen|opencode|codex|windsurf|kilocode|auggie|codebuddy|shai|q|bob]"
 }
 
 #==============================================================================
@@ -761,6 +823,12 @@ print_summary() {
 #==============================================================================
 
 main() {
+    if [[ "$WRITE_AUTHORIZED" != true ]]; then
+        log_info "No agent context files changed; feature technology and status stay in plan.md."
+        log_info "Pass --write only when the user explicitly asked to record this plan in lasting agent guidance."
+        exit 0
+    fi
+
     # Validate environment before proceeding
     validate_environment
     
