@@ -224,12 +224,13 @@ def test_a_live_announcement_still_occupies_a_slot() -> None:
     assert decision.remaining == 2
 
 
-def test_an_expired_active_attempt_still_costs_one() -> None:
-    """Dispatch happened: the execution lease was granted and then renewed.
+def test_expired_active_attempts_that_never_recorded_an_outcome_are_not_charged() -> None:
+    """Issue #4559's shape: three dispatched attempts whose owners vanished.
 
-    GitHub alone cannot prove no agent ran, so a worker that crashed after
-    dispatch must stay charged -- otherwise a crash loop bypasses the bounded
-    allowance and keeps discarding work it never published.
+    Their workers were recreated by deployment updates (with a fresh
+    deployment identity each time), so no owner was left to write an
+    outcome. Charging them blocked 37 of 39 candidates on accounting nobody
+    would ever finish; the lapsed attempts back off instead.
     """
     decision = compute_effective_retry(
         [
@@ -253,19 +254,26 @@ def test_an_expired_active_attempt_still_costs_one() -> None:
         now_epoch=_now().timestamp(),
     )
 
-    assert decision.allowed is False
-    assert decision.reason_code == "budget_exhausted"
-    assert decision.remaining == 0
+    assert decision.allowed is True
+    assert decision.reason_code == "allowed"
+    assert decision.remaining == 3
+    assert decision.unresolved_attempts == 0
 
 
-def test_a_crash_loop_after_dispatch_cannot_outlast_the_allowance() -> None:
-    """Each post-dispatch crash spends a slot even with nothing published."""
+def test_a_crash_loop_after_dispatch_backs_off_longer_each_time() -> None:
+    """A post-dispatch crash loop is bounded in time, not by a permanent block.
+
+    Each dispatched attempt that lapsed without an outcome doubles the
+    back-off from its lapse, capped at a day, so a looping issue is retried
+    at a decaying rate and never needs an operator reset.
+    """
+    base = timedelta(seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS)
     chain = [
         _announcement(
             f"att-00000000000{index}-aaaa",
             activity="active",
             predecessor=f"att-00000000000{index - 1}-aaaa" if index > 1 else "",
-            lapsed_minutes=4000 - index,
+            lapsed_minutes=5 - index,
         )
         for index in range(1, 5)
     ]
@@ -275,7 +283,43 @@ def test_a_crash_loop_after_dispatch_cannot_outlast_the_allowance() -> None:
     )
 
     assert decision.allowed is False
-    assert decision.reason_code == "budget_exhausted"
+    assert decision.reason_code == "cooling_down"
+    assert decision.remaining == 3
+    latest_lapse = datetime.fromisoformat(chain[-1].lease_expires_at)
+    assert datetime.fromisoformat(decision.cooldown_until) == latest_lapse + base * 8
+
+    many = [
+        _announcement(
+            f"att-0000000000{index:02d}-aaaa",
+            activity="active",
+            lapsed_minutes=1,
+        )
+        for index in range(1, 12)
+    ]
+    capped = compute_effective_retry(
+        many, max_attempts=3, now_epoch=_now().timestamp()
+    )
+    capped_until = datetime.fromisoformat(capped.cooldown_until)
+    assert capped_until - datetime.fromisoformat(many[-1].lease_expires_at) == timedelta(
+        days=1
+    )
+
+
+def test_pre_dispatch_lapses_keep_the_single_runtime_unavailable_backoff() -> None:
+    """A deployment fault is not evidence about the issue: no escalation."""
+    chain = [
+        _announcement(f"att-00000000000{index}-aaaa", lapsed_minutes=5 - index)
+        for index in range(1, 5)
+    ]
+
+    decision = compute_effective_retry(
+        chain, max_attempts=3, now_epoch=_now().timestamp()
+    )
+
+    latest_lapse = datetime.fromisoformat(chain[-1].lease_expires_at)
+    assert datetime.fromisoformat(decision.cooldown_until) == latest_lapse + timedelta(
+        seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS
+    )
 
 
 def test_a_version_one_announcement_keeps_its_non_expiring_contract() -> None:
@@ -312,8 +356,12 @@ def test_a_caller_without_a_clock_keeps_the_existing_accounting() -> None:
     assert decision.reason_code == "budget_exhausted"
 
 
-def test_a_lapsed_announcement_that_recorded_work_still_counts() -> None:
-    """Preserved work is evidence about the issue; it is recovery, not nothing."""
+def test_a_lapsed_attempt_that_recorded_work_is_continued_not_charged() -> None:
+    """Preserved work routes the next attempt to continuation (design section 7).
+
+    The record stays in lineage, so the successor adopts the PR or branch;
+    it just no longer spends the allowance on bookkeeping nobody finished.
+    """
     with_pr = _announcement(
         "att-000000000001-aaaa",
         lapsed_minutes=4000,
@@ -338,8 +386,27 @@ def test_a_lapsed_announcement_that_recorded_work_still_counts() -> None:
         now_epoch=_now().timestamp(),
     )
 
-    assert decision.allowed is False
-    assert decision.reason_code == "budget_exhausted"
+    assert decision.allowed is True
+    assert decision.remaining == 3
+
+    comments = [
+        {
+            "id": str(100 + index),
+            "user": {"login": "moonmind-bot"},
+            "body": render_attempt_comment(item),
+        }
+        for index, item in enumerate([with_pr, with_branch, with_sha])
+    ]
+    result = reconstruct_from_comments(
+        comments,
+        expected_repository=REPO,
+        expected_issue_number=ISSUE,
+        trusted_posters=["moonmind-bot"],
+        max_attempts=3,
+        now_epoch=_now().timestamp(),
+    )
+    # The recorded work stays observable for the continuation.
+    assert result.lineage[0]["prUrl"].endswith("/pull/4350")
 
 
 def test_genuine_outcomes_still_exhaust_the_allowance() -> None:

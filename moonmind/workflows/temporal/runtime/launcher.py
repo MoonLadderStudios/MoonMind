@@ -2416,9 +2416,11 @@ class ManagedRuntimeLauncher:
                     continue
                 env_overrides[key] = value
 
-            from moonmind.config.settings import settings as _mm_settings
-            _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
-            _git_email = str(_mm_settings.workflow.git_user_email or "").strip() or None
+            from moonmind.omnigent.git_identity import resolve_git_identity
+
+            # Configured identity, else the documented default: a
+            # commit-capable run never depends on an optional setting.
+            _git_name, _git_email = resolve_git_identity()
             if _git_name:
                 env_overrides.setdefault("GIT_AUTHOR_NAME", _git_name)
                 env_overrides.setdefault("GIT_COMMITTER_NAME", _git_name)

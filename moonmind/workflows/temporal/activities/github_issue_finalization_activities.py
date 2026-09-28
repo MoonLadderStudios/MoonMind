@@ -176,13 +176,17 @@ def terminal_attempt_outcome(
     disposition: str,
     disposition_evidence: Mapping[str, Any],
     now_epoch: float = 0.0,
+    attempt_ended_at: str = "",
 ) -> tuple[str, str, str]:
     """Return ``(outcome, next_action, cooldown_until)`` for a terminal handoff.
 
     A release whose deployment never started a runtime is recorded as
     ``runtime_unavailable`` with a bounded back-off rather than as a work
     outcome, so the portable allowance is not charged for a deployment fault
-    and a broken launcher cannot hammer one issue.
+    and a broken launcher cannot hammer one issue. The back-off runs from
+    when the attempt ended (its lease deadline, *attempt_ended_at*) when
+    that precedes the recording: a sweep that records a long-dead attempt
+    must not defer the issue again.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -190,6 +194,7 @@ def terminal_attempt_outcome(
         OUTCOME_RUNTIME_UNAVAILABLE,
         RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS,
     )
+    from moonmind.workflows.temporal.github_issue_claim_lease import parse_time
 
     evidence = dict(disposition_evidence or {})
     no_work = disposition == finalization.DISPOSITION_AVAILABLE
@@ -202,6 +207,9 @@ def terminal_attempt_outcome(
             if now_epoch
             else datetime.now(UTC)
         )
+        ended = parse_time(attempt_ended_at) if attempt_ended_at else None
+        if ended is not None and ended < started:
+            started = ended
         deadline = started + timedelta(seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS)
         return OUTCOME_RUNTIME_UNAVAILABLE, "fresh_retry", deadline.isoformat()
     if no_work:
@@ -421,6 +429,7 @@ async def _apply_failed_attempt_finalization(
         outcome, release_action, cooldown_until = terminal_attempt_outcome(
             disposition=plan.disposition,
             disposition_evidence=disposition_evidence,
+            attempt_ended_at=parsed.handoff.lease_expires_at,
         )
         remaining = disposition_evidence.get("retryRemaining")
         if type(remaining) is not int or not 0 <= remaining <= parsed.handoff.retry_remaining:

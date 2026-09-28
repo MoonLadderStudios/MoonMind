@@ -112,6 +112,9 @@ OUTCOME_RUNTIME_UNAVAILABLE = "runtime_unavailable"
 #: Portable back-off applied to a runtime-unavailable attempt.
 RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS = 3600
 
+#: Longest back-off repeated lapsed attempts can accumulate on one issue.
+LAPSED_ATTEMPT_MAX_BACKOFF_SECONDS = 86400
+
 #: Bounded outcome categories.
 ATTEMPT_OUTCOMES = frozenset(
     {
@@ -197,11 +200,16 @@ def resolve_installation_id(explicit: Any) -> str:
 
 
 def default_installation_id_file() -> Path:
-    """Return the default persisted installation-id path (Activity boundary)."""
+    """Return the default persisted installation-id path (Activity boundary).
+
+    Compose mounts the ``moonmind_secrets`` volume at ``var/secrets`` on
+    every MoonMind service; the rest of ``var`` is discarded when an update
+    recreates the container, which would mint a new identity per update.
+    """
     override = _string(os.getenv(INSTALLATION_ID_FILE_ENV_VAR))
     if override:
         return Path(override).expanduser()
-    return Path.cwd() / "var" / "moonmind_installation_id"
+    return Path.cwd() / "var" / "secrets" / "moonmind-installation-id"
 
 
 def get_or_create_installation_id(*, path: Path | None = None) -> str:
@@ -216,22 +224,47 @@ def get_or_create_installation_id(*, path: Path | None = None) -> str:
     if from_env:
         return from_env
     target = path if path is not None else default_installation_id_file()
-    try:
-        if target.exists():
-            persisted = resolve_installation_id(target.read_text(encoding="utf-8"))
-            if persisted:
-                return persisted
-    except OSError:
-        # Best-effort read: fall through and generate a fresh ephemeral id.
-        pass
+    persisted = _read_installation_id(target)
+    if persisted:
+        return persisted
     generated = f"inst-{uuid.uuid4().hex[:16]}"
+    staged = target.with_name(f".{target.name}.{uuid.uuid4().hex}")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(generated + "\n", encoding="utf-8")
+        staged.write_text(generated + "\n", encoding="utf-8")
+        # Publish complete content only if no other replica already did:
+        # replicas starting together on an empty volume must agree.
+        os.link(staged, target)
+        return generated
+    except FileExistsError:
+        winner = _read_installation_id(target)
+        if winner:
+            return winner
     except OSError:
-        # Best-effort persist: keep the generated id in memory for this run.
+        # The volume is unwritable here; fall through to the process identity.
         pass
-    return generated
+    finally:
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError:
+            # A leftover staged file is inert: only ``target`` is ever read.
+            pass
+    # Unpersistable: keep one identity for this process so every attempt it
+    # announces or finalizes agrees, instead of minting one per call.
+    return _PROCESS_INSTALLATION_IDS.setdefault(str(target), generated)
+
+
+#: Identities generated for a target this process could not persist.
+_PROCESS_INSTALLATION_IDS: dict[str, str] = {}
+
+
+def _read_installation_id(target: Path) -> str:
+    try:
+        if target.exists():
+            return resolve_installation_id(target.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    return ""
 
 
 def new_attempt_id(
@@ -1209,42 +1242,24 @@ def _cooldown_is_live(cooldown_until: str, now_epoch: float) -> bool:
     return deadline.timestamp() > now
 
 
-def _lapsed_announcement_at(handoff: AttemptHandoff, now_epoch: float) -> str:
-    """Return when *handoff*'s pre-dispatch announcement lapsed, else ``""``.
+def _lapsed_attempt_at(handoff: AttemptHandoff, now_epoch: float) -> str:
+    """Return when *handoff*'s lease lapsed without an outcome, else ``""``.
 
-    Selection announces an attempt with the short ``preparing`` lease and
-    keeps that deadline until dispatch; the first execution renewal promotes
-    it to ``active``. A handoff still reading ``preparing`` after its lease
-    expired therefore never reached dispatch, so it could not have produced
-    work on the issue -- the ``runtime_unavailable`` case seen from before
-    the attempt could write it down. Nothing else will ever write it:
-    reservation reclamation retires the label and deliberately claims no
-    terminal authority over another deployment's attempt, and the bounded
-    reconciliation scan skips the issue once that label is gone. Charging it
-    would spend the allowance on evidence the system has designed itself
-    never to resolve.
+    An attempt still reading ``in_progress`` after its version-2 lease
+    expired lost its owner before it recorded anything: a worker recreated
+    by an update, a sleeping device, a finalizer that never ran. Nothing
+    reliably finishes that record -- reservation reclamation retires the
+    label without terminal authority over the attempt, and a successor
+    only ends the old owner's reservation. Charging it spent the allowance
+    on accounting nobody would complete, so it is retained in lineage (any
+    recorded PR or branch still routes the successor to continuation) and
+    backs off instead; see :func:`_lapsed_attempt_backoff_until`.
 
-    An expired ``active`` attempt is not exempt. Its execution lease was
-    granted, so from GitHub alone we cannot prove no agent ever ran, and an
-    attempt that crashed mid-run must still cost one: otherwise a crash loop
-    bypasses the allowance and keeps discarding unrecovered work. Proving
-    that no runtime started needs the controlling history, which is what the
-    local claim sweep uses to record the ``runtime_unavailable`` outcome.
-
-    Recorded work (a pull request, a saved branch or sha) is evidence about
-    the issue, so such an attempt keeps costing one. A version-1 handoff
-    carries no lease, and a caller with no clock (``now_epoch`` of zero)
-    cannot prove a lapse; both keep their existing accounting.
+    A version-1 handoff carries no lease, and a caller with no clock
+    (``now_epoch`` of zero) cannot prove a lapse; both keep their existing
+    accounting.
     """
     if handoff.outcome != "in_progress":
-        return ""
-    if handoff.activity != ATTEMPT_ACTIVITY_PREPARING:
-        return ""
-    if (
-        _string(handoff.pr_url)
-        or _string(handoff.saved_branch)
-        or _string(handoff.saved_sha)
-    ):
         return ""
     try:
         now = float(now_epoch)
@@ -1265,12 +1280,16 @@ def _lapsed_announcement_at(handoff: AttemptHandoff, now_epoch: float) -> str:
     return expires.isoformat()
 
 
-def _announcement_backoff_until(lapsed_at: str) -> str:
-    """Portable back-off for a lapsed announcement, or ``""`` if unreadable.
+def _lapsed_attempt_backoff_until(lapsed_at: str, dispatched_lapses: int) -> str:
+    """Portable back-off for a lapsed attempt, or ``""`` if unreadable.
 
-    The same window a ``runtime_unavailable`` outcome would have carried, so a
-    deployment that is still broken rotates past the candidate instead of
-    re-announcing on it every scheduled tick.
+    A lapse before dispatch (still ``preparing``) is a deployment fault and
+    carries the single ``runtime_unavailable`` window, so a broken deployment
+    rotates past the candidate. Each dispatched lapse doubles the window,
+    capped at :data:`LAPSED_ATTEMPT_MAX_BACKOFF_SECONDS`: a crash loop is
+    retried at a decaying rate instead of being blocked until an operator
+    resets it. *dispatched_lapses* counts this lapse among the dispatched
+    ones recorded so far (zero for a pre-dispatch lapse).
     """
     from datetime import timedelta
 
@@ -1279,9 +1298,11 @@ def _announcement_backoff_until(lapsed_at: str) -> str:
     expires = parse_time(lapsed_at)
     if expires is None:
         return ""
-    return (
-        expires + timedelta(seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS)
-    ).isoformat()
+    seconds = min(
+        RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS * 2 ** max(0, dispatched_lapses - 1),
+        LAPSED_ATTEMPT_MAX_BACKOFF_SECONDS,
+    )
+    return (expires + timedelta(seconds=seconds)).isoformat()
 
 
 def compute_effective_retry(
@@ -1354,12 +1375,9 @@ def compute_effective_retry(
     # An attempt whose deployment never started a runtime says nothing about
     # this issue, so it is retained as lineage but never charged to the
     # allowance. Charging it lets one broken deployment exhaust every issue.
-    # A pre-dispatch announcement that lapsed without ever recording an
-    # outcome is the same fault reached before the attempt could name it:
-    # also retained, also uncharged, and backed off the same way below.
-    # An expired ``active`` attempt reached dispatch and still counts, but it
-    # is reported as unfinished accounting rather than a recorded outcome.
-    lapses = [_lapsed_announcement_at(handoff, now_epoch) for handoff in window]
+    # An attempt whose lease lapsed without recording an outcome is likewise
+    # retained and uncharged; its back-off below bounds how often it recurs.
+    lapses = [_lapsed_attempt_at(handoff, now_epoch) for handoff in window]
     charged = tuple(
         {
             "attemptId": handoff.attempt_id,
@@ -1373,10 +1391,20 @@ def compute_effective_retry(
     unresolved = sum(1 for item in charged if item["unresolved"])
     remaining = max(0, allowance - len(charged))
     latest_cooldown = ""
+    dispatched_lapses = 0
     for handoff, lapsed in zip(window, lapses):
+        if lapsed and handoff.activity != ATTEMPT_ACTIVITY_PREPARING:
+            dispatched_lapses += 1
         recorded = [
             handoff.cooldown_until,
-            _announcement_backoff_until(lapsed) if lapsed else "",
+            _lapsed_attempt_backoff_until(
+                lapsed,
+                dispatched_lapses
+                if handoff.activity != ATTEMPT_ACTIVITY_PREPARING
+                else 0,
+            )
+            if lapsed
+            else "",
         ]
         for candidate in recorded:
             if candidate and candidate > latest_cooldown:

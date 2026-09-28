@@ -304,6 +304,48 @@ def test_terminal_handoff_records_runtime_unavailable_with_a_cooldown() -> None:
     assert cooldown, "a runtime-unavailable attempt must carry its back-off"
 
 
+def test_a_late_recorded_runtime_fault_backs_off_from_when_the_attempt_ended() -> None:
+    """The sweep can record a weeks-old attempt; its back-off already ran.
+
+    Anchoring the window at the recording instant re-deferred 25 long-idle
+    candidates for another hour every time the sweep reached them.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from moonmind.workflows.temporal.activities.github_issue_finalization_activities import (
+        terminal_attempt_outcome,
+    )
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS,
+    )
+
+    ended = datetime(2026, 9, 15, 21, 10, tzinfo=UTC)
+    recorded = datetime(2026, 9, 28, 1, 10, tzinfo=UTC)
+
+    outcome, _next_action, cooldown = terminal_attempt_outcome(
+        disposition=DISPOSITION_AVAILABLE,
+        disposition_evidence={"runtimeUnavailable": True},
+        now_epoch=recorded.timestamp(),
+        attempt_ended_at=ended.isoformat(),
+    )
+
+    assert outcome == OUTCOME_RUNTIME_UNAVAILABLE
+    assert datetime.fromisoformat(cooldown) == ended + timedelta(
+        seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS
+    )
+
+    # A lease still running when the fault is recorded anchors at "now".
+    _outcome, _next_action, prompt = terminal_attempt_outcome(
+        disposition=DISPOSITION_AVAILABLE,
+        disposition_evidence={"runtimeUnavailable": True},
+        now_epoch=recorded.timestamp(),
+        attempt_ended_at=(recorded + timedelta(minutes=20)).isoformat(),
+    )
+    assert datetime.fromisoformat(prompt) == recorded + timedelta(
+        seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS
+    )
+
+
 def test_terminal_handoff_keeps_no_work_for_an_ordinary_release() -> None:
     from moonmind.workflows.temporal.activities.github_issue_finalization_activities import (
         terminal_attempt_outcome,

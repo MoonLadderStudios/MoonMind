@@ -189,6 +189,8 @@ Tool downloads do not occur inside an ordinary Omnigent workflow session, at hos
 
 Before an on-demand host is created, the trusted runtime adapter resolves required tool names against the deployment manifest and binds them to the selected image's tool path. It never inspects a tools volume and never compares the selected image against a checkout's exact tool version: reproducible build pins and live integrity probes are the authority, not a requalification fingerprint operators must update after ordinary upgrades.
 
+A plan compiled before an update can pin a host image that is still cached locally but predates the image-owned tools the plan requires. When the deployment records a different qualified same-repository host image (the same qualification as absent-image drift recovery), the launcher probes both images offline and launches the recorded one if only it owns the required executables. A planned image that owns its tools stays authoritative, and no probe runs when the deployment offers no alternative. Exact-host attestation still judges the launched image. If the deployment itself records a host image without the tools, attestation fails with `OMNIGENT_HARNESS_BUILD_MISMATCH`; an ordinary update refreshes the host image.
+
 ---
 
 ## 6. Host shell visibility without mounts
