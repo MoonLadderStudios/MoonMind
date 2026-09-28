@@ -6,7 +6,11 @@ This module implements the workflow type catalog and lifecycle contract describe
 
 from __future__ import annotations
 
-from moonmind.workflows.temporal.workflow_registry import product_workflow_types, require_product_projection
+from moonmind.workflows.temporal.workflow_registry import (
+    is_historical_workflow_type,
+    product_read_workflow_types,
+    require_product_projection,
+)
 
 import asyncio
 import base64
@@ -107,6 +111,17 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
 RETIRED_MANIFEST_UPDATE_NAMES: frozenset[str] = frozenset(
     {"UpdateManifest", "SetConcurrency", "CancelNodes", "RetryNodes"}
 )
+
+
+def _reject_historical_control(record: Any) -> None:
+    """Keep retired history readable but never controllable (#4189)."""
+    if is_historical_workflow_type(record.workflow_type):
+        workflow_type = getattr(record.workflow_type, "value", record.workflow_type)
+        raise TemporalExecutionHistoricalTypeError(
+            f"{record.workflow_id} is a historical {workflow_type} execution. "
+            "The type was retired (MoonLadderStudios/MoonMind#4192), so this "
+            "release does not signal, cancel, update, or rerun it."
+        )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -533,6 +548,10 @@ class TemporalExecutionRerunPlanError(TemporalExecutionValidationError):
 
 class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError):
     """Raised when failed-step Recovery checkpoint evidence is missing or invalid."""
+
+
+class TemporalExecutionHistoricalTypeError(TemporalExecutionValidationError):
+    """Raised when a control targets a retired, read-only historical type."""
 
 
 class TemporalExecutionCancelUndeliverableError(TemporalExecutionValidationError):
@@ -4128,7 +4147,7 @@ class TemporalExecutionService:
         ownership checks; only force cancellation may mutate those rows.
         """
 
-        return await self._require_cancel_target_execution(workflow_id, include_orphaned=True)
+        return await self._load_cancel_target_execution(workflow_id, include_orphaned=True)
 
     async def mark_execution_executing(
         self,
@@ -6305,9 +6324,22 @@ class TemporalExecutionService:
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {workflow_id} was not found"
             )
+        _reject_historical_control(record)
         return record
 
     async def _require_cancel_target_execution(
+        self,
+        workflow_id: str,
+        *,
+        include_orphaned: bool = False,
+    ) -> TemporalExecutionCanonicalRecord | TemporalExecutionRecord:
+        record = await self._load_cancel_target_execution(
+            workflow_id, include_orphaned=include_orphaned
+        )
+        _reject_historical_control(record)
+        return record
+
+    async def _load_cancel_target_execution(
         self,
         workflow_id: str,
         *,
@@ -6378,7 +6410,7 @@ class TemporalExecutionService:
                 TemporalExecutionRecord.sync_state
                 != TemporalExecutionProjectionSyncState.ORPHANED
             )
-        stmt = stmt.where(model.workflow_type.in_(product_workflow_types()))
+        stmt = stmt.where(model.workflow_type.in_(product_read_workflow_types()))
         if workflow_type:
             stmt = stmt.where(model.workflow_type == workflow_type)
         if owner_type:
