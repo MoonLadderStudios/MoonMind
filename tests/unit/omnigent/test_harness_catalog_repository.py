@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import (
@@ -178,4 +178,74 @@ async def test_observation_history_is_bounded_but_authority_survives(
     assert first.snapshot.catalogRef in surviving_refs
     assert trust_refs == {first.snapshot.catalogRef}
     assert total <= 51
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_prune_pass_reads_execution_plan_pins_once(tmp_path) -> None:
+    """One prune pass loads the execution-plan pins once, not per candidate.
+
+    Pinned observations outside the newest window are re-evaluated on every
+    synchronization. Reloading every persisted execution plan for each of those
+    candidates turned one catalog sync into minutes of full-table reads on the
+    API event loop, which stalled Mission Control workflow detail requests.
+    """
+
+    engine, factory = await _create_db(tmp_path)
+    clock = _Clock()
+    repository = DbHarnessCatalogRepository(factory)
+    service = OmnigentHarnessCatalogService(
+        client=_FakeInventoryClient(),
+        repository=repository,
+        endpoint_ref="default",
+        omnigent_build_digest=_BUILD_DIGEST,
+        clock=clock.tick,
+    )
+
+    plan_pinned_refs: set[str] = set()
+    for index in range(60):
+        # synchronize() persists the observation and runs one prune pass.
+        result = await service.synchronize()
+        plan_pinned_refs.add(result.snapshot.catalogRef)
+        async with factory() as session:
+            session.add(
+                OmnigentExecutionPlanRecord(
+                    plan_ref=f"plan-{index}",
+                    schema_version="omnigent.execution-plan.v1",
+                    payload_json={"harnessCatalogRef": result.snapshot.catalogRef},
+                    harness_id="opencode-native",
+                    harness_implementation_ref="implementation",
+                    host_class_ref="host-class",
+                    launch_policy_ref="launch-policy",
+                    execution_realizer_ref="realizer",
+                )
+            )
+            await session.commit()
+
+    plan_reads: list[str] = []
+
+    def _record_plan_reads(conn, cursor, statement, parameters, context, many):
+        if "omnigent_execution_plans" in statement:
+            plan_reads.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _record_plan_reads)
+    try:
+        latest = await service.synchronize()
+    finally:
+        event.remove(
+            engine.sync_engine, "before_cursor_execute", _record_plan_reads
+        )
+
+    async with factory() as session:
+        surviving_refs = set(
+            (
+                await session.execute(
+                    select(OmnigentHarnessCatalogSnapshotRecord.catalog_ref)
+                )
+            ).scalars()
+        )
+
+    assert plan_pinned_refs <= surviving_refs
+    assert latest.snapshot.catalogRef in surviving_refs
+    assert len(plan_reads) == 1
     await engine.dispose()

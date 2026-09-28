@@ -448,17 +448,15 @@ class DbHarnessCatalogRepository:
                 if isinstance(candidate, str) and candidate:
                     pinned.add(candidate)
         # Persisted execution plans pin their compiled harness-catalog
-        # snapshot: launch-time host resolution loads it by ref.
-        payloads = (
-            await session.execute(
-                select(OmnigentExecutionPlanRecord.payload_json)
-            )
+        # snapshot: launch-time host resolution loads it by ref. Read only the
+        # distinct refs; the full plan payloads are large and unbounded.
+        plan_catalog_ref = OmnigentExecutionPlanRecord.payload_json[
+            "harnessCatalogRef"
+        ].as_string()
+        plan_refs = (
+            await session.execute(select(plan_catalog_ref).distinct())
         ).scalars()
-        for payload in payloads:
-            if isinstance(payload, dict):
-                candidate = str(payload.get("harnessCatalogRef") or "")
-                if candidate:
-                    pinned.add(candidate)
+        pinned.update(ref for ref in plan_refs if ref)
         return pinned
 
     async def _prune_observations(self, session: Any, *, endpoint_ref: str) -> None:
@@ -480,10 +478,11 @@ class DbHarnessCatalogRepository:
                 )
             ).scalars()
         )
-        keep = set(refs[:_MAX_SNAPSHOTS_PER_ENDPOINT])
-        stale = [
-            ref for ref in refs[len(keep):] if ref not in await self._pinned_catalog_refs(session)
-        ]
+        candidates = refs[_MAX_SNAPSHOTS_PER_ENDPOINT:]
+        if not candidates:
+            return
+        pinned = await self._pinned_catalog_refs(session)
+        stale = [ref for ref in candidates if ref not in pinned]
         if not stale:
             return
         await session.execute(
