@@ -11,20 +11,26 @@ Phases (state is carried in ``--state-file`` so a later phase, possibly on a
 recreated stack, can verify what an earlier phase saved):
 
 ``populate``
-    Read the instance settings and preset catalogs, store a synthetic
-    credential and bind it through an instance setting, submit one task with
-    omitted/default selections, redeliver the same submission (lost
+    Read the instance settings and preset catalogs, submit one task with the
+    dashboard's default selections, redeliver the same submission (lost
     acknowledgment), observe the execution progress without a terminal
     failure, attach an artifact to it, and dispatch a recurring definition
     through run-now.
 ``cancel``
     Cancel every execution recorded by ``populate`` and require each to
     reach the canceled terminal state.
+``credential``
+    Store a synthetic credential and bind it through the GitHub token
+    setting. It runs after ``cancel`` so no execution uses the synthetic
+    token.
 ``verify``
-    Read back everything ``populate`` saved: credential metadata without
-    plaintext, the setting binding and its redacted usage, the recurring
-    definition and its dispatched run, each execution's retained terminal
-    state, and the attached artifact bytes.
+    Read back everything saved: credential metadata without plaintext, the
+    setting binding and its redacted usage, the recurring definition and its
+    dispatched run, each execution's retained terminal state, and the
+    attached artifact bytes.
+``release``
+    Remove the setting override so later work does not use the synthetic
+    token.
 
 Stdlib only: it runs on the CI host, outside the application image.
 """
@@ -182,27 +188,17 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
         raise JourneyFailure("settings catalog is empty")
     presets = api.json("GET", "/api/presets")
     log(f"settings catalog and preset catalog readable ({type(presets).__name__})")
-
-    # Synthetic external credential bound through an instance setting.
-    slug = f"single-user-journey-{label}"
-    plaintext = f"ghp_synthetic_{uuid.uuid4().hex}"
-    api.json(
-        "POST",
-        "/api/v1/secrets",
-        body={"slug": slug, "plaintext": plaintext, "details": {"journey": label}},
-        expect=(201,),
-    )
-    api.json(
-        "PATCH",
-        "/api/v1/settings/workspace",
-        body={"changes": {SETTING_KEY: f"db://{slug}"}, "reason": "journey"},
-    )
-    state["credential"] = {
-        "slug": slug,
-        "plaintextSha256": hashlib.sha256(plaintext.encode()).hexdigest(),
-        "plaintext": plaintext,
-    }
-    log(f"synthetic credential {slug} stored and bound to {SETTING_KEY}")
+    # Submit with the repository the dashboard applies when the operator
+    # leaves it blank, read from the deployment instead of declared here.
+    ui_info = api.json("GET", "/api/ui/info")
+    repository = str(
+        ((ui_info.get("dashboardConfig") or {}).get("system") or {}).get(
+            "defaultRepository"
+        )
+        or ""
+    ).strip()
+    if not repository:
+        raise JourneyFailure("dashboard config exposes no default repository")
 
     # One task with omitted/default selections and no-publication intent.
     submission = {
@@ -213,6 +209,7 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
                 "Single-user journey check: acknowledge this run in one short "
                 "sentence."
             ),
+            "repository": repository,
             "publishMode": "none",
         },
         "idempotencyKey": f"single-user-journey-{label}-{uuid.uuid4().hex}",
@@ -289,6 +286,7 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
                 "title": name,
                 "initialParameters": {
                     "task": {"instructions": "Single-user journey recurring check."},
+                    "repository": repository,
                     "publishMode": "none",
                 },
             },
@@ -331,6 +329,42 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
     ]
 
 
+def credential(api: Api, state: dict[str, Any], *, label: str) -> None:
+    """Store a synthetic credential and bind it through an instance setting."""
+
+    slug = f"single-user-journey-{label}"
+    plaintext = f"ghp_synthetic_{uuid.uuid4().hex}"
+    api.json(
+        "POST",
+        "/api/v1/secrets",
+        body={"slug": slug, "plaintext": plaintext, "details": {"journey": label}},
+        expect=(201,),
+    )
+    api.json(
+        "PATCH",
+        "/api/v1/settings/workspace",
+        body={"changes": {SETTING_KEY: f"db://{slug}"}, "reason": "journey"},
+    )
+    state["credential"] = {"slug": slug, "plaintext": plaintext}
+    log(f"synthetic credential {slug} stored and bound to {SETTING_KEY}")
+
+
+def release(api: Api, state: dict[str, Any]) -> None:
+    """Remove the setting override so later work does not use the synthetic token."""
+
+    slug = state["credential"]["slug"]
+    api.request(
+        "DELETE",
+        f"/api/v1/settings/workspace/{SETTING_KEY}",
+        expect=(200, 204),
+    )
+    _, effective = api.request("GET", "/api/v1/settings/effective?scope=workspace")
+    if f"db://{slug}".encode() in effective:
+        raise JourneyFailure(f"{SETTING_KEY} still resolves to db://{slug}")
+    state["credential"]["released"] = True
+    log(f"{SETTING_KEY} override removed")
+
+
 def cancel(api: Api, state: dict[str, Any], *, timeout: float) -> None:
     executions = state.get("executions") or []
     if not executions:
@@ -350,7 +384,9 @@ def cancel(api: Api, state: dict[str, Any], *, timeout: float) -> None:
 
 
 def verify(api: Api, state: dict[str, Any]) -> None:
-    credential = state["credential"]
+    credential = state.get("credential")
+    if not credential:
+        raise JourneyFailure("no credential recorded to verify")
     slug, plaintext = credential["slug"], credential["plaintext"]
     _, listed = api.request("GET", "/api/v1/secrets")
     if slug.encode() not in listed:
@@ -401,7 +437,9 @@ def verify(api: Api, state: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("phase", choices=("populate", "cancel", "verify"))
+    parser.add_argument(
+        "phase", choices=("populate", "cancel", "credential", "verify", "release")
+    )
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--state-file", required=True, type=Path)
     parser.add_argument("--label", default="fresh")
@@ -417,8 +455,12 @@ def main(argv: list[str] | None = None) -> int:
             populate(api, state, label=args.label, timeout=args.timeout)
         elif args.phase == "cancel":
             cancel(api, state, timeout=args.timeout)
-        else:
+        elif args.phase == "credential":
+            credential(api, state, label=args.label)
+        elif args.phase == "verify":
             verify(api, state)
+        else:
+            release(api, state)
     except JourneyFailure as exc:
         print(f"single-user-journey: FAILED ({args.phase}): {exc}", file=sys.stderr)
         return 1

@@ -11,12 +11,12 @@
 #   ./tools/first_run_journey_3938.sh --upgrade  # eligible upgrade
 #
 # Fresh: tools/single_user_journey_checks.py reads the settings/preset
-# catalogs, binds a synthetic credential through an instance setting, submits
-# one default task (and redelivers it), observes it running, attaches an
-# artifact, and dispatches a recurring definition; the browser opens the
-# built dashboard on that work; the workflow worker restarts; both executions
-# are canceled and must reach the canceled state; everything saved is read
-# back.
+# catalogs, submits one task with the dashboard's default selections (and
+# redelivers it), observes it running, attaches an artifact, and dispatches
+# a recurring definition; the browser opens the built dashboard on that work;
+# the workflow worker restarts; both executions are canceled and must reach
+# the canceled state; a synthetic credential is bound through an instance
+# setting; everything saved is read back; the binding is released.
 #
 # Upgrade: the same work is saved and canceled on the previously published
 # image (FIRST_RUN_3938_UPGRADE_FROM), the stack is recreated on the
@@ -219,7 +219,9 @@ fresh_journey() {
   browser "$label"
   restart_workflow_worker
   checks cancel "$label"
+  checks credential "$label"
   checks verify "$label"
+  checks release "$label"
 }
 
 if [[ "$MODE" == "fresh" ]]; then
@@ -231,6 +233,7 @@ else
   bring_up
   checks populate before-upgrade
   checks cancel before-upgrade
+  checks credential before-upgrade
   checks verify before-upgrade
 
   echo "Upgrading $PROJECT_NAME from $UPGRADE_FROM to $CANDIDATE_IMAGE..." | redact
@@ -238,6 +241,7 @@ else
   bring_up
   checks verify before-upgrade
   browser before-upgrade
+  checks release before-upgrade
   fresh_journey after-upgrade
 fi
 

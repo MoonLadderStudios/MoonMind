@@ -986,7 +986,7 @@ def test_impact_selection_runs_conformance_and_boundaries():
         assert outputs["integration_ci"] == "true", changed
     outputs = _outputs(["tests/unit/auth/test_keycloak_removal_conformance.py"])
     assert outputs["unit_fast"] == "true"
-    outputs = _outputs(["api_service/api/routers/workflow_console.py"])
+    outputs = _outputs(["api_service/api/routers/automation.py"])
     assert outputs["integration_ci"] == "false"
 
 
