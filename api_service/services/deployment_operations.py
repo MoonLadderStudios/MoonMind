@@ -9,7 +9,6 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
@@ -28,14 +27,57 @@ _IMAGE_REFERENCE_PATTERN = re.compile(
     r"^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[A-Fa-f0-9]{64})$"
 )
 
-# Standalone controller cutover (issue #4500): the UI/API path submits and
-# observes the same controller operation as the host entrypoint instead of
-# depending on the API, Temporal, and the legacy deployment worker. The
-# legacy Temporal workflow remains the fallback only while no controller
-# writer owns the operation.
+# Standalone controller adoption (MoonLadderStudios/MoonMind#4502): the
+# Settings Operations API submits and observes the same ``deploy/controller``
+# operation as the host entrypoint. Once a controller secret is configured,
+# the controller is the only mutation owner: an unreachable controller or a
+# lost acknowledgment is reported as such and never forks the legacy
+# Temporal updater. The legacy workflow remains only while no controller is
+# installed (no deployment-owned secret), per the #4500 bootstrap cutover.
 CONTROLLER_DEFAULT_URL = "http://127.0.0.1:8472"
-CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
-CONTROLLER_STATUS_TIMEOUT_SECONDS = 10
+CONTROLLER_SUBMIT_TIMEOUT_SECONDS: float = 30
+CONTROLLER_STATUS_TIMEOUT_SECONDS: float = 10
+
+_CONTROLLER_OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+# Controller record status -> recent-action status. Unknown statuses stay
+# UNKNOWN instead of being reported as queued or failed.
+_CONTROLLER_ACTION_STATUSES = {
+    "pending": "QUEUED",
+    "staged": "RUNNING",
+    "applying": "RUNNING",
+    "succeeded": "SUCCEEDED",
+    "partially_verified": "PARTIALLY_VERIFIED",
+    "failed": "FAILED",
+    "superseded": "SUPERSEDED",
+}
+_CONTROLLER_TERMINAL_STATUSES = frozenset(
+    {"succeeded", "partially_verified", "failed", "superseded"}
+)
+
+# Controller HTTP answers -> distinct, credential-free API outcomes.
+_CONTROLLER_HTTP_ERRORS = {
+    400: ("deployment_controller_rejected", "The controller rejected the request"),
+    401: (
+        "deployment_controller_access_denied",
+        "The controller refused the deployment-owned credential",
+    ),
+    403: (
+        "deployment_controller_access_denied",
+        "The controller refused the deployment-owned credential",
+    ),
+    404: (
+        "deployment_controller_not_found",
+        "The controller has no such operation or route",
+    ),
+    409: (
+        "deployment_controller_conflict",
+        "The controller refused the request in the operation's current state",
+    ),
+}
+
+CONTROLLER_ACTION_ID_PREFIX = "ctl_"
+CONTROLLER_OPERATIONS_ROUTE = "/api/v1/operations/deployment/controller-operations"
 
 
 def controller_base_url(explicit: str | None = None) -> str:
@@ -68,17 +110,36 @@ def controller_secret() -> str | None:
     return None
 
 
+def check_controller_operation_id(operation_id: str) -> str:
+    """Validate an operation id before it reaches a controller URL."""
+    normalized = str(operation_id or "").strip()
+    if not _CONTROLLER_OPERATION_ID_PATTERN.fullmatch(normalized):
+        raise DeploymentOperationError(
+            "deployment_operation_id_invalid",
+            "Deployment operation id is invalid.",
+        )
+    return normalized
+
+
 def _controller_request(
     *,
     method: str,
-    url: str,
+    path: str,
     secret: str,
     payload: dict[str, Any] | None = None,
-    timeout: int,
-) -> tuple[int, dict[str, Any]]:
+    timeout: float,
+) -> dict[str, Any]:
+    """Call the controller and translate its answer into typed outcomes.
+
+    A refused or unresolvable connection means the request never reached a
+    writer (``deployment_controller_unavailable``). A timeout or dropped
+    connection after sending is a lost acknowledgment: the controller may
+    own the operation, so the caller must observe or resubmit the same
+    target (which reattaches) rather than start another updater.
+    """
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(
-        url,
+        f"{controller_base_url()}{path}",
         data=body,
         method=method,
         headers={
@@ -89,14 +150,52 @@ def _controller_request(
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8") or "{}"
-            return response.status, json.loads(raw)
     except urllib.error.HTTPError as exc:
         try:
-            detail = exc.read().decode("utf-8", errors="replace") or "{}"
-            parsed = json.loads(detail)
+            parsed = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
         except (OSError, ValueError):
-            parsed = {"error": "controller refused the request"}
-        return exc.code, parsed if isinstance(parsed, dict) else {"error": str(parsed)}
+            parsed = {}
+        answered = str(parsed.get("error") or "") if isinstance(parsed, dict) else ""
+        code, message = _CONTROLLER_HTTP_ERRORS.get(
+            exc.code,
+            (
+                "deployment_controller_failed",
+                "The controller could not complete the request",
+            ),
+        )
+        if exc.code == 400 and answered:
+            message = f"{message}: {answered}"
+        raise DeploymentOperationError(
+            code, f"{message} (HTTP {exc.code})."
+        ) from None
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise _controller_ack_lost() from None
+        raise DeploymentOperationError(
+            "deployment_controller_unavailable",
+            "The standalone deployment controller is unreachable; use the "
+            "host update command or restore the controller with "
+            "`python3 deploy/controller/bootstrap.py restore`.",
+        ) from None
+    except (TimeoutError, OSError):
+        raise _controller_ack_lost() from None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        raise _controller_ack_lost() from None
+    if not isinstance(parsed, dict):
+        raise _controller_ack_lost()
+    return parsed
+
+
+def _controller_ack_lost() -> DeploymentOperationError:
+    return DeploymentOperationError(
+        "deployment_controller_ack_lost",
+        "The controller did not acknowledge the request in time; it may "
+        "still own the operation. Recent actions show its progress, and "
+        "resubmitting the same target reattaches instead of starting "
+        "another update.",
+    )
 
 
 def submit_controller_update(
@@ -105,91 +204,140 @@ def submit_controller_update(
     desired_image: str,
     source_revision: str = "",
     reason: str = "",
-    base_url: str | None = None,
-    secret: str | None = None,
 ) -> dict[str, Any] | None:
     """Submit the update to the standalone controller (same as host path).
 
-    Returns the controller operation on HTTP 202, ``None`` when no
-    controller writer is reachable (unconfigured secret, refused
-    connection, timeout, or unknown route: the legacy path stays safe),
-    and raises :class:`DeploymentOperationError` when the controller
-    answered with an ownership decision (refusal, conflict, or internal
-    error): the legacy updater must never fork a competing writer then.
+    Returns the controller operation, or ``None`` only when no controller
+    is installed (no deployment-owned secret). Every other outcome is the
+    controller's: failures raise :class:`DeploymentOperationError` with a
+    distinct code and never permit a competing legacy writer.
     """
-    resolved_secret = secret if secret is not None else controller_secret()
-    if not resolved_secret:
+    secret = controller_secret()
+    if not secret:
         return None
-    url = f"{controller_base_url(base_url)}/v1/operations"
-    try:
-        status, parsed = _controller_request(
-            method="POST",
-            url=url,
-            secret=resolved_secret,
-            payload={
-                "stack": stack,
-                "desiredImage": desired_image,
-                "sourceRevision": source_revision,
-                "reason": reason,
-            },
-            timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
-        )
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        raise _ControllerUnavailable(
-            f"standalone controller is unreachable ({exc})"
-        ) from exc
-    if status == 202:
-        return parsed
-    if status in (400, 404, 409, 500):
-        raise DeploymentOperationError(
-            "deployment_controller_owned",
-            f"Standalone controller answered HTTP {status}: "
-            f"{parsed.get('error', 'unknown controller decision')}; refusing "
-            "to fork the legacy updater while it may own the stack.",
-        )
-    raise DeploymentOperationError(
-        "deployment_controller_unexpected",
-        f"Standalone controller answered HTTP {status}; refusing to fork "
-        "the legacy updater on an uncertain outcome.",
+    return _controller_request(
+        method="POST",
+        path="/v1/operations",
+        secret=secret,
+        payload={
+            "stack": stack,
+            "desiredImage": desired_image,
+            "sourceRevision": source_revision,
+            "reason": reason,
+        },
+        timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
     )
 
 
-class _ControllerUnavailable(RuntimeError):
-    """No controller writer owns the operation; legacy fallback stays safe."""
+def _require_controller_secret() -> str:
+    secret = controller_secret()
+    if not secret:
+        raise DeploymentOperationError(
+            "deployment_controller_not_installed",
+            "The standalone deployment controller is not installed.",
+        )
+    return secret
 
 
-def observe_controller_operation(
-    *,
-    operation_id: str,
-    base_url: str | None = None,
-    secret: str | None = None,
-) -> dict[str, Any] | None:
-    """Observe the controller's record for one operation (read-only)."""
-    resolved_secret = secret if secret is not None else controller_secret()
-    if not resolved_secret or not operation_id:
+def retry_controller_operation(operation_id: str) -> dict[str, Any]:
+    """Request the controller's fresh bounded attempt for one operation."""
+    checked = check_controller_operation_id(operation_id)
+    return _controller_request(
+        method="POST",
+        path=f"/v1/operations/{checked}/retry",
+        secret=_require_controller_secret(),
+        timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+    )
+
+
+def controller_operation_logs(operation_id: str) -> dict[str, Any]:
+    """Return the controller's redacted attempt/verification log record."""
+    checked = check_controller_operation_id(operation_id)
+    return _controller_request(
+        method="GET",
+        path=f"/v1/operations/{checked}/logs",
+        secret=_require_controller_secret(),
+        timeout=CONTROLLER_STATUS_TIMEOUT_SECONDS,
+    )
+
+
+def observe_controller_operation(*, operation_id: str) -> dict[str, Any] | None:
+    """Observe one controller record; ``None`` when it cannot be read.
+
+    An unreadable observer is not evidence of failure: callers keep the
+    last known state instead of marking the operation failed.
+    """
+    secret = controller_secret()
+    if not secret or not operation_id:
         return None
-    url = f"{controller_base_url(base_url)}/v1/operations/{operation_id}"
     try:
-        status, parsed = _controller_request(
+        return _controller_request(
             method="GET",
-            url=url,
-            secret=resolved_secret,
+            path=f"/v1/operations/{check_controller_operation_id(operation_id)}",
+            secret=secret,
             timeout=CONTROLLER_STATUS_TIMEOUT_SECONDS,
         )
-    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+    except DeploymentOperationError:
         return None
-    if status != 200:
-        return None
-    return parsed
 
 
 def controller_action_status(controller_status: str) -> str:
     """Map a controller operation status onto a recent-action status."""
-    if controller_status in ("succeeded", "partially_verified"):
-        return "SUCCEEDED" if controller_status == "succeeded" else "PARTIALLY_VERIFIED"
-    if controller_status == "failed":
-        return "FAILED"
-    return "QUEUED"
+    return _CONTROLLER_ACTION_STATUSES.get(str(controller_status or ""), "UNKNOWN")
+
+
+def controller_action(
+    operation: dict[str, Any], *, operator: str | None = None
+) -> DeploymentRecentAction:
+    """Project one controller record onto the Operations recent-action shape.
+
+    Requested and installed images, the original error, verification gaps,
+    and reporting failures come from the controller's own record. No
+    workflow detail or artifact reference is manufactured for it.
+    """
+    operation_id = str(operation.get("operationId") or "")
+    controller_status = str(operation.get("status") or "")
+    desired = operation.get("desired") if isinstance(operation.get("desired"), dict) else {}
+    installed = (
+        operation.get("installed") if isinstance(operation.get("installed"), dict) else {}
+    )
+    verification = tuple(
+        DeploymentVerificationCheck(
+            name=str(check.get("name") or ""),
+            status=str(check.get("status") or ""),
+            detail=str(check.get("detail") or "") or None,
+        )
+        for check in operation.get("verification") or ()
+        if isinstance(check, dict)
+    )
+    completed_at = str(installed.get("confirmedAt") or "") or None
+    if completed_at is None and controller_status in _CONTROLLER_TERMINAL_STATUSES:
+        completed_at = str(operation.get("updatedAt") or "") or None
+    return DeploymentRecentAction(
+        id=f"ctl-{operation_id}",
+        kind="update",
+        status=controller_action_status(controller_status),
+        requested_image=str(desired.get("image") or "") or None,
+        operator=operator,
+        reason=str(desired.get("reason") or "") or None,
+        started_at=str(operation.get("createdAt") or "") or None,
+        completed_at=completed_at,
+        run_id=f"{CONTROLLER_ACTION_ID_PREFIX}{operation_id}",
+        operation_id=operation_id or None,
+        controller_status=controller_status or None,
+        installed_image=str(installed.get("image") or "") or None,
+        error_summary=str(operation.get("errorSummary") or "") or None,
+        verification=verification,
+        reporting_failures=tuple(
+            str(item) for item in operation.get("reportingFailures") or ()
+        ),
+        retryable=controller_status == "failed",
+        logs_url=(
+            f"{CONTROLLER_OPERATIONS_ROUTE}/{operation_id}/logs"
+            if operation_id
+            else None
+        ),
+    )
 
 
 def _controller_state_candidates() -> list[Path]:
@@ -230,30 +378,7 @@ def controller_recent_actions(
             continue
         records.append(parsed)
     records.sort(key=lambda op: str(op.get("updatedAt") or ""))
-    actions = []
-    for parsed in records[-limit:]:
-        operation_id = str(parsed.get("operationId") or "")
-        desired = parsed.get("desired") or {}
-        installed = parsed.get("installed") or {}
-        actions.append(
-            DeploymentRecentAction(
-                id=f"ctl-{operation_id}",
-                kind="update",
-                status=controller_action_status(str(parsed.get("status") or "")),
-                requested_image=str(desired.get("image") or "") or None,
-                resolved_digest=str(installed.get("image") or "") or None,
-                reason=str((desired.get("reason") or "") or "") or None,
-                started_at=str(parsed.get("createdAt") or "") or None,
-                completed_at=str(installed.get("confirmedAt") or "") or None,
-                run_detail_url=None,
-                run_id=f"ctl_{operation_id}",
-            )
-        )
-    return tuple(reversed(actions))
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return tuple(reversed([controller_action(parsed) for parsed in records[-limit:]]))
 
 
 class DeploymentOperationError(ValueError):
@@ -317,6 +442,13 @@ class RollbackEligibilityDecision:
 
 
 @dataclass(frozen=True)
+class DeploymentVerificationCheck:
+    name: str
+    status: str
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
 class DeploymentRecentAction:
     id: str
     kind: str
@@ -337,6 +469,14 @@ class DeploymentRecentAction:
     before_build_id: str | None = None
     after_build_id: str | None = None
     rollback_eligibility: RollbackEligibilityDecision | None = None
+    operation_id: str | None = None
+    controller_status: str | None = None
+    installed_image: str | None = None
+    error_summary: str | None = None
+    verification: tuple[DeploymentVerificationCheck, ...] = ()
+    reporting_failures: tuple[str, ...] = ()
+    retryable: bool = False
+    logs_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -461,36 +601,20 @@ class DeploymentOperationsService:
         policy = self.get_policy(stack)
         stored = self._recent_actions.get(policy.stack, ())
         refreshed: list[DeploymentRecentAction] = []
-        changed = False
         for action in stored:
-            if not str(getattr(action, "run_id", "") or "").startswith("ctl_"):
-                refreshed.append(action)
-                continue
-            operation_id = str(action.run_id or "")[len("ctl_") :]
-            observed = observe_controller_operation(operation_id=operation_id)
-            if observed is None:
-                refreshed.append(action)
-                continue
-            updated_status = controller_action_status(str(observed.get("status") or ""))
-            if updated_status == action.status:
-                refreshed.append(action)
-                continue
-            changed = True
-            refreshed.append(
-                DeploymentRecentAction(
-                    **{
-                        **action.__dict__,
-                        "status": updated_status,
-                        "completed_at": (
-                            action.completed_at
-                            if updated_status == "QUEUED"
-                            else _utc_now_iso()
-                        ),
-                    }
-                )
+            observed = (
+                observe_controller_operation(operation_id=action.operation_id)
+                if action.operation_id
+                else None
             )
-        if changed:
-            self._recent_actions[policy.stack] = tuple(refreshed)
+            # An unreadable controller keeps the last known state; it is
+            # never evidence that a still-running operation failed.
+            refreshed.append(
+                controller_action(observed, operator=action.operator)
+                if observed is not None
+                else action
+            )
+        self._recent_actions[policy.stack] = tuple(refreshed)
         # Durable controller-backed updates survive per-request service
         # instances through the controller's own record; merge them with
         # same-process submissions, newest first, without duplicates.
@@ -508,32 +632,40 @@ class DeploymentOperationsService:
         self,
         *,
         policy: DeploymentStackPolicy,
-        submission: DeploymentUpdateSubmission,
         operation: dict[str, Any],
-    ) -> DeploymentRecentAction:
-        operation_id = str(operation.get("operationId") or "").strip()
-        action = DeploymentRecentAction(
-            id=f"ctl-{operation_id or uuid4().hex}",
-            kind="update",
-            status=controller_action_status(str(operation.get("status") or "")),
-            requested_image=f"{submission.repository}:{submission.reference}",
-            operator=(
-                str(submission.requested_by_user_id)
-                if submission.requested_by_user_id is not None
-                else None
-            ),
-            reason=submission.reason,
-            started_at=_utc_now_iso(),
-            # No separate controller UI route exists; status is observed
-            # from the controller record via recent_actions.
-            run_detail_url=None,
-            run_id=f"ctl_{operation_id}" if operation_id else None,
-        )
+        operator: str | None,
+    ) -> dict[str, str | None]:
+        action = controller_action(operation, operator=operator)
         self._recent_actions[policy.stack] = (
             action,
-            *self._recent_actions.get(policy.stack, ()),
+            *(
+                existing
+                for existing in self._recent_actions.get(policy.stack, ())
+                if existing.run_id != action.run_id
+            ),
         )[:50]
-        return action
+        return {
+            "deploymentUpdateRunId": action.id,
+            # A local controller operation has no workflow or task identity.
+            "taskId": None,
+            "workflowId": None,
+            "operationId": action.operation_id,
+            "status": action.status,
+        }
+
+    async def retry_controller_update(
+        self, *, stack: str, operation_id: str, operator: str | None = None
+    ) -> dict[str, str | None]:
+        """Request the controller's fresh bounded attempt for an operation.
+
+        The controller retains prior attempts and the original error; the
+        retry is never a resubmission through another updater.
+        """
+        policy = self.get_policy(stack)
+        operation = await asyncio.to_thread(retry_controller_operation, operation_id)
+        return self._record_controller_action(
+            policy=policy, operation=operation, operator=operator
+        )
 
     async def queue_update(
         self,
@@ -541,35 +673,31 @@ class DeploymentOperationsService:
         execution_service: DeploymentExecutionCreator,
         policy: DeploymentStackPolicy,
         submission: DeploymentUpdateSubmission,
-    ) -> dict[str, str]:
+    ) -> dict[str, str | None]:
         desired_image = f"{submission.repository}:{submission.reference}"
-        try:
-            controller_operation = await asyncio.to_thread(
-                submit_controller_update,
-                stack=policy.stack,
-                desired_image=desired_image,
-                source_revision="",
-                reason=submission.reason or "",
-            )
-        except _ControllerUnavailable:
-            controller_operation = None
+        controller_operation = await asyncio.to_thread(
+            submit_controller_update,
+            stack=policy.stack,
+            desired_image=desired_image,
+            source_revision="",
+            reason=submission.reason or "",
+        )
         if controller_operation is not None:
             # The UI/API path submits the same controller operation as the
             # host entrypoint: no Temporal workflow is created, so no second
             # updater can own the stack. Status is observed from the
             # controller record (see recent_actions).
-            action = self._record_controller_action(
+            return self._record_controller_action(
                 policy=policy,
-                submission=submission,
                 operation=controller_operation,
+                operator=(
+                    str(submission.requested_by_user_id)
+                    if submission.requested_by_user_id is not None
+                    else None
+                ),
             )
-            operation_id = str(controller_operation.get("operationId") or "")
-            return {
-                "deploymentUpdateRunId": action.id,
-                "taskId": operation_id,
-                "workflowId": operation_id,
-                "status": "QUEUED",
-            }
+        # Transitional: no standalone controller is installed yet, so the
+        # application-owned deployment workflow remains the update owner.
         initial_parameters = self._build_initial_parameters(
             policy=policy,
             submission=submission,
@@ -607,6 +735,7 @@ class DeploymentOperationsService:
             "deploymentUpdateRunId": deployment_update_run_id,
             "taskId": workflow_id,
             "workflowId": workflow_id,
+            "operationId": None,
             "status": "QUEUED",
         }
 

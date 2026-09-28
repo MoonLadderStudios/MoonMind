@@ -914,3 +914,55 @@ def test_legacy_direct_propagates_compose_file_selection(tmp_path, monkeypatch):
     assert len(launched) == 1
     command = [str(part) for part in launched[0]]
     assert str(repo / "site.yaml") in command
+
+
+def test_host_entrypoint_submits_only_the_operation_the_ui_observes(
+    tmp_path, monkeypatch
+):
+    """One mutation owner: the host command is a client of the same controller
+    operation (``/v1/operations``) the Settings Operations API submits to, even
+    when a second controller client is importable and configured."""
+    import sys
+    import types
+
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+    monkeypatch.delenv("MOONMIND_CONTROLLER_SECRET_FILE", raising=False)
+    monkeypatch.setenv("MOONMIND_CONTROLLER_SECRET", "competing-secret")
+    competing = types.ModuleType("moonmind_controller.client")
+    competing.ControllerUnavailableError = RuntimeError
+    competing.is_controller_configured = lambda *a, **k: True
+    competing.build_operation_payload = lambda **kwargs: kwargs
+    competing.submit_operation = lambda *a, **k: pytest.fail(
+        "the host entrypoint forked a second controller owner"
+    )
+    package = types.ModuleType("moonmind_controller")
+    package.client = competing
+    monkeypatch.setitem(sys.modules, "moonmind_controller", package)
+    monkeypatch.setitem(sys.modules, "moonmind_controller.client", competing)
+
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    _install_controller_secret(repo)
+    digest = "sha256:" + "d" * 64
+    image = f"ghcr.io/moonladderstudios/moonmind@{digest}"
+    original_run = subprocess.run
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [image], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = json.dumps({"name": "existing-project", "services": {"api": {}}})
+        else:
+            assert args[1] == "pull"
+            output = ""
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    posted = _stub_controller_success(monkeypatch, image)
+    assert update.main(["--repo", str(repo)]) == 0
+    assert [payload["desiredImage"] for payload in posted] == [image]

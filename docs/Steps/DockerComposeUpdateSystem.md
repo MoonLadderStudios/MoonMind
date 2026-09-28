@@ -39,7 +39,7 @@ Use existing Docker/Compose, local job files, and process ownership. The control
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector. Resolve and record the concrete image that will run.
 
-**Controller:** The standalone deployment controller in its own Compose project (`deploy/moonmind-controller`), separate from the MoonMind stack. It owns its durable state, restart policy, direct Docker socket mount, and one small authenticated local endpoint guarded by a deployment-owned secret, and is capable of outliving the worker or API that submitted work to it. Its Docker transport and command endpoint survive target-project shutdown. The host CLI installs, starts, updates, and restores the controller; the controller never replaces itself, and controller updates are serialized against active deployment mutation. Its privileged execution boundary is deployment-owned, not selectable by an agent. No agents receive sockets or unrestricted controller access; its lifecycle is host-owned.
+**Controller:** The standalone deployment controller in its own Compose project (`deploy/controller`, installed by `deploy/controller/bootstrap.py`), separate from the MoonMind stack. It owns its durable state, restart policy, direct Docker socket mount, and one small authenticated local endpoint guarded by a deployment-owned secret, and is capable of outliving the worker or API that submitted work to it. Its Docker transport and command endpoint survive target-project shutdown. The host CLI installs, starts, updates, and restores the controller; the controller never replaces itself, and controller updates are serialized against active deployment mutation. Its privileged execution boundary is deployment-owned, not selectable by an agent. No agents receive sockets or unrestricted controller access; its lifecycle is host-owned.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -82,11 +82,15 @@ Preserve the existing public Operations entrypoints while changing their impleme
 POST /api/v1/operations/deployment/update
 GET  /api/v1/operations/deployment/stacks/moonmind
 GET  /api/v1/operations/deployment/image-targets?stack=moonmind
+POST /api/v1/operations/deployment/controller-operations/{operationId}/retry
+GET  /api/v1/operations/deployment/controller-operations/{operationId}/logs
 ```
 
 The submission identifies the stack and target image, with existing explicit maintenance options where supported. Keep current client fields usable during migration; this document does not introduce a replacement API schema or another job-status vocabulary.
 
-The API submits or observes the same controller operation the host uses. Its response identifies that operation and its actual current state. An API/workflow timeout is not permission to launch another updater or evidence that the underlying operation failed.
+The API submits or observes the same controller operation the host uses (`deploy/controller`, `/v1/operations`), server-to-controller with the deployment-owned secret; the browser never receives it. Its response carries the controller `operationId` and actual current status; `workflowId` and `taskId` stay empty for a controller operation. Recent actions project the controller record: requested and installed image, original error, verification gaps, reporting failures, a logs route, and Retry for a failed operation. Retry requests the controller's fresh bounded attempt and keeps prior errors. The Operations page re-reads stack state on a bounded interval only while an action is queued or running, so a reload or API replacement reattaches to the same operation.
+
+An API/workflow timeout is not permission to launch another updater or evidence that the underlying operation failed. With a controller secret configured, the controller is the only owner: an unreachable controller returns `deployment_controller_unavailable` (503), a lost acknowledgment `deployment_controller_ack_lost` (504; resubmitting the same target reattaches), a refused credential `deployment_controller_access_denied` (502), a state conflict `deployment_controller_conflict` (409), and an exhausted or internal controller failure `deployment_controller_failed` (502). None of these fall back to the application-owned workflow, and an unreadable controller keeps the last known status instead of reporting failure. Only while no controller is installed (no secret) does the API still queue the transitional `MoonMind.UserWorkflow`; that fallback is retired with the §11.4 cutover.
 
 The workflow's deployment observer heartbeats while reading its registry,
 pulling the updater image, and awaiting the durable result. A 60-second

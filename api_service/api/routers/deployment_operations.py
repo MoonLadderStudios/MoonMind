@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,6 +21,7 @@ from api_service.services.deployment_operations import (
     DeploymentUpdateSubmission,
     RollbackEligibilityDecision,
     RollbackImageTarget,
+    controller_operation_logs,
     mutable_references,
     resolve_current_deployment_image,
 )
@@ -66,9 +68,12 @@ class DeploymentUpdateResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     deployment_update_run_id: str = Field(..., alias="deploymentUpdateRunId")
-    task_id: str = Field(..., alias="taskId")
-    workflow_id: str = Field(..., alias="workflowId")
-    status: Literal["QUEUED"]
+    # Legacy workflow-backed submissions only; a controller operation has
+    # no workflow or task identity.
+    task_id: str | None = Field(None, alias="taskId")
+    workflow_id: str | None = Field(None, alias="workflowId")
+    operation_id: str | None = Field(None, alias="operationId")
+    status: str
 
 
 class DeploymentCurrentImageModel(BaseModel):
@@ -126,6 +131,12 @@ class RollbackEligibilityModel(BaseModel):
     evidence_ref: str | None = Field(None, alias="evidenceRef")
 
 
+class DeploymentVerificationCheckModel(BaseModel):
+    name: str
+    status: str
+    detail: str | None = None
+
+
 class DeploymentRecentActionModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -149,6 +160,29 @@ class DeploymentRecentActionModel(BaseModel):
     after_build_id: str | None = Field(None, alias="afterBuildId")
     rollback_eligibility: RollbackEligibilityModel | None = Field(
         None, alias="rollbackEligibility"
+    )
+    operation_id: str | None = Field(None, alias="operationId")
+    controller_status: str | None = Field(None, alias="controllerStatus")
+    installed_image: str | None = Field(None, alias="installedImage")
+    error_summary: str | None = Field(None, alias="errorSummary")
+    verification: list[DeploymentVerificationCheckModel] = Field(default_factory=list)
+    reporting_failures: list[str] = Field(
+        default_factory=list, alias="reportingFailures"
+    )
+    retryable: bool = False
+    logs_url: str | None = Field(None, alias="logsUrl")
+
+
+class DeploymentControllerLogsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    operation_id: str = Field(..., alias="operationId")
+    status: str | None = None
+    error_summary: str | None = Field(None, alias="errorSummary")
+    attempts: list[dict[str, Any]] = Field(default_factory=list)
+    verification: list[dict[str, Any]] = Field(default_factory=list)
+    reporting_failures: list[Any] = Field(
+        default_factory=list, alias="reportingFailures"
     )
 
 
@@ -208,9 +242,24 @@ def _require_admin(user: User) -> None:
     )
 
 
+# Controller outcomes keep distinct HTTP statuses so an unavailable or
+# unacknowledging controller is never confused with a policy rejection.
+_CONTROLLER_ERROR_STATUS = {
+    "deployment_controller_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "deployment_controller_not_installed": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "deployment_controller_ack_lost": status.HTTP_504_GATEWAY_TIMEOUT,
+    "deployment_controller_access_denied": status.HTTP_502_BAD_GATEWAY,
+    "deployment_controller_failed": status.HTTP_502_BAD_GATEWAY,
+    "deployment_controller_conflict": status.HTTP_409_CONFLICT,
+    "deployment_controller_not_found": status.HTTP_404_NOT_FOUND,
+}
+
+
 def _policy_error(exc: DeploymentOperationError) -> HTTPException:
     return HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        status_code=_CONTROLLER_ERROR_STATUS.get(
+            exc.code, status.HTTP_422_UNPROCESSABLE_CONTENT
+        ),
         detail={"code": exc.code, "message": exc.message},
     )
 
@@ -471,6 +520,19 @@ def _recent_action_model(action: DeploymentRecentAction) -> DeploymentRecentActi
             if eligibility
             else None
         ),
+        operation_id=action.operation_id,
+        controller_status=action.controller_status,
+        installed_image=action.installed_image,
+        error_summary=action.error_summary,
+        verification=[
+            DeploymentVerificationCheckModel(
+                name=check.name, status=check.status, detail=check.detail
+            )
+            for check in action.verification
+        ],
+        reporting_failures=list(action.reporting_failures),
+        retryable=action.retryable,
+        logs_url=action.logs_url,
     )
 
 
@@ -582,6 +644,47 @@ async def submit_deployment_update(
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
     return DeploymentUpdateResponse(**queued)
+
+
+@router.post(
+    "/controller-operations/{operation_id}/retry",
+    response_model=DeploymentUpdateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_deployment_controller_operation(
+    operation_id: str,
+    stack: str = Query("moonmind", min_length=1),
+    service: DeploymentOperationsService = Depends(_get_deployment_service),
+    user: User = Depends(get_current_user()),
+) -> DeploymentUpdateResponse:
+    """Request the controller's fresh bounded attempt for one operation."""
+    _require_admin(user)
+    try:
+        retried = await service.retry_controller_update(
+            stack=stack,
+            operation_id=operation_id,
+            operator=str(getattr(user, "id", "") or "") or None,
+        )
+    except DeploymentOperationError as exc:
+        raise _policy_error(exc) from exc
+    return DeploymentUpdateResponse(**retried)
+
+
+@router.get(
+    "/controller-operations/{operation_id}/logs",
+    response_model=DeploymentControllerLogsResponse,
+)
+async def get_deployment_controller_operation_logs(
+    operation_id: str,
+    user: User = Depends(get_current_user()),
+) -> DeploymentControllerLogsResponse:
+    """Return the controller's redacted attempt and verification record."""
+    _require_admin(user)
+    try:
+        logs = await asyncio.to_thread(controller_operation_logs, operation_id)
+    except DeploymentOperationError as exc:
+        raise _policy_error(exc) from exc
+    return DeploymentControllerLogsResponse(**logs)
 
 
 @router.get("/stacks/{stack}", response_model=DeploymentStackStateResponse)

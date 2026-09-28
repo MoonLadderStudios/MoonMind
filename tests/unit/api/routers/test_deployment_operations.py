@@ -21,7 +21,6 @@ from api_service.services.deployment_operations import (
     DeploymentRecentAction,
     RollbackEligibilityDecision,
     RollbackImageTarget,
-    _ControllerUnavailable,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_tools import (
@@ -653,24 +652,24 @@ def test_update_prefers_standalone_controller_over_legacy_workflow(
 
     assert response.status_code == 202
     payload = response.json()
-    assert payload["workflowId"] == "op-1"
-    assert payload["taskId"] == "op-1"
-    assert payload["status"] == "QUEUED"
+    assert payload["operationId"] == "op-1"
+    # No workflow identity is manufactured for a controller operation.
+    assert payload["workflowId"] is None
+    assert payload["taskId"] is None
+    assert payload["status"] == "RUNNING"
     # The same controller operation is submitted instead of a second updater:
     # no Temporal workflow is created while the controller owns the stack.
     assert execution_service.requests == []
 
 
-def test_controller_unavailable_falls_back_to_legacy_workflow(
+def test_uninstalled_controller_keeps_the_transitional_legacy_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import asyncio
 
     monkeypatch.setattr(
         "api_service.services.deployment_operations.submit_controller_update",
-        lambda **kwargs: (_ for _ in ()).throw(
-            _ControllerUnavailable("down")
-        ),
+        lambda **kwargs: None,
     )
     service = DeploymentOperationsService()
     policy = service.get_policy("moonmind")
@@ -683,17 +682,18 @@ def test_controller_unavailable_falls_back_to_legacy_workflow(
         )
     )
     assert queued["status"] == "QUEUED"
+    assert queued["operationId"] is None
     assert len(execution_service.requests) == 1
 
 
-def test_controller_ownership_never_forks_legacy_workflow(
+def test_configured_controller_failure_never_forks_legacy_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import asyncio
 
     def _owned(**kwargs: object) -> dict[str, object]:
         raise DeploymentOperationError(
-            "deployment_controller_owned", "controller owns the stack"
+            "deployment_controller_unavailable", "controller is unreachable"
         )
 
     monkeypatch.setattr(
@@ -724,7 +724,11 @@ def test_recent_actions_observe_the_same_controller_operation(
     )
     monkeypatch.setattr(
         "api_service.services.deployment_operations.observe_controller_operation",
-        lambda **kwargs: {"operationId": "op-9", "status": "succeeded"},
+        lambda **kwargs: {
+            "operationId": "op-9",
+            "status": "succeeded",
+            "installed": {"image": "img:9", "confirmedAt": "t"},
+        },
     )
     service = DeploymentOperationsService()
     policy = service.get_policy("moonmind")
@@ -740,6 +744,7 @@ def test_recent_actions_observe_the_same_controller_operation(
     assert actions[0].run_id == "ctl_op-9"
     # The status consumer observes the controller record, not a workflow.
     assert actions[0].status == "SUCCEEDED"
+    assert actions[0].installed_image == "img:9"
 
 
 def test_stack_state_surfaces_durable_controller_operations(

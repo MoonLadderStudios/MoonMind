@@ -686,4 +686,150 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(card).queryByText(/paused successfully/i)).toBeNull();
   });
 
+
+  const controllerAction = {
+    id: 'ctl-op-7',
+    kind: 'update',
+    status: 'FAILED',
+    controllerStatus: 'failed',
+    operationId: 'op-7',
+    requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260425.1234',
+    installedImage: null,
+    errorSummary: 'attempt 1: staging failed: manifest unknown',
+    startedAt: '2026-09-28T10:00:00Z',
+    completedAt: '2026-09-28T10:05:00Z',
+    runDetailUrl: null,
+    logsArtifactUrl: null,
+    runId: 'ctl_op-7',
+    verification: [],
+    reportingFailures: [],
+    retryable: true,
+    logsUrl: '/api/v1/operations/deployment/controller-operations/op-7/logs',
+  };
+
+  function mockControllerStack(actions: Array<Record<string, unknown>>) {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    let reads = 0;
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        const action = actions[Math.min(reads, actions.length - 1)];
+        reads += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ...stackState, latestAction: action, recentActions: [action] }),
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/controller-operations/op-7/logs') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            operationId: 'op-7',
+            status: 'failed',
+            errorSummary: 'attempt 1: staging failed: manifest unknown',
+            attempts: [{ attempt: 1, error: 'staging failed: manifest unknown' }],
+            verification: [],
+            reportingFailures: [],
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/controller-operations/op-7/retry') {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            deploymentUpdateRunId: 'ctl-op-7',
+            taskId: null,
+            workflowId: null,
+            operationId: 'op-7',
+            status: 'RUNNING',
+          }),
+        } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    return () => reads;
+  }
+
+  it('shows the controller operation target, installed state, original error, logs, and retry', async () => {
+    mockControllerStack([controllerAction]);
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(await within(card).findByText(/operation op-7/i)).toBeTruthy();
+    expect(within(card).getByText(/installed: not confirmed/i)).toBeTruthy();
+    expect(
+      within(card).getByText(/original error: attempt 1: staging failed: manifest unknown/i),
+    ).toBeTruthy();
+    // A controller operation has no workflow run to link to.
+    expect(within(card).queryByRole('link', { name: /run detail/i })).toBeNull();
+
+    fireEvent.click(within(card).getByRole('button', { name: /view logs/i }));
+    expect(await within(card).findByText(/attempt 1: staging failed: manifest unknown$/i)).toBeTruthy();
+
+    fireEvent.click(within(card).getByRole('button', { name: /^retry$/i }));
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Retry deployment operation op-7?'));
+      const retryCall = fetchSpy.mock.calls.find(
+        ([url]) =>
+          String(url) === '/api/v1/operations/deployment/controller-operations/op-7/retry',
+      );
+      expect(retryCall?.[1]?.method).toBe('POST');
+    });
+    expect(await within(card).findByText(/retry requested for operation op-7/i)).toBeTruthy();
+  });
+
+  it('keeps reading a running controller operation until it reaches a terminal state', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const reads = mockControllerStack([
+        { ...controllerAction, status: 'RUNNING', controllerStatus: 'applying', retryable: false, errorSummary: null },
+        { ...controllerAction, status: 'SUCCEEDED', controllerStatus: 'succeeded', retryable: false, errorSummary: null, installedImage: controllerAction.requestedImage },
+      ]);
+      renderOperations();
+
+      const card = await screen.findByRole('region', { name: /moonmind update/i });
+      expect(await within(card).findAllByText(/running/i)).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(
+        await within(card).findByText(
+          /installed: ghcr\.io\/moonladderstudios\/moonmind:20260425\.1234/i,
+        ),
+      ).toBeTruthy();
+      const settledReads = reads();
+      await vi.advanceTimersByTimeAsync(20000);
+      // Bounded reads: polling stops once the operation is terminal.
+      expect(reads()).toBe(settledReads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports the accepted controller operation instead of a workflow run', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/v1/operations/deployment/update') {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            deploymentUpdateRunId: 'ctl-op-1',
+            taskId: null,
+            workflowId: null,
+            operationId: 'op-1',
+            status: 'RUNNING',
+          }),
+        } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(card).findByRole('button', { name: /update moonmind/i });
+    fireEvent.click(within(card).getByRole('button', { name: /update moonmind/i }));
+    expect(
+      await within(card).findByText(/deployment update accepted: operation op-1/i),
+    ).toBeTruthy();
+  });
 });
