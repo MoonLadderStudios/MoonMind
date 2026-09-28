@@ -77,7 +77,7 @@ python -m pytest tests/unit \
 
 `./tools/test_unit.sh` reports the slowest Python tests with `--durations`; set `MOONMIND_PYTEST_DURATIONS` to tune the count. In CI it also writes JUnit XML unless `MOONMIND_PYTEST_JUNITXML` points at a different output path.
 
-The workflow selects `frontend-static` and the Chromium/Firefox browser matrix independently by changed-file impact. They run in parallel, while the always-running `test-frontend` result job aggregates their results, explicitly passes known non-frontend changes, and reports into `ci-required`. The generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path, and its always-running `check-generated-contracts` aggregator also reports into `ci-required`.
+The workflow selects `frontend-static` and the Chromium/Firefox browser matrix independently by changed-file impact. The `operations-controller-browser` journey runs when UI source or API selection is triggered. They run in parallel, while the always-running `test-frontend` result job aggregates their results, explicitly passes known non-frontend changes, and reports into `ci-required`. The generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path, and its always-running `check-generated-contracts` aggregator also reports into `ci-required`.
 
 See [Backend Test Selection Strategy](BackendTestSelection.md) for the detailed selector contract, category definitions, full-backend fail-open rules, and maintenance guidance.
 

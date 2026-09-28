@@ -1466,12 +1466,62 @@ jobs:
         MOONMIND_BROWSER_ENGINES: webkit
       run: npx vitest run --config frontend/vitest.browser.config.ts frontend/src/browser/mobileOverflow4559.browser.test.tsx
 
+  operations-controller-browser:
+    # MoonLadderStudios/MoonMind#4502: Settings Operations in the
+    # production-built dashboard, served by the real API application, submits
+    # to, observes, and retries the shipped deploy/controller operation with
+    # no workflow engine. The controller runs through its own entrypoint and
+    # production applier; only the Docker CLI it shells out to is replaced
+    # (every pull fails, so no container is touched). Credential-free.
+    needs: select-test-suites
+    if: >-
+      needs.select-test-suites.outputs.frontend_browser_chromium == 'true' ||
+      needs.select-test-suites.outputs.api_component == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '20'
+        cache: npm
+    - name: Install system dependencies
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+        sudo apt-get update
+        sudo apt-get install -y libcairo2-dev pkg-config
+    - name: Install Python dependencies via uv
+      run: |
+        python -m pip install --upgrade pip uv
+        uv pip install --system -e .[tests] "playwright>=1.58.0,<2.0.0"
+    - name: Build the production dashboard
+      run: |
+        npm ci --no-audit --no-fund
+        npm run ui:build
+    - name: Install the journey browser
+      run: python -m playwright install --with-deps chromium
+    - name: Run the Operations controller browser journey
+      env:
+        RUN_E2E_TESTS: "1"
+      run: python -m pytest tests/e2e/test_operations_controller_browser.py -q -p no:cacheprovider
+
   test-frontend:
     needs:
       - select-test-suites
       - frontend-static
       - frontend-browser
       - frontend-browser-webkit-targeted
+      - operations-controller-browser
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1486,6 +1536,11 @@ jobs:
         static_result="${{ needs.frontend-static.result }}"
         browser_result="${{ needs.frontend-browser.result }}"
         webkit_result="${{ needs.frontend-browser-webkit-targeted.result }}"
+        journey_selected="false"
+        if [[ "$browser_selected" == "true" || "${{ needs.select-test-suites.outputs.api_component }}" == "true" ]]; then
+          journey_selected="true"
+        fi
+        journey_result="${{ needs.operations-controller-browser.result }}"
 
         {
           echo "## Frontend validation"
@@ -1495,6 +1550,7 @@ jobs:
           echo "| Chromium | $browser_selected | $browser_result |"
           echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
           echo "| WebKit targeted (MoonMind#4559) | $browser_selected | $webkit_result |"
+          echo "| Operations controller journey (MoonMind#4502) | $journey_selected | $journey_result |"
         } >> "$GITHUB_STEP_SUMMARY"
 
         if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
@@ -1514,7 +1570,12 @@ jobs:
           exit 1
         fi
 
-        if [[ "$static_selected" != "true" && "$browser_selected" != "true" ]]; then
+        if [[ "$journey_selected" == "true" && "$journey_result" != "success" ]]; then
+          echo "::error::operations-controller-browser was selected but ended with result=$journey_result"
+          exit 1
+        fi
+
+        if [[ "$static_selected" != "true" && "$browser_selected" != "true" && "$journey_selected" != "true" ]]; then
           echo "Known non-frontend change; frontend validation skipped intentionally."
         else
           echo "All selected frontend checks passed."
