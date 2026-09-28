@@ -54,6 +54,20 @@ jobs:
           DEFAULT_APP_IMAGE: ${{ vars.MOONMIND_APP_IMAGE }}
         run: |
           app_image="${DISPATCH_APP_IMAGE:-$DEFAULT_APP_IMAGE}"
+          if [[ -z "$app_image" ]]; then
+            # No explicit image: pin the app image Release / Build App Image
+            # published for this checkout, or the current latest while that
+            # build is still in flight, by its immutable digest.
+            repo_image="ghcr.io/${GITHUB_REPOSITORY,,}"
+            for tag in "sha-${GITHUB_SHA}" latest; do
+              digest="$(docker buildx imagetools inspect "${repo_image}:${tag}" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+              if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                app_image="${repo_image}@${digest}"
+                echo "::notice::Using ${repo_image}:${tag} as ${app_image}"
+                break
+              fi
+            done
+          fi
           if [[ ! "$app_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
             echo "::error::The deployable app image must be configured by immutable digest"
             exit 1
