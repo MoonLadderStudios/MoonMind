@@ -703,15 +703,17 @@ async def test_container_finishing_between_observation_and_retry(
     assert daemon.max_overlap <= 1
 
 
+@pytest.mark.parametrize("finished_state", ["exited", "dead"])
 async def test_same_job_retry_after_own_container_exited_does_not_rerun(
-    tmp_path: Path,
+    tmp_path: Path, finished_state: str
 ) -> None:
     """R2: the same job's retry after its own container finished never reruns it.
 
     The start was applied but its acknowledgment was lost, and the container
-    ran to completion before the retry. The retry must reconcile the finished
-    container -- no second execution and no wait for a slot it no longer
-    needs -- so the workflow can observe the one real outcome.
+    ran to completion (``exited``) or ended ``dead`` before the retry. The
+    retry must reconcile the finished container -- no second execution and no
+    wait for a slot it no longer needs -- so the workflow can observe the one
+    real outcome.
     """
     daemon = _FakeDockerDaemon()
     daemon.drop_next_start_ack = True
@@ -722,7 +724,7 @@ async def test_same_job_retry_after_own_container_exited_does_not_rerun(
     name = DockerContainerJobBackend._name(request)
     # The container finishes between the lost ack and the retry, and another
     # job takes the freed slot.
-    daemon.states[name] = "exited"
+    daemon.states[name] = finished_state
     daemon.states["moonmind-container-job-other"] = "running"
     daemon._record_running()
 
@@ -732,6 +734,35 @@ async def test_same_job_retry_after_own_container_exited_does_not_rerun(
     assert retry.container_ref == name
     assert retry.running is False
     assert daemon.real_starts == 1, "retry must not re-execute the container"
+    assert daemon.states[name] == finished_state
+
+
+async def test_restricted_egress_retry_after_exit_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """R2: a bridge job that finished before its running evidence never passes.
+
+    Restricted-egress acceptance requires launch evidence observed while the
+    workload ran; Docker releases a stopped container's endpoint, so a retry
+    that finds the job already finished cannot recover it. The retry fails
+    closed with the non-retryable launch class instead of reporting the
+    pre-launch ``created_unstarted`` evidence, never re-executes the job, and
+    leaves the container for the workflow's evidence publication and cleanup.
+    """
+    daemon = _FakeDockerDaemon()
+    (backend,) = _backends(tmp_path, daemon, count=1)
+    request = _request(tmp_path, _job_id())
+    request.request.spec.network_mode = "bridge"
+    request.egress_attestation_ref = "art_created_unstarted_launch_evidence"
+    name = DockerContainerJobBackend._name(request)
+    daemon.states[name] = "exited"
+
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.start_container(request)
+
+    assert raised.value.failure_class is ContainerJobFailureClass.LAUNCH
+    assert daemon.real_starts == 0, "retry must not re-execute the container"
+    assert not any(c[0] in {"start", "rm"} for c in daemon.commands)
     assert daemon.states[name] == "exited"
 
 

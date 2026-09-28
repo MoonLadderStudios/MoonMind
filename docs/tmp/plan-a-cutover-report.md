@@ -105,8 +105,12 @@ Red on `96e615fe4`, then green after the smallest owner fixes:
   either parked the finished job behind other slot holders or `docker start`ed
   the exited container again, a duplicate execution. Fix (in
   `container_job_backend.py`): under the capacity lock, a start that finds its
-  own container `exited` reports that container for observation. It is never
-  restarted and needs no slot.
+  own container finished (`exited` or `dead`) reports that container for
+  observation. It is never restarted and needs no slot. A restricted-egress
+  (`bridge`) job cannot be accepted that way: its running launch evidence was
+  never recorded and Docker has released the endpoint, so the retry fails
+  closed with the non-retryable `launch` class and leaves the container for
+  evidence publication and cleanup.
 - **Lost start ack through the production workflow.** `start_container` ran
   with one attempt. A lost ack or a worker lost during start therefore failed
   the job and force-removed the live workload instead of reconciling it. Fix
@@ -123,7 +127,9 @@ Red on `96e615fe4`, then green after the smallest owner fixes:
   and is covered by the egress suites.
 
 New cases:
-- `test_same_job_retry_after_own_container_exited_does_not_rerun`
+- `test_same_job_retry_after_own_container_exited_does_not_rerun` (`exited`
+  and `dead`)
+- `test_restricted_egress_retry_after_exit_fails_closed`
 - `test_real_docker_same_job_retry_after_exit_does_not_rerun` (Docker-gated,
   checks that `StartedAt` is unchanged)
 - `test_lost_start_ack_reconciles_through_production_workflow`
