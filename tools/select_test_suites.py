@@ -44,6 +44,7 @@ OUTPUT_KEYS = (
     "frontend_browser_firefox",
     "frontend_browser_webkit",
     "full_frontend",
+    "operations_browser_journey",
 )
 
 FRONTEND_STATIC_EXACT = {
@@ -518,6 +519,19 @@ NON_BACKEND_EXACT = {
 }
 
 
+# Production-built Settings Operations journey against the real standalone
+# controller (MoonLadderStudios/MoonMind#4502): the compiled dashboard, the
+# API application, and the controller endpoint it submits to.
+OPERATIONS_BROWSER_JOURNEY_EXACT = {
+    "api_service/api/routers/deployment_operations.py",
+    "api_service/services/deployment_operations.py",
+    "frontend/src/components/settings/OperationsSettingsSection.tsx",
+    "tests/e2e/test_operations_controller_update_browser.py",
+    "tests/unit/api/routers/test_deployment_controller_operations.py",
+}
+OPERATIONS_BROWSER_JOURNEY_PREFIXES = ("deploy/controller/",)
+
+
 @dataclass(frozen=True)
 class SuiteSelection:
     unit_fast: bool = False
@@ -534,6 +548,7 @@ class SuiteSelection:
     frontend_browser_firefox: bool = False
     frontend_browser_webkit: bool = False
     full_frontend: bool = False
+    operations_browser_journey: bool = False
 
     def as_outputs(self) -> dict[str, str]:
         return {key: "true" if getattr(self, key) else "false" for key in OUTPUT_KEYS}
@@ -665,6 +680,7 @@ def _full_selection() -> SuiteSelection:
             "frontend_browser_firefox": True,
             "frontend_browser_webkit": True,
             "full_frontend": True,
+            "operations_browser_journey": True,
         }
     )
 
@@ -778,6 +794,14 @@ def select_suites(
         frontend_browser_firefox=firefox,
         frontend_browser_webkit=webkit,
         full_frontend=full_frontend,
+        operations_browser_journey=any(
+            _matches(
+                path,
+                exact=OPERATIONS_BROWSER_JOURNEY_EXACT,
+                prefixes=OPERATIONS_BROWSER_JOURNEY_PREFIXES,
+            )
+            for path in paths
+        ),
     )
 
     omnigent_paths = [path for path in paths if is_omnigent_contract_owned(path)]

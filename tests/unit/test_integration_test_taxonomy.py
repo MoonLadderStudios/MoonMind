@@ -284,6 +284,7 @@ def test_control_plane_lifecycle_conformance_uses_compose_network_authority() ->
         "MOONMIND_SANDBOX_EGRESS_NETWORK",
         "MOONMIND_RESTRICTED_EGRESS_NETWORK",
         "MOONMIND_OMNIGENT_EGRESS_NETWORK",
+        "MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK",
         "MOONMIND_URL",
     ):
         assert f"export {environment_name}=" in helper

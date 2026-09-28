@@ -45,6 +45,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
         "frontend_browser_firefox": "false",
         "frontend_browser_webkit": "false",
         "full_frontend": "false",
+        "operations_browser_journey": "false",
     }
 
 
@@ -987,3 +988,34 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
     outputs = _outputs(["tests/integration/single_user/test_example.py"])
     assert outputs["integration_ci"] == "true"
     assert outputs["reliability_journey"] == "false"
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "api_service/services/deployment_operations.py",
+        "api_service/api/routers/deployment_operations.py",
+        "frontend/src/components/settings/OperationsSettingsSection.tsx",
+        "tests/e2e/test_operations_controller_update_browser.py",
+        "tests/unit/api/routers/test_deployment_controller_operations.py",
+    ],
+)
+def test_operations_controller_changes_select_the_browser_journey(
+    changed_path: str,
+) -> None:
+    assert _outputs([changed_path])["operations_browser_journey"] == "true"
+
+
+def test_unrelated_changes_skip_the_operations_browser_journey() -> None:
+    outputs = _outputs(
+        [
+            "api_service/services/execution_service.py",
+            "frontend/src/components/Workflow.tsx",
+        ]
+    )
+    assert outputs["operations_browser_journey"] == "false"
+
+
+def test_full_selection_includes_the_operations_browser_journey() -> None:
+    outputs = select_suites([], event_name="schedule").as_outputs()
+    assert outputs["operations_browser_journey"] == "true"

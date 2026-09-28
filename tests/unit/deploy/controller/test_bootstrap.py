@@ -164,3 +164,154 @@ def test_bootstrap_offline_install_records_unverified_and_start_refuses(
     assert record is not None and record["verified"] is False
     with pytest.raises(bootstrap.ImageResolutionError):
         bootstrap.main(["start", "--state-dir", str(tmp_path)], env={})
+
+
+def _stack_network_lookup(names):
+    """Docker's answer for the stack's controller-access network lookup."""
+    from types import SimpleNamespace
+
+    calls = []
+
+    def fake_run(args):
+        calls.append(args)
+        if args[:3] == ["docker", "network", "ls"]:
+            return SimpleNamespace(
+                returncode=0, stdout="".join(f"{name}\n" for name in names), stderr=""
+            )
+        return SimpleNamespace(returncode=1, stdout="", stderr="offline")
+
+    return fake_run, calls
+
+
+def test_bootstrap_attaches_the_controller_to_the_stack_access_network(
+    controller_path, tmp_path, monkeypatch
+):
+    import yaml
+
+    bootstrap = load("bootstrap")
+    fake_run, calls = _stack_network_lookup(["moonmind_deployment-controller-network"])
+    monkeypatch.setattr(bootstrap, "_run_capture", fake_run)
+
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+
+    # The network is found from the stack's own Compose labels, not a name
+    # the operator must declare.
+    [lookup] = [args for args in calls if args[:3] == ["docker", "network", "ls"]]
+    assert "label=com.docker.compose.project=moonmind" in lookup
+    assert f"label=com.docker.compose.network={bootstrap.STACK_NETWORK_KEY}" in lookup
+    rendered = yaml.safe_load((tmp_path / "controller-compose.yaml").read_text())
+    service = rendered["services"]["controller"]
+    assert service["networks"]["stack"]["aliases"] == [bootstrap.STACK_NETWORK_ALIAS]
+    # The host-loopback endpoint stays on the controller's own network.
+    assert "default" in service["networks"]
+    port = bootstrap.load_identity(tmp_path)["port"]
+    assert service["ports"] == [f"127.0.0.1:{port}:{port}"]
+    assert rendered["networks"]["stack"] == {
+        "name": "moonmind_deployment-controller-network",
+        "external": True,
+    }
+
+
+def test_bootstrap_without_a_stack_network_keeps_the_controller_independent(
+    controller_path, tmp_path, monkeypatch
+):
+    import yaml
+
+    bootstrap = load("bootstrap")
+    fake_run, _ = _stack_network_lookup([])
+    monkeypatch.setattr(bootstrap, "_run_capture", fake_run)
+
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+
+    # A missing stack must never keep the controller from starting.
+    rendered = yaml.safe_load((tmp_path / "controller-compose.yaml").read_text())
+    assert "networks" not in rendered
+    assert "networks" not in rendered["services"]["controller"]
+
+
+def test_bootstrap_start_attaches_a_stack_network_created_after_install(
+    controller_path, tmp_path, monkeypatch
+):
+    import yaml
+
+    bootstrap = load("bootstrap")
+    fake_run, _ = _stack_network_lookup([])
+    monkeypatch.setattr(bootstrap, "_run_capture", fake_run)
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    bootstrap.record_controller_image(
+        tmp_path,
+        requested=bootstrap.DEFAULT_IMAGE,
+        pinned="ghcr.io/org/ctl@sha256:" + "a" * 64,
+    )
+    fake_run, _ = _stack_network_lookup(["moonmind_deployment-controller-network"])
+    monkeypatch.setattr(bootstrap, "_run_capture", fake_run)
+    started = []
+    monkeypatch.setattr(
+        bootstrap,
+        "_compose",
+        lambda state_dir, project, *args: started.append(args) or 0,
+    )
+
+    assert bootstrap.main(["start", "--state-dir", str(tmp_path)], env={}) == 0
+
+    assert started == [("up", "-d", "--wait")]
+    rendered = yaml.safe_load((tmp_path / "controller-compose.yaml").read_text())
+    assert rendered["services"]["controller"]["image"] == (
+        "ghcr.io/org/ctl@sha256:" + "a" * 64
+    )
+    assert rendered["networks"]["stack"]["name"] == (
+        "moonmind_deployment-controller-network"
+    )
+
+
+def test_stack_services_that_call_the_controller_find_what_bootstrap_installs(
+    controller_path,
+):
+    """The Compose services that submit updates reach the installed controller.
+
+    The API and the deployment worker discover the controller from the
+    deployment state they mount and reach it on the stack network bootstrap
+    attaches it to, with no operator-declared endpoint or secret.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    bootstrap = load("bootstrap")
+    repo = Path(__file__).resolve().parents[4]
+    compose = yaml.safe_load((repo / "docker-compose.yaml").read_text())
+    state_relative = bootstrap.default_state_dir(repo).relative_to(repo)
+    network = compose["networks"][bootstrap.STACK_NETWORK_KEY]
+    # Only the declared callers share it; it grants no egress.
+    assert network["internal"] is True
+    members = sorted(
+        name
+        for name, service in compose["services"].items()
+        if bootstrap.STACK_NETWORK_KEY in (service.get("networks") or [])
+    )
+    assert members == ["api", "temporal-worker-deployment-control"]
+    for name in members:
+        service = compose["services"][name]
+        environment = dict(
+            entry.split("=", 1) for entry in service["environment"] if "=" in entry
+        )
+        for key in (
+            "MOONMIND_CONTROLLER_URL",
+            "MOONMIND_CONTROLLER_SECRET",
+            "MOONMIND_CONTROLLER_SECRET_FILE",
+        ):
+            assert key not in environment, (name, key)
+        assert environment["MOONMIND_CONTROLLER_HOST"] == bootstrap.STACK_NETWORK_ALIAS
+        mounts = {
+            volume.split(":")[1]: volume.split(":")[0]
+            for volume in service["volumes"]
+            if isinstance(volume, str) and volume.count(":") >= 1
+        }
+        state_dir = Path(environment["MOONMIND_CONTROLLER_STATE_DIR"])
+        mount_target = next(
+            target for target in mounts if state_dir.is_relative_to(target)
+        )
+        # The container path resolves to bootstrap's default host state dir.
+        assert Path(mounts[mount_target]) / state_dir.relative_to(mount_target) == (
+            Path(".") / state_relative
+        )
