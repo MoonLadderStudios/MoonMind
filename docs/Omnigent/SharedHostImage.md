@@ -127,6 +127,13 @@ The former template default `1.18.11` for the default host repository is
 treated as the old mutable channel during an update and advanced to `latest`;
 an operator digest pin continues to select its exact image.
 
+The deployment worker and its updater inherit the same default image
+repositories and mutable tags as the API and runtime worker. Omitting those
+settings from `.env` still refreshes the host images during an update. Generated
+digest refs in `.env.deploy` record the installed release; migration reads
+explicit pins from the operator's `.env` separately so a previous release cannot
+pin subsequent updates.
+
 ## 2. Runtime packs (`moonmind.omnigent-harness-runtime-pack.v1`)
 
 A runtime pack is trusted deployment data, never workflow-authored. The registry is pure data: it carries no secret, image digest, or endpoint. One pack owns one harness family:
