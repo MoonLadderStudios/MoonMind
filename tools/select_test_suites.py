@@ -206,6 +206,20 @@ INTEGRATION_CI_EXACT = {
     # a change must run the hermetic integration foundation, not only the
     # in-process component suite.
     "api_service/services/profile_secret_migration.py",
+    # MoonLadderStudios/MoonMind#4356: the in-place single-operator
+    # conversion owns tests/integration/test_single_user_conversion_postgres_4346.py.
+    "api_service/services/single_user_conversion.py",
+    # MoonLadderStudios/MoonMind#4356: the fresh and eligible-upgrade Compose
+    # journeys run in the integration-ci job. Their runner and the routes
+    # they drive (submit/observe/cancel, artifacts, recurring dispatch, and
+    # the served dashboard) must select that job.
+    "tools/first_run_journey_3938.sh",
+    "tools/single_user_journey_checks.py",
+    "tools/single_user_journey_browser.mjs",
+    "api_service/api/routers/executions.py",
+    "api_service/api/routers/temporal_artifacts.py",
+    "api_service/api/routers/recurring_workflows.py",
+    "api_service/api/routers/workflow_console.py",
 }
 
 INTEGRATION_CI_PREFIXES = (
