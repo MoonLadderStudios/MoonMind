@@ -293,10 +293,11 @@ def test_preflight_cli_boundary_reports_and_identifies(fresh_snapshot, tmp_path)
         assert identity["files"][name] == f"sha256:{digest}"
 
 
-def test_stale_snapshot_cannot_masquerade_as_adopted(stale_snapshot, fresh_snapshot):
+def test_stale_snapshot_cannot_masquerade_as_adopted(stale_snapshot):
     skill_md = resolve_skill_markdown_path("moonspec-verify")
     assert skill_md is not None
-    stale_helper = _load_helper(skill_md.parent / HELPER_REL)
+    assert skill_md.parent == stale_snapshot
+    stale_helper = _load_helper(stale_snapshot / HELPER_REL)
 
     # Long-standing behavior survives; the preflight entrypoints do not exist.
     for entrypoint in ("capture", "scope", "reuse"):
@@ -308,10 +309,10 @@ def test_stale_snapshot_cannot_masquerade_as_adopted(stale_snapshot, fresh_snaps
         stale_helper.validate_report({}, None)
 
     stale_digest = hashlib.sha256(
-        (skill_md.parent / HELPER_REL).read_bytes()
+        (stale_snapshot / HELPER_REL).read_bytes()
     ).hexdigest()
     fresh_digest = hashlib.sha256(
-        (fresh_snapshot / HELPER_REL).read_bytes()
+        (PROJECTED_SKILL_DIR / HELPER_REL).read_bytes()
     ).hexdigest()
     assert stale_digest != fresh_digest
 
