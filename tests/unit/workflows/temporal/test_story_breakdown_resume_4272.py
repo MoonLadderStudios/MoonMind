@@ -470,3 +470,155 @@ async def test_github_breakdown_source_issue_key_stays_traceability_only(
     assert "issueCreation" in "\n".join(
         step.get("instructions", "") for step in expanded["steps"]
     )
+
+
+class _FakeGitHubService:
+    def __init__(self) -> None:
+        self.create_issue_requests: list[dict[str, Any]] = []
+
+    async def create_issue(
+        self,
+        *,
+        repo: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        github_token: str | None = None,
+    ):
+        self.create_issue_requests.append({"repo": repo, "title": title})
+        issue_number = len(self.create_issue_requests)
+        return {
+            "externalKey": str(issue_number),
+            "externalUrl": f"https://github.com/{repo}/issues/{issue_number}",
+            "created": True,
+            "summary": f"GitHub issue created: https://github.com/{repo}/issues/{issue_number}",
+        }
+
+
+def _jira_inputs(
+    stories: Any,
+    prior_mappings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    inputs: dict[str, Any] = {
+        "stories": stories,
+        "storyOutput": {
+            "mode": "jira",
+            "jira": {"projectKey": "MM", "issueTypeName": "Story"},
+        },
+    }
+    if prior_mappings is not None:
+        inputs["previous_outputs"] = {"jira": {"issueMappings": prior_mappings}}
+    return inputs
+
+
+@pytest.mark.asyncio
+async def test_jira_creation_resumes_from_prior_issue_mappings() -> None:
+    """Partial Jira runs resume from receipts without re-creating finished work."""
+    service = _FakeJiraService()
+    stories = [
+        {"id": "STORY-001", "summary": "First"},
+        {"id": "STORY-002", "summary": "Second"},
+        {"id": "STORY-003", "summary": "Third"},
+    ]
+    prior = [
+        {
+            "storyId": "STORY-001",
+            "storyIndex": 1,
+            "issueKey": "MM-99",
+            "summary": "First",
+        }
+    ]
+    result = await story_tools.create_jira_issues_from_stories(
+        _jira_inputs(stories, prior),
+        jira_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    # Only unfinished effects retry through the provider adapter.
+    assert len(service.requests) == 2
+    mappings = result.outputs["jira"]["issueMappings"]
+    assert len(mappings) == 3
+    by_story = {item["storyId"]: item for item in mappings}
+    # Original identity is preserved, not re-searched or re-issued.
+    assert by_story["STORY-001"]["issueKey"] == "MM-99"
+    assert by_story["STORY-002"]["issueKey"] != "MM-99"
+    assert by_story["STORY-003"]["issueKey"] != "MM-99"
+    assert result.outputs["jira"]["createdIssues"] is not None
+    assert len(result.outputs["jira"]["createdIssues"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_github_creation_resumes_from_prior_issue_mappings() -> None:
+    """Partial GitHub runs resume from receipts without re-creating finished work."""
+    service = _FakeGitHubService()
+    stories = [
+        {"id": "STORY-001", "summary": "First"},
+        {"id": "STORY-002", "summary": "Second"},
+    ]
+    prior = [
+        {
+            "storyId": "STORY-001",
+            "storyIndex": 1,
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": "7",
+            "issueUrl": "https://github.com/MoonLadderStudios/MoonMind/issues/7",
+            "summary": "First",
+        }
+    ]
+    result = await story_tools.create_github_issues_from_stories(
+        {
+            "stories": stories,
+            "storyOutput": {
+                "mode": "github",
+                "github": {"repository": "MoonLadderStudios/MoonMind"},
+            },
+            "previous_outputs": {"github": {"issueMappings": prior}},
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert len(service.create_issue_requests) == 1
+    assert service.create_issue_requests[0]["title"] == "Second"
+    mappings = result.outputs["github"]["issueMappings"]
+    assert len(mappings) == 2
+    by_story = {item["storyId"]: item for item in mappings}
+    assert by_story["STORY-001"]["issueNumber"] == "7"
+
+
+@pytest.mark.asyncio
+async def test_jira_creation_fails_fast_on_ambiguous_source() -> None:
+    """Multiple unresolved source candidates fail fast instead of arbitrary split."""
+    service = _FakeJiraService()
+    payload: dict[str, Any] = {
+        "source": {},
+        "sourceCandidates": ["docs/A.md", "docs/B.md"],
+        "stories": [{"id": "STORY-001", "summary": "First"}],
+    }
+    with pytest.raises(ValueError, match="[Aa]mbiguous"):
+        await story_tools.create_jira_issues_from_stories(
+            _jira_inputs(payload),
+            jira_service_factory=lambda: service,
+        )
+    assert service.requests == []
+
+
+@pytest.mark.asyncio
+async def test_github_creation_fails_fast_on_ambiguous_source() -> None:
+    """GitHub creation also fails fast on unresolved source candidates."""
+    service = _FakeGitHubService()
+    payload: dict[str, Any] = {
+        "source": {},
+        "sourceCandidates": ["docs/A.md", "docs/B.md"],
+        "stories": [{"id": "STORY-001", "summary": "First"}],
+    }
+    with pytest.raises(ValueError, match="[Aa]mbiguous"):
+        await story_tools.create_github_issues_from_stories(
+            {
+                "stories": payload,
+                "storyOutput": {
+                    "mode": "github",
+                    "github": {"repository": "MoonLadderStudios/MoonMind"},
+                },
+            },
+            github_service_factory=lambda: service,
+        )
+    assert service.create_issue_requests == []
