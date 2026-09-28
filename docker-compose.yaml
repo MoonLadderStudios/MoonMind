@@ -1003,6 +1003,21 @@ services:
       # and the singular release record is never created.
       - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
       - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
+      # Resolve new releases from the same mutable image inputs as the API
+      # and runtime worker. Without these defaults, an omitted .env setting
+      # leaves migration with no host candidate and retains the old image.
+      # Generated REF values remain in desired state; the migration reads
+      # explicit operator pins separately from the operator's .env file.
+      - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
+      - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
+      - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
+      - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-latest}
+      - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
+      - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}
+      - OMNIGENT_PI_HOST_IMAGE=${OMNIGENT_PI_HOST_IMAGE:-}
+      - OMNIGENT_PI_HOST_IMAGE_TAG=${OMNIGENT_PI_HOST_IMAGE_TAG:-latest}
       # The migration's catalog sync builds the generic host services, so the
       # endpoint and owner must resolve here exactly as they do for the
       # runtime-facing services.
