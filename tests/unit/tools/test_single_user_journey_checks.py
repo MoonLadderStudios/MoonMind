@@ -94,7 +94,7 @@ def test_execution_failure_before_cancellation_fails_populate(
     )
 
     assert code == 1
-    assert "failed before cancellation" in capsys.readouterr().err
+    assert "closed before cancellation" in capsys.readouterr().err
 
 
 def test_execution_that_fails_instead_of_canceling_fails_cancel(api_server, tmp_path):
@@ -104,7 +104,9 @@ def test_execution_that_fails_instead_of_canceling_fails_cancel(api_server, tmp_
         {"status": "failed", "closeStatus": "failed"},
     ]
     state_file = tmp_path / "state.json"
-    state_file.write_text(json.dumps({"executions": [{"workflowId": "mm:journey"}]}))
+    state_file.write_text(
+        json.dumps({"executions": [{"workflowId": "mm:journey", "cancel": True}]})
+    )
 
     code = journey.main(
         [
@@ -128,7 +130,9 @@ def test_canceled_execution_passes_cancel(api_server, tmp_path):
         {"status": "canceled", "closeStatus": "canceled"},
     ]
     state_file = tmp_path / "state.json"
-    state_file.write_text(json.dumps({"executions": [{"workflowId": "mm:journey"}]}))
+    state_file.write_text(
+        json.dumps({"executions": [{"workflowId": "mm:journey", "cancel": True}]})
+    )
 
     code = journey.main(
         [
@@ -150,6 +154,29 @@ def test_cancel_with_nothing_recorded_fails(api_server, tmp_path):
     base, _ = api_server
     state_file = tmp_path / "state.json"
     state_file.write_text(json.dumps({"executions": []}))
+
+    code = journey.main(["cancel", "--api-base", base, "--state-file", str(state_file)])
+
+    assert code == 1
+
+
+def test_cancel_after_the_deferred_start_fails(api_server, tmp_path):
+    """Canceling work that may already have run would not prove cancellation."""
+    base, _ = api_server
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "executions": [
+                    {
+                        "workflowId": "mm:journey",
+                        "cancel": True,
+                        "scheduledFor": "2020-01-01T00:00:00+00:00",
+                    }
+                ]
+            }
+        )
+    )
 
     code = journey.main(["cancel", "--api-base", base, "--state-file", str(state_file)])
 

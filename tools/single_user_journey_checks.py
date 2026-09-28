@@ -12,12 +12,13 @@ recreated stack, can verify what an earlier phase saved):
 
 ``populate``
     Read the instance settings and preset catalogs, submit one task with the
-    dashboard's default selections, redeliver the same submission (lost
-    acknowledgment), observe the execution progress without a terminal
-    failure, attach an artifact to it, and dispatch a recurring definition
-    through run-now.
+    dashboard's default repository as a deferred start, redeliver the same
+    submission (lost acknowledgment), observe it durably recorded and still
+    open, attach an artifact to it, and dispatch a recurring definition
+    through run-now. Without a provider credential no model-backed step can
+    stay in flight, so the deferred start is what the later phases cancel.
 ``cancel``
-    Cancel every execution recorded by ``populate`` and require each to
+    Cancel the deferred execution before its start time and require it to
     reach the canceled terminal state.
 ``credential``
     Store a synthetic credential and bind it through the GitHub token
@@ -46,6 +47,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -133,32 +135,29 @@ def describe(api: Api, workflow_id: str) -> dict[str, Any]:
     return api.json("GET", f"/api/executions/{quote(workflow_id)}")
 
 
-def wait_for_progress(api: Api, workflow_id: str, *, timeout: float) -> dict[str, Any]:
-    """Wait until the execution is past submission, failing on terminal failure."""
+def wait_for_deferred(api: Api, workflow_id: str, *, timeout: float) -> dict[str, Any]:
+    """Wait until the deferred execution is durably recorded and still open."""
 
     deadline = time.monotonic() + timeout
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
         last = describe(api, workflow_id)
         _, values = execution_state(last)
-        if values & TERMINAL_FAILURE:
+        if values & (TERMINAL_FAILURE | CANCELED | COMPLETED):
             raise JourneyFailure(
-                f"execution {workflow_id} failed before cancellation: "
-                f"{last.get('summary')!r}"
+                f"deferred execution {workflow_id} closed before cancellation as "
+                f"{sorted(values)}: {last.get('summary')!r}"
             )
-        if values & (CANCELED | COMPLETED):
-            raise JourneyFailure(
-                f"execution {workflow_id} closed unexpectedly as {sorted(values)}"
+        if last.get("scheduledFor") and last.get("runId"):
+            log(
+                f"execution {workflow_id} deferred until {last['scheduledFor']} "
+                f"({last.get('status')})"
             )
-        progress = last.get("progress") or {}
-        if last.get("status") == "running" and int(progress.get("total") or 0) >= 1:
-            log(f"execution {workflow_id} running: {last.get('summary')!r}")
             return last
         time.sleep(3)
     raise JourneyFailure(
-        f"execution {workflow_id} never reached a running step within "
-        f"{timeout:.0f}s (last status {last.get('status')!r}, "
-        f"summary {last.get('summary')!r})"
+        f"execution {workflow_id} was not recorded as deferred within "
+        f"{timeout:.0f}s (last status {last.get('status')!r})"
     )
 
 
@@ -182,7 +181,14 @@ def wait_for_canceled(api: Api, workflow_id: str, *, timeout: float) -> dict[str
     )
 
 
-def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> None:
+def populate(
+    api: Api,
+    state: dict[str, Any],
+    *,
+    label: str,
+    timeout: float,
+    defer_seconds: float,
+) -> None:
     catalog = api.json("GET", "/api/v1/settings/catalog")
     if not catalog:
         raise JourneyFailure("settings catalog is empty")
@@ -200,7 +206,11 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
     if not repository:
         raise JourneyFailure("dashboard config exposes no default repository")
 
-    # One task with omitted/default selections and no-publication intent.
+    # One task with the dashboard's default selections and no-publication
+    # intent, deferred so it stays in flight without a provider credential:
+    # Temporal holds the start and the cancellation below is observed on the
+    # workflow's first task.
+    scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
     submission = {
         "workflowType": "MoonMind.UserWorkflow",
         "title": f"single-user journey {label}",
@@ -212,6 +222,7 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
             "repository": repository,
             "publishMode": "none",
         },
+        "schedule": {"mode": "once", "scheduledFor": scheduled_for.isoformat()},
         "idempotencyKey": f"single-user-journey-{label}-{uuid.uuid4().hex}",
     }
     created = api.json("POST", "/api/executions", body=submission, expect=(200, 201))
@@ -227,9 +238,9 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
             f"({redelivered.get('workflowId')!r} != {workflow_id!r})"
         )
     log(f"submitted {workflow_id}; identical redelivery reused it")
-    running = wait_for_progress(api, workflow_id, timeout=timeout)
-    run_id = running.get("runId") or created.get("runId") or ""
-    namespace = running.get("namespace") or "default"
+    deferred = wait_for_deferred(api, workflow_id, timeout=timeout)
+    run_id = deferred.get("runId") or created.get("runId") or ""
+    namespace = deferred.get("namespace") or "default"
 
     # Artifact attached to the execution, read back through its listing.
     content = f"single-user journey artifact {label} {uuid.uuid4().hex}\n".encode()
@@ -324,8 +335,15 @@ def populate(api: Api, state: dict[str, Any], *, label: str, timeout: float) -> 
         "workflowId": dispatched,
     }
     state["executions"] = [
-        {"workflowId": workflow_id, "title": submission["title"]},
-        {"workflowId": dispatched, "title": name},
+        {
+            "workflowId": workflow_id,
+            "title": submission["title"],
+            "cancel": True,
+            "scheduledFor": scheduled_for.isoformat(),
+        },
+        # Dispatch is the recurring outcome; without a provider credential the
+        # dispatched run cannot complete, so it is observed, not canceled.
+        {"workflowId": dispatched, "title": name, "cancel": False},
     ]
 
 
@@ -366,10 +384,18 @@ def release(api: Api, state: dict[str, Any]) -> None:
 
 
 def cancel(api: Api, state: dict[str, Any], *, timeout: float) -> None:
-    executions = state.get("executions") or []
+    executions = [item for item in state.get("executions") or [] if item.get("cancel")]
     if not executions:
         raise JourneyFailure("no executions recorded to cancel")
     for execution in executions:
+        scheduled_for = execution.get("scheduledFor")
+        if scheduled_for and datetime.fromisoformat(scheduled_for) <= datetime.now(
+            timezone.utc
+        ):
+            raise JourneyFailure(
+                f"execution {execution['workflowId']} reached its start time "
+                "before cancellation; raise --defer-seconds"
+            )
         workflow_id = execution["workflowId"]
         api.json(
             "POST",
@@ -444,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-file", required=True, type=Path)
     parser.add_argument("--label", default="fresh")
     parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument("--defer-seconds", type=float, default=150.0)
     args = parser.parse_args(argv)
 
     api = Api(args.api_base)
@@ -452,7 +479,13 @@ def main(argv: list[str] | None = None) -> int:
         state = json.loads(args.state_file.read_text())
     try:
         if args.phase == "populate":
-            populate(api, state, label=args.label, timeout=args.timeout)
+            populate(
+                api,
+                state,
+                label=args.label,
+                timeout=args.timeout,
+                defer_seconds=args.defer_seconds,
+            )
         elif args.phase == "cancel":
             cancel(api, state, timeout=args.timeout)
         elif args.phase == "credential":
