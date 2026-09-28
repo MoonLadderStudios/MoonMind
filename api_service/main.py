@@ -119,9 +119,10 @@ from api_service.api.websockets import router as websockets_router
 # artifact, SSE, and WebSocket shapes. Mounting them beside the product
 # routes would create a parallel /operator/* API instead of migrating the
 # real workflow, artifact, stream, and chat consumers through one shared
-# boundary. Real-consumer migration stays tracked in open #4347; this
-# deployment keeps the existing product routes on their current auth
-# until each consumer migrates with its machine-authority separation.
+# boundary. No real consumer has migrated yet (#4347 closed without that
+# migration); this deployment keeps the existing product routes on their
+# current auth until each consumer migrates with its machine-authority
+# separation.
 from api_service.db.base import get_async_session_context
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_dashboard_dist_root
@@ -328,11 +329,17 @@ async def _run_guarded_single_user_upgrade() -> dict:
                     result.decision.disposition,
                 )
             else:
+                # The sanitized detail (for example which subsystems lack a
+                # registered transform) tells an operator why the source
+                # did not publish without reading the database.
+                reason = result.decision.reason_code
+                if result.decision.detail:
+                    reason = f"{reason}: {result.decision.detail}"
                 logger.warning(
                     "Single-user guarded upgrade blocked (%s); preserving "
                     "source data, serving release, and operator access "
                     "without conversion-side mutation.",
-                    result.decision.reason_code,
+                    reason,
                 )
             return summary
     except Exception as exc:  # pragma: no cover - bounded startup conversion
@@ -1474,7 +1481,7 @@ app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 # api_service.operator_admission. Demonstration routers are test-only (see
 # tests/unit/api/test_operator_boundary_mount_4347.py) and are not mounted
 # here, so no parallel /operator/* production API is introduced before real
-# workflow, artifact, stream, and chat consumers migrate (open #4347).
+# workflow, artifact, stream, and chat consumers migrate (not yet done).
 # Advanced identity sources (#4124): generic OIDC + trusted-proxy journeys
 # through the shared auth boundary. Endpoints fail closed when the classified
 # production mode does not select them.

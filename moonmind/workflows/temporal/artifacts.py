@@ -651,7 +651,19 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             code = str(exc.response.get("Error", {}).get("Code", ""))
             if code not in {"404", "NoSuchBucket", "NotFound"}:
                 raise
-        self._client.create_bucket(Bucket=self._bucket)
+        try:
+            self._client.create_bucket(Bucket=self._bucket)
+        except ClientError:
+            # Services of a fresh install race to create the bucket. Losing
+            # that race is fine once the bucket is reachable; otherwise the
+            # original creation error stands.
+            try:
+                self._client.head_bucket(Bucket=self._bucket)
+            except ClientError:
+                pass
+            else:
+                return
+            raise
 
     @staticmethod
     def _normalize_public_endpoint(
