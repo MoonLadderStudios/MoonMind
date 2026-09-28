@@ -810,7 +810,7 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_ci == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -861,24 +861,43 @@ jobs:
           tags: moonmind-first-run-3938:ci
           cache-from: type=gha,scope=first-run-3938-api-runtime
           cache-to: type=gha,scope=first-run-3938-api-runtime,mode=max
+      - name: Set up Node for the dashboard journey
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install the journey browser's Playwright runtime
+        # The journeys open the dashboard compiled into the candidate image
+        # from the job host, so Playwright belongs here and not in the image.
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
       - name: Run disposable default first-run journey
-        # MoonLadderStudios/MoonMind#3938: one disposable default Compose
-        # installation (no .env, no inherited credentials) exercising the
-        # real API startup/admission/session/save path with its browser
-        # consumer. The runner records revision/image provenance and reuses
-        # the saved-work journey by reference. MOONMIND_IMAGE pins the
-        # candidate build above so the journey verifies this revision.
+        # MoonLadderStudios/MoonMind#3938 / #4356: one disposable default
+        # Compose installation (no .env, no inherited credentials, no seeded
+        # person) driven through the real API and compiled dashboard:
+        # settings/catalog, synthetic credential binding, submit/observe,
+        # artifacts, recurring dispatch, worker restart, cancellation, and
+        # read-back. Any failed or unobserved step fails the job.
+        # MOONMIND_IMAGE pins the candidate build above.
         env:
-          MOONMIND_TEST_COMPOSE_PROJECT_NAME: moonmind-test-first-run-3938
           MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
           set -euo pipefail
           # The hermetic suite above runs inside Docker (often as root),
           # leaving var/ root-owned. Restore ownership so the journey can
-          # record provenance/submission evidence under var/artifacts.
+          # record evidence under var/artifacts.
           sudo chown -R "$(id -u):$(id -g)" var 2>/dev/null || true
-          ./tools/first_run_journey_3938.sh --contract
           ./tools/first_run_journey_3938.sh
+      - name: Run eligible-upgrade journey
+        # MoonLadderStudios/MoonMind#4356: work saved on the published image
+        # must survive recreation on the candidate image and the upgraded
+        # instance must accept new work.
+        env:
+          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+        run: |
+          set -euo pipefail
+          ./tools/first_run_journey_3938.sh --upgrade
       - name: Capture docker compose diagnostics
         if: failure()
         run: |

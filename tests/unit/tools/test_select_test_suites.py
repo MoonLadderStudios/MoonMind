@@ -113,7 +113,7 @@ def test_webkit_leg_stays_targeted_to_form_surfaces() -> None:
 
 
 def test_api_router_change_selects_unit_fast_and_component() -> None:
-    outputs = _outputs(["api_service/api/routers/workflow_console.py"])
+    outputs = _outputs(["api_service/api/routers/automation.py"])
 
     assert outputs["unit_fast"] == "true"
     assert outputs["api_component"] == "true"
@@ -924,31 +924,66 @@ def test_shared_resource_changes_require_real_docker_journey():
 @pytest.mark.parametrize(
     "changed_path",
     [
+        # Auth, admission, and route mounting.
+        "api_service/auth.py",
+        "api_service/auth_providers.py",
+        "api_service/main.py",
+        "api_service/api/routers/worker_auth.py",
+        "moonmind/omnigent/bridge_security.py",
+        # Instance configuration and credential bindings.
+        "api_service/api/routers/settings.py",
+        "api_service/api/routers/secrets.py",
+        "api_service/api/routers/presets.py",
+        "api_service/services/secrets.py",
+        "api_service/services/settings_catalog.py",
+        "api_service/services/presets/catalog.py",
+        # Eligible single-operator conversion on PostgreSQL.
         "api_service/services/profile_secret_migration.py",
-        "tests/unit/single_user/test_first_run_4356.py",
-        "tests/integration/single_user/test_first_run_4356.py",
-        "tests/integration/single_user/test_protected_ingress_4356.py",
-        "tests/integration/single_user/test_machine_authority_4356.py",
-        "moonmind/security/container_job_capabilities.py",
+        "api_service/services/single_user_conversion.py",
+        # Frontend transport, deployment topology, and worker binding.
+        "frontend/src/lib/api/client.ts",
+        "docker-compose.yaml",
         "moonmind/workflows/temporal/worker_runtime.py",
+        "moonmind/security/container_job_capabilities.py",
+        # The fresh and eligible-upgrade Compose journeys run in the
+        # integration-ci job: their runner and the routes they drive must
+        # select that job (MoonLadderStudios/MoonMind#4356).
+        "tools/first_run_journey_3938.sh",
+        "tools/single_user_journey_checks.py",
+        "tools/single_user_journey_browser.mjs",
+        "api_service/api/routers/executions.py",
+        "api_service/api/routers/temporal_artifacts.py",
+        "api_service/api/routers/recurring_workflows.py",
+        "api_service/api/routers/workflow_console.py",
+        "tests/unit/single_user/test_first_run_4356.py",
     ],
 )
 def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
-    """MoonLadderStudios/MoonMind#4356 R8: single-user rows own integration_ci.
+    """MoonLadderStudios/MoonMind#4356: single-user boundaries own integration_ci.
 
-    Canonical taxonomy pin: a change to the credential-conversion service,
-    its unit or integration suites, or the machine-authority/worker-binding
-    seams must run the hermetic integration foundation. Aggregation needs no
-    workflow change: .github/workflows/pytest-unit-tests.yml already runs
-    the integration-ci job whenever integration_ci=true.
+    A change to admission, instance configuration, conversion, deployment
+    topology, or the Compose journeys and the routes they exercise must run
+    the integration-ci job. Aggregation needs no workflow change:
+    .github/workflows/pytest-unit-tests.yml already runs the integration-ci
+    job whenever integration_ci=true and ci-required fails when it does not
+    succeed.
     """
     outputs = _outputs([changed_path])
     assert outputs["unit_fast"] == "true", changed_path
     assert outputs["integration_ci"] == "true", changed_path
+    assert outputs["full_backend"] == "false", changed_path
+
+
+def test_single_user_design_prose_does_not_select_integration_ci() -> None:
+    """Design prose stays on the fast shard without the integration foundation."""
+    outputs = _outputs(["docs/SingleUserApplicationDesign.md", "README.md"])
+    assert outputs["unit_fast"] == "true"
+    assert outputs["integration_ci"] == "false"
+    assert outputs["full_backend"] == "false"
 
 
 def test_single_user_integration_never_selects_reliability_journey() -> None:
     """Single-user integration suites stay out of the reliability corpus."""
-    outputs = _outputs(["tests/integration/single_user/test_first_run_4356.py"])
+    outputs = _outputs(["tests/integration/single_user/test_example.py"])
     assert outputs["integration_ci"] == "true"
     assert outputs["reliability_journey"] == "false"

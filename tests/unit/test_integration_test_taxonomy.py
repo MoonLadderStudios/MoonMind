@@ -358,7 +358,7 @@ def test_keycloak_removal_auth_boundaries_select_integration_ci() -> None:
 
     # An unrelated API router must not be dragged into integration_ci by the
     # exact-path additions above.
-    outputs = _outputs(["api_service/api/routers/workflow_console.py"])
+    outputs = _outputs(["api_service/api/routers/automation.py"])
     assert outputs["api_component"] == "true"
     assert outputs["integration_ci"] == "false"
 
