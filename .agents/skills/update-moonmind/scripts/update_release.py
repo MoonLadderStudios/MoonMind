@@ -432,7 +432,7 @@ def _submit_release(
         if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
             controller_url = f"http://127.0.0.1:{port}"
     default_secret = _default_controller_secret_file(repo)
-    if not explicit_controller and not default_secret.exists():
+    if not explicit_controller and not _secret_installed(default_secret):
         _reject_automatic_resume(is_resume)
         # The notice stays free of secret material (CodeQL clear-text
         # logging): it names no secret path or value, only the installer.
@@ -444,14 +444,15 @@ def _submit_release(
         )
         return _submit_legacy_direct(record, repo)
     if not explicit_controller:
-        secret = default_secret.read_text(encoding="utf-8").strip()
+        # Bootstrap may have written a secret and Compose file before its
+        # unpublished image could start. Fall back only if that controller
+        # never started, recorded an operation, or owns a container; a
+        # stopped controller with durable work, or one whose credential this
+        # user cannot read, must retain its recovery authority.
         try:
+            secret = _read_controller_secret(default_secret)
             _controller_call(controller_url, secret, "GET", "/v1/healthz", timeout=5)
-        except ControllerUnreachableError:
-            # Bootstrap may have written a secret and Compose file before its
-            # unpublished image could start. Fall back only if that controller
-            # never recorded an operation and owns no container; a stopped
-            # controller with durable work must retain its recovery authority.
+        except (ControllerUnreachableError, ControllerCredentialError):
             if not _controller_never_started(repo):
                 raise
             _reject_automatic_resume(is_resume)
@@ -461,6 +462,7 @@ def _submit_release(
                 flush=True,
             )
             return _submit_legacy_direct(record, repo)
+        _attach_controller_to_stack(repo, record.get("project"))
     return _submit_via_controller(
         record,
         repo,
@@ -479,6 +481,64 @@ def _reject_automatic_resume(is_resume):
             "legacy path or --controller-secret-file to resume through "
             "the controller."
         )
+
+
+class ControllerCredentialError(RuntimeError):
+    """The installed controller's deployment-owned credential is unreadable."""
+
+
+def _secret_installed(path):
+    """Whether a secret exists, including one this user may not read."""
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_controller_secret(path):
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, NotADirectoryError):
+        raise
+    except OSError:
+        # Names no path or value (CodeQL clear-text logging).
+        raise ControllerCredentialError(
+            "The standalone controller is installed, but this user cannot "
+            "read its deployment-owned credential; rerun as the user that "
+            "installed it or make the controller state readable."
+        ) from None
+
+
+def _attach_controller_to_stack(repo, project):
+    """Join the installed controller to the stack network before submitting.
+
+    A stack created after the controller leaves the Settings Operations API
+    unable to reach it. Bootstrap attaches it idempotently; a failure only
+    affects the API path, so the host submission continues on loopback.
+    """
+    bootstrap = repo / "deploy" / "controller" / "bootstrap.py"
+    if not bootstrap.is_file() or _controller_identity(repo) is None:
+        return
+    command = [sys.executable, str(bootstrap), "attach", "--repo", str(repo)]
+    if project:
+        command += ["--stack-project", str(project)]
+    try:
+        completed = subprocess.run(
+            command, cwd=repo, capture_output=True, text=True, timeout=180, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"Controller stack-network attachment skipped: {exc}", flush=True)
+        return
+    output = _redact_diagnostics(
+        (completed.stdout or completed.stderr or "").strip()[-500:]
+    )
+    if completed.returncode != 0:
+        print(f"Controller stack-network attachment failed: {output}", flush=True)
+    elif output:
+        print(output, flush=True)
 
 
 def _default_controller_secret_file(repo):
@@ -504,11 +564,18 @@ def _controller_never_started(repo):
     """Prove an incomplete bootstrap owns no operation or Compose container."""
     state_dir = repo / "deploy" / "state" / "controller"
     operations_dir = state_dir / "operations"
-    if operations_dir.exists() and any(operations_dir.iterdir()):
+    try:
+        if operations_dir.exists() and any(operations_dir.iterdir()):
+            return False
+    except OSError:
         return False
     identity = _controller_identity(repo)
     if identity is None:
         return not (state_dir / "controller-compose.yaml").exists()
+    if identity.get("startedAt"):
+        # Bootstrap started a controller: the stack's services rely on this
+        # same record, so no entrypoint picks the legacy updater beside it.
+        return False
     project = identity.get("project")
     if not isinstance(project, str) or not project:
         return False
@@ -612,13 +679,13 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
     shutdown, so this path works while MoonMind itself is unhealthy.
     """
     secret_path = Path(secret_file) if secret_file else _default_controller_secret_file(repo)
-    if not secret_path.exists():
+    if not _secret_installed(secret_path):
         raise RuntimeError(
             f"Controller secret is missing at {secret_path}; install the "
             "controller first with "
             "`python3 deploy/controller/bootstrap.py install`."
         )
-    secret = secret_path.read_text(encoding="utf-8").strip()
+    secret = _read_controller_secret(secret_path)
     rendered = json.loads(
         run(["docker", "compose", "config", "--format", "json"], cwd=repo)
     )

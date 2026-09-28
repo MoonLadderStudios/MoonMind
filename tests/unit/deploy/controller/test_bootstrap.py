@@ -1,4 +1,6 @@
 """Host-owned controller lifecycle: install/update/restore, never self-replace."""
+import json
+
 from conftest import load
 
 import pytest
@@ -135,7 +137,7 @@ def test_bootstrap_resolve_image_digest_computes_manifest_digest(
     raw = b'{"schemaVersion": 2}'
     calls = []
 
-    def fake_run(args):
+    def fake_run(args, **_kwargs):
         calls.append(args)
         assert args[:4] == ["docker", "buildx", "imagetools", "inspect"]
         return SimpleNamespace(returncode=0, stdout=raw.decode(), stderr="")
@@ -153,7 +155,7 @@ def test_bootstrap_offline_install_records_unverified_and_start_refuses(
 
     bootstrap = load("bootstrap")
 
-    def missing_docker(args):
+    def missing_docker(args, **_kwargs):
         raise OSError("no docker here")
 
     monkeypatch.setattr(bootstrap, "_run_capture", missing_docker)
@@ -172,7 +174,7 @@ def _stack_network_lookup(names):
 
     calls = []
 
-    def fake_run(args):
+    def fake_run(args, **_kwargs):
         calls.append(args)
         if args[:3] == ["docker", "network", "ls"]:
             return SimpleNamespace(
@@ -261,6 +263,163 @@ def test_bootstrap_start_attaches_a_stack_network_created_after_install(
     )
     assert rendered["networks"]["stack"]["name"] == (
         "moonmind_deployment-controller-network"
+    )
+
+
+class _FakeDocker:
+    """Docker CLI answers for a stack and a running controller container."""
+
+    def __init__(self, *, project="moonmind", networks=(), joined=None):
+        self.project = project
+        self.networks = {
+            name: f"{name}_deployment-controller-network" for name in networks
+        }
+        self.joined = {} if joined is None else joined
+        self.calls = []
+
+    def __call__(self, args, cwd=None):
+        from types import SimpleNamespace
+
+        self.calls.append((args, cwd))
+
+        def answer(stdout="", returncode=0):
+            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+        if args[:3] == ["docker", "compose", "config"]:
+            return answer(json.dumps({"name": self.project}))
+        if args[:3] == ["docker", "network", "ls"]:
+            wanted = args[args.index("--filter") + 1].split("=", 1)[1]
+            project = wanted.removeprefix("com.docker.compose.project=")
+            return answer(
+                f"{self.networks[project]}\n" if project in self.networks else ""
+            )
+        if args[:2] == ["docker", "ps"]:
+            return answer("c0ffee\n")
+        if args[:2] == ["docker", "inspect"]:
+            return answer(json.dumps(self.joined))
+        if args[:3] == ["docker", "network", "connect"]:
+            self.joined[args[-2]] = {"Aliases": [args[args.index("--alias") + 1]]}
+            return answer()
+        return answer(returncode=1)
+
+
+def _verified(bootstrap, state_dir):
+    bootstrap.record_controller_image(
+        state_dir,
+        requested=bootstrap.DEFAULT_IMAGE,
+        pinned="ghcr.io/org/ctl@sha256:" + "a" * 64,
+    )
+
+
+def test_bootstrap_finds_the_stack_network_of_the_derived_compose_project(
+    controller_path, tmp_path, monkeypatch
+):
+    import yaml
+
+    bootstrap = load("bootstrap")
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    docker = _FakeDocker(project="site-a", networks=["site-a"])
+    monkeypatch.setattr(bootstrap, "_run_capture", docker)
+    state_dir = tmp_path / "state"
+
+    assert bootstrap.main(
+        ["install", "--state-dir", str(state_dir), "--repo", str(repo)], env={}
+    ) == 0
+
+    # The project comes from the checkout's own rendered Compose config (as
+    # the host update derives it), not the literal stack name.
+    assert (["docker", "compose", "config", "--format", "json"], repo) in docker.calls
+    rendered = yaml.safe_load((state_dir / "controller-compose.yaml").read_text())
+    assert rendered["networks"]["stack"]["name"] == (
+        "site-a_deployment-controller-network"
+    )
+
+
+def test_bootstrap_records_a_started_controller_for_the_stack_services(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    monkeypatch.setattr(bootstrap, "_run_capture", _FakeDocker())
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    assert "startedAt" not in bootstrap.load_identity(tmp_path)
+    _verified(bootstrap, tmp_path)
+    monkeypatch.setattr(bootstrap, "_compose", lambda *_args: 0)
+
+    assert bootstrap.main(["start", "--state-dir", str(tmp_path)], env={}) == 0
+
+    started_at = bootstrap.load_identity(tmp_path)["startedAt"]
+    # Later commands keep the record the stack services rely on.
+    assert bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={}) == 0
+    assert bootstrap.load_identity(tmp_path)["startedAt"] == started_at
+
+
+def test_bootstrap_start_that_created_no_container_records_no_start(
+    controller_path, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    bootstrap = load("bootstrap")
+    monkeypatch.setattr(bootstrap, "_run_capture", _FakeDocker())
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    _verified(bootstrap, tmp_path)
+    monkeypatch.setattr(bootstrap, "_compose", lambda *_args: 1)
+    monkeypatch.setattr(
+        bootstrap,
+        "_run_capture",
+        lambda args, cwd=None: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    with pytest.raises(RuntimeError):
+        bootstrap.main(["start", "--state-dir", str(tmp_path)], env={})
+
+    assert "startedAt" not in bootstrap.load_identity(tmp_path)
+
+
+def test_bootstrap_attach_joins_a_running_controller_to_a_stack_created_after_it(
+    controller_path, tmp_path, monkeypatch
+):
+    import yaml
+
+    bootstrap = load("bootstrap")
+    docker = _FakeDocker(project="site-b")
+    monkeypatch.setattr(bootstrap, "_run_capture", docker)
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    _verified(bootstrap, tmp_path)
+    assert "networks" not in yaml.safe_load(
+        (tmp_path / "controller-compose.yaml").read_text()
+    )
+    # The stack comes up after the controller is already running.
+    docker.networks["site-b"] = "site-b_deployment-controller-network"
+
+    assert bootstrap.main(["attach", "--state-dir", str(tmp_path)], env={}) == 0
+    # The host update passes the project it derived; rerunning is a no-op.
+    assert bootstrap.main(
+        ["attach", "--state-dir", str(tmp_path), "--stack-project", "site-b"], env={}
+    ) == 0
+
+    connects = [
+        args for args, _ in docker.calls if args[:3] == ["docker", "network", "connect"]
+    ]
+    # Joined once under the alias the stack services call; the second run
+    # is a no-op, and the running container is never recreated.
+    assert connects == [
+        [
+            "docker",
+            "network",
+            "connect",
+            "--alias",
+            bootstrap.STACK_NETWORK_ALIAS,
+            "site-b_deployment-controller-network",
+            "c0ffee",
+        ]
+    ]
+    rendered = yaml.safe_load((tmp_path / "controller-compose.yaml").read_text())
+    assert rendered["networks"]["stack"]["name"] == (
+        "site-b_deployment-controller-network"
+    )
+    assert rendered["services"]["controller"]["image"] == (
+        "ghcr.io/org/ctl@sha256:" + "a" * 64
     )
 
 

@@ -117,10 +117,56 @@ def ensure_identity(state_dir: Path, repo: Path, port: int | None) -> dict:
         "repo": str(repo),
         "recordedAt": int(time.time()),
     }
+    if (existing or {}).get("startedAt"):
+        identity["startedAt"] = existing["startedAt"]
+    _write_identity(state_dir, identity)
+    return identity
+
+
+def _write_identity(state_dir: Path, identity: dict) -> None:
     _identity_path(state_dir).write_text(
         json.dumps(identity, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
-    return identity
+
+
+def record_controller_started(state_dir: Path) -> None:
+    """Record that a controller container may exist for this deployment.
+
+    The stack's API and deployment worker see only the mounted state, not
+    Docker. Once bootstrap has started a controller they must never choose
+    the application-owned updater beside it, even before it records work or
+    while the stack cannot reach it.
+    """
+    identity = load_identity(state_dir)
+    if identity is None or identity.get("startedAt"):
+        return
+    identity["startedAt"] = int(time.time())
+    _write_identity(state_dir, identity)
+
+
+def _controller_containers(project: str) -> list[str] | None:
+    """IDs of this deployment's controller containers; ``None`` if unknown."""
+    try:
+        completed = _run_capture(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--filter",
+                f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
+                "--format",
+                "{{.ID}}",
+            ]
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return [
+        line.strip() for line in (completed.stdout or "").splitlines() if line.strip()
+    ]
 
 
 def _port_in_use(port: int) -> bool:
@@ -152,23 +198,59 @@ def split_image_reference(image: str) -> tuple[str, str | None, str | None]:
     return text, tag, digest
 
 
-def _run_capture(args: list) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=120, check=False)
+def _run_capture(args: list, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args, capture_output=True, text=True, timeout=120, check=False, cwd=cwd
+    )
 
 
-def _stack_project(state_dir: Path, stack: str) -> str:
-    """The stack's Compose project: the host-recorded target's, else the stack."""
+def _rendered_project(repo: Path) -> str | None:
+    """The Compose project the checkout renders (as the host update derives)."""
+    try:
+        completed = _run_capture(
+            ["docker", "compose", "config", "--format", "json"], cwd=repo
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        name = json.loads(completed.stdout or "{}").get("name")
+    except (ValueError, AttributeError):
+        return None
+    return str(name) if name else None
+
+
+def _stack_project(
+    state_dir: Path, stack: str, repo: Path | None, explicit: str | None = None
+) -> str:
+    """The stack's Compose project, derived rather than assumed.
+
+    An explicit project wins, then the host-recorded target's, then the name
+    the checkout's own Compose configuration renders; the stack name is only
+    the last resort when none can be observed.
+    """
+    if explicit:
+        return explicit
     target = record_mod.OperationStore(state_dir).recorded_target(stack=stack)
     project = (target or {}).get("project")
-    return str(project) if project else stack
+    if project:
+        return str(project)
+    return (_rendered_project(repo) if repo else None) or stack
 
 
-def stack_network(state_dir: Path, stack: str) -> str | None:
+def stack_network(
+    state_dir: Path,
+    stack: str,
+    repo: Path | None = None,
+    project: str | None = None,
+) -> str | None:
     """Find the stack's controller-access network from its Compose labels.
 
     Returns ``None`` when the stack has not created it (or Docker cannot be
     asked), so the controller still starts independently of the stack.
     """
+    stack_project = _stack_project(state_dir, stack, repo, project)
     try:
         completed = _run_capture(
             [
@@ -176,7 +258,7 @@ def stack_network(state_dir: Path, stack: str) -> str | None:
                 "network",
                 "ls",
                 "--filter",
-                f"label=com.docker.compose.project={_stack_project(state_dir, stack)}",
+                f"label=com.docker.compose.project={stack_project}",
                 "--filter",
                 f"label=com.docker.compose.network={STACK_NETWORK_KEY}",
                 "--format",
@@ -407,6 +489,77 @@ def _compose(state_dir: Path, project: str, *args: str) -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def _compose_up(state_dir: Path, project: str, *args: str) -> int:
+    """Run the controller's ``up``, recording any container it may create."""
+    code = _compose(state_dir, project, "up", *args)
+    if code == 0 or _controller_containers(project) != []:
+        record_controller_started(state_dir)
+    return code
+
+
+def attach_stack_network(
+    state_dir: Path, repo: Path, stack: str, project: str | None = None
+) -> str | None:
+    """Join the running controller to the stack's access network, idempotently.
+
+    A stack created after the controller started has a network the running
+    container is not on. This connects it under the stack alias without
+    recreating it and re-renders the controller project so later ``up``
+    runs keep the attachment. Returns the network, or ``None`` when the
+    stack has not created it or no single controller container exists.
+    """
+    network = stack_network(state_dir, stack, repo, project)
+    identity = load_identity(state_dir)
+    if network is None or identity is None:
+        return None
+    containers = _controller_containers(str(identity["project"]))
+    if not containers or len(containers) != 1:
+        return None
+    [container] = containers
+    inspected = _run_capture(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            container,
+        ]
+    )
+    try:
+        joined = (
+            json.loads(inspected.stdout or "{}") if inspected.returncode == 0 else {}
+        )
+    except ValueError:
+        joined = {}
+    if network not in (joined or {}):
+        connected = _run_capture(
+            [
+                "docker",
+                "network",
+                "connect",
+                "--alias",
+                STACK_NETWORK_ALIAS,
+                network,
+                container,
+            ]
+        )
+        if connected.returncode != 0:
+            raise RuntimeError(
+                f"Attaching the controller to {network} failed: "
+                f"{(connected.stderr or connected.stdout or '').strip()[-500:]}"
+            )
+    record = load_controller_image(state_dir) or {}
+    render_compose_file(
+        state_dir=state_dir,
+        repo=repo,
+        image=str(record.get("pinned") or record.get("requested") or DEFAULT_IMAGE),
+        port=identity["port"],
+        project=identity["project"],
+        network=network,
+    )
+    return network
+
+
 def _project_for_state(state_dir: Path, repo: Path) -> str:
     identity = load_identity(state_dir)
     if identity:
@@ -433,7 +586,7 @@ def cmd_install(args, env) -> int:
         image=pinned,
         port=identity["port"],
         project=identity["project"],
-        network=stack_network(state_dir, args.stack),
+        network=stack_network(state_dir, args.stack, repo, args.stack_project),
     )
     print(f"Controller project rendered: {compose_file}", flush=True)
     print(f"Deployment-owned secret: {_secret_path(state_dir)}", flush=True)
@@ -466,9 +619,9 @@ def cmd_start(args, env) -> int:
             image=pinned,
             port=identity["port"],
             project=identity["project"],
-            network=stack_network(state_dir, args.stack),
+            network=stack_network(state_dir, args.stack, repo, args.stack_project),
         )
-    code = _compose(state_dir, project, "up", "-d", "--wait")
+    code = _compose_up(state_dir, project, "-d", "--wait")
     if code != 0:
         raise RuntimeError(f"Controller start failed (exit {code}).")
     print("Controller is running.", flush=True)
@@ -506,13 +659,13 @@ def cmd_update(args, env) -> int:
             image=pinned,
             port=identity["port"],
             project=identity["project"],
-            network=stack_network(state_dir, stack),
+            network=stack_network(state_dir, stack, repo, args.stack_project),
         )
         code = _compose(state_dir, identity["project"], "pull", CONTROLLER_SERVICE)
         if code != 0:
             raise RuntimeError(f"Controller image pull failed (exit {code}).")
-        code = _compose(
-            state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE
+        code = _compose_up(
+            state_dir, identity["project"], "-d", "--wait", CONTROLLER_SERVICE
         )
         if code != 0:
             raise RuntimeError(f"Controller recreation failed (exit {code}).")
@@ -535,12 +688,30 @@ def cmd_restore(args, env) -> int:
         image=pinned,
         port=identity["port"],
         project=identity["project"],
-        network=stack_network(state_dir, args.stack),
+        network=stack_network(state_dir, args.stack, repo, args.stack_project),
     )
-    code = _compose(state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE)
+    code = _compose_up(
+        state_dir, identity["project"], "-d", "--wait", CONTROLLER_SERVICE
+    )
     if code != 0:
         raise RuntimeError(f"Controller restore failed (exit {code}).")
     print("Controller restored independently of MoonMind health.", flush=True)
+    return 0
+
+
+def cmd_attach(args, env) -> int:
+    """Attach the running controller to a stack network created after it."""
+    _ensure_outside_controller(env)
+    state_dir = Path(args.state_dir).resolve()
+    repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
+    network = attach_stack_network(state_dir, repo, args.stack, args.stack_project)
+    if network is None:
+        print(
+            "Controller not attached: no stack network or controller container.",
+            flush=True,
+        )
+    else:
+        print(f"Controller attached to {network}.", flush=True)
     return 0
 
 
@@ -568,10 +739,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--state-dir", required=False, help="Controller state directory.")
-    for name in ("install", "start", "update", "restore", "status"):
+    for name in ("install", "start", "update", "restore", "attach", "status"):
         child = sub.add_parser(name, parents=[common])
         child.add_argument("--repo", default=None, help="Target MoonMind checkout.")
         child.add_argument("--stack", default="moonmind", help="Target stack.")
+        child.add_argument(
+            "--stack-project",
+            default=None,
+            help="Stack Compose project (default: derived from the checkout).",
+        )
         child.add_argument("--image", default=DEFAULT_IMAGE, help="Controller image.")
         child.add_argument("--port", type=int, default=DEFAULT_PORT)
     return parser
@@ -596,6 +772,7 @@ def main(argv=None, env=None) -> int:
         "start": cmd_start,
         "update": cmd_update,
         "restore": cmd_restore,
+        "attach": cmd_attach,
         "status": cmd_status,
     }
     return commands[args.command](args, marker)
