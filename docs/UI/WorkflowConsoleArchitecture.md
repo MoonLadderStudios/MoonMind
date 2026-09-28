@@ -83,7 +83,7 @@ Representative pieces:
 - HTML shell: `api_service/templates/react_dashboard.html`
 - navigation partials: `api_service/templates/_navigation.html`
 - shared entrypoint: `frontend/src/entrypoints/dashboard.tsx`
-- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx` (for example `workflow-list.tsx`, `workflow-start.tsx`, `workflow-detail.tsx`, `schedules.tsx`, `manifests.tsx`, `skills.tsx`, `settings.tsx`, `oauth-terminal.tsx`, `index-health.tsx`)
+- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx` (for example `workflow-list.tsx`, `workflow-start.tsx`, `workflow-detail.tsx`, `schedules.tsx`, `skills.tsx`, `settings.tsx`, `oauth-terminal.tsx`, `index-health.tsx`; `manifests.tsx` was removed with the retired native Manifest product, MoonLadderStudios/MoonMind#4192)
 - shared stylesheet source: `frontend/src/styles/dashboard.css`
 - generated JS/CSS bundles: `api_service/static/workflow_console/dist/`
 - React/Vite build output: `api_service/static/workflow_console/dist/`
@@ -147,13 +147,14 @@ If a React route renders structurally correct HTML but spacing, grids, or layout
 | `/workflows/{workflowId}/runs` | Workflow detail, Runs tab |
 | `/schedules` | Recurring schedule list |
 | `/schedules/{definitionId}` | Recurring schedule detail |
-| `/manifests`, `/manifests/{manifestName}` | Manifest pages |
 | `/skills` | Agent skill management |
 | `/settings` | Settings (provider profiles, secrets, operations) |
 | `/oauth-terminal` | OAuth terminal sessions (xterm.js lives here only) |
 | `/index-health` | Index health page |
 
-Convenience redirects: `/secrets` → `/settings/providers-secrets`, `/workers` → `/settings/operations`, `/manifests/new` → `/manifests`.
+Convenience redirects: `/secrets` → `/settings/providers-secrets`, `/workers` → `/settings/operations`.
+
+> Retired: the `/manifests`, `/manifests/{manifestName}`, and `/manifests/new` Manifest pages were removed with the native Manifest product (MoonLadderStudios/MoonMind#4192). `/manifests/*` resolves to no route; retired `MoonMind.ManifestIngest` links show a recoverable retired-product message instead of redirecting to a Manifests page.
 
 Rules:
 
@@ -202,8 +203,9 @@ Runtime config may still expose sources such as:
 
 - `schedules`
 - `temporal`
-- `manifests`
 - `githubBranches` or equivalent MoonMind-owned repository branch lookup endpoint
+
+(The retired native Manifest product's `manifests` source and its `manifestStatus`/`manifestNodes` boot-payload links were removed with MoonLadderStudios/MoonMind#4192; historical reads stay served through the execution projections.)
 
 That does not mean the user-facing workflow UI should give all of those equal primary visibility.
 
