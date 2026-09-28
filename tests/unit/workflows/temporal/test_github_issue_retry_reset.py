@@ -1,13 +1,12 @@
 """Budget rejections explain themselves; an audited reset readmits the issue.
 
-The issue #4503 shape runs through the production search tool: an unlabelled
-open issue whose comments hold three expired ``active``/``in_progress``
-attempts from three deployments. Selection must say that it was blocked by
-historical attempt limits, which attempts it charged, and that none of them
-recorded an outcome. Removing a label cannot help (there is none), and no
-deployment's sweep can repair evidence it never owned, so the operator's route
-is an explicit, scoped, auditable retry reset -- never comment deletion or a
-hand-edited counter.
+The issue #4503 shape -- an unlabelled open issue whose comments hold three
+expired ``active``/``in_progress`` attempts from three deployments -- no longer
+needs an operator: attempts that lapsed without recording an outcome are not
+charged, so the production search admits the issue on its own. What remains
+for the operator is recorded failures they decide to retry anyway: selection
+names the charged attempts, and the route is an explicit, scoped, auditable
+retry reset -- never comment deletion or a hand-edited counter.
 """
 
 # ruff: noqa: F811 -- imported pytest fixture
@@ -113,6 +112,29 @@ def _stranded_history(state) -> list[str]:
     return ids
 
 
+def _recorded_failures(state) -> list[str]:
+    """Three finalized failures on an otherwise available issue."""
+    ids = [f"att-4503f{index}-aaaa" for index in range(3)]
+    for index, attempt_id in enumerate(ids):
+        _post(
+            state,
+            replace(
+                _attempt(
+                    attempt_id,
+                    deployment=f"inst-device-{index}",
+                    remaining=3 - index,
+                    expired_days_ago=5 - index * 0.5,
+                    predecessor=ids[index - 1] if index else "",
+                    predecessor_comment_id=str(index) if index else "",
+                ),
+                activity="released",
+                outcome="failed",
+                writers_stopped=True,
+            ),
+        )
+    return ids
+
+
 def _exhausted_by_recorded_failures(state, *, retry_attention: bool) -> list[str]:
     """Three finalized failures on an issue that now reads Needs attention.
 
@@ -161,45 +183,69 @@ async def _search(service, owner: str):
 
 
 @pytest.mark.asyncio
+async def test_stranded_attempts_no_longer_block_selection(journey):
+    """No owner was left to record these outcomes; search needs no reset."""
+    state, service, sessions = journey
+    ids = _stranded_history(state)
+
+    admitted = await _search(service, "default/after-stranding")
+
+    assert admitted.completion_disposition != "idle", admitted.outputs
+    receipt = await IssueClaimStore(sessions).get("default/after-stranding")
+    assert receipt.issue_number == ISSUE
+    handoff = parse_attempt_comment(receipt.comment_body).handoff
+    assert handoff.retry_remaining == 3
+    assert handoff.predecessor_attempt_id == ids[-1]
+    # Nothing was reset, deleted, or rewritten.
+    for comment, attempt_id in zip(state["comments"][:3], ids):
+        assert parse_attempt_comment(comment["body"]).handoff.outcome == "in_progress"
+        assert parse_attempt_comment(comment["body"]).attempt_id == attempt_id
+    assert not any(
+        parse_attempt_comment(comment["body"]).handoff.outcome == OUTCOME_RETRY_RESET
+        for comment in state["comments"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_budget_rejection_names_the_charged_attempts(journey):
     state, service, _sessions = journey
-    ids = _stranded_history(state)
+    ids = _recorded_failures(state)
 
     result = await _search(service, "default/search-blocked")
 
     assert result.completion_disposition == "idle", result.outputs
     evidence = result.outputs["searchEvidence"]
     assert evidence["rejectionCounts"] == {"budget_exhausted": 1}
-    assert evidence["unfinishedAttemptAccounting"] == 1
+    assert evidence.get("unfinishedAttemptAccounting", 0) == 0
     sample = evidence["rejectedCandidates"][0]
     assert sample["issueNumber"] == ISSUE
     retry = sample["claimEvidence"]["retry"]
     assert retry["allowance"] == 3
-    assert retry["unresolvedAttempts"] == 3
+    assert retry["unresolvedAttempts"] == 0
     assert [item["attemptId"] for item in retry["chargedAttempts"]] == ids
     summary = result.outputs["summary"]
     assert summary.startswith("Search completed without selecting an issue.")
     assert "1 matching issue was blocked by historical attempt limits" in summary
-    assert "never recorded an outcome" in summary
 
 
 @pytest.mark.asyncio
 async def test_an_audited_reset_readmits_the_issue_and_keeps_every_attempt(journey):
     state, service, sessions = journey
-    ids = _stranded_history(state)
+    ids = _recorded_failures(state)
 
-    inventory = await inventory_retry_resets(service=service, repository=REPO)
+    inventory = await inventory_retry_resets(
+        service=service, repository=REPO, include_recorded_outcomes=True
+    )
     [plan] = inventory["issues"]
     assert plan["action"] == ACTION_RESET, plan
     assert plan["supersedes"] == ids
-    assert plan["retry"]["unresolvedAttempts"] == 3
     # The inventory writes nothing.
     assert len(state["comments"]) == 3
 
     applied = await apply_retry_reset(
         service=service,
         plan=plan,
-        reason="Stranded attempt records; owning deployments' evidence is gone.",
+        reason="Recorded failures came from a launcher fixed since.",
     )
 
     assert applied["applied"] is True, applied
@@ -212,7 +258,7 @@ async def test_an_audited_reset_readmits_the_issue_and_keeps_every_attempt(journ
     assert "fixture-owner" in reset.reset_authorization
     # Nothing was deleted or rewritten.
     for comment, attempt_id in zip(state["comments"][:3], ids):
-        assert parse_attempt_comment(comment["body"]).handoff.outcome == "in_progress"
+        assert parse_attempt_comment(comment["body"]).handoff.outcome == "failed"
         assert parse_attempt_comment(comment["body"]).attempt_id == attempt_id
 
     admitted = await _search(service, "default/after-reset")
@@ -228,8 +274,12 @@ async def test_an_audited_reset_readmits_the_issue_and_keeps_every_attempt(journ
 @pytest.mark.asyncio
 async def test_a_reset_is_not_repeated_once_recorded(journey):
     state, service, _sessions = journey
-    _stranded_history(state)
-    [plan] = (await inventory_retry_resets(service=service, repository=REPO))["issues"]
+    _recorded_failures(state)
+    [plan] = (
+        await inventory_retry_resets(
+            service=service, repository=REPO, include_recorded_outcomes=True
+        )
+    )["issues"]
     await apply_retry_reset(service=service, plan=plan, reason="stranded records")
 
     again = await apply_retry_reset(
@@ -328,12 +378,17 @@ async def test_the_operator_command_inventories_by_default_and_applies_on_reques
     from tools import reset_issue_retry_allowance as command
 
     state, service, sessions = journey
-    ids = _stranded_history(state)
+    ids = _recorded_failures(state)
     monkeypatch.setattr(github_service, "GitHubService", lambda: service)
     # No arguments: the repository is the deployment's configured one.
     monkeypatch.setattr(settings.workflow, "github_repository", REPO)
 
     assert await command.run(command.parse_args([])) == 0
+    assert len(state["comments"]) == 3
+    assert f"#{ISSUE}: reset" not in capsys.readouterr().out
+    assert (
+        await command.run(command.parse_args(["--include-recorded-outcomes"])) == 0
+    )
     assert len(state["comments"]) == 3
     assert f"#{ISSUE}: reset" in capsys.readouterr().out
 
@@ -342,7 +397,14 @@ async def test_the_operator_command_inventories_by_default_and_applies_on_reques
 
     assert (
         await command.run(
-            command.parse_args(["--apply", "--reason", "stranded attempt records"])
+            command.parse_args(
+                [
+                    "--apply",
+                    "--include-recorded-outcomes",
+                    "--reason",
+                    "failures came from a launcher fixed since",
+                ]
+            )
         )
         == 0
     )
@@ -360,7 +422,7 @@ async def test_the_operator_command_inventories_by_default_and_applies_on_reques
 async def test_a_collaborator_posted_reset_does_not_readmit_the_issue(journey):
     """Trusted provenance is not reset authority; only the operator account resets."""
     state, service, _sessions = journey
-    ids = _stranded_history(state)
+    ids = _recorded_failures(state)
     _post(
         state,
         build_retry_reset_handoff(

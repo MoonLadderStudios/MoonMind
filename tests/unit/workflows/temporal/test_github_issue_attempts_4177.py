@@ -96,6 +96,31 @@ def test_installation_identity_differs_across_deployments(tmp_path, monkeypatch)
     assert resolve_installation_id("x") == ""
 
 
+def test_default_installation_identity_survives_container_recreation(
+    tmp_path, monkeypatch
+) -> None:
+    """Compose mounts only ``moonmind_secrets`` (``var/secrets``) durably.
+
+    Every other path under ``var`` belongs to the container and is discarded
+    when an update recreates it. An identity written there changed on every
+    update, so each deployment's own earlier attempts looked foreign and
+    their accounting was never finished.
+    """
+    import shutil
+
+    monkeypatch.delenv("MOONMIND_INSTALLATION_ID", raising=False)
+    monkeypatch.delenv("MOONMIND_INSTALLATION_ID_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    durable = tmp_path / "var" / "secrets"
+
+    first = get_or_create_installation_id()
+
+    for entry in (tmp_path / "var").iterdir():
+        if entry != durable:
+            shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+    assert get_or_create_installation_id() == first
+
+
 def test_attempt_ids_are_unique_and_bound() -> None:
     first = new_attempt_id(repository="o/r", issue_number=4177, workflow_id="wf", run_id="run")
     second = new_attempt_id(repository="o/r", issue_number=4177, workflow_id="wf", run_id="run")

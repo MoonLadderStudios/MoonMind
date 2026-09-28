@@ -8,12 +8,14 @@ them, so the issue is ``budget_exhausted`` -- and the rejection said "observed
 portable failures exhaust the retry allowance", which describes three
 unfinished accounting records as three proven implementation failures.
 
-An expired ``active`` attempt keeps costing one (a crash loop must not outlast
-the allowance), so the fix is not to stop charging it. The decision instead
-names the allowance, every charged attempt and outcome, and how many of them
-never recorded a terminal outcome. Where the owning deployment can no longer
-recover the evidence, an operator records an audited reset: a GitHub-visible
-record that keeps every earlier attempt in lineage but stops charging it.
+Those records lost their owners before anything was recorded, so they are no
+longer charged: they stay in lineage and back off instead (see
+``test_github_issue_lapsed_announcement_retry``). The decision still names the
+allowance, every charged attempt and outcome, and how many of them never
+recorded a terminal outcome (a version-1 record, which never agreed to a lease,
+still counts that way). When an operator decides recorded failures deserve
+another try, they record an audited reset: a GitHub-visible record that keeps
+every earlier attempt in lineage but stops charging it.
 """
 
 from __future__ import annotations
@@ -89,6 +91,15 @@ def _terminal(
     )
 
 
+def _recorded_failures() -> list[AttemptHandoff]:
+    """Three finalized failures: the shape an operator may choose to reset."""
+    ids = ["att-4503-first-aaaa", "att-4503-second-bbbb", "att-4503-third-cccc"]
+    return [
+        _terminal(attempt_id, "failed", predecessor=ids[index - 1] if index else "")
+        for index, attempt_id in enumerate(ids)
+    ]
+
+
 def _issue_4503_history() -> list[AttemptHandoff]:
     return [
         _stale_active(
@@ -156,12 +167,28 @@ def _reset(
 # ---------------------------------------------------------------------------
 
 
-def test_stale_active_attempts_exhaust_the_allowance_as_unfinished_accounting() -> None:
+def test_stale_active_attempts_are_retained_without_spending_the_allowance() -> None:
     decision = compute_effective_retry(
         _issue_4503_history(), max_attempts=3, now_epoch=_now().timestamp()
     )
 
-    # Still charged: an expired active attempt reached dispatch.
+    assert decision.allowed is True
+    assert decision.remaining == 3
+    assert decision.charged_attempts == ()
+    assert decision.to_dict()["unresolvedAttempts"] == 0
+
+
+def test_leaseless_attempts_are_reported_as_unfinished_accounting() -> None:
+    """A version-1 record never agreed to expire, so it still counts."""
+    leaseless = [
+        replace(item, lease_renewed_at="", lease_expires_at="")
+        for item in _issue_4503_history()
+    ]
+
+    decision = compute_effective_retry(
+        leaseless, max_attempts=3, now_epoch=_now().timestamp()
+    )
+
     assert decision.allowed is False
     assert decision.reason_code == "budget_exhausted"
     assert decision.allowance == 3
@@ -171,13 +198,11 @@ def test_stale_active_attempts_exhaust_the_allowance_as_unfinished_accounting() 
         "att-4503-second-bbbb",
         "att-4503-third-cccc",
     ]
-    assert {item["outcome"] for item in decision.charged_attempts} == {"in_progress"}
     assert all(item["unresolved"] for item in decision.charged_attempts)
     # The summary must not describe unfinished records as proven failures.
     assert "never recorded a terminal outcome" in decision.summary
     assert "failures" not in decision.summary
     assert decision.to_dict()["unresolvedAttempts"] == 3
-    assert decision.to_dict()["allowance"] == 3
 
 
 def test_recorded_outcomes_are_not_reported_as_unfinished_accounting() -> None:
@@ -243,7 +268,7 @@ def test_identical_duplicate_copies_are_one_logical_attempt() -> None:
 
 def test_reconstruction_carries_the_retry_explanation() -> None:
     result = reconstruct_from_comments(
-        _comments(_issue_4503_history()),
+        _comments(_recorded_failures()),
         expected_repository=REPO,
         expected_issue_number=ISSUE,
         trusted_posters=[BOT],
@@ -254,7 +279,7 @@ def test_reconstruction_carries_the_retry_explanation() -> None:
     assert result.reason_code == "budget_exhausted"
     retry = result.to_dict()["retry"]
     assert retry["allowance"] == 3
-    assert retry["unresolvedAttempts"] == 3
+    assert retry["unresolvedAttempts"] == 0
     assert [item["attemptId"] for item in retry["chargedAttempts"]][
         -1
     ] == "att-4503-third-cccc"
@@ -266,7 +291,7 @@ def test_reconstruction_carries_the_retry_explanation() -> None:
 
 
 def test_an_audited_reset_record_restores_the_allowance_and_keeps_history() -> None:
-    history = _issue_4503_history()
+    history = _recorded_failures()
     reset = _reset(history[-1], "102", [item.attempt_id for item in history])
     comments = _comments([*history, reset])
 
@@ -306,7 +331,7 @@ def _reconstruct(comments, *, trusted=(BOT,)):
 
 def test_a_trusted_collaborator_cannot_post_an_operator_reset() -> None:
     """Provenance trust is not reset authority: only the operator account resets."""
-    history = _issue_4503_history()
+    history = _recorded_failures()
     reset = _reset(
         history[-1],
         "102",
@@ -330,7 +355,7 @@ def test_a_trusted_collaborator_cannot_post_an_operator_reset() -> None:
 
 def test_a_reset_whose_authorization_names_another_account_is_ignored() -> None:
     """Self-declared authorization fields must name the account that posted them."""
-    history = _issue_4503_history()
+    history = _recorded_failures()
     reset = _reset(
         history[-1],
         "102",
@@ -346,7 +371,7 @@ def test_a_reset_whose_authorization_names_another_account_is_ignored() -> None:
 
 def test_a_reset_clears_only_the_attempts_it_names() -> None:
     """An attempt recorded between the reset's read and its post stays charged."""
-    history = _issue_4503_history()
+    history = _recorded_failures()
     concurrent = _terminal(
         "att-4503-concurrent-eeee", "failed", predecessor=history[-1].attempt_id
     )
@@ -363,7 +388,7 @@ def test_a_reset_clears_only_the_attempts_it_names() -> None:
 
 
 def test_retry_decisions_ignore_resets_the_caller_did_not_authenticate() -> None:
-    history = _issue_4503_history()
+    history = _recorded_failures()
     reset = _reset(history[-1], "102", [item.attempt_id for item in history])
 
     decision = compute_effective_retry(
@@ -376,7 +401,7 @@ def test_retry_decisions_ignore_resets_the_caller_did_not_authenticate() -> None
 
 
 def test_a_reset_record_is_released_history_that_explains_itself() -> None:
-    history = _issue_4503_history()
+    history = _recorded_failures()
     reset = _reset(history[-1], "102", [item.attempt_id for item in history])
     body = render_attempt_comment(reset)
 
@@ -390,7 +415,7 @@ def test_a_reset_record_is_released_history_that_explains_itself() -> None:
 
 
 def test_attempts_after_a_reset_still_count() -> None:
-    history = _issue_4503_history()
+    history = _recorded_failures()
     reset = _reset(history[-1], "102", [item.attempt_id for item in history])
     after = _terminal("att-4503-after-eeee", "failed", predecessor=reset.attempt_id)
 
@@ -429,7 +454,7 @@ def test_a_reset_never_releases_an_operator_hold() -> None:
 
 def test_lifecycle_tool_inputs_cannot_forge_a_reset() -> None:
     """Workflow inputs flow through ``build_attempt_handoff``; it cannot mint one."""
-    history = _issue_4503_history()
+    history = _recorded_failures()
     forged = build_attempt_handoff(
         attempt_id="att-4503-forged-ffff",
         deployment_id="inst-device-c",
@@ -450,7 +475,7 @@ def test_lifecycle_tool_inputs_cannot_forge_a_reset() -> None:
 
 
 def test_an_untrusted_reset_comment_does_not_reset_anything() -> None:
-    history = _issue_4503_history()
+    history = _recorded_failures()
     reset = _reset(history[-1], "102", [item.attempt_id for item in history])
     comments = _comments(history) + _comments(
         [reset], poster="drive-by-user", first_id=103
