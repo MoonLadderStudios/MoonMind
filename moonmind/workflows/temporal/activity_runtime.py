@@ -13847,8 +13847,9 @@ class TemporalAgentRuntimeActivities:
             env["GIT_CONFIG_GLOBAL"] = str(support_gitconfig)
         else:
             env.pop("GIT_CONFIG_GLOBAL", None)
-        git_name = str(settings.workflow.git_user_name or "").strip()
-        git_email = str(settings.workflow.git_user_email or "").strip()
+        from moonmind.omnigent.git_identity import resolve_git_identity
+
+        git_name, git_email = resolve_git_identity()
         if git_name:
             env["GIT_AUTHOR_NAME"] = git_name
             env["GIT_COMMITTER_NAME"] = git_name
