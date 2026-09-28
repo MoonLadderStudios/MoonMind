@@ -520,3 +520,236 @@ async def test_launcher_mounts_no_overlay_for_image_tools_but_drains_legacy() ->
         "type=volume,src=moonmind-omnigent-tools-gh-2.76.2,"
         "dst=/opt/moonmind-tools,readonly" in create
     )
+
+
+_HOST_REPO = "ghcr.io/moonladderstudios/omnigent-host-moonmind"
+_PRE_TOOLS_HOST = _HOST_REPO + "@sha256:" + "a" * 64
+_TOOLED_HOST = _HOST_REPO + "@sha256:" + "b" * 64
+
+
+def _pinned_host_class(image_ref: str) -> HostClass:
+    return HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": image_ref,
+            "omnigentVersion": "0.14.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {"readOnlyRoot": True, "mountedTools": True},
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+
+
+def _tool_launch_spec(image_ref: str) -> HostLaunchSpec:
+    return HostLaunchSpec.model_validate(
+        {
+            "executionPlanRef": "plan:one",
+            "stepExecutionId": "step-1",
+            "runtimeBindingId": "binding-1",
+            "hostLeaseRef": "host-lease:one",
+            "hostLeaseGeneration": 1,
+            "hostClassRef": "omnigent-opencode@1",
+            "imageRef": image_ref,
+            "serverEndpointRef": "default",
+            "serverUrl": "http://omnigent:8000",
+            "networkRef": "moonmind_default",
+            "limits": {"cpuMillis": 2000},
+            "runtime": {},
+            "correlationName": "mm-host-tools-recovery",
+            "workspaceAttachment": {
+                "kind": "volume",
+                "sourceRef": "ws",
+                "targetPath": "/workspaces/run",
+                "accessMode": "read-write",
+            },
+            "skillAttachment": {
+                "kind": "volume",
+                "sourceRef": "skills",
+                "targetPath": "/opt/moonmind-skills",
+                "accessMode": "read-only",
+            },
+            "toolAttachments": [
+                {
+                    "kind": "image",
+                    "sourceRef": f"image:{image_ref}",
+                    "targetPath": "/opt/moonmind-tools",
+                    "accessMode": "read-only",
+                    "cleanupRef": None,
+                    "toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64,
+                    "tools": [
+                        {
+                            "name": "docker",
+                            "version": "container-v1",
+                            "path": "bin/moonmind",
+                            "versionProbe": ["--help"],
+                        },
+                        {
+                            "name": "gh",
+                            "version": "2.76.2",
+                            "path": "bin/gh",
+                            "versionProbe": ["--version"],
+                        },
+                    ],
+                }
+            ],
+            "stateAttachment": {
+                "kind": "volume",
+                "sourceRef": "mm-host-state-test",
+                "targetPath": "/home/app/.omnigent",
+                "accessMode": "read-write",
+            },
+            "labels": {},
+        }
+    )
+
+
+class _ImageContentsBackend:
+    """Docker fake that answers from which local images own the tools."""
+
+    def __init__(self, *, present: set[str], with_tools: set[str]) -> None:
+        self.present = present
+        self.with_tools = with_tools
+        self.calls: list[list[str]] = []
+
+    async def run(self, argv, **_kwargs):
+        command = list(argv)
+        self.calls.append(command)
+        if command[1:3] == ["image", "inspect"]:
+            if command[3] in self.present:
+                return 0, "sha256:present", ""
+            return 1, "", "No such image"
+        if command[:2] == ["docker", "run"] and "test -x" in " ".join(command):
+            image = command[command.index("--entrypoint") + 2]
+            paths = command[command.index("--") + 1 :]
+            owned = image in self.with_tools and all(
+                path.startswith("/opt/moonmind-tools/bin/") for path in paths
+            )
+            return (0, "", "") if owned else (1, "", "")
+        return 0, ("container-id" if command[1] == "create" else ""), ""
+
+    def launched_image(self) -> str:
+        create = next(argv for argv in self.calls if argv[:2] == ["docker", "create"])
+        return create[create.index("--entrypoint") + 2]
+
+
+def _record_deployment_host(monkeypatch, tmp_path: Path, image_ref: str) -> None:
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "resolved.json")
+    )
+    for key in (
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "OMNIGENT_PI_HOST_IMAGE_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    store.save_resolved_state(
+        ResolvedOmnigentDeploymentState.model_validate(
+            {
+                "serverImageRef": "ghcr.io/omnigent-ai/omnigent-server@sha256:"
+                + "d" * 64,
+                "opencodeHostImageRef": image_ref,
+                "sharedHostImageRef": image_ref,
+                "details": {
+                    "hostImageProvenance": {
+                        image_ref: {
+                            "buildDigest": "sha256:" + "2" * 64,
+                            "version": "0.14.1",
+                        }
+                    }
+                },
+            }
+        )
+    )
+
+
+def _launcher(backend) -> DockerOmnigentHostLauncher:
+    class Scripts:
+        def build_entrypoint(self, **_kwargs):
+            return "exec true", {}
+
+    return DockerOmnigentHostLauncher(
+        backend=backend, runtime_scripts=Scripts(), server_url="http://omnigent:8000"
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_pinned_to_pre_tools_host_launches_updated_deployment_host(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A plan made before an update still runs on the updated host image.
+
+    The planned image is still cached locally but predates image-owned tools,
+    so launching it can only fail exact-host attestation. The deployment now
+    records a qualified same-repository image that owns the tools; the launch
+    recovers onto it instead of failing the workflow.
+    """
+
+    _record_deployment_host(monkeypatch, tmp_path, _TOOLED_HOST)
+    backend = _ImageContentsBackend(
+        present={_PRE_TOOLS_HOST, _TOOLED_HOST}, with_tools={_TOOLED_HOST}
+    )
+
+    result = await _launcher(backend).launch(
+        spec=_tool_launch_spec(_PRE_TOOLS_HOST),
+        host_class=_pinned_host_class(_PRE_TOOLS_HOST),
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    assert backend.launched_image() == _TOOLED_HOST
+    assert result["launchImageRef"] == _TOOLED_HOST
+
+
+@pytest.mark.asyncio
+async def test_plan_pinned_host_that_owns_its_tools_keeps_the_recorded_image(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """In-flight plans keep their recorded host when it satisfies the plan."""
+
+    _record_deployment_host(monkeypatch, tmp_path, _TOOLED_HOST)
+    backend = _ImageContentsBackend(
+        present={_PRE_TOOLS_HOST, _TOOLED_HOST},
+        with_tools={_PRE_TOOLS_HOST, _TOOLED_HOST},
+    )
+
+    await _launcher(backend).launch(
+        spec=_tool_launch_spec(_PRE_TOOLS_HOST),
+        host_class=_pinned_host_class(_PRE_TOOLS_HOST),
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    assert backend.launched_image() == _PRE_TOOLS_HOST
+
+
+@pytest.mark.asyncio
+async def test_current_deployment_host_launches_without_extra_tool_probe(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Steady state: no other qualified image exists, so nothing is probed.
+
+    When the deployment itself still records the planned image, there is no
+    better host to recover onto; exact-host attestation reports the precise
+    gap and the launch adds no container start of its own.
+    """
+
+    _record_deployment_host(monkeypatch, tmp_path, _PRE_TOOLS_HOST)
+    backend = _ImageContentsBackend(present={_PRE_TOOLS_HOST}, with_tools=set())
+
+    await _launcher(backend).launch(
+        spec=_tool_launch_spec(_PRE_TOOLS_HOST),
+        host_class=_pinned_host_class(_PRE_TOOLS_HOST),
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    assert backend.launched_image() == _PRE_TOOLS_HOST
+    assert not any("test -x" in " ".join(argv) for argv in backend.calls)
