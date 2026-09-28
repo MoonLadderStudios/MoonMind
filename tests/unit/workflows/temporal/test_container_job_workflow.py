@@ -199,6 +199,30 @@ async def test_backend_denial_becomes_nonretryable_application_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fail_closed_launch_is_not_retried_across_activity_boundary() -> None:
+    async def remove_and_fail(request):
+        raise ContainerJobBackendError(
+            ContainerJobFailureClass.LAUNCH,
+            "restricted-egress running launch evidence could not be persisted",
+        )
+
+    backend = type("Backend", (), {"start_container": staticmethod(remove_and_fail)})()
+    activities = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    inp = _input()
+    payload = {
+        "jobId": JOB_ID,
+        "ownershipToken": inp.ownership_token,
+        "request": inp.request.model_dump(mode="json", by_alias=True),
+    }
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await activities.container_job_start_container(payload)
+
+    assert excinfo.value.non_retryable
+    assert excinfo.value.type == "launch"
+
+
+@pytest.mark.asyncio
 async def test_resource_capacity_failure_crosses_activity_boundary() -> None:
     async def deny(request):
         raise ContainerJobBackendError(
