@@ -11,10 +11,10 @@
 #   ./tools/first_run_journey_3938.sh --upgrade  # eligible upgrade
 #
 # Fresh: tools/single_user_journey_checks.py reads the settings/preset
-# catalogs, submits one task with the dashboard's default selections (and
-# redelivers it), observes it running, attaches an artifact, and dispatches
-# a recurring definition; the browser opens the built dashboard on that work;
-# the workflow worker restarts; both executions are canceled and must reach
+# catalogs, submits one task with the dashboard's default repository as a
+# deferred start (and redelivers it), attaches an artifact, and dispatches a
+# recurring definition; the browser opens the built dashboard on that work;
+# the workflow worker restarts; the deferred task is canceled and must reach
 # the canceled state; a synthetic credential is bound through an instance
 # setting; everything saved is read back; the binding is released.
 #
@@ -25,8 +25,9 @@
 # the upgraded instance.
 #
 # Any failed, missing, or unobserved step exits non-zero. There is no smoke
-# mode. Completing a model-backed task needs a provider credential, which
-# this credential-free run does not have; it cancels its work instead.
+# mode. A model-backed step needs a provider credential, which this
+# credential-free run does not have, so no step runs to completion: the task
+# is deferred and canceled, and the recurring run is observed as dispatched.
 #
 # Teardown is project-owned (down --remove-orphans on this project only; no
 # global prune). Credential-bearing named volumes are re-scoped to the
