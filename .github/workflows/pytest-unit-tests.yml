@@ -77,9 +77,22 @@ jobs:
       - name: Compute changed files
         id: changed-files
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          bash tools/ci/compute_changed_files.sh /tmp/changed-files.txt | tee /tmp/changed-files-resolution.txt
+          # Manual and scheduled runs carry no event base, so deployment
+          # safety compares against the default-branch merge base, the same
+          # diff a pull request would validate. An unresolvable base stays
+          # unknown and blocks below.
+          base_sha=""
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            default_branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch || true)"
+            if [[ -n "$default_branch" ]]; then
+              base_sha="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${default_branch}...${GITHUB_SHA}" --jq .merge_base_commit.sha || true)"
+            fi
+          fi
+          bash tools/ci/compute_changed_files.sh /tmp/changed-files.txt $base_sha | tee /tmp/changed-files-resolution.txt
           cat /tmp/changed-files-resolution.txt >> "$GITHUB_OUTPUT"
           echo "Changed files:"
           sed 's/^/  - /' /tmp/changed-files.txt || true

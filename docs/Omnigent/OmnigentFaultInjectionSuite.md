@@ -187,7 +187,10 @@ replay corpus.
     and worker images with `PYTHONPATH=/app:/src` — production modules resolve
     from the image's own `/app` install while the harness resolves from the
     mount (`tools/run_omnigent_fault_image_smoke.py` is only a local wrapper) —
-    so image authority drift (#3694) fails the smoke. The driver additionally
+    so image authority drift (#3694) fails the smoke. The image is the
+    dispatched `app_image` or the `MOONMIND_APP_IMAGE` repository variable;
+    without either, the workflow pins the digest of the app image published
+    for the checked-out commit (`sha-<commit>`, else `latest`). The driver additionally
     fails unless production imports resolve under `/app`, so checkout sources
     can never mask a broken image. Each role leg
     resolves that role's real startup module in the image and the report records

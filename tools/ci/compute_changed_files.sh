@@ -7,11 +7,14 @@
 # shallow checkout plus explicit fetches of the exact base/head commits.
 #
 # Usage:
-#   bash tools/ci/compute_changed_files.sh [OUTPUT_FILE]
+#   bash tools/ci/compute_changed_files.sh [OUTPUT_FILE] [BASE_SHA]
 #
 # Behavior:
 #   - Writes the newline-delimited changed-file list to OUTPUT_FILE
 #     (default: /tmp/changed-files.txt).
+#   - BASE_SHA, when given, replaces the event-derived base and diffs it
+#     against GITHUB_SHA (or the checked-out HEAD). Callers that need an exact
+#     diff on a manual or scheduled run pass the default-branch merge base.
 #   - Rename sources are included alongside destinations: `git diff
 #     --name-only` reports only the new path for a rename, so renaming
 #     `docs/Guide.md` to `docs/Guide.txt` would otherwise hide the removed
@@ -31,6 +34,7 @@
 set -euo pipefail
 
 OUTPUT_FILE="${1:-/tmp/changed-files.txt}"
+EXPLICIT_BASE_SHA="${2:-}"
 mkdir -p "$(dirname "${OUTPUT_FILE}")"
 
 ensure_commit_available() {
@@ -44,7 +48,10 @@ ensure_commit_available() {
 }
 
 # Classify the event into a base/head pair. Empty values mean "unknown".
-if ! read -r base_sha head_sha < <(
+if [[ -n "${EXPLICIT_BASE_SHA}" ]]; then
+  base_sha="${EXPLICIT_BASE_SHA}"
+  head_sha="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
+elif ! read -r base_sha head_sha < <(
   python3 - <<'PY'
 import json
 import os

@@ -12,21 +12,14 @@ updates:
       - "dependencies"
       - "python"
 
-  - package-ecosystem: "pip"
-    directory: "/services/orchestrator"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:15"
-      timezone: "UTC"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "python"
-      - "orchestrator"
-
+  # There is no root Dockerfile; list each directory whose Dockerfile pins a
+  # literal base image. The Omnigent host Dockerfiles take their base image
+  # from a build argument, which Dependabot cannot update.
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/api_service"
+      - "/deploy/controller"
+      - "/deploy/moonmind-controller"
     schedule:
       interval: "weekly"
       day: "monday"
