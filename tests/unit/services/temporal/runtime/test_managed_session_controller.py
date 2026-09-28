@@ -4368,6 +4368,93 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
 
 
 @pytest.mark.asyncio
+async def test_controller_reused_live_session_checkout_gets_a_commit_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session that survived the upgrade is reused, not relaunched.
+
+    Its checkout was prepared by the previous code and has no identity, so
+    the idempotent fast return must still apply it; otherwise every launch
+    keeps reusing the container while ``git commit`` exits 128.
+    """
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.git_identity import DEFAULT_GIT_USER_NAME
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", None)
+    monkeypatch.setattr(settings.workflow, "git_user_email", None)
+    monkeypatch.setattr(
+        "moonmind.omnigent.git_identity.os.chown",
+        lambda *_args, **_kwargs: None,
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "task-1" / "repo"
+    workspace_path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(workspace_path)], check=True)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/tmp/codex-home",
+        imageRef="img",
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath=request.workspace_path,
+            sessionWorkspacePath=request.session_workspace_path,
+            artifactSpoolPath=request.artifact_spool_path,
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        if command == ("docker", "inspect", "-f", "{{.Id}}", "ctr-1"):
+            return 0, "ctr-1\n", ""
+        if command == ("docker", "inspect", "-f", "{{.Image}}", "ctr-1"):
+            return 0, "sha256:current\n", ""
+        if command == ("docker", "image", "inspect", "-f", "{{.Id}}", "img"):
+            return 0, "sha256:current\n", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    handle = await controller.launch_session(request)
+
+    assert handle.session_state.container_id == "ctr-1"
+    configured = subprocess.run(
+        ["git", "-C", str(workspace_path), "config", "--local", "--get", "user.name"],
+        capture_output=True,
+        text=True,
+    )
+    assert configured.stdout.strip() == DEFAULT_GIT_USER_NAME
+
+
+@pytest.mark.asyncio
 async def test_controller_authorizes_replacement_at_container_runtime_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
