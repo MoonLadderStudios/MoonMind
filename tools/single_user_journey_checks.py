@@ -34,6 +34,16 @@ recreated stack, can verify what an earlier phase saved):
 ``release``
     Remove the setting override so later work does not use the synthetic
     token.
+``vector_free``
+    MoonLadderStudios/MoonMind#4114: prove the running candidate starts and
+    stays vector-free with no vector configuration. Read live ``/healthz``
+    (no Qdrant/vector backend keys), read live ``/openapi.json`` (no
+    vector-backend path), and submit one task-envelope request carrying an
+    explicit retired vector requirement (see ``vector_free_retired_probe``).
+    That submission must be rejected with 422 naming the retirement (4105)
+    and must create no execution identity. The ordinary vector-free work
+    itself is exercised by ``populate`` on the same instance; this phase
+    adds only the retirement-boundary proof.
 ``conversion``
     After an upgrade from an account-era release, read the API startup log
     (``--api-log``) and require the guarded single-user conversion to have
@@ -586,6 +596,109 @@ def verify(api: Api, state: dict[str, Any]) -> None:
     verify_preset(api, state)
 
 
+_VECTOR_SERVICE_NAME_RE = re.compile(
+    r"qdrant|milvus|vector[-_ ]?(db|store|service|index)|embeddings?|pgvector",
+    re.IGNORECASE,
+)
+
+
+def vector_free_retired_probe() -> dict[str, Any]:
+    """Task-envelope payload carrying an explicit retired vector requirement.
+
+    MoonLadderStudios/MoonMind#4114: the shape mirrors the hermetic
+    rejection contract (``reject_retired_vector_fields`` from #4105) so the
+    live ``POST /api/executions`` request boundary must reject it with 422
+    before scheduling. The unit suite imports this exact payload and asserts
+    the production admission path raises (4105); the live phase below
+    asserts the same over HTTP with no consequential execution identity.
+    """
+
+    return {
+        "type": "workflow",
+        "payload": {
+            "rag": {"collections": ["docs"], "required": True},
+            "workflow": {
+                "instructions": "vector-free journey retired probe",
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "title": "Step",
+                        "type": "skill",
+                        "skill": {
+                            "id": "noop",
+                            "inputs": {},
+                            "inputContractDigest": "sha256:saved",
+                        },
+                    }
+                ],
+            },
+        },
+    }
+
+
+def vector_free(api: Api, state: dict[str, Any]) -> None:
+    """Prove the running instance is vector-free at its live boundaries."""
+
+    _, raw_health = api.request("GET", "/healthz", expect=(200,))
+    try:
+        health = json.loads(raw_health or b"null")
+    except json.JSONDecodeError as exc:
+        raise JourneyFailure("/healthz response is not JSON") from exc
+    if not isinstance(health, dict) or health.get("status") != "ok":
+        raise JourneyFailure(f"/healthz is not healthy: {health!r}")
+    if any(
+        key in json.dumps(health).lower()
+        for key in ("qdrant", "vector_store", "vector-store", "vectorstore")
+    ):
+        raise JourneyFailure(f"/healthz wires a retired vector backend: {health!r}")
+    log("healthz ok with no vector backend")
+
+    _, raw_spec = api.request("GET", "/openapi.json", expect=(200,))
+    try:
+        spec = json.loads(raw_spec or b"null")
+    except json.JSONDecodeError as exc:
+        raise JourneyFailure("/openapi.json response is not JSON") from exc
+    paths = spec.get("paths", {}) if isinstance(spec, dict) else {}
+    if not isinstance(paths, dict) or not paths:
+        raise JourneyFailure("/openapi.json exposes no paths")
+    offenders = [path for path in paths if _VECTOR_SERVICE_NAME_RE.search(str(path))]
+    if offenders:
+        raise JourneyFailure(
+            f"served API contract exposes vector-backend paths: {offenders}"
+        )
+    log(f"openapi ok with no vector-backend path ({len(paths)} paths)")
+
+    probe = vector_free_retired_probe()
+    _, raw_error = api.request(
+        "POST", "/api/executions", body=probe, expect=(422,)
+    )
+    text = (raw_error or b"").decode(errors="replace")
+    if not any(
+        marker in text for marker in ("4105", "retired", "vector", "Vector")
+    ):
+        raise JourneyFailure(
+            "retired vector submission was rejected without the retirement "
+            f"diagnostic: {text[:800]!r}"
+        )
+    try:
+        error = json.loads(raw_error or b"null")
+    except json.JSONDecodeError:
+        error = {}
+    if isinstance(error, dict):
+        for key in ("workflowId", "workflow_id", "workflowid", "runId"):
+            if error.get(key):
+                raise JourneyFailure(
+                    "retired vector submission created an execution identity "
+                    f"despite rejection: {key}={error.get(key)!r}"
+                )
+    state["vector_free"] = {
+        "healthz": "ok",
+        "openapiPaths": len(paths),
+        "retiredRejected": True,
+    }
+    log("retired vector submission rejected with no execution identity")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -596,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
             "credential",
             "verify",
             "release",
+            "vector_free",
             "conversion",
         ),
     )
@@ -630,6 +744,8 @@ def main(argv: list[str] | None = None) -> int:
             credential(api, state, label=args.label)
         elif args.phase == "verify":
             verify(api, state)
+        elif args.phase == "vector_free":
+            vector_free(api, state)
         else:
             release(api, state)
     except JourneyFailure as exc:
