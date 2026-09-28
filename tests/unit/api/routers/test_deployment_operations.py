@@ -16,12 +16,10 @@ from api_service.api.routers.deployment_operations import (
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.services.deployment_operations import (
-    DeploymentOperationError,
     DeploymentOperationsService,
     DeploymentRecentAction,
     RollbackEligibilityDecision,
     RollbackImageTarget,
-    _ControllerUnavailable,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_tools import (
@@ -619,153 +617,513 @@ def test_rollback_submission_requires_explicit_confirmation(
     assert execution_service.requests == []
 
 
-def _update_submission() -> "DeploymentUpdateSubmission":
-    from api_service.services.deployment_operations import DeploymentUpdateSubmission
+class _TemporalStopped:
+    """Execution service stand-in for a stopped Temporal/workflow engine."""
 
-    return DeploymentUpdateSubmission(
-        stack="moonmind",
-        repository="ghcr.io/moonladderstudios/moonmind",
-        reference="20260425.1234",
-        mode="changed_services",
-        remove_orphans=True,
-        wait=True,
-        run_smoke_check=True,
-        pause_work=False,
-        prune_old_images=False,
-        reason="Update to the latest tested MoonMind build",
-        requested_by_user_id=uuid4(),
-    )
+    async def create_execution(self, **_kwargs: object) -> object:
+        raise AssertionError("a controller-owned update must not create a workflow")
+
+    async def list_executions(self, **_kwargs: object) -> object:
+        raise ConnectionError("temporal is stopped")
 
 
-def test_update_prefers_standalone_controller_over_legacy_workflow(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "api_service.services.deployment_operations.submit_controller_update",
-        lambda **kwargs: {"operationId": "op-1", "status": "staged"},
-    )
-    client, execution_service = admin_client
-    response = client.post(
-        "/api/v1/operations/deployment/update",
-        json=_valid_update_payload(),
-    )
-
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["workflowId"] == "op-1"
-    assert payload["taskId"] == "op-1"
-    assert payload["status"] == "QUEUED"
-    # The same controller operation is submitted instead of a second updater:
-    # no Temporal workflow is created while the controller owns the stack.
-    assert execution_service.requests == []
+_CONTROLLER_DIR = Path(__file__).resolve().parents[4] / "deploy" / "controller"
 
 
-def test_controller_unavailable_falls_back_to_legacy_workflow(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
+def _load_controller_module(name: str, monkeypatch: pytest.MonkeyPatch):
+    import importlib.util
+    import sys
 
-    monkeypatch.setattr(
-        "api_service.services.deployment_operations.submit_controller_update",
-        lambda **kwargs: (_ for _ in ()).throw(
-            _ControllerUnavailable("down")
-        ),
-    )
-    service = DeploymentOperationsService()
-    policy = service.get_policy("moonmind")
-    execution_service = _FakeExecutionService()
-    queued = asyncio.run(
-        service.queue_update(
-            execution_service=execution_service,
-            policy=policy,
-            submission=_update_submission(),
+    monkeypatch.syspath_prepend(str(_CONTROLLER_DIR))
+    for module in ("redact", "mounts", "lock", "record", "engine", "server"):
+        monkeypatch.delitem(sys.modules, module, raising=False)
+    spec = importlib.util.spec_from_file_location(name, _CONTROLLER_DIR / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _RealController:
+    """The shipped deploy/controller endpoint on its state-dir Unix socket.
+
+    The API reaches it exactly as in a deployment: through the controller
+    state directory (socket, deployment-owned secret, durable records).
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, applier_factory) -> None:
+        import shutil
+        import tempfile
+        import threading
+
+        # Short path: AF_UNIX socket paths are length-limited.
+        self.state_dir = Path(tempfile.mkdtemp(prefix="mmctl", dir="/tmp"))
+        self._cleanup = lambda: shutil.rmtree(self.state_dir, ignore_errors=True)
+        (self.state_dir / "secrets").mkdir()
+        (self.state_dir / "secrets" / "controller-bearer").write_text("ctl-secret\n")
+        self.engine = _load_controller_module("engine", monkeypatch)
+        self.record = _load_controller_module("record", monkeypatch)
+        self.server = _load_controller_module("server", monkeypatch)
+        self.store = self.record.OperationStore(self.state_dir)
+        self.applied: list[str] = []
+        self.app = self.server.build_app(
+            store=self.store, secret="ctl-secret", applier=applier_factory(self)
         )
-    )
-    assert queued["status"] == "QUEUED"
-    assert len(execution_service.requests) == 1
+        self.httpd = self.server.make_unix_server(
+            str(self.state_dir / "controller.sock"), self.app
+        )
+        self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self._thread.start()
+        monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(self.state_dir))
+
+    def stop(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self._thread.join(timeout=10)
+
+    def close(self) -> None:
+        self.app.join_applies(timeout=10)
+        self.stop()
+        self._cleanup()
 
 
-def test_controller_ownership_never_forks_legacy_workflow(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    def _owned(**kwargs: object) -> dict[str, object]:
-        raise DeploymentOperationError(
-            "deployment_controller_owned", "controller owns the stack"
+def _installs(controller: _RealController):
+    def apply(operation: dict) -> None:
+        controller.applied.append(operation["operationId"])
+        controller.store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
         )
 
-    monkeypatch.setattr(
-        "api_service.services.deployment_operations.submit_controller_update", _owned
-    )
-    service = DeploymentOperationsService()
-    policy = service.get_policy("moonmind")
-    execution_service = _FakeExecutionService()
-    with pytest.raises(DeploymentOperationError):
-        asyncio.run(
-            service.queue_update(
-                execution_service=execution_service,
-                policy=policy,
-                submission=_update_submission(),
+    return apply
+
+
+@pytest.fixture(autouse=True)
+def _no_installed_controller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Isolate every test from any controller state on the machine running it.
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(tmp_path / "no-controller"))
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+    monkeypatch.delenv("MOONMIND_CONTROLLER_SECRET_FILE", raising=False)
+
+
+@pytest.fixture
+def temporal_stopped_admin() -> Iterator[TestClient]:
+    app = FastAPI()
+    app.include_router(router)
+    _override_user(app, is_superuser=True)
+    app.dependency_overrides[_get_temporal_execution_service] = _TemporalStopped
+    with TestClient(app) as client:
+        yield client
+
+
+_IMAGE = "ghcr.io/moonladderstudios/moonmind:20260425.1234"
+
+
+def test_update_submits_to_the_real_controller_with_temporal_stopped(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller = _RealController(monkeypatch, _installs)
+    try:
+        response = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        )
+        assert response.status_code == 202, response.text
+        payload = response.json()
+        controller.app.join_applies(timeout=10)
+        [record] = controller.store.list_terminal(stack="moonmind")
+        # The response identifies the controller's own durable operation;
+        # no workflow identity is manufactured for it.
+        assert payload["owner"] == "controller"
+        assert payload["operationId"] == record["operationId"]
+        assert payload["desiredImage"] == _IMAGE
+        assert payload["workflowId"] is None
+        assert payload["taskId"] is None
+        assert controller.applied == [record["operationId"]]
+
+        state = temporal_stopped_admin.get(
+            "/api/v1/operations/deployment/stacks/moonmind"
+        )
+        assert state.status_code == 200
+        latest = state.json()["latestAction"]
+        assert latest["operationId"] == record["operationId"]
+        assert latest["status"] == "SUCCEEDED"
+        assert latest["requestedImage"] == _IMAGE
+        assert latest["resolvedDigest"] == _IMAGE
+        assert latest["runDetailUrl"] is None
+
+        detail = temporal_stopped_admin.get(
+            f"/api/v1/operations/deployment/controller-operations/{record['operationId']}"
+        )
+        assert detail.status_code == 200
+        assert detail.json()["status"] == "SUCCEEDED"
+        assert detail.json()["installedImage"] == _IMAGE
+        assert detail.json()["observedVia"] == "controller"
+        assert "ctl-secret" not in state.text + detail.text + response.text
+    finally:
+        controller.close()
+
+
+def test_duplicate_ui_submission_reattaches_to_one_mutation_owner(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    release = threading.Event()
+
+    def blocking(controller: _RealController):
+        def apply(operation: dict) -> None:
+            controller.applied.append(operation["operationId"])
+            assert release.wait(timeout=10)
+            controller.store.confirm_installed(
+                operation["operationId"], image=operation["desired"]["image"]
             )
+
+        return apply
+
+    controller = _RealController(monkeypatch, blocking)
+    try:
+        first = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
         )
-    assert execution_service.requests == []
+        # Browser refresh / lost response: the same request again.
+        second = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        )
+        assert first.status_code == second.status_code == 202
+        assert first.json()["operationId"] == second.json()["operationId"]
+        # A changed target while the first owns the stack is refused and
+        # names the owner instead of queueing a competing writer.
+        changed = _valid_update_payload()
+        changed["image"] = {
+            "repository": "ghcr.io/moonladderstudios/moonmind",
+            "reference": "stable",
+        }
+        conflict = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=changed
+        )
+        assert conflict.status_code == 409, conflict.text
+        assert conflict.json()["detail"]["code"] == "deployment_controller_busy"
+        assert conflict.json()["detail"]["operationId"] == first.json()["operationId"]
+        running = temporal_stopped_admin.get(
+            "/api/v1/operations/deployment/stacks/moonmind"
+        ).json()["latestAction"]
+        assert running["status"] in {"QUEUED", "RUNNING"}
+        release.set()
+        controller.app.join_applies(timeout=10)
+        assert controller.applied == [first.json()["operationId"]]
+    finally:
+        release.set()
+        controller.close()
 
 
-def test_recent_actions_observe_the_same_controller_operation(
+def test_api_replacement_recovers_progress_without_repeating_the_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import asyncio
+    controller = _RealController(monkeypatch, _installs)
 
-    monkeypatch.setattr(
-        "api_service.services.deployment_operations.submit_controller_update",
-        lambda **kwargs: {"operationId": "op-9", "status": "applying"},
-    )
-    monkeypatch.setattr(
-        "api_service.services.deployment_operations.observe_controller_operation",
-        lambda **kwargs: {"operationId": "op-9", "status": "succeeded"},
-    )
-    service = DeploymentOperationsService()
-    policy = service.get_policy("moonmind")
-    asyncio.run(
-        service.queue_update(
-            execution_service=_FakeExecutionService(),
-            policy=policy,
-            submission=_update_submission(),
+    def fresh_api() -> TestClient:
+        app = FastAPI()
+        app.include_router(router)
+        _override_user(app, is_superuser=True)
+        app.dependency_overrides[_get_temporal_execution_service] = _TemporalStopped
+        return TestClient(app)
+
+    try:
+        with fresh_api() as before:
+            submitted = before.post(
+                "/api/v1/operations/deployment/update", json=_valid_update_payload()
+            ).json()
+        controller.app.join_applies(timeout=10)
+        # A replaced API process (new app, new service instance) reconnects
+        # to the same durable operation and never re-submits it.
+        with fresh_api() as after:
+            latest = after.get("/api/v1/operations/deployment/stacks/moonmind").json()[
+                "latestAction"
+            ]
+        assert latest["operationId"] == submitted["operationId"]
+        assert latest["status"] == "SUCCEEDED"
+        assert controller.applied == [submitted["operationId"]]
+    finally:
+        controller.close()
+
+
+def test_explicit_retry_after_exhaustion_works_and_preserves_first_failure(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    behaviour = {"fail": True}
+
+    def flaky(controller: _RealController):
+        def apply(operation: dict) -> None:
+            if behaviour["fail"]:
+                controller.store.record_attempt_error(
+                    operation["operationId"],
+                    error="apply failed: up failed (exit 1) init-db exited 1",
+                )
+                raise controller.engine.ApplyError("up", 1, "init-db exited 1")
+            controller.store.confirm_installed(
+                operation["operationId"], image=operation["desired"]["image"]
+            )
+
+        return apply
+
+    controller = _RealController(monkeypatch, flaky)
+    try:
+        submitted = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        ).json()
+        controller.app.join_applies(timeout=10)
+        operation_id = submitted["operationId"]
+        failed = temporal_stopped_admin.get(
+            f"/api/v1/operations/deployment/controller-operations/{operation_id}"
+        ).json()
+        assert failed["status"] == "FAILED"
+        assert failed["retryPermitted"] is True
+        assert "init-db exited 1" in failed["errorSummary"]
+        assert any("init-db exited 1" in line for line in failed["logLines"])
+
+        behaviour["fail"] = False
+        retried = temporal_stopped_admin.post(
+            f"/api/v1/operations/deployment/controller-operations/{operation_id}/retry"
         )
+        assert retried.status_code == 202, retried.text
+        assert retried.json()["operationId"] == operation_id
+        controller.app.join_applies(timeout=10)
+        recovered = temporal_stopped_admin.get(
+            f"/api/v1/operations/deployment/controller-operations/{operation_id}"
+        ).json()
+        assert recovered["status"] == "SUCCEEDED"
+        assert recovered["installedImage"] == _IMAGE
+        # The first failure stays visible after the successful retry.
+        assert recovered["errorSummary"].startswith("attempt 1: apply failed")
+    finally:
+        controller.close()
+
+
+def test_non_admin_cannot_retry_a_controller_operation(
+    user_client: TestClient,
+) -> None:
+    response = user_client.post(
+        "/api/v1/operations/deployment/controller-operations/op-1/retry"
     )
-    actions = service.recent_actions("moonmind")
-    assert len(actions) == 1
-    assert actions[0].run_id == "ctl_op-9"
-    # The status consumer observes the controller record, not a workflow.
-    assert actions[0].status == "SUCCEEDED"
+    assert response.status_code == 403
 
 
-def test_stack_state_surfaces_durable_controller_operations(
+def test_failed_postcheck_and_history_upload_failure_are_distinct_from_success(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def verified_with_gaps(controller: _RealController):
+        def apply(operation: dict) -> None:
+            op_id = operation["operationId"]
+            image = operation["desired"]["image"]
+            if image.endswith(":stable"):
+                controller.store.confirm_installed(op_id, image=image)
+                controller.store.record_verification(
+                    op_id,
+                    name="operator-access:http://127.0.0.1:7000",
+                    status="failed",
+                    detail="healthz returned 502",
+                )
+            else:
+                controller.store.confirm_installed(op_id, image=image)
+                controller.store.note_reporting_failure(
+                    op_id, error="application history import failed: artifact store down"
+                )
+
+        return apply
+
+    controller = _RealController(monkeypatch, verified_with_gaps)
+    try:
+        temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        )
+        controller.app.join_applies(timeout=10)
+        stable = _valid_update_payload()
+        stable["image"] = {
+            "repository": "ghcr.io/moonladderstudios/moonmind",
+            "reference": "stable",
+        }
+        temporal_stopped_admin.post("/api/v1/operations/deployment/update", json=stable)
+        controller.app.join_applies(timeout=10)
+        actions = temporal_stopped_admin.get(
+            "/api/v1/operations/deployment/stacks/moonmind"
+        ).json()["recentActions"]
+        by_image = {action["requestedImage"]: action for action in actions}
+        postcheck = by_image["ghcr.io/moonladderstudios/moonmind:stable"]
+        assert postcheck["status"] == "PARTIALLY_VERIFIED"
+        assert any("healthz returned 502" in line for line in postcheck["logLines"])
+        history = by_image[_IMAGE]
+        # A reporting/history failure cannot change the confirmed outcome.
+        assert history["status"] == "SUCCEEDED"
+        assert any("artifact store down" in line for line in history["logLines"])
+    finally:
+        controller.close()
+
+
+def test_installed_controller_unavailable_is_a_distinct_result_never_a_workflow(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller = _RealController(monkeypatch, _installs)
+    try:
+        # The controller recorded work, so it keeps recovery authority.
+        controller.store.begin(stack="moonmind", desired_image="img:0", source_revision="")
+        controller.stop()
+        response = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        )
+        assert response.status_code == 503, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "deployment_controller_unavailable"
+        assert "bootstrap.py" in detail["message"]
+        assert "ctl-secret" not in response.text
+    finally:
+        controller._cleanup()
+
+
+def test_controller_rejecting_the_api_credential_is_access_denied(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller = _RealController(monkeypatch, _installs)
+    try:
+        (controller.state_dir / "secrets" / "controller-bearer").write_text("stale\n")
+        response = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        )
+        assert response.status_code == 502, response.text
+        assert response.json()["detail"]["code"] == "deployment_controller_unauthorized"
+        assert "stale" not in response.text
+        assert controller.store.list_open() == []
+    finally:
+        controller.close()
+
+
+def test_unanswered_submission_is_uncertain_not_failed_or_forked(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from api_service.services import deployment_operations as service_module
+
+    controller = _RealController(monkeypatch, _installs)
+    original = service_module._ControllerConnection.getresponse
+
+    def lost_response(self):  # the request was sent; the reply never arrives
+        original(self).read()
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(service_module._ControllerConnection, "getresponse", lost_response)
+    try:
+        response = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        )
+        assert response.status_code == 504, response.text
+        assert response.json()["detail"]["code"] == "deployment_controller_uncertain"
+        monkeypatch.setattr(service_module._ControllerConnection, "getresponse", original)
+        controller.app.join_applies(timeout=10)
+        # The accepted operation is still observable and was applied once.
+        latest = temporal_stopped_admin.get(
+            "/api/v1/operations/deployment/stacks/moonmind"
+        ).json()["latestAction"]
+        assert latest["status"] == "SUCCEEDED"
+        assert len(controller.applied) == 1
+    finally:
+        controller.close()
+
+
+def test_controller_record_stays_readable_while_the_controller_is_down(
+    temporal_stopped_admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller = _RealController(monkeypatch, _installs)
+    try:
+        submitted = temporal_stopped_admin.post(
+            "/api/v1/operations/deployment/update", json=_valid_update_payload()
+        ).json()
+        controller.app.join_applies(timeout=10)
+        controller.stop()
+        detail = temporal_stopped_admin.get(
+            "/api/v1/operations/deployment/controller-operations/"
+            f"{submitted['operationId']}"
+        )
+        assert detail.status_code == 200
+        assert detail.json()["observedVia"] == "record"
+        assert detail.json()["status"] == "SUCCEEDED"
+        missing = temporal_stopped_admin.get(
+            "/api/v1/operations/deployment/controller-operations/..%2Fsecrets"
+        )
+        assert missing.status_code in {404, 422}
+    finally:
+        controller._cleanup()
+
+
+def test_bootstrap_that_never_started_keeps_the_transitional_workflow_path(
+    admin_client: tuple[TestClient, _FakeExecutionService],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import json as _json
-
-    operations_dir = tmp_path / "operations"
-    operations_dir.mkdir()
-    (operations_dir / "op-7.json").write_text(
-        _json.dumps(
-            {
-                "operationId": "op-7",
-                "stack": "moonmind",
-                "status": "succeeded",
-                "desired": {"image": "img:7", "reason": "host path"},
-                "installed": {"image": "img:7", "confirmedAt": "t"},
-                "createdAt": "t2",
-                "updatedAt": "t3",
-            }
-        )
+    # `bootstrap.py install` wrote a secret, but no verified image could
+    # start a controller and it owns no operation: the same transitional
+    # rule as the host entrypoint applies until the image is published.
+    state_dir = tmp_path / "controller"
+    (state_dir / "secrets").mkdir(parents=True)
+    (state_dir / "secrets" / "controller-bearer").write_text("x\n")
+    (state_dir / "controller-image.json").write_text('{"verified": false}')
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(state_dir))
+    client, execution_service = admin_client
+    response = client.post(
+        "/api/v1/operations/deployment/update", json=_valid_update_payload()
     )
-    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(tmp_path))
-    service = DeploymentOperationsService()
-    actions = service.recent_actions("moonmind")
-    assert [(action.run_id, action.status) for action in actions] == [
-        ("ctl_op-7", "SUCCEEDED")
+    assert response.status_code == 202, response.text
+    assert response.json()["owner"] == "legacy_workflow"
+    assert len(execution_service.requests) == 1
+
+
+def test_historical_workflow_actions_stay_readable_beside_controller_actions(
+    admin_client: tuple[TestClient, _FakeExecutionService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _RealController(monkeypatch, _installs)
+    client, execution_service = admin_client
+    execution_service.execution_items = [
+        SimpleNamespace(
+            workflow_id="mm:workflow-history",
+            run_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            owner_id="admin@example.com",
+            state="completed",
+            close_status="completed",
+            parameters={
+                "workflow": {
+                    "operation": {"kind": "update"},
+                    "plan": [
+                        {
+                            "tool": {
+                                "name": DEPLOYMENT_UPDATE_TOOL_NAME,
+                                "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
+                            },
+                            "inputs": {
+                                "stack": "moonmind",
+                                "image": {
+                                    "repository": "ghcr.io/moonladderstudios/moonmind",
+                                    "reference": "20260101.0001",
+                                },
+                                "mode": "changed_services",
+                            },
+                        }
+                    ],
+                }
+            },
+            memo={},
+            artifact_refs=[],
+            started_at="2026-01-01T00:00:00Z",
+            closed_at="2026-01-01T00:04:00Z",
+        )
     ]
+    try:
+        client.post("/api/v1/operations/deployment/update", json=_valid_update_payload())
+        controller.app.join_applies(timeout=10)
+        actions = client.get("/api/v1/operations/deployment/stacks/moonmind").json()[
+            "recentActions"
+        ]
+        assert actions[0]["operationId"]
+        assert actions[-1]["runDetailUrl"] == "/workflows/mm:workflow-history"
+        assert actions[-1]["operationId"] is None
+        assert execution_service.requests == []
+    finally:
+        controller.close()

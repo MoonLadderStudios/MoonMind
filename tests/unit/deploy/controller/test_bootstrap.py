@@ -29,6 +29,25 @@ def test_bootstrap_install_writes_compose_project_and_secret(
     assert len(secret_file.read_text().strip()) >= 32
 
 
+def test_bootstrap_install_records_the_served_deployment_checkout(
+    controller_path, tmp_path
+):
+    # Target-less Operations submissions derive their Compose target from
+    # this checkout inside the controller container.
+    bootstrap = load("bootstrap")
+    repo = tmp_path / "MoonMind"
+    repo.mkdir()
+    state = tmp_path / "state"
+    assert (
+        bootstrap.main(
+            ["install", "--state-dir", str(state), "--repo", str(repo)], env={}
+        )
+        == 0
+    )
+    rendered = (state / "controller-compose.yaml").read_text()
+    assert f'MOONMIND_CONTROLLER_TARGET_DIR: "{repo.resolve()}"' in rendered
+
+
 def test_bootstrap_update_serializes_against_active_mutation(
     controller_path, tmp_path
 ):

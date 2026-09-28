@@ -78,6 +78,7 @@ def test_submit_status_and_retry_round_trip(controller_path, tmp_path):
         )
         assert status == 202, created
         op_id = created["operationId"]
+        harness.app.join_applies(timeout=10)
         assert harness.applied == [op_id]
         status, fetched = harness.call(
             "GET", f"/v1/operations/{op_id}", secret="test-secret"
@@ -89,6 +90,7 @@ def test_submit_status_and_retry_round_trip(controller_path, tmp_path):
         )
         assert status == 202
         assert retried["attemptGroup"] == 2
+        harness.app.join_applies(timeout=10)
     finally:
         harness.close()
 
@@ -140,22 +142,16 @@ def test_internal_errors_do_not_expose_exception_detail(controller_path, tmp_pat
     thread = threading.Thread(target=harness_httpd.serve_forever, daemon=True)
     thread.start()
     try:
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/v1/operations",
-            data=json.dumps(
-                {"stack": "moonmind", "desiredImage": "img", "sourceRevision": "r"}
-            ).encode(),
-            method="POST",
-            headers={"Authorization": "Bearer test-secret"},
+        status, created = _post_operation(
+            port, {"stack": "moonmind", "desiredImage": "img", "sourceRevision": "r"}
         )
-        try:
-            with urllib.request.urlopen(request, timeout=10):
-                raise AssertionError("expected a 500 from the failing applier")
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 500
-            payload = json.loads(exc.read().decode() or "{}")
-            assert "boom" not in json.dumps(payload)
-            assert payload.get("error") == "internal error"
+        assert status == 202, created
+        app.join_applies(timeout=10)
+        status, fetched = _get(port, f"/v1/operations/{created['operationId']}")
+        assert status == 200
+        assert fetched["status"] == "failed"
+        assert "boom" not in json.dumps(fetched)
+        assert "RuntimeError" in fetched["errorSummary"]
     finally:
         harness_httpd.shutdown()
         thread.join(timeout=10)
@@ -292,7 +288,8 @@ def test_submit_retries_transient_failures_within_a_bounded_budget(
         with urllib.request.urlopen(request, timeout=10) as response:
             assert response.status == 202
             created = json.loads(response.read().decode() or "{}")
-        assert created["status"] == "succeeded"
+        app.join_applies(timeout=10)
+        assert store.load(created["operationId"])["status"] == "succeeded"
         assert calls["count"] == 3
     finally:
         harness_httpd.shutdown()
@@ -328,11 +325,9 @@ def test_submit_reaches_terminal_failed_after_the_retry_budget(
             method="POST",
             headers={"Authorization": "Bearer test-secret"},
         )
-        try:
-            with urllib.request.urlopen(request, timeout=10):
-                raise AssertionError("expected a 500 after the retry budget")
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 500
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 202
+        app.join_applies(timeout=10)
         operations = store.list_terminal(stack="moonmind")
         assert len(operations) == 1
         assert operations[0]["status"] == "failed"
@@ -340,6 +335,19 @@ def test_submit_reaches_terminal_failed_after_the_retry_budget(
     finally:
         harness_httpd.shutdown()
         thread.join(timeout=10)
+
+
+def _get(port, path):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        method="GET",
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}")
 
 
 def _post_operation(port, body):
@@ -446,6 +454,7 @@ def test_submit_accepts_relative_compose_subpaths(controller_path, tmp_path):
             },
         )
         assert status == 202, created
+        app.join_applies(timeout=10)
         assert applied == [created["operationId"]]
     finally:
         harness_httpd.shutdown()
@@ -699,3 +708,337 @@ def test_restart_orders_tied_timestamps_by_record_mtime(
     result = server_mod.converge_on_restart(store, applier=applier)
     assert applied == [current["operationId"]]
     assert result["superseded"] == [stale["operationId"]]
+
+
+class _BlockingApplier:
+    """Applier that holds the apply open until the test releases it."""
+
+    def __init__(self, store):
+        self.store = store
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.applied = []
+
+    def __call__(self, operation):
+        self.applied.append(operation["operationId"])
+        self.started.set()
+        assert self.release.wait(timeout=10)
+        self.store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+
+def _serve(app):
+    httpd = make_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, thread
+
+
+def test_submit_accepts_before_apply_finishes_and_status_stays_readable(
+    controller_path, tmp_path
+):
+    # A slow pull/up must not outlive the caller's request: the endpoint
+    # accepts the durable operation and the apply continues without it.
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    applier = _BlockingApplier(store)
+    app = server_mod.build_app(store=store, secret="test-secret", applier=applier)
+    httpd, thread = _serve(app)
+    port = httpd.server_address[1]
+    try:
+        status, created = _post_operation(
+            port, {"stack": "moonmind", "desiredImage": "img:1"}
+        )
+        assert status == 202, created
+        assert created["status"] in record.OPEN_STATUSES
+        assert applier.started.wait(timeout=10)
+        status, observed = _get(port, f"/v1/operations/{created['operationId']}")
+        assert status == 200
+        assert observed["status"] in record.OPEN_STATUSES
+        applier.release.set()
+        app.join_applies(timeout=10)
+        status, observed = _get(port, f"/v1/operations/{created['operationId']}")
+        assert observed["status"] == "succeeded"
+        assert observed["installed"]["image"] == "img:1"
+    finally:
+        applier.release.set()
+        httpd.shutdown()
+        thread.join(timeout=10)
+
+
+def test_duplicate_submit_while_applying_reattaches_to_the_same_operation(
+    controller_path, tmp_path
+):
+    # A lost acknowledgment (host or UI resubmits the same target) reattaches
+    # to the in-flight owner instead of launching a second updater.
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    applier = _BlockingApplier(store)
+    app = server_mod.build_app(store=store, secret="test-secret", applier=applier)
+    httpd, thread = _serve(app)
+    port = httpd.server_address[1]
+    try:
+        _, first = _post_operation(port, {"stack": "moonmind", "desiredImage": "img:1"})
+        assert applier.started.wait(timeout=10)
+        status, second = _post_operation(
+            port, {"stack": "moonmind", "desiredImage": "img:1"}
+        )
+        assert status == 202, second
+        assert second["operationId"] == first["operationId"]
+        applier.release.set()
+        app.join_applies(timeout=10)
+        assert applier.applied == [first["operationId"]]
+    finally:
+        applier.release.set()
+        httpd.shutdown()
+        thread.join(timeout=10)
+
+
+def test_changed_target_while_applying_is_refused_and_names_the_owner(
+    controller_path, tmp_path
+):
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    applier = _BlockingApplier(store)
+    app = server_mod.build_app(store=store, secret="test-secret", applier=applier)
+    httpd, thread = _serve(app)
+    port = httpd.server_address[1]
+    try:
+        _, first = _post_operation(port, {"stack": "moonmind", "desiredImage": "img:1"})
+        assert applier.started.wait(timeout=10)
+        status, refused = _post_operation(
+            port, {"stack": "moonmind", "desiredImage": "img:2"}
+        )
+        assert status == 409, refused
+        assert refused["operationId"] == first["operationId"]
+        applier.release.set()
+        app.join_applies(timeout=10)
+        # Once the owner finishes, the changed target is explicit new intent.
+        status, second = _post_operation(
+            port, {"stack": "moonmind", "desiredImage": "img:2"}
+        )
+        assert status == 202, second
+        assert second["operationId"] != first["operationId"]
+        app.join_applies(timeout=10)
+    finally:
+        applier.release.set()
+        httpd.shutdown()
+        thread.join(timeout=10)
+
+
+def test_explicit_retry_after_exhaustion_succeeds_and_keeps_first_failure(
+    controller_path, tmp_path
+):
+    engine_mod = load("engine")
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    behaviour = {"fail": True}
+
+    def applier(operation):
+        if behaviour["fail"]:
+            store.record_attempt_error(
+                operation["operationId"], error="pull failed: registry down"
+            )
+            raise engine_mod.StageError("pull", 1, "registry down")
+        store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    app = server_mod.build_app(store=store, secret="test-secret", applier=applier)
+    httpd, thread = _serve(app)
+    port = httpd.server_address[1]
+    try:
+        _, created = _post_operation(port, {"stack": "moonmind", "desiredImage": "img:1"})
+        app.join_applies(timeout=10)
+        op_id = created["operationId"]
+        _, exhausted = _get(port, f"/v1/operations/{op_id}")
+        assert exhausted["status"] == "failed"
+        assert exhausted["autoAttemptsExhausted"] is True
+        behaviour["fail"] = False
+        status, retried = _post_operation_path(port, f"/v1/operations/{op_id}/retry")
+        assert status == 202, retried
+        app.join_applies(timeout=10)
+        _, recovered = _get(port, f"/v1/operations/{op_id}")
+        assert recovered["status"] == "succeeded"
+        assert recovered["attemptGroup"] == 2
+        assert recovered["attempts"][0]["error"] == "pull failed: registry down"
+        assert "attempt 1: pull failed: registry down" in recovered["errorSummary"]
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=10)
+
+
+def _post_operation_path(port, path):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=b"{}",
+        method="POST",
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}")
+
+
+def test_unix_socket_listener_serves_the_same_authenticated_endpoint(
+    controller_path, tmp_path
+):
+    # The MoonMind API reaches the controller through its deployment state
+    # mount; the socket carries the same bearer-guarded routes as TCP.
+    import http.client
+    import socket
+
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    app = server_mod.build_app(
+        store=store, secret="test-secret", applier=lambda operation: None
+    )
+    socket_path = tmp_path / "state" / "controller.sock"
+    httpd = server_mod.make_unix_server(str(socket_path), app)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+    class _UnixConnection(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.connect(str(socket_path))
+
+    def call(secret):
+        connection = _UnixConnection("localhost", timeout=10)
+        headers = {"Authorization": f"Bearer {secret}"}
+        connection.request("GET", "/v1/healthz", headers=headers)
+        response = connection.getresponse()
+        body = json.loads(response.read().decode() or "{}")
+        connection.close()
+        return response.status, body
+
+    try:
+        assert call("test-secret") == (200, {"status": "ok"})
+        assert call("wrong")[0] == 401
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=10)
+    # A stale socket from a previous controller process is replaced.
+    replacement = server_mod.make_unix_server(str(socket_path), app)
+    replacement.server_close()
+
+
+def test_production_apply_derives_the_installed_deployment_target(
+    controller_path, tmp_path, monkeypatch
+):
+    # A submission without a target (the Operations API path) applies to
+    # the deployment the controller was installed for, derived from its
+    # checkout and `.env`, never to an empty or guessed project.
+    record = load("record")
+    server_mod = load("server")
+    repo = tmp_path / "MoonMind"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    (repo / "site.yaml").write_text("services: {}\n")
+    (repo / ".env").write_text("COMPOSE_FILE=docker-compose.yaml:site.yaml\n")
+    monkeypatch.setenv("MOONMIND_CONTROLLER_TARGET_DIR", str(repo))
+    store = record.OperationStore(tmp_path / "state")
+    op = store.begin(stack="moonmind", desired_image="img:1", source_revision="")
+
+    class _Runner:
+        def __init__(self):
+            self.commands = []
+
+        def run(self, args, timeout_seconds):
+            self.commands.append(tuple(args))
+            if "config" in args:
+                return {
+                    "exit": 0,
+                    "output": json.dumps(
+                        {
+                            "name": "moonmind",
+                            "services": {
+                                "api": {},
+                                "docker-proxy": {},
+                                "sandbox-egress-proxy": {},
+                                "temporal-worker-workflow": {},
+                            },
+                        }
+                    ),
+                }
+            if "ps" in args:
+                return {
+                    "exit": 0,
+                    "output": "\n".join(
+                        json.dumps({"Service": name, "State": "running"})
+                        for name in ("api", "temporal-worker-workflow")
+                    ),
+                }
+            return {"exit": 0, "output": "ok"}
+
+    runner = _Runner()
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: runner)
+    result = server_mod.production_apply(store, op)
+    assert result["status"] == "succeeded", result
+    loaded = store.load(op["operationId"])
+    assert loaded["target"] == {
+        "project": "moonmind",
+        "projectDir": str(repo),
+        "composeFiles": ["docker-compose.yaml", "site.yaml"],
+        "services": ["api", "temporal-worker-workflow"],
+        "envFile": str(repo / ".env"),
+    }
+    up = [command for command in runner.commands if "up" in command]
+    assert up and "docker-proxy" not in up[0]
+
+
+def test_production_apply_without_a_derivable_target_fails_terminally(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    monkeypatch.delenv("MOONMIND_CONTROLLER_TARGET_DIR", raising=False)
+    store = record.OperationStore(tmp_path / "state")
+    op = store.begin(stack="moonmind", desired_image="img:1", source_revision="")
+    result = server_mod.production_apply(store, op)
+    assert result["status"] == "refused"
+    loaded = store.load(op["operationId"])
+    # Refusal is a terminal, explained failure; it never stays open forever.
+    assert loaded["status"] == "failed"
+    assert "target configuration is invalid" in loaded["errorSummary"]
+
+
+def test_restart_recovery_runs_through_the_same_apply_owners(
+    controller_path, tmp_path
+):
+    # Unfinished work resumes in the background so the endpoint answers
+    # status reads (and reattaches resubmissions) while it converges.
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    op = store.begin(stack="moonmind", desired_image="img:1", source_revision="")
+    applier = _BlockingApplier(store)
+    app = server_mod.build_app(store=store, secret="test-secret", applier=applier)
+    httpd, thread = _serve(app)
+    port = httpd.server_address[1]
+    try:
+        result = app.converge()
+        assert result["converged"] == [op["operationId"]]
+        assert applier.started.wait(timeout=10)
+        status, attached = _post_operation(
+            port, {"stack": "moonmind", "desiredImage": "img:1"}
+        )
+        assert status == 202
+        assert attached["operationId"] == op["operationId"]
+        applier.release.set()
+        app.join_applies(timeout=10)
+        assert applier.applied == [op["operationId"]]
+        assert store.load(op["operationId"])["status"] == "succeeded"
+    finally:
+        applier.release.set()
+        httpd.shutdown()
+        thread.join(timeout=10)

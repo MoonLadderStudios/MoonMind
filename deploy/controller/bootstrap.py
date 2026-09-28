@@ -323,6 +323,9 @@ services:
       MOONMIND_CONTROLLER_STATE_DIR: /var/lib/moonmind-controller
       MOONMIND_CONTROLLER_PORT: "{port}"
       MOONMIND_CONTROLLER_SECRET_FILE: /var/lib/moonmind-controller/secrets/controller-bearer
+      # The deployment this controller serves; target-less submissions (the
+      # Operations API) derive their Compose target from this checkout.
+      MOONMIND_CONTROLLER_TARGET_DIR: "{repo}"
     ports:
       - "127.0.0.1:{port}:{port}"
     volumes:
