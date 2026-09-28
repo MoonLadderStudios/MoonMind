@@ -124,6 +124,8 @@ steps:
       For partially implemented stories, preserve the original story scope and add remainingWork so Jira tracks only the unmet requirements.
       Mark unverifiable stories with issueCreation.action = "manual_review" so deterministic Jira creation will not create implementation work automatically.
       Write the reconciliation report to the runtime-provided markdown breakdown path when available.
+      Report an automation-owned continuation naming the specific missing input (remainingWork, sourceReference.path/claimIds, or the unsupported issueCreation.action value) for recoverable evidence gaps; reserve human ownership for genuine user decisions or explicit holds.
+      Reconcile partial creation, linking, and child submission through existing receipts (issueMappings/createdIssues with stable idempotency keys) before retry: continue only unfinished effects, preserve original issue/child identity and saved work, and never claim implementation from successful queueing.
       Do not create Jira issues, do not create downstream workflow executions, and do not implement code in this reconciliation step.
     skill:
       id: story-reconcile-implementation

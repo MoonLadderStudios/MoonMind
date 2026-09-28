@@ -194,6 +194,23 @@ STORY_JIRA_CREATE_ACTIONS = frozenset(
         "create_jira_issue",
     }
 )
+STORY_JIRA_REMAINING_WORK_ACTIONS = frozenset(
+    {STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE}
+)
+STORY_JIRA_KNOWN_ACTIONS = frozenset(
+    STORY_JIRA_SKIP_ACTIONS
+    | STORY_JIRA_BLOCK_ACTIONS
+    | STORY_JIRA_CREATE_ACTIONS
+    | STORY_JIRA_REMAINING_WORK_ACTIONS
+)
+STORY_IMPLEMENTATION_KNOWN_STATUSES = frozenset(
+    {
+        STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED,
+        STORY_IMPLEMENTATION_STATUS_PARTIALLY_IMPLEMENTED,
+        STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE,
+        "not_implemented",
+    }
+)
 _ACCEPTANCE_HEADING_RE = re.compile(
     r"(?im)^\s*(acceptance\s+criteria|acceptance|ac)\s*:?\s*$"
 )
@@ -730,17 +747,36 @@ def _story_implementation_status(story: Mapping[str, Any]) -> str:
         or story.get("status")
     )
 
-def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
+def _explicit_issue_creation_action(story: Mapping[str, Any]) -> str:
     issue_creation = _story_issue_creation(story)
-    action = _normalized_story_token(
+    return _normalized_story_token(
         issue_creation.get("action")
         or story.get("issueCreationAction")
         or story.get("issue_creation_action")
         or story.get("jiraCreationAction")
         or story.get("jira_creation_action")
     )
+
+
+def _normalize_issue_creation_action(action: str) -> str:
+    """Map an explicit creation action onto the existing wire values.
+
+    ``manual_review`` stays a decodable wire value for non-mutating
+    suspension: unknown or unsupported actions suspend as
+    ``manual_review`` instead of failing or silently creating work.
+    """
+    normalized = _normalized_story_token(action)
+    if not normalized:
+        return ""
+    if normalized in STORY_JIRA_KNOWN_ACTIONS:
+        return normalized
+    return STORY_JIRA_ACTION_MANUAL_REVIEW
+
+
+def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
+    action = _explicit_issue_creation_action(story)
     if action:
-        return action
+        return _normalize_issue_creation_action(action)
     status = _story_implementation_status(story)
     if status == STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED:
         return STORY_JIRA_ACTION_SKIP
@@ -748,7 +784,41 @@ def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
         return STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE
     if status == STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE:
         return STORY_JIRA_ACTION_MANUAL_REVIEW
+    if status and status not in STORY_IMPLEMENTATION_KNOWN_STATUSES:
+        return STORY_JIRA_ACTION_MANUAL_REVIEW
     return STORY_JIRA_ACTION_CREATE_ISSUE
+
+
+def _continuation_for_reconciliation_block(
+    *,
+    reason: str,
+    missing_input: str = "",
+) -> dict[str, Any]:
+    """Report who owns a reconciliation block and what unblocks it.
+
+    Recoverable evidence gaps stay automation-owned with the specific
+    missing input. Only genuine user decisions or explicit holds are
+    human-owned.
+    """
+    normalized_reason = _string(reason).lower()
+    if any(
+        marker in normalized_reason
+        for marker in (
+            "operator hold",
+            "user decision",
+            "explicit hold",
+            "human approval",
+        )
+    ):
+        owner = "human"
+    else:
+        owner = "automation"
+    continuation: dict[str, Any] = {"owner": owner}
+    if missing_input:
+        continuation["missingInput"] = missing_input
+    if reason:
+        continuation["reason"] = _string(reason)
+    return continuation
 
 def _story_issue_creation_reason(story: Mapping[str, Any]) -> str:
     issue_creation = _story_issue_creation(story)
@@ -910,9 +980,26 @@ def _reconcile_stories_for_issue_creation(
             status == STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE
             and action not in STORY_JIRA_CREATE_ACTIONS
         ):
-            blocked.append(
-                _story_reconciliation_record(story, index=index, action=action)
+            blocked_record = _story_reconciliation_record(
+                story, index=index, action=action
             )
+            explicit_action = _explicit_issue_creation_action(story)
+            if explicit_action and explicit_action not in STORY_JIRA_KNOWN_ACTIONS:
+                missing_input = (
+                    f"issueCreation.action '{explicit_action}' is not a "
+                    "supported creation action"
+                )
+            else:
+                missing_input = _string(
+                    blocked_record.get("reason")
+                ) or "implementation evidence for the blocked story"
+            blocked_record["continuation"] = (
+                _continuation_for_reconciliation_block(
+                    reason=_string(blocked_record.get("reason")),
+                    missing_input=missing_input,
+                )
+            )
+            blocked.append(blocked_record)
             continue
         if (
             action == STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE
@@ -929,6 +1016,12 @@ def _reconcile_stories_for_issue_creation(
                     "reason",
                     "Partially implemented stories require remainingWork before "
                     "issue creation can safely narrow the issue scope.",
+                )
+                blocked_record["continuation"] = (
+                    _continuation_for_reconciliation_block(
+                        reason=_string(blocked_record.get("reason")),
+                        missing_input="remainingWork",
+                    )
                 )
                 blocked.append(blocked_record)
                 continue
@@ -993,6 +1086,116 @@ def _is_canonical_source_path(path: str) -> bool:
     if normalized.startswith("docs/tmp/") or "/docs/tmp/" in normalized:
         return False
     return normalized.startswith("docs/") or "/docs/" in normalized
+
+
+BREAKDOWN_SOURCE_KIND_EXPLICIT_FILE = "explicit-file"
+BREAKDOWN_SOURCE_KIND_TRUSTED_ISSUE = "trusted-issue"
+BREAKDOWN_SOURCE_KIND_INLINE = "inline"
+BREAKDOWN_SOURCE_KIND_IMPERATIVE = "imperative"
+BREAKDOWN_SOURCE_KIND_AMBIGUOUS = "ambiguous-source"
+
+_AMBIGUOUS_SOURCE_RESOLUTION_STATUSES = frozenset(
+    {"ambiguous", "invalid_candidates", "invalid_explicit_path"}
+)
+
+
+def _resolve_breakdown_source_kind(selection: Mapping[str, Any]) -> str:
+    """Classify the selected breakdown source by meaning and authority.
+
+    The owning document authority and the selected input kind decide the
+    result, not just a ``docs/`` path prefix: an explicit file path, a
+    trusted issue brief, inline instructions, imperative input describing
+    actionable outcomes, or an ambiguous selection across candidates.
+    """
+    if not isinstance(selection, Mapping):
+        return BREAKDOWN_SOURCE_KIND_INLINE
+    source = selection.get("source")
+    source_mapping = dict(source) if isinstance(source, Mapping) else {}
+    source_class = _breakdown_source_document_class(selection)
+    for container in (selection, source_mapping):
+        resolution = container.get("sourceResolution") or container.get(
+            "source_resolution"
+        )
+        if isinstance(resolution, Mapping):
+            status = _string(
+                resolution.get("status") or resolution.get("sourceStatus")
+            ).lower()
+            if status in _AMBIGUOUS_SOURCE_RESOLUTION_STATUSES:
+                return BREAKDOWN_SOURCE_KIND_AMBIGUOUS
+    candidates: list[Any] = []
+    for container in (selection, source_mapping):
+        for key in ("sourceCandidates", "source_candidates", "candidates"):
+            items = _list(container.get(key))
+            if items:
+                candidates = items
+                break
+        if candidates:
+            break
+    if len(candidates) > 1:
+        return BREAKDOWN_SOURCE_KIND_AMBIGUOUS
+    if source_class == "imperative-input":
+        return BREAKDOWN_SOURCE_KIND_IMPERATIVE
+    source_issue_key = _string(
+        selection.get("sourceIssueKey")
+        or selection.get("source_issue_key")
+        or selection.get("source_issue")
+        or source_mapping.get("sourceIssueKey")
+        or source_mapping.get("source_issue_key")
+    )
+    source_path = _string(
+        source_mapping.get("referencePath")
+        or source_mapping.get("reference_path")
+        or source_mapping.get("path")
+    ) or _breakdown_source_path(selection)
+    if source_issue_key and not source_path:
+        return BREAKDOWN_SOURCE_KIND_TRUSTED_ISSUE
+    if source_path:
+        return BREAKDOWN_SOURCE_KIND_EXPLICIT_FILE
+    return BREAKDOWN_SOURCE_KIND_INLINE
+
+
+def _filter_pending_stories_by_receipts(
+    stories: Sequence[Mapping[str, Any]],
+    issue_mappings: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split requested stories into pending work and existing receipts.
+
+    Reconciles a partial creation run through its existing issue mappings
+    before retry: stories with a matching receipt keep their original
+    issue identity and saved work, while only unfinished effects are
+    returned for continuation. No new ledger is created and no re-search
+    for a different target occurs.
+    """
+    receipts: dict[str, dict[str, Any]] = {}
+    receipts_by_index: dict[int, dict[str, Any]] = {}
+    for mapping in issue_mappings:
+        if not isinstance(mapping, Mapping):
+            continue
+        receipt = dict(mapping)
+        story_id = _string(receipt.get("storyId") or receipt.get("story_id"))
+        if story_id and story_id not in receipts:
+            receipts[story_id] = receipt
+        for key in ("storyIndex", "story_index"):
+            raw_index = receipt.get(key)
+            try:
+                index = int(raw_index) if raw_index is not None else 0
+            except (TypeError, ValueError):
+                continue
+            if index > 0 and index not in receipts_by_index:
+                receipts_by_index[index] = receipt
+
+    pending: list[dict[str, Any]] = []
+    already_created: list[dict[str, Any]] = []
+    for index, story in enumerate(stories, start=1):
+        if not isinstance(story, Mapping):
+            continue
+        story_id = _story_id(story, index=index)
+        receipt = receipts.get(story_id) or receipts_by_index.get(index)
+        if receipt is not None:
+            already_created.append(dict(receipt))
+        else:
+            pending.append(dict(story))
+    return pending, already_created
 
 
 def _source_reference_requires_claim_ids(
