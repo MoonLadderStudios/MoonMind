@@ -13,7 +13,12 @@
 # Fresh: tools/single_user_journey_checks.py reads the settings/preset
 # catalogs, submits one task with the dashboard's default repository as a
 # deferred start (and redelivers it), attaches an artifact, dispatches a
-# recurring definition, and saves a preset; the browser opens the built
+# recurring definition, and saves a preset; the vector_free phase then
+# proves the running candidate is vector-free at its live boundaries
+# (MoonLadderStudios/MoonMind#4114: live /healthz and /openapi.json carry
+# no vector backend, and one task-envelope request with an explicit
+# retired vector requirement is rejected with 422 and creates no
+# execution); the browser opens the built
 # dashboard on that work; the workflow worker restarts; the browser cancels
 # the deferred task from its workflow page and the API must report it
 # canceled; a synthetic credential is bound through an instance setting;
@@ -299,6 +304,10 @@ restart_workflow_worker() {
 fresh_journey() {
   local label="$1"
   checks populate "$label"
+  # MoonLadderStudios/MoonMind#4114: vector-free boundary proof on the
+  # candidate instance (fresh installs and the post-upgrade candidate;
+  # never on the pre-upgrade old release, which predates retirement).
+  checks vector_free "$label"
   browser "$label"
   restart_workflow_worker
   cancel_from_dashboard "$label"

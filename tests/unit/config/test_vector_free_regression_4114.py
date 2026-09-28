@@ -1373,3 +1373,71 @@ def test_vector_free_reuses_sibling_evidence_without_duplication() -> None:
         ["tests/unit/config/test_vector_free_regression_4114.py"]
     )
     assert selection.unit_fast is True
+
+
+def test_vector_free_live_journey_wires_actual_product_boundaries() -> None:
+    """Existing CI's first-run journey executes the vector-free boundaries.
+
+    MoonLadderStudios/MoonMind#4114 R2/A1: the disposable default first-run
+    journey (``tools/first_run_journey_3938.sh`` + stdlib
+    ``tools/single_user_journey_checks.py``) already boots a clean default
+    install with no ``.env`` and drives ordinary work (submit/redeliver,
+    artifacts, recurring, preset, worker restart, dashboard cancel,
+    read-back) on disposable Compose services. This test pins that the
+    journey actually exercises the vector-free product boundaries instead
+    of counting YAML parsing or sentinel fixtures:
+
+    - the helper exposes a ``vector_free`` phase whose retired probe
+      carries an explicit retired requirement that the real production
+      admission path (``reject_retired_vector_fields`` from #4105)
+      rejects;
+    - the helper's phase asserts live ``/healthz`` vector-freedom,
+      live OpenAPI vector-freedom, and retired-submission rejection with
+      no consequential execution identity;
+    - the shell runs that phase on the candidate (fresh installs and the
+      post-upgrade candidate instance), never on the pre-upgrade old
+      release.
+    """
+    import importlib.util
+
+    helper_path = REPO_ROOT / "tools/single_user_journey_checks.py"
+    assert helper_path.is_file(), "missing live journey helper"
+    spec = importlib.util.spec_from_file_location(
+        "single_user_journey_checks_4114", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert callable(getattr(module, "vector_free", None)), (
+        "journey helper exposes no vector_free phase"
+    )
+    assert callable(getattr(module, "vector_free_retired_probe", None)), (
+        "journey helper exposes no vector_free_retired_probe payload"
+    )
+    probe = module.vector_free_retired_probe()
+    assert isinstance(probe, dict) and isinstance(probe.get("payload"), dict)
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(
+            probe["payload"], field_path="payload"
+        )
+
+    source = helper_path.read_text(encoding="utf-8")
+    assert "/healthz" in source
+    assert "/openapi.json" in source
+    assert "workflowId" in source
+
+    shell = (REPO_ROOT / "tools/first_run_journey_3938.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "checks vector_free" in shell, (
+        "first-run journey never runs the vector_free phase"
+    )
+    fresh_body = shell.split("fresh_journey()")[1].split("\n}\n")[0]
+    assert "checks vector_free" in fresh_body
+    # The post-upgrade candidate instance reuses the same fresh_journey,
+    # so the vector_free phase runs there too; the pre-upgrade old release
+    # (which predates retirement) must not run it inline.
+    assert "fresh_journey after-upgrade" in shell
+    pre_upgrade_body = shell.split("bring_up 3")[1].split("Upgrading $PROJECT_NAME")[0]
+    assert "vector_free" not in pre_upgrade_body
