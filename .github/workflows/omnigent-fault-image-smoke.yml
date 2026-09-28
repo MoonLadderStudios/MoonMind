@@ -54,6 +54,28 @@ jobs:
           DEFAULT_APP_IMAGE: ${{ vars.MOONMIND_APP_IMAGE }}
         run: |
           app_image="${DISPATCH_APP_IMAGE:-$DEFAULT_APP_IMAGE}"
+          if [[ -z "$app_image" ]]; then
+            # No explicit image: pin the app image Release / Build App Image
+            # published for this exact checkout by its immutable digest. Never
+            # substitute latest, which can be an earlier commit than the
+            # harness under test. A build still in flight (about 6-8 minutes)
+            # gets a bounded wait.
+            ref="ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA}"
+            for attempt in $(seq 1 30); do
+              digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+              if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                app_image="${ref%:*}@${digest}"
+                echo "::notice::Using ${ref} as ${app_image}"
+                break
+              fi
+              echo "Waiting for ${ref} to be published (${attempt}/30)..."
+              sleep 30
+            done
+            if [[ -z "$app_image" ]]; then
+              echo "::error::${ref} was not published within 15 minutes; dispatch with app_image or set MOONMIND_APP_IMAGE"
+              exit 1
+            fi
+          fi
           if [[ ! "$app_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
             echo "::error::The deployable app image must be configured by immutable digest"
             exit 1
