@@ -1154,6 +1154,24 @@ def _resolve_breakdown_source_kind(selection: Mapping[str, Any]) -> str:
     return BREAKDOWN_SOURCE_KIND_INLINE
 
 
+def _require_unambiguous_breakdown_source(payload: Any) -> None:
+    """Fail fast when the selected breakdown source is ambiguous.
+
+    Consumed by the story issue-creation paths so an unresolved
+    multi-candidate selection raises an actionable source-resolution
+    error instead of decomposing an arbitrary candidate.
+    """
+    if not isinstance(payload, Mapping):
+        return
+    if _resolve_breakdown_source_kind(payload) != BREAKDOWN_SOURCE_KIND_AMBIGUOUS:
+        return
+    raise ValueError(
+        "Ambiguous breakdown source: multiple candidate documents were "
+        "selected with no explicit source. Choose one source document or "
+        "provide explicit sourceResolution before breakdown."
+    )
+
+
 def _filter_pending_stories_by_receipts(
     stories: Sequence[Mapping[str, Any]],
     issue_mappings: Sequence[Mapping[str, Any]],
@@ -3090,6 +3108,7 @@ async def create_jira_issues_from_stories(
         or previous_story_output.get("storyBreakdownJson")
     )
     parsed_story_payload = _parse_story_breakdown_payload(raw_story_payload)
+    _require_unambiguous_breakdown_source(parsed_story_payload)
     breakdown_source_path = _breakdown_source_path(parsed_story_payload)
     breakdown_source_document_class = _breakdown_source_document_class(
         parsed_story_payload
@@ -3121,6 +3140,7 @@ async def create_jira_issues_from_stories(
                 if inspect.isawaitable(artifact_payload):
                     artifact_payload = await artifact_payload  # type: ignore[assignment]
                 parsed_payload = _parse_story_breakdown_payload(artifact_payload)
+                _require_unambiguous_breakdown_source(parsed_payload)
                 breakdown_source_path = _breakdown_source_path(parsed_payload)
                 breakdown_source_document_class = _breakdown_source_document_class(
                     parsed_payload
@@ -3213,6 +3233,7 @@ async def create_jira_issues_from_stories(
                 if inspect.isawaitable(fetched):
                     fetched = await fetched  # type: ignore[assignment]
                 fetched_payload = _parse_story_breakdown_payload(fetched)
+                _require_unambiguous_breakdown_source(fetched_payload)
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
                 breakdown_source_document_class = _breakdown_source_document_class(
                     fetched_payload
@@ -3257,6 +3278,15 @@ async def create_jira_issues_from_stories(
             blocked_stories=blocked_stories,
             partial_stories_adjusted=partial_stories_adjusted,
         )
+
+    eligible_stories = list(stories)
+    prior_issue_receipts = _issue_mappings_from_inputs(inputs, context=_context)
+    resumed_issue_mappings: list[dict[str, Any]] = []
+    if prior_issue_receipts:
+        pending_stories, resumed_issue_mappings = _filter_pending_stories_by_receipts(
+            eligible_stories, prior_issue_receipts
+        )
+        stories = pending_stories
 
     if not project_key:
         reason = (
@@ -3470,6 +3500,37 @@ async def create_jira_issues_from_stories(
             )
         raise
 
+    if resumed_issue_mappings:
+        _resumed_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): dict(item)
+            for item in resumed_issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _new_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): item
+            for item in issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _created_by_id: dict[str, dict[str, Any]] = {}
+        for _mapping_item, _created_item in zip(issue_mappings, created):
+            _sid = _string(_mapping_item.get("storyId") or _mapping_item.get("story_id"))
+            if _sid and _sid not in _created_by_id:
+                _created_by_id[_sid] = _created_item
+        _combined_mappings: list[dict[str, Any]] = []
+        _combined_created: list[dict[str, Any]] = []
+        for _eligible_index, _eligible_story in enumerate(eligible_stories, start=1):
+            _eligible_id = _story_id(_eligible_story, index=_eligible_index)
+            if _eligible_id in _resumed_by_id:
+                _combined_mappings.append(_resumed_by_id[_eligible_id])
+                _combined_created.append(dict(_resumed_by_id[_eligible_id]))
+            elif _eligible_id in _new_by_id:
+                _combined_mappings.append(_new_by_id[_eligible_id])
+                _combined_created.append(
+                    _created_by_id.get(_eligible_id, _new_by_id[_eligible_id])
+                )
+        issue_mappings = _combined_mappings
+        created = _combined_created
+
     link_results, dependency_chain_complete = await _create_dependency_links(
         service=service,
         dependency_mode=dependency_mode,
@@ -3490,7 +3551,7 @@ async def create_jira_issues_from_stories(
                 "mode": "jira",
                 "status": story_status,
                 "storyCount": original_story_count,
-                "eligibleStoryCount": len(stories),
+                "eligibleStoryCount": len(eligible_stories),
                 "createdCount": len(created),
                 "dependencyMode": dependency_mode,
                 "skippedStories": skipped_stories,
@@ -3695,6 +3756,7 @@ async def create_github_issues_from_stories(
         or previous_story_output.get("storyBreakdownJson")
     )
     parsed_story_payload = _parse_story_breakdown_payload(raw_story_payload)
+    _require_unambiguous_breakdown_source(parsed_story_payload)
     breakdown_source_path = _breakdown_source_path(parsed_story_payload)
     breakdown_source_document_class = _breakdown_source_document_class(
         parsed_story_payload
@@ -3725,6 +3787,7 @@ async def create_github_issues_from_stories(
             if inspect.isawaitable(artifact_payload):
                 artifact_payload = await artifact_payload  # type: ignore[assignment]
             parsed_payload = _parse_story_breakdown_payload(artifact_payload)
+            _require_unambiguous_breakdown_source(parsed_payload)
             breakdown_source_path = _breakdown_source_path(parsed_payload)
             breakdown_source_document_class = _breakdown_source_document_class(
                 parsed_payload
@@ -3772,6 +3835,7 @@ async def create_github_issues_from_stories(
             if inspect.isawaitable(fetched):
                 fetched = await fetched  # type: ignore[assignment]
             fetched_payload = _parse_story_breakdown_payload(fetched)
+            _require_unambiguous_breakdown_source(fetched_payload)
             breakdown_source_path = _breakdown_source_path(fetched_payload)
             breakdown_source_document_class = _breakdown_source_document_class(
                 fetched_payload
@@ -3794,6 +3858,15 @@ async def create_github_issues_from_stories(
             blocked_stories=blocked_stories,
             partial_stories_adjusted=partial_stories_adjusted,
         )
+
+    eligible_stories = list(stories)
+    prior_issue_receipts = _github_issue_mappings_from_inputs(inputs, context=_context)
+    resumed_issue_mappings: list[dict[str, Any]] = []
+    if prior_issue_receipts:
+        pending_stories, resumed_issue_mappings = _filter_pending_stories_by_receipts(
+            eligible_stories, prior_issue_receipts
+        )
+        stories = pending_stories
 
     missing_claim_ids = _missing_source_claim_story_ids(
         stories,
@@ -3848,6 +3921,37 @@ async def create_github_issues_from_stories(
             )
         )
 
+    if resumed_issue_mappings:
+        _resumed_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): dict(item)
+            for item in resumed_issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _new_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): item
+            for item in issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _created_by_id: dict[str, dict[str, Any]] = {}
+        for _mapping_item, _created_item in zip(issue_mappings, created):
+            _sid = _string(_mapping_item.get("storyId") or _mapping_item.get("story_id"))
+            if _sid and _sid not in _created_by_id:
+                _created_by_id[_sid] = _created_item
+        _combined_mappings: list[dict[str, Any]] = []
+        _combined_created: list[dict[str, Any]] = []
+        for _eligible_index, _eligible_story in enumerate(eligible_stories, start=1):
+            _eligible_id = _story_id(_eligible_story, index=_eligible_index)
+            if _eligible_id in _resumed_by_id:
+                _combined_mappings.append(_resumed_by_id[_eligible_id])
+                _combined_created.append(dict(_resumed_by_id[_eligible_id]))
+            elif _eligible_id in _new_by_id:
+                _combined_mappings.append(_new_by_id[_eligible_id])
+                _combined_created.append(
+                    _created_by_id.get(_eligible_id, _new_by_id[_eligible_id])
+                )
+        issue_mappings = _combined_mappings
+        created = _combined_created
+
     partial = bool(blocked_stories)
     story_status = "github_partial" if partial else "github_created"
     return ToolResult(
@@ -3857,7 +3961,7 @@ async def create_github_issues_from_stories(
                 "mode": "github",
                 "status": story_status,
                 "storyCount": original_story_count,
-                "eligibleStoryCount": len(stories),
+                "eligibleStoryCount": len(eligible_stories),
                 "createdCount": len(created),
                 "dependencyMode": "none",
                 "dependencyCount": 0,
