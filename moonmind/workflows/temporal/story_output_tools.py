@@ -1193,6 +1193,12 @@ def _filter_pending_stories_by_receipts(
         story_id = _string(receipt.get("storyId") or receipt.get("story_id"))
         if story_id and story_id not in receipts:
             receipts[story_id] = receipt
+        if story_id:
+            # A receipt with a stable story ID is only valid for that story.
+            # Positional fallback stays reserved for legacy receipts without
+            # a stable ID so a changed breakdown cannot claim a mismatched
+            # receipt by retained position.
+            continue
         for key in ("storyIndex", "story_index"):
             raw_index = receipt.get(key)
             try:
@@ -1214,6 +1220,57 @@ def _filter_pending_stories_by_receipts(
         else:
             pending.append(dict(story))
     return pending, already_created
+
+
+def _ordered_partial_mappings(
+    *,
+    eligible_stories: Sequence[Mapping[str, Any]],
+    resumed_mappings: Sequence[Mapping[str, Any]],
+    new_mappings: Sequence[Mapping[str, Any]],
+    new_created: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Combine resumed and newly created mappings in eligible-story order.
+
+    Used when creation stops partway so the partial result keeps each
+    completed story's stable ID-linked receipt for the retry instead of
+    only raw provider objects.
+    """
+    resumed_by_id = {
+        _string(item.get("storyId") or item.get("story_id")): dict(item)
+        for item in resumed_mappings
+        if isinstance(item, Mapping)
+        and _string(item.get("storyId") or item.get("story_id"))
+    }
+    new_by_id = {
+        _string(item.get("storyId") or item.get("story_id")): dict(item)
+        for item in new_mappings
+        if isinstance(item, Mapping)
+        and _string(item.get("storyId") or item.get("story_id"))
+    }
+    created_by_id: dict[str, dict[str, Any]] = {}
+    for mapping_item, created_item in zip(new_mappings, new_created):
+        if not isinstance(mapping_item, Mapping) or not isinstance(
+            created_item, Mapping
+        ):
+            continue
+        sid = _string(mapping_item.get("storyId") or mapping_item.get("story_id"))
+        if sid and sid not in created_by_id:
+            created_by_id[sid] = dict(created_item)
+    combined_mappings: list[dict[str, Any]] = []
+    combined_created: list[dict[str, Any]] = []
+    for eligible_index, eligible_story in enumerate(eligible_stories, start=1):
+        if not isinstance(eligible_story, Mapping):
+            continue
+        eligible_id = _story_id(eligible_story, index=eligible_index)
+        if eligible_id in resumed_by_id:
+            combined_mappings.append(resumed_by_id[eligible_id])
+            combined_created.append(dict(resumed_by_id[eligible_id]))
+        elif eligible_id in new_by_id:
+            combined_mappings.append(new_by_id[eligible_id])
+            combined_created.append(
+                created_by_id.get(eligible_id, new_by_id[eligible_id])
+            )
+    return combined_mappings, combined_created
 
 
 def _source_reference_requires_claim_ids(
@@ -2625,11 +2682,13 @@ def _fallback_result(
     inputs: Mapping[str, Any],
     story_count: int = 0,
     created: Sequence[Mapping[str, Any]] = (),
+    issue_mappings: Sequence[Mapping[str, Any]] = (),
     dependency_mode: str = "",
 ) -> ToolResult:
     branch = _string(inputs.get("targetBranch") or inputs.get("branch"))
     base_ref = _string(inputs.get("startingBranch") or inputs.get("baseBranch"))
     created_issues = [dict(issue) for issue in created]
+    mapping_list = [dict(item) for item in issue_mappings if isinstance(item, Mapping)]
     story_output: dict[str, Any] = {
         "mode": "docs_tmp",
         "status": "fallback",
@@ -2640,11 +2699,12 @@ def _fallback_result(
     if dependency_mode and dependency_mode != JIRA_DEPENDENCY_MODE_NONE:
         story_output["dependencyMode"] = dependency_mode
     jira_output: dict[str, Any] = {}
-    if created_issues:
-        story_output["createdCount"] = len(created_issues)
+    if created_issues or mapping_list:
+        story_output["createdCount"] = len(created_issues or mapping_list)
         jira_output = {
-            "createdCount": len(created_issues),
+            "createdCount": len(created_issues or mapping_list),
             "createdIssues": created_issues,
+            "issueMappings": mapping_list,
             "partial": True,
         }
     return ToolResult(
@@ -3490,14 +3550,24 @@ async def create_jira_issues_from_stories(
                 )
             )
     except Exception as exc:
+        partial_mappings, partial_created = _ordered_partial_mappings(
+            eligible_stories=eligible_stories,
+            resumed_mappings=resumed_issue_mappings,
+            new_mappings=issue_mappings,
+            new_created=created,
+        )
         if fallback_on_failure:
             return _fallback_result(
                 reason=f"Jira issue creation failed: {exc}",
                 inputs=inputs,
                 story_count=len(stories),
-                created=created,
+                created=partial_created or created,
+                issue_mappings=partial_mappings or issue_mappings,
                 dependency_mode=dependency_mode,
             )
+        if partial_mappings:
+            setattr(exc, "partial_issue_mappings", partial_mappings)
+            setattr(exc, "partial_created_issues", partial_created or created)
         raise
 
     if resumed_issue_mappings:
@@ -3884,42 +3954,54 @@ async def create_github_issues_from_stories(
     service = github_service_factory()
     created: list[dict[str, Any]] = []
     issue_mappings: list[dict[str, Any]] = []
-    for index, story in enumerate(stories, start=1):
-        summary = _story_summary(story, index=index)
-        result = await service.create_issue(
-            repo=repository,
-            title=summary,
-            body=_story_description_with_source(
-                story,
-                fallback_source_path=breakdown_source_path,
-            ),
-            labels=_github_labels(
-                story=story,
-                github_payload=github_payload,
-            ),
-            github_token=None,
-        )
-        issue_result = (
-            result.model_dump(by_alias=True)
-            if hasattr(result, "model_dump")
-            else dict(result)
-        )
-        if not bool(issue_result.get("created")):
-            raise ValueError(
-                _string(issue_result.get("summary"))
-                or "GitHub issue creation failed."
+    try:
+        for index, story in enumerate(stories, start=1):
+            summary = _story_summary(story, index=index)
+            result = await service.create_issue(
+                repo=repository,
+                title=summary,
+                body=_story_description_with_source(
+                    story,
+                    fallback_source_path=breakdown_source_path,
+                ),
+                labels=_github_labels(
+                    story=story,
+                    github_payload=github_payload,
+                ),
+                github_token=None,
             )
-        created.append(issue_result)
-        issue_mappings.append(
-            _github_issue_mapping(
-                story=story,
-                issue=issue_result,
-                repository=repository,
-                index=index,
-                summary=summary,
-                fallback_source_path=breakdown_source_path,
+            issue_result = (
+                result.model_dump(by_alias=True)
+                if hasattr(result, "model_dump")
+                else dict(result)
             )
+            if not bool(issue_result.get("created")):
+                raise ValueError(
+                    _string(issue_result.get("summary"))
+                    or "GitHub issue creation failed."
+                )
+            created.append(issue_result)
+            issue_mappings.append(
+                _github_issue_mapping(
+                    story=story,
+                    issue=issue_result,
+                    repository=repository,
+                    index=index,
+                    summary=summary,
+                    fallback_source_path=breakdown_source_path,
+                )
+            )
+    except Exception as exc:
+        partial_mappings, partial_created = _ordered_partial_mappings(
+            eligible_stories=eligible_stories,
+            resumed_mappings=resumed_issue_mappings,
+            new_mappings=issue_mappings,
+            new_created=created,
         )
+        if partial_mappings:
+            setattr(exc, "partial_issue_mappings", partial_mappings)
+            setattr(exc, "partial_created_issues", partial_created or created)
+        raise
 
     if resumed_issue_mappings:
         _resumed_by_id = {

@@ -261,6 +261,40 @@ def test_receipt_filter_continues_only_unfinished_effects() -> None:
     assert already_created[1]["issueKey"] == "MM-3"
 
 
+def test_receipt_positional_fallback_requires_matching_story_id() -> None:
+    """Positional receipts must not claim a story with a different stable ID."""
+    stories = [
+        {"id": "STORY-A", "summary": "First"},
+        {"id": "STORY-B", "summary": "Second"},
+    ]
+    receipts = [
+        {"storyId": "STORY-X", "storyIndex": 1, "issueKey": "MM-99"},
+    ]
+    pending, already_created = story_tools._filter_pending_stories_by_receipts(
+        stories, receipts
+    )
+    assert [item["id"] for item in pending] == ["STORY-A", "STORY-B"]
+    assert already_created == []
+
+
+def test_receipt_positional_fallback_supports_legacy_receipts_without_story_id() -> (
+    None
+):
+    """Legacy receipts without a stable story ID still resume by position."""
+    stories = [
+        {"id": "STORY-A", "summary": "First"},
+        {"id": "STORY-B", "summary": "Second"},
+    ]
+    receipts = [
+        {"storyIndex": 1, "issueKey": "MM-99"},
+    ]
+    pending, already_created = story_tools._filter_pending_stories_by_receipts(
+        stories, receipts
+    )
+    assert [item["id"] for item in pending] == ["STORY-B"]
+    assert [item["issueKey"] for item in already_created] == ["MM-99"]
+
+
 @asynccontextmanager
 async def _catalog_service(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/breakdown_4272.db")
@@ -582,6 +616,80 @@ async def test_github_creation_resumes_from_prior_issue_mappings() -> None:
     assert len(mappings) == 2
     by_story = {item["storyId"]: item for item in mappings}
     assert by_story["STORY-001"]["issueNumber"] == "7"
+
+
+class _FailingSecondJiraService(_FakeJiraService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def create_issue(self, request):
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("boom after first issue")
+        return await super().create_issue(request)
+
+
+@pytest.mark.asyncio
+async def test_jira_partial_failure_preserves_issue_mappings() -> None:
+    """Jira fallback after a mid-run failure keeps story-linked receipts."""
+    service = _FailingSecondJiraService()
+    stories = [
+        {"id": "STORY-001", "summary": "First"},
+        {"id": "STORY-002", "summary": "Second"},
+    ]
+    result = await story_tools.create_jira_issues_from_stories(
+        _jira_inputs(stories),
+        jira_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    jira_outputs = result.outputs["jira"]
+    assert jira_outputs.get("partial") is True
+    mappings = jira_outputs.get("issueMappings") or []
+    assert len(mappings) == 1
+    assert mappings[0]["storyId"] == "STORY-001"
+    assert mappings[0].get("issueKey")
+
+
+class _FailingSecondGitHubService(_FakeGitHubService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def create_issue(self, *, repo, title, body, labels=None, github_token=None):
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("boom after first issue")
+        return await super().create_issue(
+            repo=repo, title=title, body=body, labels=labels, github_token=github_token
+        )
+
+
+@pytest.mark.asyncio
+async def test_github_partial_failure_preserves_issue_mappings() -> None:
+    """GitHub mid-run failure keeps completed mappings for the retry."""
+    service = _FailingSecondGitHubService()
+    stories = [
+        {"id": "STORY-001", "summary": "First"},
+        {"id": "STORY-002", "summary": "Second"},
+    ]
+    with pytest.raises(RuntimeError, match="boom") as exc_info:
+        await story_tools.create_github_issues_from_stories(
+            {
+                "stories": stories,
+                "storyOutput": {
+                    "mode": "github",
+                    "github": {"repository": "MoonLadderStudios/MoonMind"},
+                },
+            },
+            github_service_factory=lambda: service,
+        )
+    assert service.calls == 2
+    partial = getattr(exc_info.value, "partial_issue_mappings", None)
+    assert isinstance(partial, list)
+    assert len(partial) == 1
+    assert partial[0]["storyId"] == "STORY-001"
+    assert partial[0].get("issueNumber")
 
 
 @pytest.mark.asyncio
