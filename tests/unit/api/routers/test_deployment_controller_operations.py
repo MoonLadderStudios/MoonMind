@@ -56,12 +56,24 @@ class _QuietHandler(WSGIRequestHandler):
 class _Controller:
     """The real deploy/controller endpoint on a loopback port."""
 
-    def __init__(self, tmp_path: Path, *, production: bool = False) -> None:
+    def __init__(
+        self, tmp_path: Path, *, production: bool = False, bootstrapped: bool = False
+    ) -> None:
         for name in CONTROLLER_MODULES:
             sys.modules.pop(name, None)
         sys.path.insert(0, str(CONTROLLER_DIR))
         self.modules = {name: self._load(name) for name in CONTROLLER_MODULES}
         self.state_dir = tmp_path / "controller-state"
+        self.secret = SECRET
+        if bootstrapped:
+            # The real host bootstrap writes the deployment-owned secret; the
+            # endpoint port is recorded once the server is bound below.
+            self.bootstrap = self._load("bootstrap")
+            self.secret = (
+                self.bootstrap.ensure_secret(self.state_dir)
+                .read_text(encoding="utf-8")
+                .strip()
+            )
         self.store = self.modules["record"].OperationStore(self.state_dir)
         self.applied: list[str] = []
         self.behavior: Callable[[dict[str, Any]], None] = self.succeed
@@ -74,11 +86,15 @@ class _Controller:
             )
         app = self.modules["server"].build_app(
             store=self.store,
-            secret=SECRET,
+            secret=self.secret,
             applier=None if production else self._apply,
         )
         self.httpd = make_server("127.0.0.1", 0, app, handler_class=_QuietHandler)
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        if bootstrapped:
+            self.bootstrap.ensure_identity(
+                self.state_dir, tmp_path / "checkout", self.httpd.server_address[1]
+            )
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
 
@@ -117,7 +133,7 @@ class _Controller:
     def close(self) -> None:
         self.stop()
         sys.path.remove(str(CONTROLLER_DIR))
-        for name in CONTROLLER_MODULES:
+        for name in (*CONTROLLER_MODULES, "bootstrap"):
             sys.modules.pop(name, None)
 
 
@@ -170,6 +186,48 @@ def controller(
         yield running
     finally:
         running.close()
+
+
+@pytest.fixture
+def installed_controller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[_Controller]:
+    """A controller installed by the real bootstrap, found as Compose wires it.
+
+    Only what docker-compose.yaml gives the api and deployment worker is set:
+    the mounted controller state directory and the network alias host (the
+    test controller answers on loopback as ``localhost``). No endpoint or
+    secret is declared.
+    """
+    for name in (
+        "MOONMIND_CONTROLLER_URL",
+        "MOONMIND_CONTROLLER_SECRET",
+        "MOONMIND_CONTROLLER_SECRET_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    running = _Controller(tmp_path, bootstrapped=True)
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(running.state_dir))
+    monkeypatch.setenv("MOONMIND_CONTROLLER_HOST", "localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    try:
+        yield running
+    finally:
+        running.close()
+
+
+class _TemporalRecording(_TemporalStopped):
+    """Temporal is up and records the transitional update workflow."""
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+
+    async def create_execution(self, **kwargs: object) -> object:
+        self.created.append(kwargs)
+        return SimpleNamespace(
+            workflow_id="mm:transitional-update",
+            run_id="11111111-2222-3333-4444-555555555555",
+        )
 
 
 def _client(*, is_superuser: bool = True) -> TestClient:
@@ -610,3 +668,69 @@ def test_historical_workflow_actions_stay_readable_beside_controller_operations(
     # History is readable, never an executable legacy fallback.
     assert historical["retryable"] is False
     assert historical["logsUrl"] is None
+
+
+def test_router_finds_the_installed_controller_from_the_mounted_deployment_state(
+    installed_controller: _Controller,
+) -> None:
+    response = _update(_client())
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    # The same controller the host command uses owns the update; no
+    # UserWorkflow was created (Temporal is stopped).
+    assert installed_controller.applied == [payload["operationId"]]
+    assert payload["workflowId"] is None
+    assert payload["status"] == "SUCCEEDED"
+
+
+def test_typed_update_tool_finds_the_installed_controller_from_the_mounted_state(
+    installed_controller: _Controller,
+) -> None:
+    import asyncio
+
+    from moonmind.workflows.skills.deployment_execution import (
+        build_deployment_update_handler,
+    )
+
+    result = asyncio.run(build_deployment_update_handler()(_tool_inputs(), {}))
+
+    assert result.status == "COMPLETED", result
+    assert installed_controller.applied == [result.outputs["operationId"]]
+
+
+def test_bootstrap_that_never_started_a_controller_keeps_the_transitional_owner(
+    installed_controller: _Controller,
+) -> None:
+    # Bootstrap wrote the secret and identity, but its controller never
+    # answered or recorded work (for example an unpublished image): like the
+    # host command, the application-owned updater is still the only owner.
+    installed_controller.stop()
+    temporal = _TemporalRecording()
+    client = _client()
+    client.app.dependency_overrides[_get_temporal_execution_service] = lambda: temporal
+
+    response = _update(client)
+
+    assert response.status_code == 202, response.text
+    assert response.json()["workflowId"] == "mm:transitional-update"
+    assert len(temporal.created) == 1
+
+
+def test_installed_controller_with_recorded_work_never_falls_back_when_unreachable(
+    installed_controller: _Controller,
+) -> None:
+    installed_controller.store.begin(
+        stack="moonmind", desired_image=IMAGE_B, source_revision="abc123"
+    )
+    installed_controller.stop()
+    temporal = _TemporalRecording()
+    client = _client()
+    client.app.dependency_overrides[_get_temporal_execution_service] = lambda: temporal
+
+    response = _update(client)
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "deployment_controller_unavailable"
+    assert temporal.created == []
+    assert installed_controller.secret not in response.text

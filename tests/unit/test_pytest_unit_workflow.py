@@ -982,3 +982,36 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
     assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in steps[
         "Start isolated reliability dependencies"
     ]["run"]
+
+
+def test_operations_browser_journey_runs_the_production_built_ui_and_gates_ci() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["operations-browser-journey"]
+
+    assert job["needs"] == "select-test-suites"
+    assert (
+        job["if"]
+        == "needs.select-test-suites.outputs.operations_browser_journey == 'true'"
+    )
+    outputs = workflow["jobs"]["select-test-suites"]["outputs"]
+    assert "operations_browser_journey" in outputs
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    # The journey serves this checkout's production dashboard build.
+    assert "npm run ui:build" in commands
+    assert "playwright install --with-deps chromium" in commands
+    run = _run_command(
+        "operations-browser-journey", "Run Operations controller browser journey"
+    )
+    assert "tests/e2e/test_operations_controller_update_browser.py" in run
+    run_step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Run Operations controller browser journey"
+    )
+    assert run_step["env"]["RUN_E2E_TESTS"] == "1"
+
+    required = workflow["jobs"]["ci-required"]
+    assert "operations-browser-journey" in required["needs"]
+    script = "\n".join(step.get("run", "") for step in required["steps"])
+    assert "needs.select-test-suites.outputs.operations_browser_journey" in script
+    assert "needs.operations-browser-journey.result" in script

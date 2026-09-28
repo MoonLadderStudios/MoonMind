@@ -33,8 +33,12 @@ _IMAGE_REFERENCE_PATTERN = re.compile(
 # the controller is the only mutation owner: an unreachable controller or a
 # lost acknowledgment is reported as such and never forks the legacy
 # Temporal updater. The legacy workflow remains only while no controller is
-# installed (no deployment-owned secret), per the #4500 bootstrap cutover.
+# installed (no deployment-owned secret, or a bootstrap that never started a
+# controller), per the #4500 bootstrap cutover.
 CONTROLLER_DEFAULT_URL = "http://127.0.0.1:8472"
+CONTROLLER_DEFAULT_HOST = "127.0.0.1"
+_CONTROLLER_SECRET_RELATIVE_PATH = Path("secrets") / "controller-bearer"
+_CONTROLLER_IDENTITY_FILE = "controller-identity.json"
 CONTROLLER_SUBMIT_TIMEOUT_SECONDS: float = 30
 CONTROLLER_STATUS_TIMEOUT_SECONDS: float = 10
 
@@ -80,13 +84,63 @@ CONTROLLER_ACTION_ID_PREFIX = "ctl_"
 CONTROLLER_OPERATIONS_ROUTE = "/api/v1/operations/deployment/controller-operations"
 
 
+def _installed_controller_state() -> Path | None:
+    """The state directory a host bootstrap installed a controller into.
+
+    Inside the stack, Compose points ``MOONMIND_CONTROLLER_STATE_DIR`` at the
+    controller's directory within the mounted ``./deploy/state``; a
+    checkout-local process finds bootstrap's default ``deploy/state/controller``.
+    """
+    for candidate in _controller_state_candidates():
+        try:
+            if (candidate / _CONTROLLER_SECRET_RELATIVE_PATH).is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _controller_selected_explicitly() -> bool:
+    return any(
+        (os.environ.get(name) or "").strip()
+        for name in (
+            "MOONMIND_CONTROLLER_URL",
+            "MOONMIND_CONTROLLER_SECRET",
+            "MOONMIND_CONTROLLER_SECRET_FILE",
+        )
+    )
+
+
+def _installed_controller_port(state_dir: Path) -> int | None:
+    try:
+        identity = json.loads(
+            (state_dir / _CONTROLLER_IDENTITY_FILE).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    port = identity.get("port") if isinstance(identity, dict) else None
+    if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+        return port
+    return None
+
+
 def controller_base_url(explicit: str | None = None) -> str:
-    """Return the standalone controller endpoint (loopback only by default)."""
-    return (
-        explicit
-        or os.environ.get("MOONMIND_CONTROLLER_URL")
-        or CONTROLLER_DEFAULT_URL
-    ).rstrip("/")
+    """Return the standalone controller endpoint.
+
+    An explicit URL wins. Otherwise the port comes from the installed
+    controller's recorded identity and the host from
+    ``MOONMIND_CONTROLLER_HOST`` (the stack network alias inside Compose,
+    host loopback elsewhere).
+    """
+    selected = explicit or os.environ.get("MOONMIND_CONTROLLER_URL")
+    if selected:
+        return selected.rstrip("/")
+    state_dir = _installed_controller_state()
+    port = _installed_controller_port(state_dir) if state_dir else None
+    if port is None:
+        return CONTROLLER_DEFAULT_URL
+    host = (os.environ.get("MOONMIND_CONTROLLER_HOST") or "").strip()
+    return f"http://{host or CONTROLLER_DEFAULT_HOST}:{port}"
 
 
 def controller_secret() -> str | None:
@@ -94,20 +148,41 @@ def controller_secret() -> str | None:
     explicit = os.environ.get("MOONMIND_CONTROLLER_SECRET")
     if explicit and explicit.strip():
         return explicit.strip()
-    candidates = [
-        os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE") or "",
-        "deploy/state/controller/secrets/controller-bearer",
-    ]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        try:
-            value = Path(candidate).read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if value:
-            return value
-    return None
+    secret_file = os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
+    if secret_file:
+        candidate = Path(secret_file)
+    else:
+        state_dir = _installed_controller_state()
+        if state_dir is None:
+            return None
+        candidate = state_dir / _CONTROLLER_SECRET_RELATIVE_PATH
+    try:
+        value = candidate.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def _bootstrap_never_started_controller() -> bool:
+    """Whether a discovered controller has provably never owned any work.
+
+    Mirrors the host entrypoint's transitional rule: bootstrap may leave a
+    secret before its controller can start (for example an unpublished
+    image). An unreachable controller that recorded no operation owns no
+    stack, so the application-owned updater remains the only writer. An
+    explicitly selected controller, or one with recorded work, keeps its
+    authority.
+    """
+    if _controller_selected_explicitly():
+        return False
+    state_dir = _installed_controller_state()
+    if state_dir is None:
+        return False
+    operations_dir = state_dir / "operations"
+    try:
+        return not (operations_dir.is_dir() and any(operations_dir.iterdir()))
+    except OSError:
+        return False
 
 
 def check_controller_operation_id(operation_id: str) -> str:
@@ -208,25 +283,34 @@ def submit_controller_update(
     """Submit the update to the standalone controller (same as host path).
 
     Returns the controller operation, or ``None`` only when no controller
-    is installed (no deployment-owned secret). Every other outcome is the
+    is installed (no deployment-owned secret, or an unreachable bootstrap
+    controller that never recorded work). Every other outcome is the
     controller's: failures raise :class:`DeploymentOperationError` with a
     distinct code and never permit a competing legacy writer.
     """
     secret = controller_secret()
     if not secret:
         return None
-    return _controller_request(
-        method="POST",
-        path="/v1/operations",
-        secret=secret,
-        payload={
-            "stack": stack,
-            "desiredImage": desired_image,
-            "sourceRevision": source_revision,
-            "reason": reason,
-        },
-        timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
-    )
+    try:
+        return _controller_request(
+            method="POST",
+            path="/v1/operations",
+            secret=secret,
+            payload={
+                "stack": stack,
+                "desiredImage": desired_image,
+                "sourceRevision": source_revision,
+                "reason": reason,
+            },
+            timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+        )
+    except DeploymentOperationError as exc:
+        if (
+            exc.code == "deployment_controller_unavailable"
+            and _bootstrap_never_started_controller()
+        ):
+            return None
+        raise
 
 
 def _require_controller_secret() -> str:

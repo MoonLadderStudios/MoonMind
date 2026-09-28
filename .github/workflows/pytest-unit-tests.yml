@@ -36,6 +36,7 @@ jobs:
       frontend_browser_chromium: ${{ steps.select.outputs.frontend_browser_chromium }}
       frontend_browser_firefox: ${{ steps.select.outputs.frontend_browser_firefox }}
       full_frontend: ${{ steps.select.outputs.full_frontend }}
+      operations_browser_journey: ${{ steps.select.outputs.operations_browser_journey }}
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -1247,6 +1248,59 @@ jobs:
       - name: Verify exclusive backend shard ownership
         run: python tools/verify_test_shard_ownership.py
 
+  operations-browser-journey:
+    # MoonLadderStudios/MoonMind#4502: the production-built Settings
+    # Operations journey. This checkout's compiled dashboard and the real API
+    # application submit to the real deploy/controller endpoint with Temporal
+    # stopped (target, installed state, original error, logs, Retry, reload
+    # reattach, read-only history). Hermetic: no Compose, database, or
+    # provider credentials.
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.operations_browser_journey == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Initialize Omnigent bundle for the API application
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        # Playwright for Python comes from the pyproject `dev` group.
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests] "playwright>=1.58.0,<2.0.0"
+          python -m playwright install --with-deps chromium
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Build the production dashboard
+        run: |
+          npm ci --no-audit --no-fund
+          npm run ui:build
+      - name: Run Operations controller browser journey
+        timeout-minutes: 10
+        env:
+          RUN_E2E_TESTS: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python -m pytest tests/e2e/test_operations_controller_update_browser.py \
+            -v --tb=short --timeout 300
+
   ci-required:
     # Pure, no-checkout result aggregator for required CI
     # (MoonLadderStudios/MoonMind#3326, #3950). It performs no repository
@@ -1280,6 +1334,7 @@ jobs:
       - omnigent-exact-artifact
       - omnigent-deterministic-conformance
       - verify-test-shard-ownership
+      - operations-browser-journey
       - test-frontend
       - check-generated-contracts
     if: always()
@@ -1360,6 +1415,9 @@ jobs:
           require_selected "omnigent-deterministic-conformance" \
             "${{ needs.select-test-suites.outputs.omnigent_conformance }}" \
             "${{ needs.omnigent-deterministic-conformance.result }}"
+          require_selected "operations-browser-journey" \
+            "${{ needs.select-test-suites.outputs.operations_browser_journey }}" \
+            "${{ needs.operations-browser-journey.result }}"
 
           # Always-run aggregators (MoonLadderStudios/MoonMind#3950): both
           # test-frontend and check-generated-contracts use `if: always()`

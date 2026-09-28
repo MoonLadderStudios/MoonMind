@@ -253,6 +253,12 @@ services:
       - MOONMIND_TRUSTED_INGRESS=${MOONMIND_TRUSTED_INGRESS:-}
       - MOONMIND_PUBLIC_BASE_URL=${MOONMIND_PUBLIC_BASE_URL:-}
       - MOONMIND_TRUSTED_PROXIES=${MOONMIND_TRUSTED_PROXIES:-}
+      # Settings Operations submits to the standalone controller that
+      # deploy/controller/bootstrap.py installs under ./deploy/state/controller
+      # (secret and endpoint port read from that mounted state) and reaches it
+      # on deployment-controller-network under the alias bootstrap attaches.
+      - MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller
+      - MOONMIND_CONTROLLER_HOST=moonmind-controller
     env_file:
       - path: .env
         required: false
@@ -281,6 +287,7 @@ services:
     networks:
       - control-plane-network
       - docker-proxy-network
+      - deployment-controller-network
     healthcheck:
       test: [
           "CMD",
@@ -1028,6 +1035,10 @@ services:
       - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
       - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
       - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
+      # The typed deployment.update_compose_stack tool submits to the same
+      # installed controller as Settings Operations (see the api service).
+      - MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller
+      - MOONMIND_CONTROLLER_HOST=moonmind-controller
     env_file:
       - path: .env
         required: false
@@ -1063,6 +1074,7 @@ services:
     networks:
       - control-plane-network
       - docker-proxy-network
+      - deployment-controller-network
     restart: unless-stopped
 
   temporal-worker-integrations:
@@ -1726,6 +1738,12 @@ networks:
     name: ${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
+    internal: true
+  # Controller callers only (api, temporal-worker-deployment-control). The
+  # standalone controller joins it from its own Compose project when present;
+  # its endpoint stays unpublished beyond host loopback.
+  deployment-controller-network:
+    name: ${MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK:-moonmind_deployment-controller-network}
     internal: true
   sandbox-egress-network:
     name: ${MOONMIND_SANDBOX_EGRESS_NETWORK:-moonmind_sandbox-egress-network}

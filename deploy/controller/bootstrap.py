@@ -34,6 +34,12 @@ DEFAULT_IMAGE = os.environ.get(
 # Derived identity spreads independent deployments across stable project
 # names and loopback ports instead of colliding on one shared name/port.
 DERIVED_PORT_RANGE = 100
+# The stack's internal network that its controller callers (the API and the
+# deployment worker) join. The controller attaches to it under this alias
+# when the stack has created it; it is never required for the controller
+# itself to start.
+STACK_NETWORK_KEY = "deployment-controller-network"
+STACK_NETWORK_ALIAS = "moonmind-controller"
 
 
 class InsideControllerError(RuntimeError):
@@ -148,6 +154,43 @@ def split_image_reference(image: str) -> tuple[str, str | None, str | None]:
 
 def _run_capture(args: list) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, timeout=120, check=False)
+
+
+def _stack_project(state_dir: Path, stack: str) -> str:
+    """The stack's Compose project: the host-recorded target's, else the stack."""
+    target = record_mod.OperationStore(state_dir).recorded_target(stack=stack)
+    project = (target or {}).get("project")
+    return str(project) if project else stack
+
+
+def stack_network(state_dir: Path, stack: str) -> str | None:
+    """Find the stack's controller-access network from its Compose labels.
+
+    Returns ``None`` when the stack has not created it (or Docker cannot be
+    asked), so the controller still starts independently of the stack.
+    """
+    try:
+        completed = _run_capture(
+            [
+                "docker",
+                "network",
+                "ls",
+                "--filter",
+                f"label=com.docker.compose.project={_stack_project(state_dir, stack)}",
+                "--filter",
+                f"label=com.docker.compose.network={STACK_NETWORK_KEY}",
+                "--format",
+                "{{.Name}}",
+            ]
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    names = [
+        line.strip() for line in (completed.stdout or "").splitlines() if line.strip()
+    ]
+    return names[0] if len(names) == 1 else None
 
 
 def resolve_image_digest(image: str) -> str:
@@ -293,6 +336,7 @@ def render_compose_file(
     image: str = DEFAULT_IMAGE,
     port: int = DEFAULT_PORT,
     project: str | None = None,
+    network: str | None = None,
 ) -> Path:
     """Render the separate controller Compose project (REQ-02).
 
@@ -302,7 +346,10 @@ def render_compose_file(
     ``/mnt/<drive>`` mounts. A missing required host source fails fast
     instead of becoming an auto-created empty directory. The Compose
     project name is this deployment's stable identity (see
-    :func:`project_for_repo`), never a shared global.
+    :func:`project_for_repo`), never a shared global. When the stack's
+    controller-access ``network`` exists, the controller also joins it so
+    the stack's API and deployment worker reach the same endpoint the host
+    uses; the host-loopback port stays the only published binding.
     """
     state_src = mounts_mod.resolve_bind_source(str(state_dir))
     repo_src = mounts_mod.resolve_bind_source(str(repo))
@@ -331,6 +378,17 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
       moonmind.controller.managed: "true"
+"""
+    if network:
+        content += f"""    networks:
+      default: {{}}
+      stack:
+        aliases:
+          - {STACK_NETWORK_ALIAS}
+networks:
+  stack:
+    name: {network}
+    external: true
 """
     path.write_text(content, encoding="utf-8")
     return path
@@ -375,6 +433,7 @@ def cmd_install(args, env) -> int:
         image=pinned,
         port=identity["port"],
         project=identity["project"],
+        network=stack_network(state_dir, args.stack),
     )
     print(f"Controller project rendered: {compose_file}", flush=True)
     print(f"Deployment-owned secret: {_secret_path(state_dir)}", flush=True)
@@ -397,7 +456,18 @@ def cmd_start(args, env) -> int:
     repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
     project = _project_for_state(state_dir, repo)
     # The privileged container only starts from a verified digest.
-    require_verified_image(state_dir, args.image)
+    pinned = require_verified_image(state_dir, args.image)
+    identity = load_identity(state_dir)
+    if identity:
+        # Re-render so a stack network created after install is attached.
+        render_compose_file(
+            state_dir=state_dir,
+            repo=repo,
+            image=pinned,
+            port=identity["port"],
+            project=identity["project"],
+            network=stack_network(state_dir, args.stack),
+        )
     code = _compose(state_dir, project, "up", "-d", "--wait")
     if code != 0:
         raise RuntimeError(f"Controller start failed (exit {code}).")
@@ -436,6 +506,7 @@ def cmd_update(args, env) -> int:
             image=pinned,
             port=identity["port"],
             project=identity["project"],
+            network=stack_network(state_dir, stack),
         )
         code = _compose(state_dir, identity["project"], "pull", CONTROLLER_SERVICE)
         if code != 0:
@@ -464,6 +535,7 @@ def cmd_restore(args, env) -> int:
         image=pinned,
         port=identity["port"],
         project=identity["project"],
+        network=stack_network(state_dir, args.stack),
     )
     code = _compose(state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE)
     if code != 0:
