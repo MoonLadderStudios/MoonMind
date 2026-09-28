@@ -83,7 +83,18 @@ _DASHBOARD_UI_ERROR_DETAIL = (
     "Dashboard asset bundle is missing or invalid. Check server logs and rebuild "
     "the UI assets before retrying."
 )
-_WORKFLOW_DETAIL_TABS = {"chat", "overview", "steps", "artifacts", "runs", "debug"}
+# Canonical tabs plus the legacy steps/runs/artifacts aliases the SPA
+# redirects to execution/evidence (frontend/src/lib/workflowDetailRoutes.ts).
+_WORKFLOW_DETAIL_TABS = {
+    "chat",
+    "overview",
+    "execution",
+    "evidence",
+    "debug",
+    "steps",
+    "artifacts",
+    "runs",
+}
 _RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
     "manifests",
     "new",
@@ -307,9 +318,8 @@ _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "message": (
         "Workflow console route was not found. Use /workflows, /workflows/new, "
         "/workflows/{workflowId}, /workflows/{workflowId}/chat, "
-        "/workflows/{workflowId}/overview, /workflows/{workflowId}/steps, "
-        "/workflows/{workflowId}/artifacts, /workflows/{workflowId}/runs, "
-        "or /workflows/{workflowId}/debug."
+        "/workflows/{workflowId}/overview, /workflows/{workflowId}/execution, "
+        "/workflows/{workflowId}/evidence, or /workflows/{workflowId}/debug."
     ),
 }
 
