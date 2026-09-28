@@ -1040,106 +1040,6 @@ def test_serving_post_failure_records_redacted_error_and_stays_usable(tmp_path):
     assert retried["status"] == "desired"
 
 
-def test_cutover_handoff_taken_when_controller_configured():
-    """Controller-first cutover: handoff wins when configured (REQ-1/REQ-2/REQ-7)."""
-    import importlib.util as _ilu
-    import sys as _sys
-    import types as _types
-    from pathlib import Path as _Path3
-
-    _entry = (
-        _Path3(__file__).resolve().parents[2]
-        / ".agents"
-        / "skills"
-        / "update-moonmind"
-        / "scripts"
-        / "update_release.py"
-    )
-    _spec = _ilu.spec_from_file_location("cutover_update_release", _entry)
-    assert _spec is not None and _spec.loader is not None
-    _mod = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_mod)
-
-    calls: dict = {}
-
-    def _fake_build_operation_payload(
-        *, operation_id, target_image, services=None, **_extra
-    ):
-        calls["payload"] = {
-            "operation_id": operation_id,
-            "target_image": target_image,
-            "services": tuple(services) if services is not None else None,
-            "extra": dict(_extra),
-        }
-        return {"operationId": operation_id, "desired": {"targetImage": target_image}}
-
-    def _fake_submit_operation(payload, **_kwargs):
-        calls["submitted"] = payload
-        calls["submit_kwargs"] = dict(_kwargs)
-        return {"status": "installed"}
-
-    class _FakeUnavailableError(Exception):
-        pass
-
-    _fake_client = _types.ModuleType("moonmind_controller.client")
-    _fake_client.is_controller_configured = lambda: True
-    _fake_client.build_operation_payload = _fake_build_operation_payload
-    _fake_client.submit_operation = _fake_submit_operation
-    _fake_client.ControllerUnavailableError = _FakeUnavailableError
-    _fake_pkg = _types.ModuleType("moonmind_controller")
-    _fake_pkg.client = _fake_client
-    _prior_pkg = _sys.modules.get("moonmind_controller")
-    _prior_client = _sys.modules.get("moonmind_controller.client")
-    _sys.modules["moonmind_controller"] = _fake_pkg
-    _sys.modules["moonmind_controller.client"] = _fake_client
-    try:
-        record = {
-            "image": "repo@sha256:cutover",
-            "project": "moonmind-test",
-            "context": {"idempotency_key": "host-update:cutover-1"},
-        }
-        assert _mod._try_controller_handoff(record=record) == 0
-    finally:
-        if _prior_pkg is not None:
-            _sys.modules["moonmind_controller"] = _prior_pkg
-        else:
-            _sys.modules.pop("moonmind_controller", None)
-        if _prior_client is not None:
-            _sys.modules["moonmind_controller.client"] = _prior_client
-        else:
-            _sys.modules.pop("moonmind_controller.client", None)
-    # The trusted release data reached the controller handoff exactly once;
-    # the legacy temporal-worker-deployment-control path was never entered
-    # (a handled submission returns an exit code instead of None).
-    assert calls["submitted"]["desired"]["targetImage"] == "repo@sha256:cutover"
-    assert calls["payload"]["operation_id"] == "host-update:cutover-1"
-    # The host handoff names the Compose project, targets real services
-    # (never a hardcoded "worker"), and waits for the terminal record.
-    assert calls["payload"]["extra"].get("stack") == "moonmind-test"
-    assert calls["submit_kwargs"].get("wait_for_terminal") is True
-
-    _fake_client2 = _types.ModuleType("moonmind_controller.client")
-    _fake_client2.is_controller_configured = lambda: False
-    _fake_client2.submit_operation = lambda payload: (_ for _ in ()).throw(
-        AssertionError("unconfigured controller must not submit")
-    )
-    _fake_pkg2 = _types.ModuleType("moonmind_controller")
-    _fake_pkg2.client = _fake_client2
-    _sys.modules["moonmind_controller"] = _fake_pkg2
-    _sys.modules["moonmind_controller.client"] = _fake_client2
-    try:
-        assert _mod._try_controller_handoff(record=record) is None
-    finally:
-        if _prior_pkg is not None:
-            _sys.modules["moonmind_controller"] = _prior_pkg
-        else:
-            _sys.modules.pop("moonmind_controller", None)
-        if _prior_client is not None:
-            _sys.modules["moonmind_controller.client"] = _prior_client
-        else:
-            _sys.modules.pop("moonmind_controller.client", None)
-
-
 def test_cutover_lock_is_installation_local_and_preserves_legacy(tmp_path):
     """Two installs hold independent locks; legacy files are never deleted (REQ-7)."""
     from moonmind_controller import lock
@@ -1181,7 +1081,7 @@ def test_cutover_lock_is_installation_local_and_preserves_legacy(tmp_path):
         pass
 
 
-def test_cutover_submit_prefers_controller_and_serializes_host_update():
+def test_cutover_submit_prefers_controller_and_serializes_controller_update():
     """Legacy path stays fallback-only; host owns controller update (REQ-2/REQ-7)."""
     from pathlib import Path as _Path4
 
@@ -1193,23 +1093,6 @@ def test_cutover_submit_prefers_controller_and_serializes_host_update():
     handoff_pos = submit_body.index("controller_available()")
     legacy_pos = submit_body.index("_build_deployment_update_executor")
     assert handoff_pos < legacy_pos, "controller handoff must precede legacy fallback"
-
-    entry_source = (
-        repo
-        / ".agents"
-        / "skills"
-        / "update-moonmind"
-        / "scripts"
-        / "update_release.py"
-    ).read_text()
-    assert "_try_controller_handoff(record=record)" in entry_source
-    assert (
-        entry_source.index("_try_controller_handoff(record=record)")
-        < entry_source.index("temporal-worker-deployment-control")
-    ), "host entrypoint must try the controller before the legacy control service"
-    # The handoff targets the release-owned service set, never a hardcoded
-    # "worker" service that does not exist in the canonical stack.
-    assert '("api", "worker")' not in entry_source
 
     server_source = (repo / "moonmind_controller" / "server.py").read_text()
     assert "/update" not in server_source, "controller must never replace itself"

@@ -1592,6 +1592,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/deployment/controller-operations/{operation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Deployment Controller Operation
+         * @description Request the controller's fresh bounded attempt for one operation.
+         */
+        post: operations["retry_deployment_controller_operation_api_v1_operations_deployment_controller_operations__operation_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/deployment/controller-operations/{operation_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deployment Controller Operation Logs
+         * @description Return the controller's redacted attempt and verification record.
+         */
+        get: operations["get_deployment_controller_operation_logs_api_v1_operations_deployment_controller_operations__operation_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/deployment/stacks/{stack}": {
         parameters: {
             query?: never;
@@ -7612,6 +7652,27 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DeploymentControllerLogsResponse */
+        DeploymentControllerLogsResponse: {
+            /** Operationid */
+            operationId: string;
+            /** Status */
+            status?: string | null;
+            /** Errorsummary */
+            errorSummary?: string | null;
+            /** Attempts */
+            attempts?: {
+                [key: string]: unknown;
+            }[];
+            /** Verification */
+            verification?: {
+                [key: string]: unknown;
+            }[];
+            /** Reportingfailures */
+            reportingFailures?: unknown[];
+        } & {
+            [key: string]: unknown;
+        };
         /** DeploymentCurrentImageModel */
         DeploymentCurrentImageModel: {
             /** Requestedimage */
@@ -7698,6 +7759,25 @@ export interface components {
             /** Afterbuildid */
             afterBuildId?: string | null;
             rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
+            /** Operationid */
+            operationId?: string | null;
+            /** Controllerstatus */
+            controllerStatus?: string | null;
+            /** Installedimage */
+            installedImage?: string | null;
+            /** Errorsummary */
+            errorSummary?: string | null;
+            /** Verification */
+            verification?: components["schemas"]["DeploymentVerificationCheckModel"][];
+            /** Reportingfailures */
+            reportingFailures?: string[];
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+            /** Logsurl */
+            logsUrl?: string | null;
         };
         /** DeploymentStackStateResponse */
         DeploymentStackStateResponse: {
@@ -7763,14 +7843,22 @@ export interface components {
             /** Deploymentupdaterunid */
             deploymentUpdateRunId: string;
             /** Taskid */
-            taskId: string;
+            taskId?: string | null;
             /** Workflowid */
-            workflowId: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "QUEUED";
+            workflowId?: string | null;
+            /** Operationid */
+            operationId?: string | null;
+            /** Status */
+            status: string;
+        };
+        /** DeploymentVerificationCheckModel */
+        DeploymentVerificationCheckModel: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail?: string | null;
         };
         /** EligibleProviderProfile */
         EligibleProviderProfile: {
@@ -17428,6 +17516,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_deployment_controller_operation_api_v1_operations_deployment_controller_operations__operation_id__retry_post: {
+        parameters: {
+            query?: {
+                stack?: string;
+            };
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deployment_controller_operation_logs_api_v1_operations_deployment_controller_operations__operation_id__logs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentControllerLogsResponse"];
                 };
             };
             /** @description Validation Error */
