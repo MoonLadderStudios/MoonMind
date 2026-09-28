@@ -2123,6 +2123,16 @@ class TemporalExecutionService:
             )
 
         workflow_type_enum = self._parse_workflow_type(workflow_type)
+        # MoonLadderStudios/MoonMind#4193: retired ManifestIngest must reject
+        # before provider-profile resolution so stale targetRuntime /
+        # providerProfileRef values cannot mask the retirement rejection
+        # with a profile-mismatch error.
+        if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
+            raise TemporalExecutionValidationError(
+                "MoonMind.ManifestIngest was retired "
+                "(MoonLadderStudios/MoonMind#4192): the new release does not "
+                "register or launch manifest ingest workflows."
+            )
         owner_type_enum, owner = self._resolve_owner_metadata(
             owner_id=owner_id,
             owner_type=owner_type,
@@ -2167,12 +2177,6 @@ class TemporalExecutionService:
             target={"initialParameters": initial_parameters},
         )
 
-        if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
-            raise TemporalExecutionValidationError(
-                "MoonMind.ManifestIngest was retired "
-                "(MoonLadderStudios/MoonMind#4192): the new release does not "
-                "register or launch manifest ingest workflows."
-            )
         if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
             if not has_user_workflow_plan_source(
                 initial_parameters=initial_parameters,
