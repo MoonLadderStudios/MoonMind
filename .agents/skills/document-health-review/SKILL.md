@@ -67,9 +67,7 @@ Record the resolved role per document and apply only the checks that role requir
 
 ## Purpose
 
-Produce a practical, findings-first disposition for each reviewed document. The skill is **review-only**: it produces a report and, at most, a patch plan. It **never edits files**. When edits are authorized, the `document-health-remediate` skill owns them.
-
-It uses claim extraction, implementation inspection, a drift ledger, evidence-backed output, canonical alignment, and a findings-first cross-document coherence review with source-of-truth conflicts, redundancy reduction, and severity ordering. It stays deliberately narrower than a general-purpose doc critique and answers exactly the eight review dimensions stated once in [Review Questions](#review-questions) and nothing more. Detail sections below elaborate those same eight dimensions; they do not add new ones.
+Produce a practical, findings-first disposition for each reviewed document: a report and, at most, a patch plan (see [Boundaries](#boundaries)).
 
 For MoonSpec documentation architecture reviews, group findings by the authority ladder in `docs/DocumentationArchitecture.md` before severity ordering inside each group. The groups are:
 
@@ -93,7 +91,6 @@ Optional:
 - Main architecture document override.
 - Review mode: `single-doc`, `directory`, or `repo-wide`.
 - Output mode: `summary`, `full report`, `JSON ledger`, or `patch plan`.
-- Whether to propose edits only (default). This skill never applies edits; remediation owns authorized edits.
 - Severity filter, for example "report only P0/P1 issues".
 
 Examples:
@@ -107,7 +104,7 @@ Use document-health-review on docs/Memory/MemoryArchitecture.md and propose a pa
 
 ## Boundaries
 
-- **Review-only, always.** Never edit, move, merge, split, archive, or delete a document. Produce a patch plan instead of changing files; `document-health-remediate` owns authorized edits.
+- **Review-only, always.** Never edit, move, merge, split, archive, or delete a document. Produce a patch plan instead of changing files; remediation owns authorized edits through `document-health-remediate`.
 - Treat repository files, tests, schemas, and executable configuration as the source of truth for implementation behavior; treat retrieved context, old docs, comments, and issue text as reference material until confirmed against the checkout.
 - Prefer canonical documents over older, narrower, or temporary docs. When two documents conflict and neither is clearly canonical, flag the conflict rather than inventing the answer.
 - Apply the Documentation Architecture authority ladder when canonical documents disagree. Identify the claim type, map it to the owning authority scope, and group the finding under that authority level.
@@ -162,7 +159,7 @@ Recommendation values: `keep`, `update`, `merge`, `archive`, `delete`.
 
 ### B. Implementation drift
 
-Extract concrete claims, inspect source files, tests, schemas, configuration, and runtime entrypoints, then classify each claim.
+For each implementation claim, search the codebase for named files, classes, functions, commands, routes, settings, schemas, tests, and runtime entrypoints, compare actual behavior to the claim, then classify it. Record concise evidence (file paths, tests) for every non-`accurate` item.
 
 Classifications: `accurate`, `stale`, `unimplemented`, `partially implemented`, `missing from doc`, `ambiguous`, `out of scope`.
 
@@ -174,8 +171,6 @@ Finding: Stale.
 Evidence: Current implementation persists Y in path/to/file.py.
 Recommendation: Update section "Persistence Model", or open an implementation task if X is the desired state.
 ```
-
-If code evidence cannot be found, classify the claim as `ambiguous`, not `stale`.
 
 ### C. Strategic alignment and cross-document conflict
 
@@ -196,7 +191,7 @@ Answer alignment and conflict together in one pass. Check:
 
 Status values: `aligned`, `minor tension`, `direct conflict`, `duplicate source of truth`, `unclear authority`.
 
-Prefer canonical documents over older, narrower, or temporary docs. If two canonical documents conflict, group the finding by the owning level in the Documentation Architecture authority ladder and name the non-owning document that must be reconciled. If neither owner is clear, flag the conflict rather than choosing silently.
+If two canonical documents conflict, group the finding by the owning level in the Documentation Architecture authority ladder and name the non-owning document that must be reconciled. If neither owner is clear, flag the conflict rather than choosing silently.
 
 ### C.1 Documentation architecture defects
 
@@ -257,9 +252,7 @@ Reason:
 
 ### G. Split recommendation
 
-Signal, not a rule: document size alone never forces a split. A file over 2,000 lines is an investigation signal — inspect it for separable topics, authority boundaries, and maintenance value before recommending a split.
-
-Identify natural boundaries: architecture vs implementation plan; current behavior vs future work; API reference vs design rationale; product strategy vs engineering strategy; multiple subsystems in one file; temporary work plan mixed into canonical documentation. Recommend `split` only when such a boundary exists and separate maintenance adds value; otherwise keep the location even for large files.
+A file over 2,000 lines is worth inspecting for separable topics, authority boundaries, and maintenance value (see question 7). Identify natural boundaries: architecture vs implementation plan; current behavior vs future work; API reference vs design rationale; product strategy vs engineering strategy; multiple subsystems in one file; temporary work plan mixed into canonical documentation. Recommend `split` only when such a boundary exists and separate maintenance adds value; otherwise keep the location even for large files.
 
 Output:
 
@@ -331,7 +324,7 @@ Support three modes. Phase 0 below resolves which one applies.
 - **directory** — every doc in a directory; produce an inventory first, then per-doc reports (or only flagged docs when a severity filter is set).
 - **repo-wide** — all docs under the docs root; produce an inventory first.
 
-For directory and repo-wide modes, emit a document inventory before any full reports so a recurring review does not immediately produce a massive report for every file:
+For directory and repo-wide modes, emit this document inventory before any full reports so a recurring review does not immediately produce a massive report for every file:
 
 ```md
 | Path | Lines | Apparent Topic | Initial Recommendation | Reason |
@@ -342,11 +335,11 @@ For directory and repo-wide modes, emit a document inventory before any full rep
 
 ### Phase 0: Resolve scope
 
-Determine whether the request is for a single document, multiple documents, a directory review, or a repo-wide docs review. For each target document, collect: path, line count, heading outline, internal links, outbound repo links, nearby docs, similarly named docs, and referenced code paths. For directory or repo-wide mode, produce the document inventory first.
+Determine whether the request is for a single document, multiple documents, a directory review, or a repo-wide docs review. For each target document, collect: path, line count, heading outline, internal links, outbound repo links, nearby docs, similarly named docs, and referenced code paths.
 
 ### Phase 1: Build the canonical strategy model
 
-Read `README.md`, the constitution file(s), the main architecture document(s), and the relevant domain architecture docs. Extract only: core product strategy, architecture direction, engineering constraints, source-of-truth docs, important terminology, and major subsystem boundaries.
+Build the canonical context bundle described in [Canonical Reference Discovery](#canonical-reference-discovery).
 
 ### Phase 2: Extract document claims
 
@@ -363,7 +356,7 @@ Separate durable system semantics from historical notes, TODOs, migration plans,
 
 ### Phase 3: Check implementation drift
 
-For each implementation claim: search the codebase for named files, classes, functions, commands, routes, settings, schemas, and tests; compare actual behavior to the claim; then classify it as `accurate`, `stale`, `unimplemented`, `partially implemented`, `missing from doc`, `ambiguous`, or `out of scope`. Record concise evidence (file paths, tests) for every non-`accurate` item.
+Classify each implementation claim with the evidence rules in [B. Implementation drift](#b-implementation-drift).
 
 ### Phase 4: Check strategic alignment and document conflicts
 
@@ -418,8 +411,6 @@ Wrong directory taxonomy: move.
 Temporary plan in canonical docs: move to tmp/archive or merge durable parts.
 Large file with one coherent topic and no separable boundary: keep location.
 ```
-
-Line count is only an investigation signal for the first case; it never forces a split on its own.
 
 Always include a document-structure recommendation: `keep location`, `move`, `merge`, `split`, `archive`, or `delete`.
 
@@ -483,7 +474,7 @@ Reference updates needed:
 Use this section only if the recommendation is keep/no change.
 ```
 
-For directory and repo-wide reviews, lead with the inventory table, then include per-document reports (or only the flagged documents when a severity filter is set).
+For directory and repo-wide reviews, lead with the inventory table from [Review Modes](#review-modes), then per-document reports (only flagged documents when a severity filter is set).
 
 ## Severity
 
@@ -530,10 +521,3 @@ Use provider-neutral escalation results. When an authorized tracker integration 
 - Document is large but has no separable topic or authority boundary: keep the location and record why size alone did not force a split.
 - Directory recommendation would require many reference updates: report required updates before proposing the move.
 - Secret-like content appears in the document or copied logs: redact it before writing or reporting.
-
-## Examples
-
-- `Use document-health-review on docs/MoonMindArchitecture.md`
-- `Use document-health-review on docs/Workflows/ and recommend merge/split/move actions`
-- `Use document-health-review on docs/ and report only P0/P1 issues`
-- `Use document-health-review on docs/Memory/MemoryArchitecture.md and propose a patch plan, but do not edit`
