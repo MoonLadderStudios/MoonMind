@@ -55,8 +55,36 @@ PRE_DISPATCH_ACTIVITIES = frozenset(
         "omnigent.evaluate_session_admission",
         "provider_profile.list",
         "provider_profile.manager_state",
+        "provider_profile.ensure_manager",
     }
 )
+
+
+def _capacity_wait_expired(failure):
+    """Recognize the closed AgentRun's capacity failure, never arbitrary errors.
+
+    Legacy lease expiry was an untyped ApplicationError. A configuration error
+    can occur after requesting a slot, so acknowledgment alone is not enough.
+    An unexpected nested cause remains evidence requiring recovery.
+    """
+    if not failure.HasField("application_failure_info"):
+        return False
+    info = failure.application_failure_info
+    if not info.non_retryable:
+        return False
+    if info.type == "SlotAcquisitionTimeout":
+        # Raised inside `except TimeoutError` by AgentRun. Temporal preserves
+        # that Python exception context, unlike the cause-free legacy expiry.
+        return not failure.HasField("cause") or (
+            failure.cause.HasField("application_failure_info")
+            and failure.cause.application_failure_info.type == "TimeoutError"
+            and not failure.cause.HasField("cause")
+        )
+    return (
+        not failure.HasField("cause")
+        and info.type in {"", "ApplicationError"}
+        and failure.message == "GitHub issue claim lease expired"
+    )
 
 
 def _repository_identity(value):
@@ -117,7 +145,8 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
     start and shared mutation settled. A completed owner whose attempt already
     recorded its outcome (*outcome_recorded*) is left to that journey before
     any history is read. An undispatched agent has a complete initial-run
-    history containing only known admission Activities and no child starts.
+    history containing only known admission Activities and no child starts,
+    a confirmed capacity request with no grant, and a capacity-wait failure.
     The workflow's existence or an absent runtime binding alone proves nothing.
     """
     namespace, workflow_id = receipt.owner.split("/", 1)
@@ -185,6 +214,10 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
         shared_started = set()
         initial_run = False
         admission_only = True
+        capacity_requests = set()
+        capacity_requested = False
+        capacity_granted = False
+        capacity_wait_expired = False
 
         def _scheduled_id(attrs, *names):
             for name in names:
@@ -218,6 +251,37 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
                 initial_run = not (
                     event.workflow_execution_started_event_attributes.continued_execution_run_id
                 )
+            if event.HasField(
+                "signal_external_workflow_execution_initiated_event_attributes"
+            ):
+                signal = (
+                    event.signal_external_workflow_execution_initiated_event_attributes
+                )
+                if signal.signal_name == "request_slot" and signal.namespace in {
+                    "",
+                    namespace,
+                }:
+                    capacity_requests.add(event.event_id)
+            if event.HasField("external_workflow_execution_signaled_event_attributes"):
+                if (
+                    event.external_workflow_execution_signaled_event_attributes.initiated_event_id
+                    in capacity_requests
+                ):
+                    capacity_requested = True
+            if event.HasField("workflow_execution_signaled_event_attributes"):
+                if (
+                    event.workflow_execution_signaled_event_attributes.signal_name
+                    == "slot_assigned"
+                ):
+                    capacity_granted = True
+            if event.HasField("workflow_execution_failed_event_attributes"):
+                capacity_wait_expired = _capacity_wait_expired(
+                    event.workflow_execution_failed_event_attributes.failure
+                )
+            if event.HasField("activity_task_failed_event_attributes"):
+                # Do not replace failed admission/configuration with a refund,
+                # even if the lease maintainer subsequently reports expiry.
+                admission_only = False
             if event.HasField(
                 "start_child_workflow_execution_initiated_event_attributes"
             ):
@@ -281,6 +345,9 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
             and initial_run
             and admission_only
             and not initiated
+            and capacity_requested
+            and not capacity_granted
+            and capacity_wait_expired
         ):
             undispatched_agents.add((identity[0], described.run_id))
     return agents, completed, undispatched_agents

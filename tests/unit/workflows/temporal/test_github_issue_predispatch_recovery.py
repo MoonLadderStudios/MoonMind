@@ -9,15 +9,23 @@ from unittest.mock import AsyncMock
 
 import pytest
 from temporalio.api.common.v1 import ActivityType, WorkflowExecution
+from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
 from temporalio.api.history.v1 import (
     ActivityTaskCompletedEventAttributes,
+    ActivityTaskFailedEventAttributes,
     ActivityTaskScheduledEventAttributes,
     ChildWorkflowExecutionStartedEventAttributes,
+    ExternalWorkflowExecutionSignaledEventAttributes,
     HistoryEvent,
+    SignalExternalWorkflowExecutionInitiatedEventAttributes,
     StartChildWorkflowExecutionInitiatedEventAttributes,
+    WorkflowExecutionFailedEventAttributes,
+    WorkflowExecutionSignaledEventAttributes,
     WorkflowExecutionStartedEventAttributes,
 )
 from temporalio.client import WorkflowExecutionStatus
+from temporalio.converter import DefaultFailureConverter, DefaultPayloadConverter
+from temporalio.exceptions import ApplicationError
 
 from api_service.db.models import OmnigentRuntimeBindingRecord, ProviderProfileSlotLease
 from moonmind.workflows.temporal import github_issue_claim_recovery as recovery
@@ -40,7 +48,19 @@ from tests.unit.workflows.temporal.test_github_issue_claim_recovery import (
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
 
-def _closed_capacity_wait(*, extra_activity="", previous_run=""):
+def _closed_capacity_wait(
+    *,
+    extra_activity="",
+    previous_run="",
+    failure_type="",
+    failure_message="GitHub issue claim lease expired",
+    capacity_request=True,
+    failed_admission=False,
+    nested_failure=False,
+    capacity_acknowledged=True,
+    capacity_granted=False,
+    terminal_recorded=True,
+):
     """The September outage: renew, inspect admission, wait, expire; no launch."""
     started = HistoryEvent(
         event_id=1,
@@ -75,6 +95,92 @@ def _closed_capacity_wait(*, extra_activity="", previous_run=""):
                     ),
                 ),
             ]
+        )
+        if failed_admission and name == "integration.resolve_adapter_metadata":
+            events[-1] = HistoryEvent(
+                event_id=event_id + 1,
+                activity_task_failed_event_attributes=ActivityTaskFailedEventAttributes(
+                    scheduled_event_id=event_id,
+                    failure=Failure(
+                        message="Adapter is not registered",
+                        application_failure_info=ApplicationFailureInfo(
+                            type="ValueError", non_retryable=True
+                        ),
+                    ),
+                ),
+            )
+    if capacity_request:
+        event_id = len(events) + 1
+        events.extend(
+            [
+                HistoryEvent(
+                    event_id=event_id,
+                    signal_external_workflow_execution_initiated_event_attributes=SignalExternalWorkflowExecutionInitiatedEventAttributes(
+                        namespace="default",
+                        workflow_execution=WorkflowExecution(
+                            workflow_id="provider-profile-manager:codex"
+                        ),
+                        signal_name="request_slot",
+                    ),
+                ),
+                HistoryEvent(
+                    event_id=event_id + 1,
+                    external_workflow_execution_signaled_event_attributes=ExternalWorkflowExecutionSignaledEventAttributes(
+                        initiated_event_id=event_id
+                    ),
+                ),
+            ]
+        )
+        if not capacity_acknowledged:
+            events.pop()
+    if capacity_granted:
+        events.append(
+            HistoryEvent(
+                event_id=len(events) + 1,
+                workflow_execution_signaled_event_attributes=WorkflowExecutionSignaledEventAttributes(
+                    signal_name="slot_assigned"
+                ),
+            )
+        )
+    failure = Failure(
+        message=failure_message,
+        application_failure_info=ApplicationFailureInfo(
+            type=failure_type, non_retryable=True
+        ),
+    )
+    if failure_type == "SlotAcquisitionTimeout":
+        # AgentRun raises this from wait_condition's TimeoutError; use the SDK
+        # converter so its real exception context is retained in the fixture.
+        try:
+            try:
+                raise TimeoutError()
+            except TimeoutError:
+                raise ApplicationError(
+                    "Provider capacity wait timed out",
+                    type="SlotAcquisitionTimeout",
+                    non_retryable=True,
+                )
+        except ApplicationError as error:
+            DefaultFailureConverter().to_failure(
+                error, DefaultPayloadConverter(), failure
+            )
+    if nested_failure:
+        failure.cause.CopyFrom(
+            Failure(
+                message="Invalid profile",
+                application_failure_info=ApplicationFailureInfo(
+                    type="ProfileResolutionError", non_retryable=True
+                ),
+            )
+        )
+    if terminal_recorded:
+        events.append(
+            HistoryEvent(
+                event_id=len(events) + 1,
+                workflow_execution_failed_event_attributes=WorkflowExecutionFailedEventAttributes(
+                    failure=failure
+                ),
+            )
         )
     parent_events = [
         HistoryEvent(
@@ -135,6 +241,17 @@ def _closed_capacity_wait(*, extra_activity="", previous_run=""):
         "dispatched",
         "unknown_activity",
         "prior_run",
+        "manager_started",
+        "permanent_profile",
+        "permanent_adapter",
+        "failed_admission",
+        "missing_capacity_request",
+        "nested_permanent",
+        "request_not_acknowledged",
+        "capacity_granted",
+        "missing_terminal",
+        "capacity_timeout",
+        "capacity_timeout_permanent",
     ],
 )
 async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
@@ -188,8 +305,26 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
         extra_activity={
             "dispatched": "omnigent.execute",
             "unknown_activity": "future.dispatch",
+            "manager_started": "provider_profile.ensure_manager",
         }.get(fault, ""),
         previous_run="earlier-agent-run" if fault == "prior_run" else "",
+        failure_type={
+            "permanent_profile": "ProfileResolutionError",
+            "permanent_adapter": "ValueError",
+            "capacity_timeout": "SlotAcquisitionTimeout",
+            "capacity_timeout_permanent": "SlotAcquisitionTimeout",
+        }.get(fault, ""),
+        failure_message=(
+            "Invalid profile or adapter"
+            if fault in {"permanent_profile", "permanent_adapter"}
+            else "GitHub issue claim lease expired"
+        ),
+        capacity_request=fault != "missing_capacity_request",
+        failed_admission=fault == "failed_admission",
+        nested_failure=fault in {"nested_permanent", "capacity_timeout_permanent"},
+        capacity_acknowledged=fault != "request_not_acknowledged",
+        capacity_granted=fault == "capacity_granted",
+        terminal_recorded=fault != "missing_terminal",
     )
     result = await recovery.reconcile_local_claims(
         state={},
@@ -197,7 +332,13 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
         service=service,
         client_factory=AsyncMock(return_value=client),
     )
-    if fault not in {"none", "exhausted", "lost_ack"}:
+    if fault not in {
+        "none",
+        "exhausted",
+        "lost_ack",
+        "manager_started",
+        "capacity_timeout",
+    }:
         assert result["released"] == 0
         assert result["results"][0]["reasonCode"] == (
             "runtime_cleanup_pending"
