@@ -52,6 +52,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "moonspec-align",
             "moonspec-implement",
             "moonspec-verify",
+            "auto",
             "moonspec-doc-reconcile",
         ]
         seeded_step_titles = [step["title"] for step in template.steps]
@@ -158,9 +159,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
         assert "moonspec-assess" in jira_orchestrate_steps
-        assert len(jira_orchestrate_steps) == 26
-        assert jira_orchestrate_steps.count("moonspec-implement") == 7
-        assert jira_orchestrate_steps.count("moonspec-verify") == 7
+        assert len(jira_orchestrate_steps) == 15
+        assert jira_orchestrate_steps.count("moonspec-implement") == 1
+        assert jira_orchestrate_steps.count("moonspec-verify") == 1
         assert jira_orchestrate_steps.count("moonspec-doc-reconcile") == 1
         jira_orchestrate_titles = [
             step["title"] for step in jira_orchestrate_template.steps
@@ -200,21 +201,20 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_step = next(
             step
             for step in jira_orchestrate_template.steps
-            if step["title"] == "Remediate verification gaps — attempt 1 of 6"
+            if step["title"] == "Remediation loop controller"
         )
-        assert remediation_step["skill"]["id"] == "moonspec-implement"
-        assert "ADDITIONAL_WORK_NEEDED" in remediation_step["instructions"]
-        assert "verification report's gaps" in remediation_step["instructions"]
-        remediation_verify_step = next(
-            step
+        remediation_loop = remediation_step["annotations"]["remediationLoop"]
+        assert remediation_loop["kind"] == "remediation_loop"
+        assert remediation_loop["remediationTool"]["inputs"]["selectedSkill"] == (
+            "moonspec-implement"
+        )
+        assert remediation_loop["verificationTool"]["inputs"][
+            "verify_artifact_path"
+        ] == "var/artifacts/moonspec-verify/jira-orchestrate.json"
+        assert not any(
+            (step.get("annotations") or {}).get("moonSpecRemediationAttempt")
             for step in jira_orchestrate_template.steps
-            if step["title"] == "Verify remediation attempt 6 of 6"
         )
-        assert remediation_verify_step["skill"]["id"] == "moonspec-verify"
-        assert remediation_verify_step["skill"]["args"]["verify_artifact_path"] == (
-            "var/artifacts/moonspec-verify/jira-orchestrate.json"
-        )
-        assert "controlling verification gate" in remediation_verify_step["instructions"]
         doc_reconcile_step = next(
             step
             for step in jira_orchestrate_template.steps
@@ -253,7 +253,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         assert "pull request" in pr_step["instructions"]
         assert "doc reconciliation outcome" in pr_step["instructions"]
-        assert "post-remediation moonspec-verify" in pr_step["instructions"]
+        assert "controlling moonspec-verify" in pr_step["instructions"]
         assert "parent workflow must use the pull request URL" in pr_step["instructions"]
         assert "explicit PR-publication step" in pr_step["instructions"]
         assert "controlling instruction for this step only" in pr_step["instructions"]
@@ -297,7 +297,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in expanded_orchestrate_without_verify["steps"]
         ]
         assert "Verify completion" not in no_verify_orchestrate_titles
-        assert "Verify remediation attempt 6 of 6" not in no_verify_orchestrate_titles
+        assert "Remediation loop controller" not in no_verify_orchestrate_titles
         assert "Reconcile declarative docs" not in no_verify_orchestrate_titles
         assert "moonspec-verify" not in no_verify_orchestrate_skill_ids
         assert "Implement the task breakdown" in no_verify_orchestrate_titles
