@@ -112,16 +112,6 @@ RETIRED_MANIFEST_UPDATE_NAMES: frozenset[str] = frozenset(
     {"UpdateManifest", "SetConcurrency", "CancelNodes", "RetryNodes"}
 )
 
-
-def _reject_historical_control(record: Any) -> None:
-    """Keep retired history readable but never controllable (#4189)."""
-    if is_historical_workflow_type(record.workflow_type):
-        workflow_type = getattr(record.workflow_type, "value", record.workflow_type)
-        raise TemporalExecutionHistoricalTypeError(
-            f"{record.workflow_id} is a historical {workflow_type} execution. "
-            "The type was retired (MoonLadderStudios/MoonMind#4192), so this "
-            "release does not signal, cancel, update, or rerun it."
-        )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -552,6 +542,18 @@ class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError)
 
 class TemporalExecutionHistoricalTypeError(TemporalExecutionValidationError):
     """Raised when a control targets a retired, read-only historical type."""
+
+
+def reject_historical_control(record: Any) -> None:
+    """Keep retired history readable but never controllable (#4189)."""
+    workflow_type = getattr(record, "workflow_type", None)
+    if is_historical_workflow_type(workflow_type):
+        workflow_type = getattr(workflow_type, "value", workflow_type)
+        raise TemporalExecutionHistoricalTypeError(
+            f"{record.workflow_id} is a historical {workflow_type} execution. "
+            "The type was retired (MoonLadderStudios/MoonMind#4192), so this "
+            "release does not control, rerun, recover, or continue it."
+        )
 
 
 class TemporalExecutionCancelUndeliverableError(TemporalExecutionValidationError):
@@ -2707,7 +2709,7 @@ class TemporalExecutionService:
             )
 
         if description is not None:
-            require_product_projection(description.workflow_type)
+            require_product_projection(description.workflow_type, include_historical=True)
 
         record = await self._load_source_execution(
             canonical_workflow_id,
@@ -2746,20 +2748,20 @@ class TemporalExecutionService:
                 # those runs have no API-created canonical source row. Their
                 # Temporal-authoritative projection is the durable control-plane
                 # record used for ownership and parent-runtime inheritance.
-                require_product_projection(projection.workflow_type)
+                require_product_projection(projection.workflow_type, include_historical=True)
                 return projection
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
 
-        require_product_projection(record.workflow_type)
+        require_product_projection(record.workflow_type, include_historical=True)
         if include_orphaned:
             projection = await self._load_projection_execution(
                 canonical_workflow_id,
                 include_orphaned=True,
             )
             if projection is not None:
-                require_product_projection(projection.workflow_type)
+                require_product_projection(projection.workflow_type, include_historical=True)
                 return projection
         return await self._sync_projection_best_effort(record)
 
@@ -6328,7 +6330,7 @@ class TemporalExecutionService:
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {workflow_id} was not found"
             )
-        _reject_historical_control(record)
+        reject_historical_control(record)
         return record
 
     async def _require_cancel_target_execution(
@@ -6340,7 +6342,7 @@ class TemporalExecutionService:
         record = await self._load_cancel_target_execution(
             workflow_id, include_orphaned=include_orphaned
         )
-        _reject_historical_control(record)
+        reject_historical_control(record)
         return record
 
     async def _load_cancel_target_execution(

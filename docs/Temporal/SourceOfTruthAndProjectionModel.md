@@ -245,10 +245,16 @@ execution views. Retired product types listed in
 retired by MoonLadderStudios/MoonMind#4192) have `historical` scope: they are
 never registered or launchable, but their old-release rows stay readable
 through the DB-backed list, detail, projection sync, and artifact readers
-(MoonLadderStudios/MoonMind#4189). Every control on a historical row
-(signal, cancel, update, rerun, recovery, reschedule) is rejected with
-`TemporalExecutionHistoricalTypeError` before any Temporal call, and missing
-owner evidence is reported as an empty `ownerId`, never as `system`.
+(MoonLadderStudios/MoonMind#4189). `require_product_projection` admits only
+registered product types unless a reader passes `include_historical=True`.
+The executions router's owned-execution loader denies historical rows by
+default and only read routes opt in, so every mutating route (signal, cancel,
+update, reschedule, rerun, continue, recovery, publication retry, checkpoint
+branches) answers a permanent `409 execution_historical` before any Temporal
+call or durable write. The service control helpers raise
+`TemporalExecutionHistoricalTypeError` for non-HTTP callers. Detail offers no
+actions for a historical row, and missing owner evidence is reported as an
+empty `ownerId`, never as `system`.
 Internal supervisors, managers and control
 owners have operator scope; janitors and reconciliation loops are excluded.
 Unknown types are reported as unknown and never relabeled as UserWorkflow.
