@@ -121,6 +121,47 @@ def test_default_installation_identity_survives_container_recreation(
     assert get_or_create_installation_id() == first
 
 
+def test_replicas_racing_on_an_empty_volume_agree_on_one_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """The losing writer adopts the winner's identity instead of its own."""
+    import os as real_os
+
+    from moonmind.workflows.temporal import github_issue_attempts as attempts
+
+    monkeypatch.delenv("MOONMIND_INSTALLATION_ID", raising=False)
+    target = tmp_path / "secrets" / "moonmind-installation-id"
+    real_link = real_os.link
+
+    def _winner_publishes_first(source, destination, *args, **kwargs):
+        # Another replica completes its create between our read and ours.
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("inst-winnerreplica01\n", encoding="utf-8")
+        return real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(attempts.os, "link", _winner_publishes_first)
+
+    assert get_or_create_installation_id(path=target) == "inst-winnerreplica01"
+    assert target.read_text(encoding="utf-8").strip() == "inst-winnerreplica01"
+    assert [entry.name for entry in target.parent.iterdir()] == [target.name]
+
+
+def test_an_unpersistable_identity_stays_stable_within_the_process(
+    tmp_path, monkeypatch
+) -> None:
+    """A failed write must not mint a different identity per call."""
+    monkeypatch.delenv("MOONMIND_INSTALLATION_ID", raising=False)
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("", encoding="utf-8")
+    target = blocker / "moonmind-installation-id"
+
+    first = get_or_create_installation_id(path=target)
+
+    assert first.startswith("inst-")
+    assert get_or_create_installation_id(path=target) == first
+
+
 def test_attempt_ids_are_unique_and_bound() -> None:
     first = new_attempt_id(repository="o/r", issue_number=4177, workflow_id="wf", run_id="run")
     second = new_attempt_id(repository="o/r", issue_number=4177, workflow_id="wf", run_id="run")

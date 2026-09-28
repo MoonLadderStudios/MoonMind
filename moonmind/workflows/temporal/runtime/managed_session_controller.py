@@ -2571,6 +2571,8 @@ class DockerCodexManagedSessionController:
                     image_ref=request.image_ref,
                 )
             ):
+                # A session prepared by earlier code may predate the identity.
+                self._apply_workspace_git_identity(Path(request.workspace_path))
                 return CodexManagedSessionHandle(
                     runtimeFamily=request.runtime_family,
                     sessionState=existing_record.session_state(),

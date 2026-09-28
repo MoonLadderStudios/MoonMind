@@ -224,22 +224,45 @@ def get_or_create_installation_id(*, path: Path | None = None) -> str:
     if from_env:
         return from_env
     target = path if path is not None else default_installation_id_file()
-    try:
-        if target.exists():
-            persisted = resolve_installation_id(target.read_text(encoding="utf-8"))
-            if persisted:
-                return persisted
-    except OSError:
-        # Best-effort read: fall through and generate a fresh ephemeral id.
-        pass
+    persisted = _read_installation_id(target)
+    if persisted:
+        return persisted
     generated = f"inst-{uuid.uuid4().hex[:16]}"
+    staged = target.with_name(f".{target.name}.{uuid.uuid4().hex}")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(generated + "\n", encoding="utf-8")
+        staged.write_text(generated + "\n", encoding="utf-8")
+        # Publish complete content only if no other replica already did:
+        # replicas starting together on an empty volume must agree.
+        os.link(staged, target)
+        return generated
+    except FileExistsError:
+        winner = _read_installation_id(target)
+        if winner:
+            return winner
     except OSError:
-        # Best-effort persist: keep the generated id in memory for this run.
         pass
-    return generated
+    finally:
+        try:
+            staged.unlink()
+        except OSError:
+            pass
+    # Unpersistable: keep one identity for this process so every attempt it
+    # announces or finalizes agrees, instead of minting one per call.
+    return _PROCESS_INSTALLATION_IDS.setdefault(str(target), generated)
+
+
+#: Identities generated for a target this process could not persist.
+_PROCESS_INSTALLATION_IDS: dict[str, str] = {}
+
+
+def _read_installation_id(target: Path) -> str:
+    try:
+        if target.exists():
+            return resolve_installation_id(target.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    return ""
 
 
 def new_attempt_id(
