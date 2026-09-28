@@ -13,8 +13,13 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   removed the manifest-only distributions:
   ``test_dependency_removal_landed_no_manifest_only_distributions`` asserts
   ``pyproject.toml`` and ``poetry.lock`` carry no ``qdrant-client``,
-  ``llama-index``, or reader packages. Image-level qualification stays a
-  protected deployment check (see ``test_topology_matrix_gaps_are_explicit``).
+  ``llama-index``, or reader packages. #4111 applies the same guard to the
+  installed distributions: ``test_installed_distributions_are_vector_free``
+  covers the clean CI install, and
+  ``tests/integration/test_installed_graph_vector_free_4111.py`` covers the
+  ``test-runtime`` image, which shares the API/worker dependency layer.
+  Per-deployment image observation stays a protected deployment check (see
+  ``test_topology_matrix_gaps_are_explicit``).
 - Topology: ``test_compose_*`` guards the rendered default Compose file, the
   test Compose file, every declared profile, and every documented
   ``--profile``/``COMPOSE_PROFILES`` combination (hermetic YAML render under
@@ -49,8 +54,10 @@ old required-vector payload) and must fail in the owning guard.
 
 from __future__ import annotations
 
+import importlib.metadata
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -99,7 +106,23 @@ _STARTUP_SENTINEL_RE = re.compile(
     r"|Qdrant (?:connection|DNS|unavailable|outage)",
     re.IGNORECASE,
 )
-_QDRANT_DISTRIBUTION_RE = re.compile(r"^qdrant(-client)?$", re.IGNORECASE)
+# Qdrant SDKs plus the retired distributions that pulled native vector stores
+# (mem0ai, LlamaIndex and its readers), in any PEP 503 spelling.
+_VECTOR_DISTRIBUTION_RE = re.compile(
+    r"^(qdrant([-_.]client)?|mem0ai|llama[-_.]index([-_.].+)?)$", re.IGNORECASE
+)
+# Supported provider, HTTP/YAML, artifact, source-control, and orchestration
+# libraries that must survive the vector removal in every installed graph.
+_SURVIVING_DISTRIBUTIONS = (
+    "anthropic",
+    "openai",
+    "httpx",
+    "pyyaml",
+    "boto3",
+    "gitpython",
+    "temporalio",
+    "fastapi",
+)
 _RETIRED_TOOL_DESCRIPTOR_RE = re.compile(
     r"qdrant|followUpRetrieval|follow_up_retrieval", re.IGNORECASE
 )
@@ -188,11 +211,11 @@ def check_init_sql_vector_free(sql_text: str) -> list[str]:
 
 
 def check_dependency_vector_free(distribution_names: list[str]) -> list[str]:
-    """Return problems when a distribution set carries a Qdrant package."""
+    """Return problems when a distribution set carries a vector package."""
     return [
-        f"distribution {name!r} reintroduces the retired Qdrant SDK"
+        f"distribution {name!r} reintroduces a retired Qdrant/vector SDK"
         for name in distribution_names
-        if _QDRANT_DISTRIBUTION_RE.match(str(name).strip())
+        if _VECTOR_DISTRIBUTION_RE.match(str(name).strip())
     ]
 
 
@@ -471,6 +494,73 @@ def test_dependency_guard_rejects_transitive_fixture_requirement() -> None:
         )
         != []
     )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["mem0ai", "llama-index", "llama-index-core", "llama_index.readers.file"],
+)
+def test_dependency_guard_rejects_retired_vector_sdk_fixture(name: str) -> None:
+    # Negative control: the retired memory SDK and LlamaIndex/reader families
+    # pull native vector stores, so any spelling must fail the owning guard.
+    assert check_dependency_vector_free(["httpx", name]) != []
+
+
+def test_dependency_guard_keeps_surviving_libraries() -> None:
+    assert check_dependency_vector_free(list(_SURVIVING_DISTRIBUTIONS)) == []
+
+
+def installed_distribution_names() -> list[str]:
+    """Names of every distribution installed in the running interpreter."""
+    return sorted(
+        {
+            str(dist.metadata["Name"])
+            for dist in importlib.metadata.distributions()
+            if dist.metadata["Name"]
+        }
+    )
+
+
+def assert_installed_graph_vector_free() -> list[str]:
+    """Apply the dependency guard to the actual installed environment.
+
+    The surviving-library check keeps an empty or unrelated interpreter from
+    passing vacuously: the guarded environment must be a real MoonMind graph.
+    """
+    installed = installed_distribution_names()
+    normalized = {re.sub(r"[-_.]+", "-", name).lower() for name in installed}
+    missing = sorted(set(_SURVIVING_DISTRIBUTIONS) - normalized)
+    assert missing == [], f"installed graph lacks supported libraries: {missing}"
+    problems = check_dependency_vector_free(installed)
+    assert problems == [], "; ".join(problems)
+    return installed
+
+
+def test_installed_distributions_are_vector_free() -> None:
+    """The clean CI install (``uv pip install -e .[tests]``) carries no
+    Qdrant/native vector distribution, transitively or directly."""
+    assert_installed_graph_vector_free()
+
+
+@pytest.mark.parametrize(
+    ("installed", "reason"),
+    [
+        (["httpx"], "lacks supported libraries"),
+        (list(_SURVIVING_DISTRIBUTIONS) + ["qdrant-client"], "retired Qdrant"),
+    ],
+)
+def test_installed_graph_guard_rejects_fixture_environment(
+    monkeypatch: pytest.MonkeyPatch, installed: list[str], reason: str
+) -> None:
+    # Negative controls: an interpreter that is not a real MoonMind graph, or
+    # one that transitively installed the retired client, fails the guard.
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distributions",
+        lambda: [SimpleNamespace(metadata={"Name": name}) for name in installed],
+    )
+    with pytest.raises(AssertionError, match=reason):
+        assert_installed_graph_vector_free()
 
 
 def test_dependency_removal_landed_no_manifest_only_distributions() -> None:
