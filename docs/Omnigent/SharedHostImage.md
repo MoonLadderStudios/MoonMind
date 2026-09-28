@@ -128,8 +128,11 @@ treated as the old mutable channel during an update and advanced to `latest`;
 an operator digest pin continues to select its exact image.
 
 The deployment worker and its updater inherit the same default image
-repositories and mutable tags as the API and runtime worker. Omitting those
-settings from `.env` still refreshes the host images during an update. Generated
+repositories and mutable tags as the API and runtime worker. The release
+resolver applies the same defaults itself, because the first update's one-off
+updater runs from the previously installed Compose service, which may not pass
+them. Omitting those settings from `.env` therefore refreshes the host images
+on the first ordinary update. Generated
 digest refs in `.env.deploy` record the installed release; migration reads
 explicit pins from the operator's `.env` separately so a previous release cannot
 pin subsequent updates.
