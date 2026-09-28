@@ -42,6 +42,11 @@ def api_server():
         def do_GET(self):
             if self.path.startswith("/api/executions/"):
                 self._send(200, execution.next())
+            elif self.path == "/api/ui/info":
+                self._send(
+                    200,
+                    {"dashboardConfig": {"system": {"defaultRepository": "o/r"}}},
+                )
             else:
                 self._send(200, {"sections": ["ok"]})
 
@@ -67,7 +72,9 @@ def api_server():
         server.shutdown()
 
 
-def test_execution_failure_before_cancellation_fails_populate(api_server, tmp_path):
+def test_execution_failure_before_cancellation_fails_populate(
+    api_server, tmp_path, capsys
+):
     base, execution = api_server
     execution.statuses = [
         {"status": "queued"},
@@ -87,6 +94,7 @@ def test_execution_failure_before_cancellation_fails_populate(api_server, tmp_pa
     )
 
     assert code == 1
+    assert "failed before cancellation" in capsys.readouterr().err
 
 
 def test_execution_that_fails_instead_of_canceling_fails_cancel(api_server, tmp_path):
