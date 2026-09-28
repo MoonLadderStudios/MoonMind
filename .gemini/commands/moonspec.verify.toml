@@ -3,6 +3,8 @@ description = "Verify a completed MoonSpec implementation."
 prompt = """
 Use the `moonspec-verify` skill to perform final read-only verification against the provided original instructions, declarative document, issue brief, or optional active MoonSpec feature.
 
+Read the resolved Skill's `SKILL.md` and `references/acceptance-policy.md`. Follow that policy for resolved-Skill provenance, structured report preflight, and bounded automated evidence handoffs. Do not infer a missing verdict or make operator review the default continuation.
+
 User input:
 {{args}}
 

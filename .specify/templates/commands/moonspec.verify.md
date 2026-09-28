@@ -16,4 +16,6 @@ Use the resolved `moonspec-verify` Skill to verify the original instructions or 
 
 Resolve the Skill from `$MOONMIND_ACTIVE_SKILLS_DIR` when exported, otherwise the host's available Skill resolver or `.agents/skills/moonspec-verify`. Pass `$ARGUMENTS` unchanged, including the original issue/source, constraints, candidate, completion target, and evidence references. Do not require `spec.md`, `plan.md`, or `tasks.md` when another usable original baseline exists.
 
+Use the helper beside that resolved Skill to record its identity and preflight requested structured output as defined by its acceptance policy. Preserve malformed-output diagnostics for bounded report repair instead of inferring a verdict or asking an operator to finish verification. Do not resolve a different upstream Skill to obtain a more convenient result.
+
 Run the Skill read-only and preserve its complete report and objective evidence. Let the Skill execute its hooks once; do not run a second command-level hook lifecycle.
