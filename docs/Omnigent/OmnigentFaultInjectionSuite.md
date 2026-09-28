@@ -190,7 +190,8 @@ replay corpus.
     so image authority drift (#3694) fails the smoke. The image is the
     dispatched `app_image` or the `MOONMIND_APP_IMAGE` repository variable;
     without either, the workflow pins the digest of the app image published
-    for the checked-out commit (`sha-<commit>`, else `latest`). The driver additionally
+    for the checked-out commit (`sha-<commit>`), waiting a bounded time for an
+    in-flight build and never substituting another commit's image. The driver additionally
     fails unless production imports resolve under `/app`, so checkout sources
     can never mask a broken image. Each role leg
     resolves that role's real startup module in the image and the report records
