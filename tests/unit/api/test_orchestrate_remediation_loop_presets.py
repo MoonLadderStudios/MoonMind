@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -22,6 +23,7 @@ from moonmind.workflows.temporal.remediation_loop import (
 from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationWorkspaceHead,
 )
+from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows import run as run_module
 from tests.unit.api.test_presets_service import template_db
 
@@ -325,3 +327,178 @@ async def test_expanded_orchestrate_loop_preserves_c0_c1_c2_and_verifies_c2(
     assert projection["workspaceHeadRef"] == "artifact://workspace/C2"
     assert projection["latestVerificationRef"] == "artifact://verification/V2"
     assert projection["consumedBudgets"]["attempts"] == 2
+
+
+_PUBLICATION_PRESETS = ("github-issue-orchestrate", "jira-orchestrate")
+
+
+async def _omnigent_plan_nodes(tmp_path, slug: str) -> list[dict[str, Any]]:
+    steps = await _expand(tmp_path, slug)
+    plan = _build_runtime_planner()(
+        inputs={"workflow": {"title": slug, "instructions": slug, "steps": steps}},
+        parameters={"targetRuntime": "omnigent"},
+        snapshot=SimpleNamespace(
+            digest="reg:sha256:test", artifact_ref="art_registry_123"
+        ),
+    )
+    return plan["nodes"]
+
+
+def _node_with_title(nodes: list[dict[str, Any]], title: str) -> dict[str, Any]:
+    return next(node for node in nodes if node["inputs"].get("title") == title)
+
+
+def _archive_evidence(archive: str) -> dict[str, dict[str, str]]:
+    return {
+        "after_execution": {
+            "checkpointRef": f"art_{archive}_checkpoint",
+            "workspaceArchiveRef": f"art_{archive}_archive",
+            "workspaceKind": "worktree_archive",
+            "workspaceDigest": f"sha256:{archive}",
+            "workspaceIdentityDigest": "sha256:" + ("b" * 64),
+            "checkpointManifestRef": f"art_{archive}_manifest",
+        }
+    }
+
+
+def _ledger(
+    nodes: list[dict[str, Any]], *, completed_through: str, current: str
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    status = "completed"
+    for node in nodes:
+        if node["id"] == current:
+            status = "executing"
+        rows.append({"logicalStepId": node["id"], "status": status})
+        if node["id"] == completed_through:
+            status = "pending"
+    return rows
+
+
+def _restore_ref(
+    workflow: run_module.MoonMindRunWorkflow, node: dict[str, Any]
+) -> str | None:
+    restore_ref = workflow._omnigent_publication_checkpoint_restore_ref(
+        node=node,
+        node_inputs=workflow._node_inputs_mapping(node),
+    )
+    if restore_ref is not None:
+        request = workflow._build_agent_execution_request(
+            node_inputs=dict(node["inputs"]),
+            node_id=node["id"],
+            tool_name="omnigent",
+            workflow_parameters={},
+            trusted_remediation_checkpoint_restore_ref=restore_ref,
+        )
+        assert request.workspace_spec["workspaceCheckpointRestoreRef"] == restore_ref
+    return restore_ref
+
+
+def _enable_publication_restore(
+    monkeypatch: pytest.MonkeyPatch, *, orchestrate: bool = True
+) -> None:
+    patches = {
+        run_module.RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+        run_module.RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
+    }
+    if orchestrate:
+        patches.add("run-omnigent-orchestrate-publication-checkpoint-restore-v1")
+    monkeypatch.setattr(
+        run_module.workflow, "patched", lambda patch_id: patch_id in patches
+    )
+
+
+@pytest.mark.parametrize("slug", _PUBLICATION_PRESETS)
+async def test_expanded_orchestrate_pr_publishes_reconciled_verified_head(
+    tmp_path,
+    slug: str,
+    run_workflow: run_module.MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nodes = await _omnigent_plan_nodes(tmp_path, slug)
+    run_workflow._initialize_remediation_loop_controller(ordered_nodes=nodes)
+    run_workflow._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+        _head("C2", 3)
+    )
+    _enable_publication_restore(monkeypatch)
+    docs = _node_with_title(nodes, "Reconcile declarative docs")
+    publish = _node_with_title(nodes, "Create pull request")
+
+    run_workflow._step_ledger_rows = _ledger(
+        nodes, completed_through=docs["id"], current=docs["id"]
+    )
+    assert _restore_ref(run_workflow, docs) == "artifact://workspace/C2"
+
+    run_workflow._step_ledger_rows = _ledger(
+        nodes, completed_through=docs["id"], current=publish["id"]
+    )
+    # Reconciliation left no archive: publish the verified head, never a clean
+    # checkout.
+    assert _restore_ref(run_workflow, publish) == "artifact://workspace/C2"
+
+    run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        docs["id"]: _archive_evidence("reconciled")
+    }
+    assert _restore_ref(run_workflow, publish) == "artifact://art_reconciled_archive"
+
+
+@pytest.mark.parametrize("slug", _PUBLICATION_PRESETS)
+async def test_expanded_orchestrate_pr_publishes_implementation_without_remediation(
+    tmp_path,
+    slug: str,
+    run_workflow: run_module.MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nodes = await _omnigent_plan_nodes(tmp_path, slug)
+    run_workflow._initialize_remediation_loop_controller(ordered_nodes=nodes)
+    _enable_publication_restore(monkeypatch)
+    implement = _node_with_title(nodes, "Implement the task breakdown")
+    docs = _node_with_title(nodes, "Reconcile declarative docs")
+    publish = _node_with_title(nodes, "Create pull request")
+    run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        implement["id"]: _archive_evidence("implementation")
+    }
+
+    run_workflow._step_ledger_rows = _ledger(
+        nodes, completed_through=docs["id"], current=docs["id"]
+    )
+    assert _restore_ref(run_workflow, docs) == (
+        "artifact://art_implementation_archive"
+    )
+
+    # Reconciliation did not complete, so its archive cannot replace the
+    # verified implementation candidate.
+    run_workflow._step_checkpoint_workspace_evidence_by_boundary[docs["id"]] = (
+        _archive_evidence("partial-docs")
+    )
+    rows = _ledger(nodes, completed_through=docs["id"], current=publish["id"])
+    next(row for row in rows if row["logicalStepId"] == docs["id"])["status"] = (
+        "failed"
+    )
+    run_workflow._step_ledger_rows = rows
+    assert _restore_ref(run_workflow, publish) == (
+        "artifact://art_implementation_archive"
+    )
+
+
+@pytest.mark.parametrize("slug", _PUBLICATION_PRESETS)
+async def test_orchestrate_publication_restore_retains_unpatched_history(
+    tmp_path,
+    slug: str,
+    run_workflow: run_module.MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nodes = await _omnigent_plan_nodes(tmp_path, slug)
+    run_workflow._initialize_remediation_loop_controller(ordered_nodes=nodes)
+    run_workflow._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+        _head("C2", 3)
+    )
+    _enable_publication_restore(monkeypatch, orchestrate=False)
+    docs = _node_with_title(nodes, "Reconcile declarative docs")
+    publish = _node_with_title(nodes, "Create pull request")
+    run_workflow._step_ledger_rows = _ledger(
+        nodes, completed_through=docs["id"], current=publish["id"]
+    )
+
+    assert _restore_ref(run_workflow, docs) is None
+    assert _restore_ref(run_workflow, publish) is None
