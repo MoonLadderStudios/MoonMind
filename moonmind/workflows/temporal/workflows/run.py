@@ -999,6 +999,14 @@ RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
 RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-publication-checkpoint-restore-v1"
 )
+# GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
+# and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
+# candidate into doc reconciliation, then publish that reconciled archive (or
+# the verified candidate when reconciliation left none). Older histories retain
+# their recorded clean-checkout commands.
+RUN_OMNIGENT_ORCHESTRATE_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
+    "run-omnigent-orchestrate-publication-checkpoint-restore-v1"
+)
 # An issue-implementation PR handoff may restore a candidate that was already
 # pushed by the implementation stage. ``no_commits`` at that later sandbox is
 # not authority to skip the PR: it only says the restored head needs no second
@@ -1489,6 +1497,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # attempts inherit it so ``auto`` loop tools never reach adapter routing.
         self._remediation_loop_runtime: dict[str, Any] | None = None
         self._remediation_loop_continuation: dict[str, Any] | None = None
+        # Orchestrate doc-reconciliation Step launched from the verified
+        # candidate archive; only its archive may replace that candidate at PR.
+        self._omnigent_reconciled_candidate_step_id: str | None = None
         # Controller-attested canonical turn lineage per logical step (#3707).
         # Compact and deterministic: the workflow is the only authority that can
         # say which closed turn source a Step Execution launches under.
@@ -7565,13 +7576,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         node: Mapping[str, Any],
         node_inputs: Mapping[str, Any],
     ) -> str | None:
-        """Return the verified candidate archive consumed by a PR handoff."""
+        """Return the verified candidate archive consumed by a PR handoff.
 
+        Orchestrate presets reconcile docs after verification; that Step
+        continues from the same candidate, and its archive is what the PR
+        handoff publishes.
+        """
+
+        annotations = self._node_annotations_mapping(node)
+        issue_implement_handoff = (
+            annotations.get("issueImplementRole") == "pull-request-handoff"
+        )
+        orchestrate_role = (
+            ""
+            if issue_implement_handoff
+            else str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        )
         if (
-            self._node_annotations_mapping(node).get("issueImplementRole")
-            != "pull-request-handoff"
-            or not self._remediation_loop_uses_omnigent()
-        ):
+            not issue_implement_handoff
+            and orchestrate_role not in {"doc-reconciliation", "pull-request-handoff"}
+        ) or not self._remediation_loop_uses_omnigent():
             return None
         tool = self._plan_node_tool_mapping(node) or {}
         agent_id = self._agent_id_from_runtime_inputs(
@@ -7580,13 +7604,47 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         if _normalize_agent_runtime_id(agent_id) != "omnigent":
             return None
+        if orchestrate_role and not workflow.patched(
+            RUN_OMNIGENT_ORCHESTRATE_PUBLICATION_CHECKPOINT_RESTORE_PATCH
+        ):
+            return None
+        node_id = str(node.get("id") or "")
+        if orchestrate_role == "pull-request-handoff":
+            reconciled = self._reconciled_candidate_checkpoint_ref()
+            if reconciled is not None:
+                return reconciled
         head = self._remediation_workspace_head
         if head is not None:
-            return head.head_checkpoint_ref
-        candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
-            str(node.get("id") or "")
+            restore_ref = head.head_checkpoint_ref
+        else:
+            candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
+                node_id
+            )
+            restore_ref = candidate[1]["checkpointRef"] if candidate else None
+        if orchestrate_role == "doc-reconciliation" and restore_ref is not None:
+            self._omnigent_reconciled_candidate_step_id = node_id
+        return restore_ref
+
+    def _reconciled_candidate_checkpoint_ref(self) -> str | None:
+        """Return the completed doc-reconciliation archive of the candidate."""
+
+        step_id = self._omnigent_reconciled_candidate_step_id
+        if not step_id:
+            return None
+        row = next(
+            (
+                row
+                for row in self._step_ledger_rows
+                if str(row.get("logicalStepId") or "").strip() == step_id
+            ),
+            None,
         )
-        return candidate[1]["checkpointRef"] if candidate is not None else None
+        if row is None or str(row.get("status") or "").strip().lower() != (
+            "completed"
+        ):
+            return None
+        evidence = self._canonical_remediation_checkpoint_evidence(step_id)
+        return evidence["checkpointRef"] if evidence is not None else None
 
     def _remediation_loop_uses_omnigent(self) -> bool:
         runtime = self._remediation_loop_runtime
