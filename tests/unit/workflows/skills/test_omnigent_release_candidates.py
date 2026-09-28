@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
+import os
+import shutil
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -83,9 +87,7 @@ def release_module(monkeypatch):
     policies = types.ModuleType("api_service.services.omnigent_policies")
     policies.configured_bootstrap_image_refs = configured_bootstrap_image_refs
     policies.resolve_bootstrap_image_ref = resolve_bootstrap_image_ref
-    monkeypatch.setitem(
-        sys.modules, "api_service.services.omnigent_policies", policies
-    )
+    monkeypatch.setitem(sys.modules, "api_service.services.omnigent_policies", policies)
 
     module = _load_release_module(monkeypatch)
     module._resolver_calls = calls
@@ -174,6 +176,123 @@ def test_deployment_inputs_keep_compose_shell_image_override(
     assert inputs["OMNIGENT_SHARED_HOST_IMAGE_TAG"] == "qualified"
 
 
+def test_first_updater_from_previous_compose_resolves_default_image_inputs(
+    release_module, monkeypatch, tmp_path
+):
+    """The first update launches its updater from the installed Compose file.
+
+    That previous service definition carries no image inputs, only the
+    generated refs from .env.deploy, so the resolver itself must supply the
+    same mutable defaults as Compose or the stale host image is retained.
+    """
+    for key in release_module.OMNIGENT_RELEASE_INPUT_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", LIVE_HOST)
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    drivers = release_module.production_drivers(
+        runner=SimpleNamespace(local_project_dir=str(tmp_path)),
+        moonmind_image="moonmind:updated",
+        actor="release",
+    )
+    inputs = asyncio.run(drivers.deployment_inputs())
+    assert inputs == {
+        "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+        "OMNIGENT_IMAGE_TAG": "latest",
+        "OMNIGENT_HOST_IMAGE": "ghcr.io/omnigent-ai/omnigent-host",
+        "OMNIGENT_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        "OMNIGENT_OPENCODE_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_PI_HOST_IMAGE_TAG": "latest",
+    }
+
+
+@pytest.mark.parametrize("configuration", ["omitted", "explicit_defaults", "custom"])
+def test_compose_updater_supplies_refreshable_image_inputs(
+    release_module, monkeypatch, tmp_path, configuration
+):
+    """The actual updater service must refresh hosts when .env omits images."""
+    if shutil.which("docker") is None:
+        pytest.skip("Docker Compose is required to render the updater service")
+    expected = {
+        "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+        "OMNIGENT_IMAGE_TAG": "latest",
+        "OMNIGENT_HOST_IMAGE": "ghcr.io/omnigent-ai/omnigent-host",
+        "OMNIGENT_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        "OMNIGENT_OPENCODE_HOST_IMAGE_TAG": "latest",
+        "OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+    }
+    if configuration == "custom":
+        expected.update(
+            OMNIGENT_SHARED_HOST_IMAGE="registry.example/custom-host",
+            OMNIGENT_SHARED_HOST_IMAGE_TAG="approved",
+            OMNIGENT_PI_HOST_IMAGE="registry.example/pi-host",
+            OMNIGENT_PI_HOST_IMAGE_TAG="approved-pi",
+        )
+    operator_env = tmp_path / ".env"
+    operator_env.write_text(
+        (
+            ""
+            if configuration == "omitted"
+            else "".join(f"{key}={value}\n" for key, value in expected.items())
+        ),
+        encoding="utf-8",
+    )
+    # The old deployment-owned record remains present during an update. It
+    # must not become an operator pin for the next image resolution.
+    generated = tmp_path / ".env.deploy"
+    generated.write_text(
+        f"OMNIGENT_SHARED_HOST_IMAGE_REF={LIVE_HOST}\n", encoding="utf-8"
+    )
+    rendered = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--project-name",
+            "moonmind-test-release-inputs",
+            "--project-directory",
+            str(tmp_path),
+            "--env-file",
+            str(operator_env),
+            "--env-file",
+            str(generated),
+            "-f",
+            str(ROOT / "docker-compose.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        env={key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    worker_env = json.loads(rendered.stdout)["services"][
+        "temporal-worker-deployment-control"
+    ]["environment"]
+    for key in (
+        *release_module.OMNIGENT_RELEASE_INPUT_KEYS,
+        *release_module.OMNIGENT_RELEASE_ENV_KEYS,
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in worker_env.items():
+        if value is not None:
+            monkeypatch.setenv(key, str(value))
+    drivers = release_module.production_drivers(
+        runner=SimpleNamespace(local_project_dir=str(tmp_path)),
+        moonmind_image="moonmind:updated",
+        actor="release",
+    )
+    inputs = asyncio.run(drivers.deployment_inputs())
+    assert {key: inputs.get(key) for key in expected} == expected
+    assert "OMNIGENT_SHARED_HOST_IMAGE_REF" not in inputs
+    if configuration != "custom":
+        assert not inputs.get("OMNIGENT_PI_HOST_IMAGE")
+
+
 def test_release_refreshes_only_active_static_host_profiles(release_module):
     commands = []
 
@@ -218,13 +337,9 @@ def _load_image_resolution_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "moonmind.omnigent.bootstrap.models", models)
     compatibility = types.ModuleType("moonmind.omnigent.compatibility")
     compatibility.versions_compatible = lambda *args, **kwargs: True
-    monkeypatch.setitem(
-        sys.modules, "moonmind.omnigent.compatibility", compatibility
-    )
+    monkeypatch.setitem(sys.modules, "moonmind.omnigent.compatibility", compatibility)
     path = ROOT / "moonmind/omnigent/bootstrap/image_resolution.py"
-    spec = importlib.util.spec_from_file_location(
-        "image_resolution_under_test", path
-    )
+    spec = importlib.util.spec_from_file_location("image_resolution_under_test", path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)

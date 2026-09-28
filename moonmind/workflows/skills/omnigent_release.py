@@ -58,6 +58,22 @@ OMNIGENT_RELEASE_INPUT_KEYS = (
     "OMNIGENT_PI_HOST_IMAGE_TAG",
 )
 
+# Defaults for omitted mutable inputs, matching docker-compose.yaml. The first
+# update's one-off updater runs from the previously installed Compose service,
+# which may not pass these inputs, so the resolver must not depend on Compose
+# supplying them.
+OMNIGENT_RELEASE_INPUT_DEFAULTS = {
+    "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+    "OMNIGENT_IMAGE_TAG": "latest",
+    "OMNIGENT_HOST_IMAGE": "ghcr.io/omnigent-ai/omnigent-host",
+    "OMNIGENT_HOST_IMAGE_TAG": "latest",
+    "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+    "OMNIGENT_OPENCODE_HOST_IMAGE_TAG": "latest",
+    "OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+    "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+    "OMNIGENT_PI_HOST_IMAGE_TAG": "latest",
+}
+
 # Bootstrap policy ids the release migrates, with the record host kind each
 # one pins. Mirrors `_bootstrap_policy_definitions` without importing the
 # policy module at load time.
@@ -454,6 +470,9 @@ async def _default_deployment_inputs(
             elif key not in inputs and value:
                 # Compose shell variables outrank .env interpolation.
                 inputs[key] = value
+    for key, value in OMNIGENT_RELEASE_INPUT_DEFAULTS.items():
+        # Compose `${VAR:-default}` also treats an empty value as omitted.
+        inputs.setdefault(key, value)
     # The old template copied an OpenCode vendor-version tag into .env. That
     # mutable tag was a default channel, not an immutable operator image pin.
     # Promote it to the current publication channel during an ordinary update;
