@@ -159,29 +159,7 @@ def plan_retry_reset(
         reset_authorizer_id=actor_id,
     )
     plan["retry"] = lineage.retry
-    attention = (
-        lifecycle.interpret_issue(issue).settled == lifecycle.SETTLED_NEEDS_ATTENTION
-    )
     if lineage.reason_code != "budget_exhausted":
-        if (
-            attention
-            and lineage.reason_code in {"allowed", "cooling_down"}
-            and _attention_from_retry_budget(marked[-1][1].handoff)
-        ):
-            # The escalation rested on attempts the current accounting no
-            # longer charges (lapsed attempts once were). Resolve it without
-            # superseding anything: recorded outcomes keep their charge.
-            comment, latest = marked[-1]
-            return {
-                **plan,
-                "action": ACTION_RESET,
-                "reasonCode": "attention_budget_no_longer_exhausted",
-                "resolvesAttention": True,
-                "predecessor": {
-                    "attemptId": latest.attempt_id,
-                    "commentId": _string(comment.get("id")),
-                },
-            }
         action = ACTION_REFUSE if lineage.outcome == "needs_attention" else ACTION_NONE
         return {**plan, "action": action, "reasonCode": lineage.reason_code}
     retry = lineage.retry or {}
@@ -195,6 +173,9 @@ def plan_retry_reset(
             "reasonCode": "too_many_charged_attempts",
         }
     comment, latest = marked[-1]
+    attention = (
+        lifecycle.interpret_issue(issue).settled == lifecycle.SETTLED_NEEDS_ATTENTION
+    )
     if attention and not _attention_from_retry_budget(latest.handoff):
         return {
             **plan,

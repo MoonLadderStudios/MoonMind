@@ -484,61 +484,6 @@ async def test_a_reset_resolves_the_attention_its_exhausted_budget_left(journey)
 
 
 @pytest.mark.asyncio
-async def test_attention_from_a_budget_that_no_longer_counts_is_resolved(journey):
-    """Issue #4441's shape: attention raised by the old accounting.
-
-    Two stranded attempts were charged, so the third attempt's finalizer
-    saw 0/3 remaining and escalated. Stranded attempts no longer count, so
-    the budget the escalation rests on is gone: the inventory plans the
-    attention resolution by default, and it supersedes nothing -- the
-    recorded failure keeps its charge.
-    """
-    state, service, sessions = journey
-    ids = _stranded_history(state)[:2]
-    del state["comments"][2:]
-    _post(
-        state,
-        replace(
-            _attempt(
-                "att-4441c-cccc",
-                deployment="inst-device-c",
-                remaining=0,
-                expired_days_ago=1,
-                predecessor=ids[-1],
-                predecessor_comment_id="2",
-            ),
-            activity="released",
-            outcome="failed",
-            writers_stopped=True,
-            pending_disposition="to_needs_attention",
-            next_action="obtain_attention",
-        ),
-    )
-    state["labels"] = ["status: in-progress", NEEDS_ATTENTION]
-
-    [plan] = (await inventory_retry_resets(service=service, repository=REPO))["issues"]
-    assert plan["action"] == ACTION_RESET, plan
-    assert plan["resolvesAttention"] is True
-    assert plan["supersedes"] == []
-    assert len(state["comments"]) == 3
-
-    applied = await apply_retry_reset(
-        service=service,
-        plan=plan,
-        reason="Escalated on stranded attempts that are no longer charged.",
-    )
-
-    assert applied["applied"] is True, applied
-    assert applied["attentionResolved"] is True
-    assert state["labels"] == []
-    admitted = await _search(service, "default/after-stale-attention")
-    assert admitted.completion_disposition != "idle", admitted.outputs
-    receipt = await IssueClaimStore(sessions).get("default/after-stale-attention")
-    handoff = parse_attempt_comment(receipt.comment_body).handoff
-    assert handoff.retry_remaining == 2
-
-
-@pytest.mark.asyncio
 async def test_attention_the_retry_budget_did_not_cause_is_not_reset(journey):
     state, service, _sessions = journey
     _exhausted_by_recorded_failures(state, retry_attention=False)
