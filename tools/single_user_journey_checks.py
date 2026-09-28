@@ -14,24 +14,33 @@ recreated stack, can verify what an earlier phase saved):
     Read the instance settings and preset catalogs, submit one task with the
     dashboard's default repository as a deferred start, redeliver the same
     submission (lost acknowledgment), observe it durably recorded and still
-    open, attach an artifact to it, and dispatch a recurring definition
-    through run-now. Without a provider credential no model-backed step can
-    stay in flight, so the deferred start is what the later phases cancel.
-``cancel``
-    Cancel the deferred execution before its start time and require it to
-    reach the canceled terminal state.
+    open, attach an artifact to it, dispatch a recurring definition through
+    run-now, and save a preset. Without a provider credential no model-backed
+    step can stay in flight, so the deferred start is what the dashboard
+    later cancels (``tools/single_user_journey_browser.mjs ... cancel``).
+``canceled``
+    Confirm the dashboard cancellation: each execution marked for
+    cancellation must have been canceled through the dashboard before its
+    start time and must reach the canceled terminal state.
 ``credential``
     Store a synthetic credential and bind it through the GitHub token
-    setting. It runs after ``cancel`` so no execution uses the synthetic
+    setting. It runs after ``canceled`` so no execution uses the synthetic
     token.
 ``verify``
     Read back everything saved: credential metadata without plaintext, the
     setting binding and its redacted usage, the recurring definition and its
-    dispatched run, each execution's retained terminal state, and the
-    attached artifact bytes.
+    dispatched run, each execution's retained terminal state, the attached
+    artifact bytes, and the saved preset version.
 ``release``
     Remove the setting override so later work does not use the synthetic
     token.
+``conversion``
+    After an upgrade from an account-era release, read the API startup log
+    (``--api-log``) and require the guarded single-user conversion to have
+    classified the retained data as one eligible operator. It either
+    published, or it refused only because subsystem transforms are not yet
+    registered. That refusal is recorded and printed as not published. Any
+    other refusal, a deferral, or no observed outcome fails.
 
 Stdlib only: it runs on the CI host, outside the application image.
 """
@@ -41,6 +50,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -55,6 +65,19 @@ SETTING_KEY = "integrations.github.token_ref"
 TERMINAL_FAILURE = frozenset({"failed", "terminated", "timed_out", "timedout"})
 CANCELED = frozenset({"canceled", "cancelled"})
 COMPLETED = frozenset({"completed", "succeeded"})
+# Startup log lines written by api_service.main._run_guarded_single_user_upgrade
+# and the read-only conversion guard that follows it.
+CONVERSION_OUTCOME = re.compile(
+    r"Single-user guarded upgrade (?:"
+    r"published \((?P<published>[a-z_]+)\)"
+    r"|blocked \((?P<blocked>[a-z_]+)(?:: (?P<detail>[^)]*))?\)"
+    r"|deferred: (?P<deferred>\w+))"
+)
+CONVERSION_GUARD = re.compile(
+    r"Single-user conversion guard: disposition=(?P<disposition>[a-z_]+) "
+    r"reason=(?P<reason>[a-z_]+)"
+)
+PENDING_TRANSFORMS = re.compile(r"lack registered transforms: (?P<names>[a-z_,]+)")
 
 
 class JourneyFailure(RuntimeError):
@@ -334,6 +357,22 @@ def populate(
         "runId": request_id,
         "workflowId": dispatched,
     }
+
+    preset = api.json(
+        "POST",
+        "/api/presets",
+        body={
+            "slug": f"single-user-journey-{label}-{uuid.uuid4().hex[:8]}",
+            "title": f"single-user journey preset {label}",
+            "description": "Single-user journey preset read back after restarts.",
+            "steps": [{"instructions": "Single-user journey preset step."}],
+        },
+        expect=(201,),
+    )
+    if not preset.get("slug"):
+        raise JourneyFailure(f"preset creation returned no slug: {preset}")
+    state["preset"] = preset_identity(preset)
+    log(f"preset {preset['slug']} saved ({preset.get('presetDigest')})")
     state["executions"] = [
         {
             "workflowId": workflow_id,
@@ -345,6 +384,42 @@ def populate(
         # dispatched run cannot complete, so it is observed, not canceled.
         {"workflowId": dispatched, "title": name, "cancel": False},
     ]
+
+
+def preset_identity(preset: dict[str, Any]) -> dict[str, Any]:
+    """The saved preset version the read-back must find unchanged."""
+
+    return {
+        "slug": preset.get("slug"),
+        "scope": preset.get("scope"),
+        "scopeRef": preset.get("scopeRef"),
+        "title": preset.get("title"),
+        "presetDigest": preset.get("presetDigest"),
+        "steps": [step.get("instructions") for step in preset.get("steps") or []],
+    }
+
+
+def verify_preset(api: Api, state: dict[str, Any]) -> None:
+    saved = state.get("preset")
+    if not saved:
+        raise JourneyFailure("no preset recorded to verify")
+    query = urllib.parse.urlencode(
+        {
+            key: value
+            for key, value in (
+                ("scope", saved["scope"]),
+                ("scopeRef", saved["scopeRef"]),
+            )
+            if value
+        }
+    )
+    found = api.json("GET", f"/api/presets/{quote(saved['slug'])}?{query}")
+    if preset_identity(found) != saved:
+        raise JourneyFailure(
+            f"preset {saved['slug']} changed: saved {saved}, found "
+            f"{preset_identity(found)}"
+        )
+    log(f"preset {saved['slug']} retained at {saved['presetDigest']}")
 
 
 def credential(api: Api, state: dict[str, Any], *, label: str) -> None:
@@ -383,30 +458,79 @@ def release(api: Api, state: dict[str, Any]) -> None:
     log(f"{SETTING_KEY} override removed")
 
 
-def cancel(api: Api, state: dict[str, Any], *, timeout: float) -> None:
+def canceled(api: Api, state: dict[str, Any], *, timeout: float) -> None:
+    """Confirm the dashboard canceled each deferred execution before it started."""
+
     executions = [item for item in state.get("executions") or [] if item.get("cancel")]
     if not executions:
         raise JourneyFailure("no executions recorded to cancel")
     for execution in executions:
-        scheduled_for = execution.get("scheduledFor")
-        if scheduled_for and datetime.fromisoformat(scheduled_for) <= datetime.now(
-            timezone.utc
-        ):
-            raise JourneyFailure(
-                f"execution {execution['workflowId']} reached its start time "
-                "before cancellation; raise --defer-seconds"
-            )
         workflow_id = execution["workflowId"]
-        api.json(
-            "POST",
-            f"/api/executions/{quote(workflow_id)}/cancel",
-            body={"action": "cancel", "reason": "single-user journey"},
-            expect=(200, 202),
-        )
+        requested = execution.get("cancelRequestedAt")
+        if not requested:
+            raise JourneyFailure(
+                f"execution {workflow_id} was not canceled through the dashboard"
+            )
+        scheduled_for = execution.get("scheduledFor")
+        if scheduled_for and datetime.fromisoformat(
+            scheduled_for
+        ) <= datetime.fromisoformat(requested):
+            raise JourneyFailure(
+                f"execution {workflow_id} reached its start time before the "
+                "dashboard canceled it; raise --defer-seconds"
+            )
     for execution in executions:
         wait_for_canceled(api, execution["workflowId"], timeout=timeout)
         execution["canceled"] = True
-        log(f"execution {execution['workflowId']} canceled")
+        log(f"execution {execution['workflowId']} canceled through the dashboard")
+
+
+def conversion(state: dict[str, Any], *, api_log: Path) -> None:
+    """Require an eligible guarded conversion outcome after an account-era upgrade."""
+
+    text = api_log.read_text(errors="replace")
+    outcomes = list(CONVERSION_OUTCOME.finditer(text))
+    if not outcomes:
+        raise JourneyFailure(
+            f"no guarded single-user upgrade outcome in {api_log.name}"
+        )
+    latest = outcomes[-1]
+    if latest["published"]:
+        if latest["published"] != "eligible_conversion":
+            raise JourneyFailure(
+                "account-era data converted as "
+                f"{latest['published']!r}, not as one eligible operator"
+            )
+        state["conversion"] = {
+            "outcome": "published",
+            "disposition": latest["published"],
+        }
+        log("guarded conversion published the eligible single-operator source")
+        return
+    if latest["deferred"]:
+        raise JourneyFailure(f"guarded conversion deferred: {latest['deferred']}")
+    reason = latest["blocked"]
+    guards = list(CONVERSION_GUARD.finditer(text))
+    eligible = bool(guards) and (
+        guards[-1]["disposition"],
+        guards[-1]["reason"],
+    ) == ("eligible_conversion", "single_operator")
+    pending = PENDING_TRANSFORMS.search(latest["detail"] or "")
+    if reason != "missing_transform_coverage" or not eligible or not pending:
+        raise JourneyFailure(
+            f"guarded conversion refused ({reason}: {latest['detail'] or 'no detail'})"
+        )
+    names = sorted(name for name in pending["names"].split(",") if name)
+    state["conversion"] = {
+        "outcome": "blocked",
+        "reason": reason,
+        "pendingSubsystems": names,
+    }
+    log(
+        "guarded conversion NOT published: the source is one eligible operator, "
+        f"but subsystems {','.join(names)} have no registered transform; "
+        "source data and operator access are preserved"
+    )
 
 
 def verify(api: Api, state: dict[str, Any]) -> None:
@@ -459,18 +583,28 @@ def verify(api: Api, state: dict[str, Any]) -> None:
     if hashlib.sha256(content).hexdigest() != artifact["sha256"]:
         raise JourneyFailure(f"artifact {artifact['artifactId']} bytes changed")
     log(f"artifact {artifact['artifactId']} bytes retained")
+    verify_preset(api, state)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "phase", choices=("populate", "cancel", "credential", "verify", "release")
+        "phase",
+        choices=(
+            "populate",
+            "canceled",
+            "credential",
+            "verify",
+            "release",
+            "conversion",
+        ),
     )
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--state-file", required=True, type=Path)
     parser.add_argument("--label", default="fresh")
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--defer-seconds", type=float, default=150.0)
+    parser.add_argument("--api-log", type=Path)
     args = parser.parse_args(argv)
 
     api = Api(args.api_base)
@@ -486,8 +620,12 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
                 defer_seconds=args.defer_seconds,
             )
-        elif args.phase == "cancel":
-            cancel(api, state, timeout=args.timeout)
+        elif args.phase == "canceled":
+            canceled(api, state, timeout=args.timeout)
+        elif args.phase == "conversion":
+            if args.api_log is None:
+                raise JourneyFailure("conversion needs --api-log")
+            conversion(state, api_log=args.api_log)
         elif args.phase == "credential":
             credential(api, state, label=args.label)
         elif args.phase == "verify":
