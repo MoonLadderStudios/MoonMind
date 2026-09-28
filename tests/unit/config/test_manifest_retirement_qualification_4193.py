@@ -15,10 +15,14 @@ rather than creating another universal verifier or optional-only suite:
   manifests, Compose/env metadata, required-CI selection).
 - Retirement rows that REQUIRE removal (admission rejection, side-effect
   ordering, schedules/control, runtime graph, historical reads,
-  upgrade/data, security, no-reintroduction) are explicitly pinned as
-  residuals owned by the sibling removals. The native Manifest product is
-  still present in this checkout; this module records that fact so no row
-  can be misreported as qualified before the candidate lands.
+  upgrade/data, security, no-reintroduction) were pinned as residuals
+  owned by the sibling removals while the product was still present. The
+  native Manifest product is now removed (MR5, #4192); executed
+  retirement proof lives in the sibling boundary suites plus
+  ``tests/unit/api/routers/test_manifest_retirement_boundaries_4193.py``.
+  Helper/import-level checks in this module are labeled as such and do
+  not by themselves prove a served UI -> workflow -> runtime -> artifact
+  journey.
 
 Matrix-to-evidence mapping (issue acceptance matrix):
 
@@ -38,18 +42,20 @@ Matrix-to-evidence mapping (issue acceptance matrix):
   files pinned; readable-after-removal belongs to #4189 A/B.
 - Upgrade/data: NOT qualified here. Protected PostgreSQL/migration/artifact
   handoff checks are named in ``test_qualification_gaps_are_explicit``.
-- Ordinary product journey: QUALIFIED here for the hermetic boundary —
-  UserWorkflow admission accepts explicit context/first-message/chat inputs
-  with no Manifest/vector settings, via the real execution contract and
-  ``AgentExecutionRequest``.
-- Shared primitives: QUALIFIED here for the hermetic boundary — normal
+- Ordinary product journey: HELPER-LEVEL here for the hermetic boundary —
+  UserWorkflow admission helpers accept explicit context/first-message/chat
+  inputs with no Manifest/vector settings, via the real execution contract
+  and ``AgentExecutionRequest``. Served journey proof lives in the #4193
+  boundary suite and existing normal-workflow suites, not in these helper
+  checks alone.
+- Shared primitives: HELPER-LEVEL here for the hermetic boundary — normal
   schedules/child/skill/saved-work/publication helpers remain importable
   and user ``manifest.yaml``/Vite/Skill/capability/saved-work manifests
   remain allowed by the no-reintroduction guard.
 - Security: NOT qualified here. Wrong-owner/restricted/malformed/unsafe
   historical-artifact probes belong to the sibling removal + #4189; the
   guard pins no authority widening in this slice.
-- Defaults/build/docs: QUALIFIED here for the hermetic boundary —
+- Defaults/build/docs: HELPER-LEVEL here for the hermetic boundary —
   omitted/default vs explicit equivalent normal inputs, env-template,
   dependency/image metadata, and required-CI collection.
 - No reintroduction: GUARD DEFINED here, residual CLEARED here. The targeted
@@ -182,7 +188,7 @@ def check_user_manifest_allowed(descriptors: list[str]) -> list[str]:
             continue
         # Legitimate user manifests are always allowed; anything else that
         # reaches here is simply not a native product marker.
-        assert _ALLOWED_USER_MANIFEST_RE.search(descriptor) or True
+        pass
     return problems
 
 
@@ -264,15 +270,15 @@ def check_repo_native_manifest_product_absent(
 def test_native_manifest_product_pending_sibling_removal() -> None:
     """Guard state stays coherent with the real repo across staged removals.
 
-    The retirement candidate has NOT fully landed, but sibling removals
-    (#4188/#4190/#4191/#4192/#4189) may delete individual product files
-    independently. Requiring the complete pre-retirement file set to remain
-    would fail as soon as any sibling lands and would enforce the deprecated
-    implementation this suite is supposed to retire. Instead pin the enduring
-    invariant: while any native surface remains, the repo-derived guard must
-    flag it as a sibling-owned residual; once no surface remains, the guard
-    must pass. Either state is coherent; a silent pass while surfaces remain
-    is not.
+    The native removal has landed (MR5, #4192); sibling drain/cutover work
+    (#4188/#4190/#4191/#4189) may still own historical-read and
+    deployment-cutover evidence independently. Requiring the complete
+    pre-retirement file set to remain would fail now that siblings have
+    landed and would enforce the deprecated implementation this suite is
+    supposed to retire. Instead pin the enduring invariant: while any
+    native surface remains, the repo-derived guard must flag it as a
+    sibling-owned residual; once no surface remains, the guard must pass.
+    Either state is coherent; a silent pass while surfaces remain is not.
     """
     present = scan_repo_for_native_manifest_product_files()
     problems = check_repo_native_manifest_product_absent()
@@ -411,7 +417,6 @@ def test_ordinary_journey_agent_request_needs_no_manifest_or_vector() -> None:
     )
     dumped = request.model_dump(by_alias=True)
     assert dumped["agentKind"] == "managed"
-    assert "manifest" not in str(dumped).lower() or True
     parameters = dumped.get("parameters", {})
     assert "rag" not in parameters
     assert "followUpRetrieval" not in parameters
@@ -449,8 +454,6 @@ def test_shared_primitives_temporal_catalog_has_no_manifest_requirement() -> Non
     """The generated catalog path exists; Manifest drift belongs to siblings."""
     catalog = REPO_ROOT / "docs/Temporal/WorkflowTypeCatalogGenerated.md"
     assert catalog.exists()
-    # This slice does not claim the catalog is Manifest-free (sibling-owned).
-    assert True
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +467,11 @@ def test_historical_contract_shapes_are_named_for_sibling_ownership() -> None:
     ``manifest_ref`` compile histories and ``manifestArtifactRef`` node
     histories are validated against the pinned old release by #4189; no claim
     is made here that a deleted workflow replays on the new binary.
+
+    This is a source-level pin only, not executed historical-read proof:
+    executed post-removal reads live in
+    ``tests/unit/api/routers/test_manifest_retirement_boundaries_4193.py``
+    (decode + degraded + no-replay at the owning router/service boundary).
 
     The MR5 candidate deleted the native readers
     (``moonmind/schemas/manifest_ingest_models.py``,
