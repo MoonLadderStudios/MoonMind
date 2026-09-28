@@ -1578,8 +1578,12 @@ def build_runtime_config(
                 "detail": temporal_dashboard.detail_endpoint,
                 "steps": temporal_dashboard.steps_endpoint,
                 "update": temporal_dashboard.update_endpoint,
-                "manifestStatus": "/api/executions/{workflowId}/manifest-status",
-                "manifestNodes": "/api/executions/{workflowId}/manifest-nodes",
+                # MoonLadderStudios/MoonMind#4187: the native Manifest
+                # product is retired and its manifest-status/manifest-nodes
+                # routes are removed. No manifestStatus/manifestNodes links
+                # are advertised here: there are no consumers, and
+                # historical manifest_ref/manifestArtifactRef reads stay
+                # served through the execution list/detail projections.
                 "signal": temporal_dashboard.signal_endpoint,
                 "cancel": temporal_dashboard.cancel_endpoint,
                 "artifacts": temporal_dashboard.artifacts_endpoint,
