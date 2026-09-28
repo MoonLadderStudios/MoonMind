@@ -233,6 +233,71 @@ async def test_s3_store_uses_thread_local_clients(
     assert other_thread_client is not main_thread_client
     assert len(created_clients) == 2
 
+@pytest.mark.parametrize("code", ["BucketAlreadyOwnedByYou", "BucketAlreadyExists"])
+async def test_s3_store_accepts_bucket_created_concurrently(
+    monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """A fresh install's services race to create the bucket; losing is not an error."""
+
+    class _RacingS3Client:
+        created_elsewhere = False
+
+        def head_bucket(self, *, Bucket: str) -> None:
+            if not self.created_elsewhere:
+                raise ClientError({"Error": {"Code": "404"}}, "HeadBucket")
+
+        def create_bucket(self, *, Bucket: str) -> None:
+            # Another service created the bucket between our check and create.
+            type(self).created_elsewhere = True
+            raise ClientError({"Error": {"Code": code}}, "CreateBucket")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.boto3.client",
+        lambda service_name, **kwargs: _RacingS3Client(),
+    )
+
+    store = S3TemporalArtifactStore(
+        endpoint_url="http://example.test:9000",
+        bucket="bucket-1",
+        access_key_id="access",
+        secret_access_key="secret",
+        region_name="us-east-1",
+        use_ssl=False,
+    )
+
+    assert store._bucket == "bucket-1"
+
+
+async def test_s3_store_raises_when_bucket_stays_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bucket owned elsewhere or a denied create still fails loudly."""
+
+    class _DeniedS3Client:
+        def head_bucket(self, *, Bucket: str) -> None:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadBucket")
+
+        def create_bucket(self, *, Bucket: str) -> None:
+            raise ClientError(
+                {"Error": {"Code": "BucketAlreadyExists"}}, "CreateBucket"
+            )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.boto3.client",
+        lambda service_name, **kwargs: _DeniedS3Client(),
+    )
+
+    with pytest.raises(ClientError):
+        S3TemporalArtifactStore(
+            endpoint_url="http://example.test:9000",
+            bucket="bucket-1",
+            access_key_id="access",
+            secret_access_key="secret",
+            region_name="us-east-1",
+            use_ssl=False,
+        )
+
+
 async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
     """Service should create, upload, read, and list artifacts by execution linkage."""
 
