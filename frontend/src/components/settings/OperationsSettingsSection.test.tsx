@@ -805,6 +805,51 @@ describe('OperationsSettingsSection deployment update card', () => {
     }
   });
 
+  it('shows the failed controller operation after a refused update without a reload', async () => {
+    const previous = {
+      ...controllerAction,
+      id: 'ctl-op-6',
+      runId: 'ctl_op-6',
+      operationId: 'op-6',
+      status: 'SUCCEEDED',
+      controllerStatus: 'succeeded',
+      errorSummary: null,
+      retryable: false,
+      installedImage: controllerAction.requestedImage,
+    };
+    mockControllerStack([previous, controllerAction]);
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/v1/operations/deployment/update') {
+        return Promise.resolve({
+          ok: false,
+          status: 502,
+          json: async () => ({
+            detail: {
+              code: 'deployment_controller_failed',
+              message: 'The controller could not complete the request (HTTP 500).',
+            },
+          }),
+        } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(await within(card).findByText(/operation op-6/i)).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: /update moonmind/i }));
+    expect(
+      await within(card).findByText(/the controller could not complete the request/i),
+    ).toBeTruthy();
+    // The controller recorded the failed operation; the page re-reads it so
+    // the original error and Retry are visible without a manual reload.
+    expect(
+      await within(card).findByText(/original error: attempt 1: staging failed: manifest unknown/i),
+    ).toBeTruthy();
+    expect(within(card).getByRole('button', { name: /^retry$/i })).toBeTruthy();
+  });
+
   it('reports the accepted controller operation instead of a workflow run', async () => {
     const originalFetch = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation((input, init) => {

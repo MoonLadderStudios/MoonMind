@@ -3528,6 +3528,100 @@ def build_compose_command_plan(
     )
 
 
+# Controller outcomes that cannot fork a writer when the same target is
+# resubmitted: the request never reached one, its acknowledgment was lost
+# (resubmission reattaches), or the controller already owns the stack.
+_RETRYABLE_CONTROLLER_CODES = frozenset(
+    {
+        "deployment_controller_unavailable",
+        "deployment_controller_ack_lost",
+        "deployment_controller_conflict",
+    }
+)
+
+
+async def submit_to_installed_controller(
+    inputs: Mapping[str, Any],
+) -> ToolResult | None:
+    """Submit the typed update to the installed standalone controller.
+
+    With a controller installed, this tool is only a submit/observe adapter
+    for the same ``deploy/controller`` operation the host entrypoint and the
+    Settings Operations API use (MoonLadderStudios/MoonMind#4502); it never
+    runs the application-owned updater beside it. Returns ``None`` only when
+    no controller is installed (no deployment-owned secret).
+    """
+    from api_service.services.deployment_operations import (
+        DeploymentOperationError,
+        submit_controller_update,
+    )
+
+    parsed = _parse_inputs(inputs)
+    requested_image = _requested_image(parsed)
+    try:
+        operation = await asyncio.to_thread(
+            submit_controller_update,
+            stack=parsed["stack"],
+            desired_image=requested_image,
+            reason=parsed["reason"] or "",
+        )
+    except DeploymentOperationError as exc:
+        raise ToolFailure(
+            error_code=exc.code.upper(),
+            message=exc.message,
+            retryable=exc.code in _RETRYABLE_CONTROLLER_CODES,
+            details={"failureClass": exc.code},
+        ) from None
+    if operation is None:
+        return None
+    operation_id = str(operation.get("operationId") or "")
+    controller_status = str(operation.get("status") or "")
+    if controller_status not in ("succeeded", "partially_verified", "failed"):
+        raise ToolFailure(
+            error_code="DEPLOYMENT_CONTROLLER_RUNNING",
+            message=(
+                f"Controller operation {operation_id} is still {controller_status}; "
+                "resubmitting the same target reattaches to it."
+            ),
+            retryable=True,
+            details={"operationId": operation_id, "failureClass": "in_progress"},
+        )
+    installed = operation.get("installed") or {}
+    outputs = {
+        "status": controller_status.upper(),
+        "stack": parsed["stack"],
+        "requestedImage": requested_image,
+        "operationId": operation_id,
+        "installedImage": installed.get("image"),
+        "errorSummary": operation.get("errorSummary") or None,
+        "verification": list(operation.get("verification") or []),
+        "reportingFailures": list(operation.get("reportingFailures") or []),
+    }
+    succeeded = controller_status == "succeeded"
+    if not succeeded:
+        outputs["failure"] = {
+            "class": (
+                "verification_failure"
+                if controller_status == "partially_verified"
+                else "controller_failure"
+            ),
+            "reason": _redact_sensitive(
+                operation.get("errorSummary")
+                or "Controller verification did not prove desired state."
+            ),
+            "retryable": False,
+        }
+    return ToolResult(
+        status="COMPLETED" if succeeded else "FAILED",
+        outputs=outputs,
+        progress={
+            "percent": 100,
+            "state": controller_status.upper(),
+            "message": f"Controller operation {operation_id}: {controller_status}.",
+        },
+    )
+
+
 def build_deployment_update_handler(
     executor: DeploymentUpdateExecutor | None = None,
 ):
@@ -3541,6 +3635,9 @@ def build_deployment_update_handler(
     async def _handler(
         inputs: Mapping[str, Any], context: Mapping[str, Any] | None = None
     ) -> ToolResult:
+        controller_result = await submit_to_installed_controller(inputs)
+        if controller_result is not None:
+            return controller_result
         context = dict(context or {})
         context_executor = None
         candidate = context.get("deployment_update_executor")

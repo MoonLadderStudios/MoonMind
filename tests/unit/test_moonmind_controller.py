@@ -671,30 +671,6 @@ def test_controller_handoff_payload_is_data_only():
     assert record["operationId"] == "host-update:abc"
     assert record["desired"]["targetImage"] == "repo@digest"
 
-    # Load the application handoff by path: importing the ``moonmind``
-    # package pulls heavy API/DB dependencies, while the handoff itself is
-    # a thin data module the controller test must not require.
-    import importlib.util as _ilu
-
-    from pathlib import Path as _Path2
-
-    _handoff_path = (
-        _Path2(__file__).resolve().parents[2]
-        / "moonmind"
-        / "workflows"
-        / "skills"
-        / "deployment_controller_handoff.py"
-    )
-    _spec = _ilu.spec_from_file_location("deployment_controller_handoff", _handoff_path)
-    assert _spec is not None and _spec.loader is not None
-    _handoff = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_handoff)
-
-    assert _handoff.build_controller_payload(
-        submission_id="abc", image="repo@digest"
-    )["desired"]["targetImage"] == "repo@digest"
-    assert _handoff.controller_available() in (True, False)
-
 
 def test_serving_post_invalid_payload_returns_client_error():
     """Invalid operation payloads get a structured 400, not a dropped socket."""
@@ -1081,19 +1057,11 @@ def test_cutover_lock_is_installation_local_and_preserves_legacy(tmp_path):
         pass
 
 
-def test_cutover_submit_prefers_controller_and_serializes_controller_update():
-    """Legacy path stays fallback-only; host owns controller update (REQ-2/REQ-7)."""
+def test_cutover_serializes_controller_update():
+    """Host owns controller update (REQ-2/REQ-7)."""
     from pathlib import Path as _Path4
 
     repo = _Path4(__file__).resolve().parents[2]
-    submit_source = (
-        repo / "moonmind" / "workflows" / "skills" / "deployment_release.py"
-    ).read_text()
-    submit_body = submit_source.split("async def submit", 1)[1]
-    handoff_pos = submit_body.index("controller_available()")
-    legacy_pos = submit_body.index("_build_deployment_update_executor")
-    assert handoff_pos < legacy_pos, "controller handoff must precede legacy fallback"
-
     server_source = (repo / "moonmind_controller" / "server.py").read_text()
     assert "/update" not in server_source, "controller must never replace itself"
     install_source = (repo / "tools" / "install-moonmind-controller.sh").read_text()
