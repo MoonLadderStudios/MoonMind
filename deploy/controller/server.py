@@ -28,6 +28,11 @@ LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+NO_RECORDED_TARGET = (
+    "no deployment target is recorded for this stack; run "
+    "./tools/update-moonmind.sh on the host once so the controller records "
+    "the deployment's Compose project, files, and services"
+)
 _MAX_IMAGE_CHARS = 1024
 
 
@@ -425,6 +430,17 @@ def build_app(
             return _json_response(
                 start_response, "400 Bad Request", {"error": rejection}
             )
+        target = body.get("target") if isinstance(body.get("target"), dict) else None
+        if not target:
+            # Callers inside the stack cannot observe the host checkout; the
+            # deployment identity the host entrypoint recorded is reused.
+            target = store.recorded_target(stack=stack)
+        if applier is None and not record_mod.target_applicable(target):
+            # Refused before persistence so restart recovery never replays
+            # an operation the production applier could not admit.
+            return _json_response(
+                start_response, "400 Bad Request", {"error": NO_RECORDED_TARGET}
+            )
         try:
             lock_mod.ensure_no_competing_writer(store.state_dir, stack)
             cutover_block = check_legacy_cutover(legacy_writer_probe)
@@ -435,7 +451,7 @@ def build_app(
                 desired_image=desired_image,
                 source_revision=source_revision,
                 reason=body.get("reason", ""),
-                target=body.get("target") if isinstance(body.get("target"), dict) else None,
+                target=target,
             )
             already_installed = (operation.get("installed") or {}).get("image") == desired_image and operation.get(
                 "status"
@@ -618,7 +634,7 @@ def production_apply(
     target = operation.get("target") or {}
     project = target.get("project", operation.get("stack"))
     checks = engine.pre_apply_checks(
-        config_valid=bool(target.get("projectDir") and target.get("composeFiles")),
+        config_valid=record_mod.target_applicable(target),
         storage_ok=True,
         access_preserved=True,
         old_service_health={},

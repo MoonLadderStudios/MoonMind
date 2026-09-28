@@ -78,6 +78,19 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
+_PER_SUBMISSION_TARGET_KEYS = frozenset({"idempotencyKey"})
+
+
+def target_applicable(target: Any) -> bool:
+    """Whether a target names the Compose project files and services to apply."""
+    return bool(
+        isinstance(target, Mapping)
+        and target.get("projectDir")
+        and target.get("composeFiles")
+        and target.get("services")
+    )
+
+
 def error_summary(attempts: list) -> str:
     if not attempts:
         return ""
@@ -244,6 +257,42 @@ class OperationStore:
             return None
         return matches[-1]
 
+    def recorded_target(self, *, stack: str) -> dict | None:
+        """Return the newest applicable deployment target recorded for a stack.
+
+        The host entrypoint resolves the deployment's Compose project, files,
+        services, and settings on every submission. A caller that cannot
+        observe them (the Settings Operations API inside the stack) omits the
+        target, and the controller reuses this recorded deployment identity
+        instead of demanding it again. Per-submission fields such as the
+        idempotency key are not inherited.
+        """
+        newest: tuple[str, int] | None = None
+        selected: dict | None = None
+        if not self.operations_dir.is_dir():
+            return None
+        for path in sorted(self.operations_dir.glob("*.json")):
+            try:
+                operation = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if operation.get("stack") != stack:
+                continue
+            target = operation.get("target")
+            if not target_applicable(target):
+                continue
+            order = (str(operation.get("createdAt") or ""), path.stat().st_mtime_ns)
+            if newest is None or order > newest:
+                newest = order
+                selected = target
+        if selected is None:
+            return None
+        return {
+            key: value
+            for key, value in selected.items()
+            if key not in _PER_SUBMISSION_TARGET_KEYS
+        }
+
     def supersede(self, operation_id: str, *, reason: str = "") -> dict:
         """Close an open operation as superseded without applying it.
 
@@ -351,4 +400,5 @@ __all__ = [
     "TERMINAL_STATUSES",
     "OperationStore",
     "error_summary",
+    "target_applicable",
 ]

@@ -56,7 +56,7 @@ class _QuietHandler(WSGIRequestHandler):
 class _Controller:
     """The real deploy/controller endpoint on a loopback port."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, *, production: bool = False) -> None:
         for name in CONTROLLER_MODULES:
             sys.modules.pop(name, None)
         sys.path.insert(0, str(CONTROLLER_DIR))
@@ -65,8 +65,17 @@ class _Controller:
         self.store = self.modules["record"].OperationStore(self.state_dir)
         self.applied: list[str] = []
         self.behavior: Callable[[dict[str, Any]], None] = self.succeed
+        self.commands: list[tuple[str, ...]] = []
+        if production:
+            # The controller's own production applier runs; only the Docker
+            # CLI is replaced by a recorder that reports services running.
+            self.modules["engine"].subprocess_runner = lambda: _RecordingDocker(
+                self.commands
+            )
         app = self.modules["server"].build_app(
-            store=self.store, secret=SECRET, applier=self._apply
+            store=self.store,
+            secret=SECRET,
+            applier=None if production else self._apply,
         )
         self.httpd = make_server("127.0.0.1", 0, app, handler_class=_QuietHandler)
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
@@ -110,6 +119,41 @@ class _Controller:
         sys.path.remove(str(CONTROLLER_DIR))
         for name in CONTROLLER_MODULES:
             sys.modules.pop(name, None)
+
+
+class _RecordingDocker:
+    """Stands in for the Docker CLI beneath the production applier."""
+
+    def __init__(self, commands: list[tuple[str, ...]]) -> None:
+        self.commands = commands
+
+    def run(self, args: Any, timeout_seconds: int) -> dict[str, Any]:
+        command = tuple(str(part) for part in args)
+        self.commands.append(command)
+        if "ps" in command:
+            services = command[command.index("json") + 1 :]
+            return {
+                "exit": 0,
+                "output": json.dumps(
+                    [{"Service": name, "State": "running"} for name in services]
+                ),
+            }
+        return {"exit": 0, "output": ""}
+
+
+@pytest.fixture
+def production_controller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[_Controller]:
+    running = _Controller(tmp_path, production=True)
+    monkeypatch.setenv("MOONMIND_CONTROLLER_URL", running.url)
+    monkeypatch.setenv("MOONMIND_CONTROLLER_SECRET", SECRET)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    try:
+        yield running
+    finally:
+        running.close()
 
 
 @pytest.fixture
@@ -379,3 +423,190 @@ def test_unreadable_controller_keeps_the_last_known_state(
     [action] = _actions(client)
     assert action["status"] == "RUNNING"
     assert json.dumps(action).count("FAILED") == 0
+
+
+def _host_recorded_target(tmp_path: Path) -> dict[str, Any]:
+    """The deployment target the host entrypoint records on its submissions."""
+    project_dir = tmp_path / "deployment"
+    project_dir.mkdir()
+    (project_dir / "docker-compose.yaml").write_text("services: {}\n")
+    return {
+        "project": "existing-project",
+        "projectDir": str(project_dir),
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api", "temporal-worker-agent-runtime"],
+        "idempotencyKey": "host-update:first-host-submission",
+    }
+
+
+def test_production_controller_applies_a_router_submission_with_the_recorded_target(
+    production_controller: _Controller, tmp_path: Path
+) -> None:
+    host_target = _host_recorded_target(tmp_path)
+    host = production_controller.store.begin(
+        stack="moonmind",
+        desired_image=IMAGE_B,
+        source_revision="abc123",
+        target=host_target,
+    )
+    production_controller.store.confirm_installed(host["operationId"], image=IMAGE_B)
+
+    response = _update(_client())
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload["status"] == "SUCCEEDED"
+    recorded = production_controller.store.load(payload["operationId"])
+    # The controller reuses the deployment's recorded target; the host
+    # submission's idempotency key is its own and is not inherited.
+    assert recorded["target"] == {
+        key: value for key, value in host_target.items() if key != "idempotencyKey"
+    }
+    assert recorded["installed"]["image"] == IMAGE_A
+    [pull, up, *_observe] = production_controller.commands
+    base = (
+        "docker",
+        "compose",
+        "--project-name",
+        "existing-project",
+        "--project-directory",
+        host_target["projectDir"],
+        "-f",
+        "docker-compose.yaml",
+    )
+    assert pull[: len(base)] == base
+    assert "pull" in pull
+    assert up[: len(base)] == base
+    assert up[-2:] == ("api", "temporal-worker-agent-runtime")
+
+
+def test_production_controller_refuses_a_submission_with_no_recorded_target(
+    production_controller: _Controller,
+) -> None:
+    response = _update(_client())
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "deployment_controller_rejected"
+    assert "update-moonmind" in detail["message"]
+    # Refused before persistence: no open operation is left behind to be
+    # replayed by restart recovery, and Docker was never invoked.
+    assert production_controller.store.list_open(stack="moonmind") == []
+    assert production_controller.commands == []
+
+
+def _tool_inputs(reference: str = "20260425.1234") -> dict[str, Any]:
+    return {
+        "stack": "moonmind",
+        "image": {
+            "repository": "ghcr.io/moonladderstudios/moonmind",
+            "reference": reference,
+        },
+        "mode": "changed_services",
+        "reason": "Workflow-requested update",
+    }
+
+
+def test_typed_update_tool_submits_the_same_operation_the_ui_observes(
+    controller: _Controller,
+) -> None:
+    import asyncio
+
+    from moonmind.workflows.skills.deployment_execution import (
+        build_deployment_update_handler,
+    )
+
+    # The default handler's legacy executor has no Compose runner, so any
+    # fallback to the application-owned updater would fail this test.
+    handler = build_deployment_update_handler()
+    result = asyncio.run(handler(_tool_inputs(), {}))
+
+    assert result.status == "COMPLETED", result
+    operation_id = result.outputs["operationId"]
+    assert result.outputs["installedImage"] == IMAGE_A
+    assert controller.applied == [operation_id]
+    assert [action["operationId"] for action in _actions(_client())] == [operation_id]
+    # A repeated tool call (activity retry) reattaches instead of forking.
+    again = asyncio.run(handler(_tool_inputs(), {}))
+    assert again.outputs["operationId"] == operation_id
+    assert controller.applied == [operation_id]
+
+
+def test_typed_update_tool_reports_controller_outcomes_truthfully(
+    controller: _Controller,
+) -> None:
+    import asyncio
+
+    from moonmind.workflows.skills.deployment_execution import (
+        build_deployment_update_handler,
+    )
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+
+    handler = build_deployment_update_handler()
+    controller.behavior = controller.fail
+    with pytest.raises(ToolFailure) as failed:
+        asyncio.run(handler(_tool_inputs(), {}))
+    assert failed.value.error_code == "DEPLOYMENT_CONTROLLER_FAILED"
+    assert failed.value.retryable is False
+
+    controller.stop()
+    with pytest.raises(ToolFailure) as unavailable:
+        asyncio.run(handler(_tool_inputs(reference="stable"), {}))
+    assert unavailable.value.error_code == "DEPLOYMENT_CONTROLLER_UNAVAILABLE"
+    # Retrying cannot fork a writer: the request never reached one.
+    assert unavailable.value.retryable is True
+    assert SECRET not in str(unavailable.value)
+
+
+class _TemporalHistoryOnly(_TemporalStopped):
+    """Temporal can still list one historical workflow-backed update."""
+
+    async def list_executions(self, **_kwargs: object) -> object:
+        record = SimpleNamespace(
+            workflow_id="mm:historical-update",
+            run_id="11111111-2222-3333-4444-555555555555",
+            state="completed",
+            close_status="completed",
+            owner_id="operator",
+            started_at=None,
+            closed_at=None,
+            artifact_refs=[],
+            memo={},
+            parameters={
+                "workflow": {
+                    "plan": [
+                        {
+                            "tool": {"name": "deployment.update_compose_stack"},
+                            "inputs": {
+                                "stack": "moonmind",
+                                "image": {
+                                    "repository": "ghcr.io/moonladderstudios/moonmind",
+                                    "reference": "20260401.0001",
+                                },
+                            },
+                        }
+                    ]
+                }
+            },
+        )
+        return SimpleNamespace(items=[record])
+
+
+def test_historical_workflow_actions_stay_readable_beside_controller_operations(
+    controller: _Controller,
+) -> None:
+    client = _client()
+    client.app.dependency_overrides[_get_temporal_execution_service] = (
+        _TemporalHistoryOnly
+    )
+    operation_id = _update(client).json()["operationId"]
+
+    actions = _actions(client)
+
+    assert [action["operationId"] for action in actions] == [operation_id, None]
+    historical = actions[1]
+    assert historical["runDetailUrl"] == "/workflows/mm:historical-update"
+    assert historical["requestedImage"].endswith(":20260401.0001")
+    # History is readable, never an executable legacy fallback.
+    assert historical["retryable"] is False
+    assert historical["logsUrl"] is None

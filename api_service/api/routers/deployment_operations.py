@@ -701,11 +701,17 @@ async def get_deployment_stack_state(
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
     recent_actions = service.recent_actions(policy.stack)
-    if not recent_actions:
-        recent_actions = await _recent_actions_from_executions(
-            execution_service=execution_service,
-            policy=policy,
-        )
+    # Historical workflow-backed updates stay readable beside controller
+    # operations as history; they are never an executable legacy fallback.
+    historical = await _recent_actions_from_executions(
+        execution_service=execution_service,
+        policy=policy,
+    )
+    seen = {action.id for action in recent_actions}
+    recent_actions = (
+        *recent_actions,
+        *(action for action in historical if action.id not in seen),
+    )
     return _stack_state(policy, service, recent_actions=recent_actions)
 
 

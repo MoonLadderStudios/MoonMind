@@ -717,6 +717,10 @@ export function OperationsSettingsSection({
         level: 'error',
         text: mutationError.message,
       });
+      // A refused request may still have a recorded controller operation
+      // (for example an exhausted apply); re-read it so its original error
+      // and Retry appear without a reload.
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
   });
 
@@ -787,6 +791,7 @@ export function OperationsSettingsSection({
         level: 'error',
         text: mutationError.message,
       });
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
   });
 
@@ -831,6 +836,7 @@ export function OperationsSettingsSection({
     },
     onError: (mutationError: Error) => {
       setRollbackNotice({ level: 'error', text: mutationError.message });
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
   });
 
