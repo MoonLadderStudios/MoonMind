@@ -241,11 +241,13 @@ def get_or_create_installation_id(*, path: Path | None = None) -> str:
         if winner:
             return winner
     except OSError:
+        # The volume is unwritable here; fall through to the process identity.
         pass
     finally:
         try:
-            staged.unlink()
+            staged.unlink(missing_ok=True)
         except OSError:
+            # A leftover staged file is inert: only ``target`` is ever read.
             pass
     # Unpersistable: keep one identity for this process so every attempt it
     # announces or finalizes agrees, instead of minting one per call.
