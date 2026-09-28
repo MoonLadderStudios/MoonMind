@@ -188,7 +188,6 @@ def check_user_manifest_allowed(descriptors: list[str]) -> list[str]:
             continue
         # Legitimate user manifests are always allowed; anything else that
         # reaches here is simply not a native product marker.
-        pass
     return problems
 
 
