@@ -12,9 +12,12 @@ Focused integration coverage for the fixed-request launch path owned by
 * R2: lost start acknowledgments and worker death before/during/after start
   reconcile the existing container before retry (no duplicate start side
   effect, no abandoned live consumer, no premature slot reuse), including a
-  container finishing between observation and retry. A Docker-gated
-  variant injects the lost ack on the real ``docker start`` path and
-  reconciles through the daemon ledger.
+  container finishing between observation and retry -- including the same
+  job's own container finishing before its retry, which is observed, never
+  re-executed. The production workflow retries start after a lost ack and
+  reconciles instead of failing and discarding the live workload.
+  Docker-gated variants inject the lost ack on the real ``docker start``
+  path and reconcile through the daemon ledger.
 * R3: slot waiting, release, cancellation refusal, and restart through the
   production ``start_container`` boundary, plus agent-host/job-ledger
   separation -- and wait/release/proceed/restart plus host-full
@@ -22,8 +25,9 @@ Focused integration coverage for the fixed-request launch path owned by
   Activities.
 * R4: the normal CLI-to-container route carries the stock 2 CPU / 4 GiB /
   PID bound to Docker verbatim with no pool probe or resource helper; a
-  real-Docker inspect case (skipped without a daemon) checks the created
-  container config; and the Batch PR Resolver preset route (resolver run
+  real-Docker inspect case (skipped without a daemon) checks the config of
+  the container production ``create_container`` made from the stock CLI
+  request; and the Batch PR Resolver preset route (resolver run
   request, scoped capability, canonical submission) reaches host execution
   with isolated fixtures.
 
@@ -699,6 +703,38 @@ async def test_container_finishing_between_observation_and_retry(
     assert daemon.max_overlap <= 1
 
 
+async def test_same_job_retry_after_own_container_exited_does_not_rerun(
+    tmp_path: Path,
+) -> None:
+    """R2: the same job's retry after its own container finished never reruns it.
+
+    The start was applied but its acknowledgment was lost, and the container
+    ran to completion before the retry. The retry must reconcile the finished
+    container -- no second execution and no wait for a slot it no longer
+    needs -- so the workflow can observe the one real outcome.
+    """
+    daemon = _FakeDockerDaemon()
+    daemon.drop_next_start_ack = True
+    (backend,) = _backends(tmp_path, daemon, count=1)
+    request = _request(tmp_path, _job_id())
+    with pytest.raises(RuntimeError, match="lost start acknowledgment"):
+        await backend.start_container(request)
+    name = DockerContainerJobBackend._name(request)
+    # The container finishes between the lost ack and the retry, and another
+    # job takes the freed slot.
+    daemon.states[name] = "exited"
+    daemon.states["moonmind-container-job-other"] = "running"
+    daemon._record_running()
+
+    retry = await backend.start_container(request)
+
+    assert retry.capacity_wait is None, "a finished job needs no slot"
+    assert retry.container_ref == name
+    assert retry.running is False
+    assert daemon.real_starts == 1, "retry must not re-execute the container"
+    assert daemon.states[name] == "exited"
+
+
 async def test_own_paused_container_keeps_its_slot_on_retry(tmp_path: Path) -> None:
     """R2: a retry for a slot-holding own container never parks or recounts."""
     daemon = _FakeDockerDaemon()
@@ -716,7 +752,11 @@ async def test_own_paused_container_keeps_its_slot_on_retry(tmp_path: Path) -> N
 
 
 async def test_slot_wait_release_cancel_and_restart(tmp_path: Path) -> None:
-    """R3: wait, release on stop, non-waitable refusal, and restart."""
+    """R3: wait, release on stop, non-waitable refusal, and restart.
+
+    A restart after the job's container finished reconciles that outcome
+    instead of executing it again; the freed slot restarts the next job.
+    """
     daemon = _FakeDockerDaemon()
     daemon.states["moonmind-container-job-holder"] = "running"
     daemon._record_running()
@@ -743,8 +783,13 @@ async def test_slot_wait_release_cancel_and_restart(tmp_path: Path) -> None:
     name = DockerContainerJobBackend._name(waiter)
     daemon.states[name] = "exited"
     daemon._record_running()
+    starts_before_restart = daemon.real_starts
     restarted = await backend.start_container(waiter)
-    assert restarted.running is True
+    assert restarted.running is False, "a finished job is never re-executed"
+    assert daemon.real_starts == starts_before_restart
+    successor = _request(tmp_path, _job_id(), wait_for_capacity=True)
+    next_job = await backend.start_container(successor)
+    assert next_job.running is True
     assert daemon.max_overlap <= 1
 
 
@@ -830,64 +875,59 @@ async def test_stock_create_carries_fixed_limits_verbatim(
     assert daemon.info_count() == 0, "Plan A performs no machine-budget probe"
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="requires the Docker CLI")
 async def test_real_docker_inspect_shows_stock_fixed_limits(tmp_path: Path) -> None:
-    """R4: real-Docker config inspection for the stock limits (CI Docker)."""
-    import subprocess
+    """R4: the stock CLI request, created by production code, on real Docker.
 
-    probing = subprocess.run(
-        ["docker", "info", "--format", "{{.ServerVersion}}"],
-        capture_output=True,
-        text=True,
-        timeout=60,
+    The canonical ``python_test_submission`` spec runs through the production
+    ``DockerContainerJobBackend.create_container`` against the real daemon,
+    and the created container's HostConfig carries the stock 2 CPU / 4 GiB /
+    PID bound with no cgroup parent and no machine-budget probe. Only the
+    network is ``none``: restricted-egress attestation needs the deployment
+    gateway and is qualified by the egress suites. Docker-backed required CI
+    only; skips without a daemon.
+    """
+    _require_real_docker_image()
+    submission = python_test_submission(
+        ["tests/unit/example.py"], env=dict(_CLI_ENV)
     )
-    if probing.returncode != 0:
-        pytest.skip(
-            "requires a reachable Docker daemon: "
-            f"{probing.stderr.strip()[:200]}"
-        )
+    submission["spec"]["networkMode"] = "none"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    job_id = _job_id()
+    request = ContainerJobActivityRequest.model_validate(
+        {
+            "jobId": job_id,
+            "ownershipToken": f"{job_id}:v1",
+            "request": submission,
+            "resolvedWorkspaceRef": str(workspace),
+            "resolvedImageRef": _REAL_TEST_IMAGE,
+        }
+    )
+    calls: list[tuple[str, ...]] = []
 
-    del tmp_path  # real Docker needs no fixture workspace
-    name = f"moonmind-test-plan-a-{uuid.uuid4().hex[:12]}"
+    async def recording(raw: Any) -> tuple[int, bytes, bytes]:
+        calls.append(tuple(str(item) for item in raw))
+        return await _real_docker_run(raw)
+
+    backend = _real_backend(tmp_path, tmp_path / "capacity-locks", recording)
+    name = DockerContainerJobBackend._name(request)
     try:
-        created = subprocess.run(
-            [
-                "docker",
-                "create",
-                "--name",
-                name,
-                "--cpus",
-                "2",
-                "--memory",
-                "4096m",
-                "--pids-limit",
-                "512",
-                "alpine:3.20",
-                "true",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
+        created = await backend.create_container(request)
+        assert created.container_ref == name
+        inspected = await _real_docker_run(
+            ("inspect", "--format", "{{json .HostConfig}}", name)
         )
-        assert created.returncode == 0, created.stderr
-        inspected = subprocess.run(
-            ["docker", "inspect", "--format", "{{json .HostConfig}}", name],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        assert inspected.returncode == 0, inspected.stderr
-        host_config = json.loads(inspected.stdout)
+        assert inspected[0] == 0, inspected[2]
+        host_config = json.loads(inspected[1])
         assert host_config["NanoCpus"] == 2_000_000_000
         assert host_config["Memory"] == 4096 * 1024 * 1024
         assert host_config["PidsLimit"] == 512
         assert host_config.get("CgroupParent", "") in ("", None)
-    finally:
-        subprocess.run(
-            ["docker", "rm", "--force", name],
-            capture_output=True,
-            timeout=120,
+        assert not any(command[0] == "info" for command in calls), (
+            "Plan A performs no machine-budget probe"
         )
+    finally:
+        await _real_docker_run(("rm", "--force", name))
 
 
 _DIGEST = "sha256:" + "a" * 64
@@ -933,6 +973,12 @@ class _PlanAWorkflowDaemon:
         self.created: dict[str, str] = {}
         self.holder_token = ownership_token
         self.max_overlap = 0
+        self.real_starts = 0
+        # Lost-ack injection: the daemon applies the next start but its
+        # acknowledgment never reaches the worker. When ``finish_after_lost_ack``
+        # is set the container also runs to completion before any retry.
+        self.drop_next_start_ack = False
+        self.finish_after_lost_ack = False
 
     def _record_running(self) -> None:
         running = sum(1 for state in self.states.values() if state == "running")
@@ -982,8 +1028,15 @@ class _PlanAWorkflowDaemon:
             self.states[name] = "created"
             return 0, name.encode(), b""
         if command[0] == "start":
+            if self.states.get(command[1]) != "running":
+                self.real_starts += 1
             self.states[command[1]] = "running"
             self._record_running()
+            if self.drop_next_start_ack:
+                self.drop_next_start_ack = False
+                if self.finish_after_lost_ack:
+                    self.states[command[1]] = "exited"
+                raise RuntimeError("injected lost start acknowledgment")
             return 0, command[1].encode(), b""
         if command[0] == "stop":
             self.states[command[-1]] = "exited"
@@ -1501,6 +1554,81 @@ async def test_real_docker_lost_start_ack_reconciles_before_retry(
             )
 
 
+async def test_real_docker_same_job_retry_after_exit_does_not_rerun(
+    tmp_path: Path,
+) -> None:
+    """R2: on real Docker, a finished container is reconciled, not rerun.
+
+    The start is applied but its acknowledgment is lost, and the container
+    runs to completion before the retry. The retry must leave the daemon's
+    record of the one execution untouched (same ``StartedAt``) instead of
+    ``docker start``-ing the exited container again. Docker-backed required
+    CI only.
+    """
+    import subprocess
+
+    _require_real_docker_image()
+    lock_root = tmp_path / "capacity-locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    name = f"moonmind-test-plan-a-{uuid.uuid4().hex[:12]}"
+    job = _request(tmp_path, _job_id(), container_ref=name)
+    created = subprocess.run(
+        [
+            "docker",
+            "create",
+            "--name",
+            name,
+            "--label",
+            f"{LABEL_CONTAINER_JOB}={job.job_id}",
+            _REAL_TEST_IMAGE,
+            "true",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert created.returncode == 0, created.stderr
+    try:
+        dropped = False
+
+        async def flaky(raw: Any) -> tuple[int, bytes, bytes]:
+            nonlocal dropped
+            command = tuple(str(item) for item in raw)
+            if command[:2] == ("start", name) and not dropped:
+                dropped = True
+                await _real_docker_run(command)
+                raise RuntimeError("injected lost start acknowledgment")
+            return await _real_docker_run(raw)
+
+        victim = _real_backend(tmp_path, lock_root, flaky)
+        with pytest.raises(RuntimeError, match="lost start acknowledgment"):
+            await victim.start_container(job)
+        waited = await _real_docker_run(("wait", name))
+        assert waited[0] == 0, waited[2]
+        assert await _real_container_status(name) == "exited"
+        first_run = await _real_docker_run(
+            ("inspect", "--format", "{{.State.StartedAt}}", name)
+        )
+
+        survivor = _real_backend(tmp_path, lock_root, _real_docker_run)
+        retry = await survivor.start_container(job)
+
+        assert retry.running is False
+        assert retry.capacity_wait is None
+        after_retry = await _real_docker_run(
+            ("inspect", "--format", "{{.State.StartedAt}}", name)
+        )
+        assert after_retry[1] == first_run[1], (
+            "the retry must not execute the finished container again"
+        )
+    finally:
+        subprocess.run(
+            ["docker", "rm", "--force", name],
+            capture_output=True,
+            timeout=120,
+        )
+
+
 # ------------------------------------------- production-workflow R3 journeys
 
 
@@ -1706,6 +1834,86 @@ async def test_subordinate_test_job_runs_while_hosts_full_through_workflow(
     assert any(command[0] == "start" for command in daemon.commands), (
         "the subordinate job must reach docker start"
     )
+    assert not any(command[0] == "info" for command in daemon.commands)
+
+
+async def _lost_start_ack_workflow_journey(
+    tmp_path: Path, *, finish_before_retry: bool
+) -> tuple[dict[str, Any], _PlanAWorkflowDaemon, list[tuple[str, str]]]:
+    daemon = _PlanAWorkflowDaemon(
+        holder_name=None,
+        ownership_token="container-job:holder:v1",
+    )
+    daemon.drop_next_start_ack = True
+    daemon.finish_after_lost_ack = finish_before_retry
+    async with _production_workflow_harness(tmp_path, daemon=daemon) as (
+        client,
+        workflow_queue,
+        workspace,
+        _,
+        _published,
+        projected,
+    ):
+        job_id = "container-job:" + ("4" if finish_before_retry else "5") * 32
+        handle = await client.start_workflow(
+            MoonMindContainerJobWorkflow.run,
+            _workflow_input(job_id, workspace),
+            id=f"container-job-plan-a-{uuid.uuid4()}",
+            task_queue=workflow_queue,
+        )
+        result = await _await_workflow_success(handle, daemon, holder_name=None)
+    return result, daemon, projected
+
+
+async def test_lost_start_ack_reconciles_through_production_workflow(
+    tmp_path: Path,
+) -> None:
+    """R2: a lost start ack is reconciled by the production workflow.
+
+    The daemon applies ``docker start`` but the Activity never receives the
+    acknowledgment -- the same uncertainty a worker lost during start leaves
+    behind. The production ``MoonMindContainerJobWorkflow`` must reconcile
+    the live container on its start retry and observe it to completion: one
+    real start, no second execution, and no force-removal of the running
+    workload before its outcome is observed.
+    """
+    result, daemon, _projected = await _lost_start_ack_workflow_journey(
+        tmp_path, finish_before_retry=False
+    )
+
+    assert result["state"] == "succeeded", result
+    assert daemon.real_starts == 1, "the retry must not start a second execution"
+    observed = [
+        index
+        for index, command in enumerate(daemon.commands)
+        if command[:3] == ("inspect", "--format", "{{json .State}}")
+    ]
+    removed = [
+        index for index, command in enumerate(daemon.commands) if command[0] == "rm"
+    ]
+    assert observed, "the reconciled workload must be observed"
+    assert all(index > max(observed) for index in removed), (
+        "the live workload must not be removed before its outcome is observed"
+    )
+    assert daemon.max_overlap <= 1
+    assert not any(command[0] == "info" for command in daemon.commands)
+
+
+async def test_container_finishing_before_start_retry_through_production_workflow(
+    tmp_path: Path,
+) -> None:
+    """R2: a container finishing between the lost ack and the retry.
+
+    The start was applied, its ack was lost, and the container ran to
+    completion before the Activity retried. The production workflow must
+    report that one real outcome instead of executing the job again.
+    """
+    result, daemon, _projected = await _lost_start_ack_workflow_journey(
+        tmp_path, finish_before_retry=True
+    )
+
+    assert result["state"] == "succeeded", result
+    assert daemon.real_starts == 1, "a finished job must never be re-executed"
     assert not any(command[0] == "info" for command in daemon.commands)
 
 
