@@ -297,6 +297,26 @@ class OperationStore:
             operation["status"] = "pending"
         return self._write(operation)
 
+    def fail(self, operation_id: str, *, error: str) -> dict:
+        """Close an unfinished operation as failed with an explained error.
+
+        Used for refusals and unexpected controller errors that further
+        automatic attempts cannot fix. Earlier attempt errors are kept; an
+        explicit ``begin_retry`` still starts a fresh bounded group.
+        """
+        operation = self.record_attempt_error(operation_id, error=error)
+        if operation.get("installed") is not None:
+            return operation
+        operation["autoAttemptsExhausted"] = True
+        operation["status"] = "failed"
+        return self._write(operation)
+
+    def set_target(self, operation_id: str, target: Mapping[str, Any]) -> dict:
+        """Record the deployment target derived for a target-less request."""
+        operation = self.load(operation_id)
+        operation["target"] = dict(target)
+        return self._write(operation)
+
     def begin_retry(self, operation_id: str) -> dict:
         """Start a fresh bounded attempt group; prior diagnostics are kept."""
         operation = self.load(operation_id)

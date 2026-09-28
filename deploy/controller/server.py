@@ -12,12 +12,18 @@ is reconciled (left alone) rather than competed with.
 """
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import os
 import re
+import socketserver
+import stat
+import threading
+import traceback
 from typing import Any, Callable
 from urllib.parse import urlsplit
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 import engine
 import lock as lock_mod
@@ -25,6 +31,9 @@ import record as record_mod
 from redact import redact_mapping
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
+# Endpoint socket inside the state directory (reachable by the MoonMind API
+# through its read-only deployment-state mount).
+SOCKET_NAME = "controller.sock"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -365,6 +374,50 @@ def _apply_with_bounded_retries(
                 raise
 
 
+class _ApplyOwners:
+    """Background apply owners: at most one in-flight operation per stack.
+
+    The request thread only accepts work: it persists the operation, takes
+    the stack lock, and hands both to an owner thread, so a slow pull/up
+    never outlives the caller's HTTP timeout or blocks status reads. A
+    resubmitted target reattaches to the in-flight owner instead of racing
+    it (lost acknowledgment never launches a second updater).
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._active: dict[str, tuple[str, threading.Thread]] = {}
+
+    def in_flight(self, stack: str) -> str | None:
+        with self._guard:
+            entry = self._active.get(stack)
+            if entry is not None and entry[1].is_alive():
+                return entry[0]
+            return None
+
+    def start(self, stack: str, operation_id: str, work: Callable[[], None]) -> None:
+        def run() -> None:
+            try:
+                work()
+            finally:
+                with self._guard:
+                    if self._active.get(stack, ("",))[0] == operation_id:
+                        self._active.pop(stack, None)
+
+        thread = threading.Thread(
+            target=run, name=f"apply-{operation_id}", daemon=True
+        )
+        with self._guard:
+            self._active[stack] = (operation_id, thread)
+        thread.start()
+
+    def join(self, timeout: float | None = None) -> None:
+        with self._guard:
+            threads = [thread for _, thread in self._active.values()]
+        for thread in threads:
+            thread.join(timeout)
+
+
 def build_app(
     *,
     store: record_mod.OperationStore,
@@ -373,9 +426,17 @@ def build_app(
     applier: Callable[[dict], Any] | None = None,
     legacy_writer_probe: Callable[[], bool] | None = None,
 ):
-    """Build the WSGI application. The secret is deployment-owned."""
+    """Build the WSGI application. The secret is deployment-owned.
+
+    The returned app also exposes ``converge()`` (restart recovery through
+    the same apply owners) and ``join_applies(timeout)``.
+    """
     bearer = _read_secret(secret, secret_file)
     run_apply = applier or (lambda operation: production_apply(store, operation))
+    owners = _ApplyOwners()
+    # Serializes acceptance (dedupe, lock acquisition, owner start) so two
+    # concurrent submissions cannot both create or launch an operation.
+    accepting = threading.Lock()
 
     def app(environ, start_response):
         if not _authorized(environ, bearer):
@@ -412,6 +473,55 @@ def build_app(
             return _json_response(start_response, "200 OK", {"status": "ok"})
         return _json_response(start_response, "404 Not Found", {"error": "unknown route"})
 
+    def _launch(operation: dict) -> None:
+        """Take the stack lock and hand the operation to its apply owner.
+
+        Raises :class:`lock_mod.LockBusyError` when another process owns
+        the stack; the lock is released by the owner thread when done.
+        """
+        operation_id = operation["operationId"]
+        stack = operation["stack"]
+        held = lock_mod.StackLock(store.state_dir, stack).acquire()
+        held.__enter__()
+
+        def work() -> None:
+            try:
+                _apply_with_bounded_retries(store, operation_id, run_apply)
+            except (engine.StageError, engine.ApplyError):
+                # Recorded per attempt by the applier; the bounded loop has
+                # already reached its terminal state.
+                pass
+            except Exception as exc:  # noqa: BLE001 - recorded, never exposed
+                traceback.print_exc()
+                store.fail(
+                    operation_id,
+                    error=(
+                        f"controller error ({type(exc).__name__}); see the "
+                        "controller container log"
+                    ),
+                )
+            finally:
+                held.__exit__(None, None, None)
+
+        owners.start(stack, operation_id, work)
+
+    def _in_flight_response(start_response, stack, desired_image):
+        """Reattach to (same target) or refuse beside (changed target) an owner."""
+        in_flight = owners.in_flight(stack)
+        if in_flight is None:
+            return None
+        operation = store.load(in_flight)
+        if (operation.get("desired") or {}).get("image") == desired_image:
+            return _json_response(start_response, "202 Accepted", _public_operation(operation))
+        return _json_response(
+            start_response,
+            "409 Conflict",
+            {
+                "error": "stack has an unfinished operation",
+                "operationId": in_flight,
+            },
+        )
+
     def _submit(start_response, body):
         stack = body.get("stack")
         desired_image = body.get("desiredImage")
@@ -426,26 +536,27 @@ def build_app(
                 start_response, "400 Bad Request", {"error": rejection}
             )
         try:
-            lock_mod.ensure_no_competing_writer(store.state_dir, stack)
-            cutover_block = check_legacy_cutover(legacy_writer_probe)
-            if cutover_block is not None:
-                return _json_response(start_response, "409 Conflict", {"error": cutover_block})
-            operation = store.begin(
-                stack=stack,
-                desired_image=desired_image,
-                source_revision=source_revision,
-                reason=body.get("reason", ""),
-                target=body.get("target") if isinstance(body.get("target"), dict) else None,
-            )
-            already_installed = (operation.get("installed") or {}).get("image") == desired_image and operation.get(
-                "status"
-            ) in ("succeeded", "partially_verified")
-            if not already_installed and operation.get("status") in ("pending", "staged", "applying"):
-                candidate = lock_mod.StackLock(store.state_dir, stack)
-                with candidate.acquire():
-                    operation = _apply_with_bounded_retries(
-                        store, operation["operationId"], run_apply
-                    )
+            with accepting:
+                attached = _in_flight_response(start_response, stack, desired_image)
+                if attached is not None:
+                    return attached
+                lock_mod.ensure_no_competing_writer(store.state_dir, stack)
+                cutover_block = check_legacy_cutover(legacy_writer_probe)
+                if cutover_block is not None:
+                    return _json_response(start_response, "409 Conflict", {"error": cutover_block})
+                operation = store.begin(
+                    stack=stack,
+                    desired_image=desired_image,
+                    source_revision=source_revision,
+                    reason=body.get("reason", ""),
+                    target=body.get("target") if isinstance(body.get("target"), dict) else None,
+                )
+                already_installed = (operation.get("installed") or {}).get("image") == desired_image and operation.get(
+                    "status"
+                ) in ("succeeded", "partially_verified")
+                if not already_installed and operation.get("status") in record_mod.OPEN_STATUSES:
+                    _launch(operation)
+                    operation = store.load(operation["operationId"])
         except lock_mod.LockBusyError:
             # Never expose lock-owner internals: a constant conflict body.
             return _json_response(start_response, "409 Conflict", {"error": "stack is owned by another writer"})
@@ -456,25 +567,33 @@ def build_app(
     def _status(start_response, operation_id):
         try:
             return _json_response(start_response, "200 OK", _public_operation(store.load(operation_id)))
-        except KeyError:
+        except (KeyError, ValueError):
             return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
 
     def _retry(start_response, operation_id):
         try:
-            operation = store.begin_retry(operation_id)
-        except KeyError:
+            with accepting:
+                existing = store.load(operation_id)
+                in_flight = owners.in_flight(existing["stack"])
+                if in_flight == operation_id:
+                    return _json_response(start_response, "202 Accepted", _public_operation(existing))
+                if in_flight is not None:
+                    return _json_response(
+                        start_response,
+                        "409 Conflict",
+                        {"error": "stack has an unfinished operation", "operationId": in_flight},
+                    )
+                lock_mod.ensure_no_competing_writer(store.state_dir, existing["stack"])
+                operation = store.begin_retry(operation_id)
+                _launch(operation)
+                operation = store.load(operation_id)
+        except (KeyError, ValueError):
             return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
+        except lock_mod.LockBusyError:
+            return _json_response(start_response, "409 Conflict", {"error": "stack is owned by another writer"})
         except RuntimeError:
             # Constant body: retry-budget internals never reach the response.
             return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
-        try:
-            candidate = lock_mod.StackLock(store.state_dir, operation["stack"])
-            with candidate.acquire():
-                operation = _apply_with_bounded_retries(
-                    store, operation_id, run_apply
-                )
-        except lock_mod.LockBusyError:
-            return _json_response(start_response, "409 Conflict", {"error": "stack is owned by another writer"})
         except Exception:  # noqa: BLE001 - never expose exception detail
             return _json_response(start_response, "500 Internal Server Error", {"error": "internal error"})
         return _json_response(start_response, "202 Accepted", _public_operation(operation))
@@ -482,7 +601,7 @@ def build_app(
     def _logs(start_response, operation_id):
         try:
             operation = store.load(operation_id)
-        except KeyError:
+        except (KeyError, ValueError):
             return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
         logs = {
             "operationId": operation_id,
@@ -494,7 +613,84 @@ def build_app(
         }
         return _json_response(start_response, "200 OK", redact_mapping(logs))
 
+    def converge() -> dict:
+        """Restart recovery through the same owners (endpoint stays usable)."""
+        def adopt(operation: dict) -> None:
+            try:
+                _launch(operation)
+            except lock_mod.LockBusyError:
+                # Another writer owns the stack: leave the operation open
+                # for the next recovery instead of competing with it.
+                print(
+                    f"restart recovery deferred {operation['operationId']}: "
+                    "stack is owned by another writer",
+                    flush=True,
+                )
+
+        with accepting:
+            return converge_on_restart(
+                store, adopt, legacy_writer_probe=legacy_writer_probe
+            )
+
+    app.converge = converge
+    app.join_applies = owners.join
     return app
+
+
+class _ThreadingWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
+    """TCP endpoint; each request gets a thread so reads never queue behind writes."""
+
+    daemon_threads = True
+
+
+class _UnixWSGIServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """The same WSGI app on a Unix socket inside the controller state dir.
+
+    The MoonMind API reaches the controller through its read-only
+    deployment-state mount instead of a network path into this separate
+    Compose project; every route still requires the bearer secret.
+    """
+
+    daemon_threads = True
+
+    def __init__(self, path: str, app) -> None:
+        super().__init__(path, WSGIRequestHandler)
+        self.application = app
+        self.base_environ = {
+            "SERVER_NAME": "localhost",
+            "GATEWAY_INTERFACE": "CGI/1.1",
+            "SERVER_PORT": "0",
+            "REMOTE_HOST": "",
+            "CONTENT_LENGTH": "",
+            "SCRIPT_NAME": "",
+        }
+
+    def get_app(self):
+        return self.application
+
+    def finish_request(self, request, client_address) -> None:
+        self.RequestHandlerClass(request, ("unix", 0), self)
+
+
+def make_tcp_server(host: str, port: int, app) -> WSGIServer:
+    return make_server(host, port, app, server_class=_ThreadingWSGIServer)
+
+
+def make_unix_server(path: str, app) -> _UnixWSGIServer:
+    """Bind the endpoint socket, replacing only a stale socket file."""
+    with contextlib.suppress(FileNotFoundError):
+        if stat.S_ISSOCK(os.lstat(path).st_mode):
+            os.unlink(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    server = _UnixWSGIServer(path, app)
+    # Same audience as the deployment-owned secret: the owner of the state
+    # directory (the host user whose API container reads that secret). The
+    # bearer secret still guards every route.
+    owner = os.stat(os.path.dirname(path) or ".")
+    with contextlib.suppress(OSError):
+        os.chown(path, owner.st_uid, owner.st_gid)
+    os.chmod(path, 0o660)
+    return server
 
 
 def _env_files_for_apply(target: dict, overlay: str) -> list:
@@ -607,6 +803,93 @@ def omnigent_channels_for_target(target: dict) -> list:
     ]
 
 
+# The controller never recreates the target's Docker transport substrate
+# through itself (same exclusion the host entrypoint applies).
+EXCLUDED_SERVICES = frozenset({"docker-proxy", "sandbox-egress-proxy"})
+TARGET_CONFIG_TIMEOUT_SECONDS = 120
+
+
+def _installed_target_dir(state_dir: str) -> str:
+    explicit = os.environ.get("MOONMIND_CONTROLLER_TARGET_DIR", "").strip()
+    if explicit:
+        return explicit
+    try:
+        with open(os.path.join(state_dir, "controller-identity.json"), encoding="utf-8") as stream:
+            identity = json.load(stream)
+    except (OSError, ValueError):
+        return ""
+    return str((identity or {}).get("repo") or "") if isinstance(identity, dict) else ""
+
+
+def _deployment_compose_files(project_dir: str, env_values: dict) -> list | None:
+    """Resolve the deployment's Compose file set like Compose itself does."""
+    selection = str(env_values.get("COMPOSE_FILE") or "").strip()
+    if selection:
+        files = []
+        for part in re.split(r"[;:]", selection):
+            name = part.strip()
+            if not name:
+                continue
+            if name.startswith("/") or ".." in name.split("/"):
+                return None
+            if not os.path.isfile(os.path.join(project_dir, name)):
+                return None
+            files.append(name)
+        return files or None
+    files = ["docker-compose.yaml"]
+    for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+        if os.path.isfile(os.path.join(project_dir, name)):
+            files.append(name)
+            break
+    return files
+
+
+def derive_default_target(state_dir: str, runner) -> dict | None:
+    """Derive the installed deployment's target from its checkout and `.env`.
+
+    The controller is installed for one deployment checkout (bootstrap
+    records it); project name and services come from that checkout's own
+    rendered Compose configuration, so callers need not declare what the
+    deployment already determines. Returns ``None`` when nothing is
+    derivable, which the pre-apply check then refuses explicitly.
+    """
+    project_dir = _installed_target_dir(state_dir)
+    if not project_dir or not os.path.isdir(project_dir):
+        return None
+    env_file = os.path.join(project_dir, ".env")
+    env_values = read_env_file(env_file)
+    compose_files = _deployment_compose_files(project_dir, env_values)
+    if not compose_files:
+        return None
+    command = ["docker", "compose", "--project-directory", project_dir]
+    for compose_file in compose_files:
+        command.extend(["-f", compose_file])
+    command.extend(["config", "--format", "json"])
+    try:
+        rendered = json.loads(
+            runner.run(command, TARGET_CONFIG_TIMEOUT_SECONDS).get("output") or "{}"
+        )
+    except (engine.CommandError, ValueError):
+        return None
+    services = sorted(
+        name
+        for name in (rendered.get("services") or {})
+        if name not in EXCLUDED_SERVICES
+    )
+    project = str(rendered.get("name") or "")
+    if not project or not _SAFE_NAME_RE.match(project) or not services:
+        return None
+    target = {
+        "project": project,
+        "projectDir": project_dir,
+        "composeFiles": compose_files,
+        "services": services,
+    }
+    if os.path.isfile(env_file):
+        target["envFile"] = env_file
+    return target
+
+
 def production_apply(
     store: record_mod.OperationStore,
     operation: dict,
@@ -614,8 +897,19 @@ def production_apply(
     dispatch_probe: Callable[[], bool | None] | None = None,
     omnigent_migrator: Callable[[dict], Any] | None = None,
 ) -> dict:
-    """Default applier: stage images, apply, verify, and record the result."""
+    """Default applier: stage images, apply, verify, and record the result.
+
+    A submission without a target (the Operations API path) applies to the
+    deployment this controller was installed for (see
+    :func:`derive_default_target`); the derived target is recorded on the
+    operation before anything runs.
+    """
+    runner = engine.subprocess_runner()
     target = operation.get("target") or {}
+    if not target.get("projectDir"):
+        derived = derive_default_target(str(store.state_dir), runner)
+        if derived is not None:
+            target = store.set_target(operation["operationId"], derived)["target"]
     project = target.get("project", operation.get("stack"))
     checks = engine.pre_apply_checks(
         config_valid=bool(target.get("projectDir") and target.get("composeFiles")),
@@ -624,10 +918,10 @@ def production_apply(
         old_service_health={},
     )
     if not checks["admitted"]:
-        store.record_attempt_error(operation["operationId"], error="; ".join(checks["problems"]))
+        # Retrying cannot fix a refused target: close it with the reason.
+        store.fail(operation["operationId"], error="; ".join(checks["problems"]))
         return {"status": "refused", "problems": checks["problems"]}
     store.mark_stage(operation["operationId"], stage="staged")
-    runner = engine.subprocess_runner()
     overlay = write_image_overlay(
         str(store.state_dir), operation["operationId"], operation["desired"]["image"]
     )
@@ -829,7 +1123,6 @@ def _verify_omnigent_release(
 
 def main(argv=None) -> int:
     import argparse
-    from wsgiref.simple_server import make_server
 
     parser = argparse.ArgumentParser(description="Standalone MoonMind deployment controller.")
     parser.add_argument("--state-dir", default=os.environ.get("MOONMIND_CONTROLLER_STATE_DIR", "/var/lib/moonmind-controller"))
@@ -844,10 +1137,18 @@ def main(argv=None) -> int:
     secret_file = args.secret_file or os.path.join(args.state_dir, "secrets", "controller-bearer")
     store = record_mod.OperationStore(args.state_dir)
     probe = None if args.no_legacy_probe else default_legacy_writer_probe
-    converge_on_restart(store, lambda operation: production_apply(store, operation), legacy_writer_probe=probe)
     app = build_app(store=store, secret_file=secret_file, legacy_writer_probe=probe)
-    httpd = make_server("0.0.0.0", args.port, app)
-    print(f"moonmind-controller listening on 0.0.0.0:{args.port}", flush=True)
+    socket_path = os.path.join(args.state_dir, SOCKET_NAME)
+    unix_httpd = make_unix_server(socket_path, app)
+    threading.Thread(target=unix_httpd.serve_forever, name="unix-endpoint", daemon=True).start()
+    httpd = make_tcp_server("0.0.0.0", args.port, app)
+    # Restart recovery runs through the same apply owners, so the endpoint
+    # answers status reads while unfinished work converges.
+    print(json.dumps({"restartRecovery": app.converge()}, sort_keys=True), flush=True)
+    print(
+        f"moonmind-controller listening on 0.0.0.0:{args.port} and {socket_path}",
+        flush=True,
+    )
     httpd.serve_forever()
     return 0
 

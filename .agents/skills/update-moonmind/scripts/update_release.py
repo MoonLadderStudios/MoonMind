@@ -30,6 +30,7 @@ _DEFAULT_CONTROLLER_URL = os.environ.get(
 # definition is unchanged, and required init-db gating stays inside Compose.
 _CONTROLLER_EXCLUDED_SERVICES = frozenset({"docker-proxy", "sandbox-egress-proxy"})
 _CONTROLLER_POLL_INTERVAL_SECONDS = 10
+_CONTROLLER_SUBMIT_ATTEMPTS = 3
 _CONTROLLER_POLL_TIMEOUT_SECONDS = 1800
 
 
@@ -378,12 +379,6 @@ def main(argv=None):
         f"Release submission: {submission_id} (resume with --resume {submission_id})",
         flush=True,
     )
-    # Replacement owner first: the canonical client handoff when configured,
-    # then this PR's direct controller path; the legacy application-owned
-    # updater remains the final fallback.
-    controller_rc = _try_controller_handoff(record=record)
-    if controller_rc is not None:
-        return controller_rc
     return _submit_release(
         record,
         repo,
@@ -551,9 +546,13 @@ def _controller_call(controller_url, secret, method, path, payload=None, timeout
         raise RuntimeError(
             f"Controller {method} {path} failed with HTTP {exc.code}: {detail}"
         ) from None
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, OSError) as exc:
+        # A timeout or reset is an unanswered request, not a refusal: the
+        # controller may have accepted it, so callers reattach by resubmitting
+        # the same target (the controller deduplicates) or by observing.
+        reason = getattr(exc, "reason", exc)
         raise ControllerUnreachableError(
-            f"Controller at {controller_url} is unreachable ({exc.reason}); "
+            f"Controller at {controller_url} is unreachable ({reason}); "
             "install and start it with "
             "`python3 deploy/controller/bootstrap.py install` (then `start`), "
             "or pass --legacy-direct for the transitional application-owned path."
@@ -651,19 +650,31 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
         # Recorded for post-apply operator-access verification; the
         # controller stores the submission target unchanged.
         target["operatorUrls"] = operator_urls
-    _, created = _controller_call(
-        controller_url,
-        secret,
-        "POST",
-        "/v1/operations",
-        {
-            "stack": "moonmind",
-            "desiredImage": record["image"],
-            "sourceRevision": record["inputs"].get("sourceRevision", ""),
-            "reason": record["inputs"].get("reason", ""),
-            "target": target,
-        },
-    )
+    submission = {
+        "stack": "moonmind",
+        "desiredImage": record["image"],
+        "sourceRevision": record["inputs"].get("sourceRevision", ""),
+        "reason": record["inputs"].get("reason", ""),
+        "target": target,
+    }
+    for attempt in range(1, _CONTROLLER_SUBMIT_ATTEMPTS + 1):
+        try:
+            _, created = _controller_call(
+                controller_url, secret, "POST", "/v1/operations", submission
+            )
+            break
+        except ControllerUnreachableError:
+            # The controller deduplicates an unfinished or completed operation
+            # for the same target, so resubmitting reattaches to the owner
+            # instead of launching a second updater.
+            if attempt == _CONTROLLER_SUBMIT_ATTEMPTS:
+                raise
+            print(
+                "Controller acknowledgment was lost; reattaching to the same "
+                f"operation (attempt {attempt + 1}/{_CONTROLLER_SUBMIT_ATTEMPTS})",
+                flush=True,
+            )
+            _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
     operation_id = created.get("operationId")
     if not operation_id:
         raise RuntimeError(f"Controller refused the submission: {created}")
@@ -671,9 +682,18 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
     deadline = time.time() + _CONTROLLER_POLL_TIMEOUT_SECONDS
     last_status = None
     while True:
-        _, operation = _controller_call(
-            controller_url, secret, "GET", f"/v1/operations/{operation_id}"
-        )
+        try:
+            _, operation = _controller_call(
+                controller_url, secret, "GET", f"/v1/operations/{operation_id}"
+            )
+        except ControllerUnreachableError as exc:
+            # Losing the observer is not a failed update: the controller
+            # keeps owning the operation, so keep observing until the deadline.
+            if time.time() > deadline:
+                raise
+            print(f"Controller operation {operation_id}: unobserved ({exc})", flush=True)
+            _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
+            continue
         status = operation.get("status")
         if status != last_status:
             print(f"Controller operation {operation_id}: {status}", flush=True)
@@ -804,58 +824,6 @@ def _submit_legacy_direct(record, repo):
                 },
             check=False,
         ).returncode
-
-
-def _try_controller_handoff(*, record):
-    """Submit trusted release data to the standalone controller if configured.
-
-    Returns the controller exit code on a handled submission, else None to
-    fall through to the legacy application-owned path. A controller failure
-    falls back with an explicit diagnostic; the installation is unchanged.
-    """
-    try:
-        from moonmind_controller import client
-    except ImportError:
-        return None
-    if not client.is_controller_configured():
-        return None
-    trusted_inputs = dict((record.get("inputs") or {}) if isinstance(record.get("inputs"), dict) else {})
-
-    def _optional_mapping(value) -> dict | None:
-        return dict(value) if isinstance(value, dict) else None
-
-    payload = client.build_operation_payload(
-        operation_id=str(
-            record["context"].get("idempotency_key") or f"host-update:{record['image']}"
-        ),
-        target_image=record["image"],
-        stack=record.get("project"),
-        authorization=_optional_mapping(trusted_inputs.get("authorization")),
-        storage=_optional_mapping(trusted_inputs.get("storage")),
-        access_settings=_optional_mapping(
-            trusted_inputs.get("accessSettings") or trusted_inputs.get("access_settings")
-        ),
-    )
-    try:
-        receipt = client.submit_operation(payload, wait_for_terminal=True)
-    except client.ControllerUnavailableError as exc:
-        # No controller writer owns this operation (down or absent record):
-        # falling back to the legacy application-owned updater is safe.
-        print(
-            f"Standalone controller unavailable ({exc}); falling back to the "
-            "legacy application-owned updater until cutover completes.",
-            flush=True,
-        )
-        return None
-    except Exception as exc:
-        # The controller owns (or may own) this operation: never fork the
-        # legacy updater while it may still be applying the same stack.
-        # The durable record stays observable via controller status, and a
-        # retry reuses the same submission ID idempotently.
-        print(f"Standalone controller did not complete the operation ({exc})", flush=True)
-        return 1
-    print(f"Controller operation: {receipt} (standalone replacement owner)", flush=True)
-    return 0
 
 
 def _compose_ps_state(*, repo, project):

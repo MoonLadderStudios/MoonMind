@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,9 +21,13 @@ from api_service.services.deployment_operations import (
     DeploymentUpdateSubmission,
     RollbackEligibilityDecision,
     RollbackImageTarget,
+    controller_action,
     mutable_references,
+    observe_controller_operation,
     resolve_current_deployment_image,
+    retry_controller_operation,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.config.settings import settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
@@ -63,12 +68,44 @@ class DeploymentUpdateRequest(BaseModel):
 
 
 class DeploymentUpdateResponse(BaseModel):
+    """Accepted update. A controller operation carries no workflow identity."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     deployment_update_run_id: str = Field(..., alias="deploymentUpdateRunId")
-    task_id: str = Field(..., alias="taskId")
-    workflow_id: str = Field(..., alias="workflowId")
-    status: Literal["QUEUED"]
+    owner: Literal["controller", "legacy_workflow"]
+    operation_id: str | None = Field(None, alias="operationId")
+    desired_image: str | None = Field(None, alias="desiredImage")
+    status: str
+    task_id: str | None = Field(None, alias="taskId")
+    workflow_id: str | None = Field(None, alias="workflowId")
+
+
+class DeploymentControllerCheckModel(BaseModel):
+    name: str
+    status: str
+    detail: str | None = None
+
+
+class DeploymentControllerOperationResponse(BaseModel):
+    """One standalone-controller operation as observed by the API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    operation_id: str = Field(..., alias="operationId")
+    stack: str | None = None
+    status: str
+    controller_status: str | None = Field(None, alias="controllerStatus")
+    desired_image: str | None = Field(None, alias="desiredImage")
+    installed_image: str | None = Field(None, alias="installedImage")
+    installed_at: str | None = Field(None, alias="installedAt")
+    error_summary: str | None = Field(None, alias="errorSummary")
+    log_lines: list[str] = Field(default_factory=list, alias="logLines")
+    verification: list[DeploymentControllerCheckModel] = Field(default_factory=list)
+    retry_permitted: bool = Field(False, alias="retryPermitted")
+    observed_via: Literal["controller", "record"] = Field(..., alias="observedVia")
+    created_at: str | None = Field(None, alias="createdAt")
+    updated_at: str | None = Field(None, alias="updatedAt")
 
 
 class DeploymentCurrentImageModel(BaseModel):
@@ -150,6 +187,10 @@ class DeploymentRecentActionModel(BaseModel):
     rollback_eligibility: RollbackEligibilityModel | None = Field(
         None, alias="rollbackEligibility"
     )
+    operation_id: str | None = Field(None, alias="operationId")
+    error_summary: str | None = Field(None, alias="errorSummary")
+    log_lines: list[str] = Field(default_factory=list, alias="logLines")
+    retry_permitted: bool = Field(False, alias="retryPermitted")
 
 
 class ImageTargetModel(BaseModel):
@@ -209,10 +250,10 @@ def _require_admin(user: User) -> None:
 
 
 def _policy_error(exc: DeploymentOperationError) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        detail={"code": exc.code, "message": exc.message},
-    )
+    detail: dict[str, Any] = {"code": exc.code, "message": exc.message}
+    if exc.operation_id:
+        detail["operationId"] = exc.operation_id
+    return HTTPException(status_code=exc.http_status, detail=detail)
 
 
 def _enum_text(value: object) -> str | None:
@@ -453,6 +494,10 @@ def _recent_action_model(action: DeploymentRecentAction) -> DeploymentRecentActi
         after_summary=action.after_summary,
         before_build_id=action.before_build_id,
         after_build_id=action.after_build_id,
+        operation_id=action.operation_id,
+        error_summary=action.error_summary,
+        log_lines=list(action.log_lines),
+        retry_permitted=action.retry_permitted,
         rollback_eligibility=(
             RollbackEligibilityModel(
                 eligible=eligibility.eligible,
@@ -597,13 +642,84 @@ async def get_deployment_stack_state(
         policy = service.get_policy(stack)
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
-    recent_actions = service.recent_actions(policy.stack)
-    if not recent_actions:
-        recent_actions = await _recent_actions_from_executions(
+    # Controller operations first; historical workflow-backed updates stay
+    # readable as history (their links open the old run, never re-execute).
+    recent_actions = (
+        *service.recent_actions(policy.stack),
+        *await _recent_actions_from_executions(
             execution_service=execution_service,
             policy=policy,
-        )
+        ),
+    )
     return _stack_state(policy, service, recent_actions=recent_actions)
+
+
+def _controller_operation_model(
+    operation: dict[str, Any], observed_via: Literal["controller", "record"]
+) -> DeploymentControllerOperationResponse:
+    action = controller_action(operation)
+    installed = operation.get("installed") or {}
+    checks = [
+        DeploymentControllerCheckModel(
+            name=str(check.get("name") or ""),
+            status=str(check.get("status") or ""),
+            detail=redact_sensitive_text(str(check.get("detail") or "")) or None,
+        )
+        for check in operation.get("verification") or ()
+        if isinstance(check, dict)
+    ]
+    return DeploymentControllerOperationResponse(
+        operation_id=action.operation_id or "",
+        stack=str(operation.get("stack") or "") or None,
+        status=action.status,
+        controller_status=str(operation.get("status") or "") or None,
+        desired_image=action.requested_image,
+        installed_image=action.resolved_digest,
+        installed_at=str(installed.get("confirmedAt") or "") or None,
+        error_summary=action.error_summary,
+        log_lines=list(action.log_lines),
+        verification=checks,
+        retry_permitted=action.retry_permitted,
+        observed_via=observed_via,
+        created_at=action.started_at,
+        updated_at=str(operation.get("updatedAt") or "") or None,
+    )
+
+
+@router.get(
+    "/controller-operations/{operation_id}",
+    response_model=DeploymentControllerOperationResponse,
+)
+async def get_controller_operation(
+    operation_id: str,
+    _user: User = Depends(get_current_user()),
+) -> DeploymentControllerOperationResponse:
+    """Observe one controller operation (its durable record if it is down)."""
+    try:
+        operation, observed_via = await asyncio.to_thread(
+            observe_controller_operation, operation_id
+        )
+    except DeploymentOperationError as exc:
+        raise _policy_error(exc) from exc
+    return _controller_operation_model(operation, observed_via)
+
+
+@router.post(
+    "/controller-operations/{operation_id}/retry",
+    response_model=DeploymentControllerOperationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_controller_operation_route(
+    operation_id: str,
+    user: User = Depends(get_current_user()),
+) -> DeploymentControllerOperationResponse:
+    """Request the controller's fresh bounded attempt; prior errors remain."""
+    _require_admin(user)
+    try:
+        operation = await asyncio.to_thread(retry_controller_operation, operation_id)
+    except DeploymentOperationError as exc:
+        raise _policy_error(exc) from exc
+    return _controller_operation_model(operation, "controller")
 
 
 @router.get("/image-targets", response_model=ImageTargetsResponse)

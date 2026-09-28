@@ -914,3 +914,184 @@ def test_legacy_direct_propagates_compose_file_selection(tmp_path, monkeypatch):
     assert len(launched) == 1
     command = [str(part) for part in launched[0]]
     assert str(repo / "site.yaml") in command
+
+
+CONTROLLER_DIR = ROOT / "deploy" / "controller"
+
+
+def _load_controller_module(name, monkeypatch):
+    import sys
+
+    monkeypatch.syspath_prepend(str(CONTROLLER_DIR))
+    for module in ("redact", "mounts", "lock", "record", "engine", "server"):
+        monkeypatch.delitem(sys.modules, module, raising=False)
+    spec = importlib.util.spec_from_file_location(name, CONTROLLER_DIR / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _real_controller(tmp_path, monkeypatch, applier_factory):
+    """Serve the shipped deploy/controller endpoint on a loopback port."""
+    import threading
+
+    record = _load_controller_module("record", monkeypatch)
+    server = _load_controller_module("server", monkeypatch)
+    store = record.OperationStore(tmp_path / "controller-state")
+    app = server.build_app(
+        store=store, secret="test-secret", applier=applier_factory(store)
+    )
+    httpd = server.make_tcp_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return store, app, httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+def _installing_applier(applied):
+    def factory(store):
+        def apply(operation):
+            applied.append(operation["operationId"])
+            store.confirm_installed(
+                operation["operationId"], image=operation["desired"]["image"]
+            )
+
+        return apply
+
+    return factory
+
+
+def _controller_record(image):
+    return {
+        "project": "existing-project",
+        "image": image,
+        "inputs": {"sourceRevision": "rev1", "reason": "test"},
+        "context": {"idempotency_key": "host-update:sub-1"},
+        "submissionId": "sub-1",
+    }
+
+
+def test_host_entrypoint_is_a_client_of_the_real_controller_operation(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    _install_controller_secret(repo)
+    monkeypatch.setattr(
+        update,
+        "run",
+        lambda args, **kwargs: json.dumps(
+            {"name": "existing-project", "services": {"api": {}, "docker-proxy": {}}}
+        ),
+    )
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    applied = []
+    store, _, httpd, url = _real_controller(
+        tmp_path, monkeypatch, _installing_applier(applied)
+    )
+    image = "ghcr.io/moonladderstudios/moonmind@sha256:" + "c" * 64
+    try:
+        assert (
+            update._submit_via_controller(
+                _controller_record(image), repo, controller_url=url, secret_file=None
+            )
+            == 0
+        )
+    finally:
+        httpd.shutdown()
+    [operation] = store.list_terminal(stack="moonmind")
+    assert applied == [operation["operationId"]]
+    assert operation["installed"]["image"] == image
+    assert operation["target"]["services"] == ["api"]
+
+
+def test_host_lost_submission_acknowledgment_reattaches_to_one_operation(
+    tmp_path, monkeypatch, capsys
+):
+    # The controller accepted the POST but its response never arrived: the
+    # resubmission reattaches instead of launching a second updater.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    _install_controller_secret(repo)
+    monkeypatch.setattr(
+        update,
+        "run",
+        lambda args, **kwargs: json.dumps(
+            {"name": "existing-project", "services": {"api": {}}}
+        ),
+    )
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    applied = []
+    store, _, httpd, url = _real_controller(
+        tmp_path, monkeypatch, _installing_applier(applied)
+    )
+    real_urlopen = update.urllib.request.urlopen
+    lost = {"posts": 0, "polls": 0}
+
+    def flaky_urlopen(request, timeout=None):
+        if request.method == "POST":
+            lost["posts"] += 1
+            if lost["posts"] == 1:
+                with real_urlopen(request, timeout=timeout):
+                    pass
+                raise TimeoutError("timed out")
+        elif lost["polls"] == 0:
+            # One transient observation failure while the controller works.
+            lost["polls"] += 1
+            raise update.urllib.error.URLError("connection reset")
+        return real_urlopen(request, timeout=timeout)
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", flaky_urlopen)
+    image = "ghcr.io/moonladderstudios/moonmind@sha256:" + "d" * 64
+    try:
+        assert (
+            update._submit_via_controller(
+                _controller_record(image), repo, controller_url=url, secret_file=None
+            )
+            == 0
+        )
+    finally:
+        httpd.shutdown()
+    assert lost["posts"] == 2
+    operations = store.list_terminal(stack="moonmind")
+    assert len(operations) == 1
+    assert applied == [operations[0]["operationId"]]
+    assert "reattaching" in capsys.readouterr().out
+
+
+def test_host_reports_the_original_controller_failure(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    _install_controller_secret(repo)
+    monkeypatch.setattr(
+        update,
+        "run",
+        lambda args, **kwargs: json.dumps(
+            {"name": "existing-project", "services": {"api": {}}}
+        ),
+    )
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    engine = _load_controller_module("engine", monkeypatch)
+
+    def failing(store):
+        def apply(operation):
+            store.record_attempt_error(
+                operation["operationId"], error="apply failed: init-db exited 1"
+            )
+            raise engine.ApplyError("up", 1, "init-db exited 1")
+
+        return apply
+
+    _, _, httpd, url = _real_controller(tmp_path, monkeypatch, failing)
+    image = "ghcr.io/moonladderstudios/moonmind@sha256:" + "e" * 64
+    try:
+        with pytest.raises(RuntimeError, match="attempt 1: apply failed: init-db exited 1"):
+            update._submit_via_controller(
+                _controller_record(image), repo, controller_url=url, secret_file=None
+            )
+    finally:
+        httpd.shutdown()
+

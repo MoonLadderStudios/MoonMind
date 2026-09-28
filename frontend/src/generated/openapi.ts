@@ -1609,6 +1609,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/deployment/controller-operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Controller Operation
+         * @description Observe one controller operation (its durable record if it is down).
+         */
+        get: operations["get_controller_operation_api_v1_operations_deployment_controller_operations__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/deployment/controller-operations/{operation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Controller Operation Route
+         * @description Request the controller's fresh bounded attempt; prior errors remain.
+         */
+        post: operations["retry_controller_operation_route_api_v1_operations_deployment_controller_operations__operation_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/deployment/image-targets": {
         parameters: {
             query?: never;
@@ -7612,6 +7652,55 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DeploymentControllerCheckModel */
+        DeploymentControllerCheckModel: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail?: string | null;
+        };
+        /**
+         * DeploymentControllerOperationResponse
+         * @description One standalone-controller operation as observed by the API.
+         */
+        DeploymentControllerOperationResponse: {
+            /** Operationid */
+            operationId: string;
+            /** Stack */
+            stack?: string | null;
+            /** Status */
+            status: string;
+            /** Controllerstatus */
+            controllerStatus?: string | null;
+            /** Desiredimage */
+            desiredImage?: string | null;
+            /** Installedimage */
+            installedImage?: string | null;
+            /** Installedat */
+            installedAt?: string | null;
+            /** Errorsummary */
+            errorSummary?: string | null;
+            /** Loglines */
+            logLines?: string[];
+            /** Verification */
+            verification?: components["schemas"]["DeploymentControllerCheckModel"][];
+            /**
+             * Retrypermitted
+             * @default false
+             */
+            retryPermitted: boolean;
+            /**
+             * Observedvia
+             * @enum {string}
+             */
+            observedVia: "controller" | "record";
+            /** Createdat */
+            createdAt?: string | null;
+            /** Updatedat */
+            updatedAt?: string | null;
+        };
         /** DeploymentCurrentImageModel */
         DeploymentCurrentImageModel: {
             /** Requestedimage */
@@ -7698,6 +7787,17 @@ export interface components {
             /** Afterbuildid */
             afterBuildId?: string | null;
             rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
+            /** Operationid */
+            operationId?: string | null;
+            /** Errorsummary */
+            errorSummary?: string | null;
+            /** Loglines */
+            logLines?: string[];
+            /**
+             * Retrypermitted
+             * @default false
+             */
+            retryPermitted: boolean;
         };
         /** DeploymentStackStateResponse */
         DeploymentStackStateResponse: {
@@ -7758,19 +7858,28 @@ export interface components {
             /** Confirmation */
             confirmation?: string | null;
         };
-        /** DeploymentUpdateResponse */
+        /**
+         * DeploymentUpdateResponse
+         * @description Accepted update. A controller operation carries no workflow identity.
+         */
         DeploymentUpdateResponse: {
             /** Deploymentupdaterunid */
             deploymentUpdateRunId: string;
-            /** Taskid */
-            taskId: string;
-            /** Workflowid */
-            workflowId: string;
             /**
-             * Status
-             * @constant
+             * Owner
+             * @enum {string}
              */
-            status: "QUEUED";
+            owner: "controller" | "legacy_workflow";
+            /** Operationid */
+            operationId?: string | null;
+            /** Desiredimage */
+            desiredImage?: string | null;
+            /** Status */
+            status: string;
+            /** Taskid */
+            taskId?: string | null;
+            /** Workflowid */
+            workflowId?: string | null;
         };
         /** EligibleProviderProfile */
         EligibleProviderProfile: {
@@ -17459,6 +17568,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentStackStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_controller_operation_api_v1_operations_deployment_controller_operations__operation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentControllerOperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_controller_operation_route_api_v1_operations_deployment_controller_operations__operation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentControllerOperationResponse"];
                 };
             };
             /** @description Validation Error */

@@ -471,6 +471,126 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(card).queryByRole('link', { name: /raw command/i })).toBeNull();
   });
 
+  it('shows controller progress, original error, logs, and retries the same operation', async () => {
+    const failedControllerAction = {
+      id: 'ctl-op-1',
+      kind: 'update',
+      status: 'FAILED',
+      requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260425.1234',
+      resolvedDigest: null,
+      startedAt: '2026-04-25T18:00:00Z',
+      completedAt: '2026-04-25T18:04:00Z',
+      runDetailUrl: null,
+      runId: null,
+      operationId: 'op-1',
+      errorSummary: 'attempt 1: apply failed: init-db exited 1',
+      logLines: ['attempt 1: apply failed: init-db exited 1', 'attempt 2: apply failed: init-db exited 1'],
+      retryPermitted: true,
+    };
+    const historicalAction = { ...recentAction, id: 'depupd_recent' };
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/v1/operations/codex/shards') {
+        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...stackState,
+            latestAction: failedControllerAction,
+            recentActions: [failedControllerAction, historicalAction],
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
+      }
+      if (
+        url === '/api/v1/operations/deployment/controller-operations/op-1/retry' &&
+        init?.method === 'POST'
+      ) {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({ operationId: 'op-1', status: 'QUEUED', observedVia: 'controller' }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(
+      (await within(card).findAllByText(/attempt 1: apply failed: init-db exited 1/i)).length,
+    ).toBeGreaterThan(0);
+    expect(within(card).getByText(/controller operation op-1/i)).toBeTruthy();
+    expect(within(card).getByText(/attempt 2: apply failed/i)).toBeTruthy();
+    // Historical workflow-backed actions stay readable as history.
+    expect(within(card).getByRole('link', { name: /run detail/i }).getAttribute('href')).toBe(
+      '/workflows/depupd_recent',
+    );
+
+    fireEvent.click(within(card).getByRole('button', { name: /retry update/i }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            String(url) === '/api/v1/operations/deployment/controller-operations/op-1/retry' &&
+            init?.method === 'POST',
+        ),
+      ).toBe(true);
+    });
+    expect(await within(card).findByText(/retry requested for controller operation op-1/i)).toBeTruthy();
+  });
+
+  it('reports a controller-owned update acceptance by operation, not workflow', async () => {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/v1/operations/codex/shards') {
+        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({ ok: true, json: async () => stackState } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/update') {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            deploymentUpdateRunId: 'ctl-op-2',
+            owner: 'controller',
+            operationId: 'op-2',
+            desiredImage: 'ghcr.io/moonladderstudios/moonmind:latest',
+            status: 'QUEUED',
+            taskId: null,
+            workflowId: null,
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    fireEvent.click(await within(card).findByRole('button', { name: /update moonmind/i }));
+    expect(
+      await within(card).findByText(/accepted by the deployment controller: operation op-2/i),
+    ).toBeTruthy();
+  });
+
   it('renders rollback only for eligible recent deployment actions', async () => {
     fetchSpy.mockImplementation((input) => {
       const url = String(input);

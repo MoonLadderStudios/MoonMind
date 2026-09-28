@@ -114,6 +114,10 @@ const DeploymentActionSchema = z
     afterSummary: z.string().optional().nullable(),
     beforeBuildId: z.string().optional().nullable(),
     afterBuildId: z.string().optional().nullable(),
+    operationId: z.string().optional().nullable(),
+    errorSummary: z.string().optional().nullable(),
+    logLines: z.array(z.string()).optional().default([]),
+    retryPermitted: z.boolean().optional().default(false),
     rollbackEligibility: z
       .object({
         eligible: z.boolean(),
@@ -198,6 +202,23 @@ export interface WorkerPauseConfig {
 }
 
 const DEPLOYMENT_STACK = 'moonmind';
+// Bounded progress reads while a controller operation is unfinished.
+const DEPLOYMENT_PROGRESS_POLL_MS = 5000;
+const ACTIVE_DEPLOYMENT_STATUSES = new Set(['QUEUED', 'RUNNING']);
+
+type DeploymentUpdateAccepted = {
+  deploymentUpdateRunId: string;
+  owner?: 'controller' | 'legacy_workflow';
+  operationId?: string | null;
+  status: string;
+};
+
+function deploymentAcceptedText(kind: 'update' | 'rollback', result: DeploymentUpdateAccepted): string {
+  if (result.owner === 'controller' && result.operationId) {
+    return `Deployment ${kind} accepted by the deployment controller: operation ${result.operationId}`;
+  }
+  return `Deployment ${kind} queued: ${result.deploymentUpdateRunId}`;
+}
 
 const DEFAULT_UPDATE_OPTIONS = {
   mode: 'changed_services',
@@ -479,6 +500,12 @@ export function OperationsSettingsSection({
       }
       return DeploymentStackStateSchema.parse(await response.json());
     },
+    refetchInterval: (query) =>
+      query.state.data?.recentActions.some((action) =>
+        ACTIVE_DEPLOYMENT_STATUSES.has(String(action.status || '').toUpperCase()),
+      )
+        ? DEPLOYMENT_PROGRESS_POLL_MS
+        : false,
   });
 
   const {
@@ -596,7 +623,7 @@ export function OperationsSettingsSection({
               : `Server error: ${response.status}`;
         throw new Error(detail);
       }
-      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+      return response.json() as Promise<DeploymentUpdateAccepted>;
     },
     onSuccess: (result) => {
       if (!result) {
@@ -604,7 +631,7 @@ export function OperationsSettingsSection({
       }
       setUpdateNotice({
         level: 'ok',
-        text: `Deployment update queued: ${result.deploymentUpdateRunId}`,
+        text: deploymentAcceptedText('update', result),
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
@@ -673,7 +700,7 @@ export function OperationsSettingsSection({
               : `Server error: ${response.status}`;
         throw new Error(detail);
       }
-      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+      return response.json() as Promise<DeploymentUpdateAccepted>;
     },
     onSuccess: (result) => {
       if (!result) {
@@ -681,7 +708,7 @@ export function OperationsSettingsSection({
       }
       setRollbackNotice({
         level: 'ok',
-        text: `Deployment rollback queued: ${result.deploymentUpdateRunId}`,
+        text: deploymentAcceptedText('rollback', result),
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
@@ -690,6 +717,34 @@ export function OperationsSettingsSection({
         level: 'error',
         text: mutationError.message,
       });
+    },
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (operationId: string) => {
+      const response = await fetch(
+        `/api/v1/operations/deployment/controller-operations/${encodeURIComponent(operationId)}/retry`,
+        { method: 'POST', headers: { Accept: 'application/json' } },
+      );
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorPayload.detail?.message === 'string'
+            ? errorPayload.detail.message
+            : `Server error: ${response.status}`;
+        throw new Error(detail);
+      }
+      return operationId;
+    },
+    onSuccess: (operationId) => {
+      setRollbackNotice({
+        level: 'ok',
+        text: `Retry requested for controller operation ${operationId}`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
+    },
+    onError: (mutationError: Error) => {
+      setRollbackNotice({ level: 'error', text: mutationError.message });
     },
   });
 
@@ -982,8 +1037,34 @@ export function OperationsSettingsSection({
                         <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                           {action.completedAt || action.startedAt || '-'}
                           {action.operator ? ` · ${action.operator}` : ''}
+                          {action.operationId
+                            ? ` · Controller operation ${action.operationId}`
+                            : ''}
                         </div>
+                        {action.errorSummary ? (
+                          <div className="mt-2 break-words text-xs text-rose-700 dark:text-rose-400">
+                            {action.errorSummary}
+                          </div>
+                        ) : null}
+                        {action.logLines.length ? (
+                          <details className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+                            <summary className="cursor-pointer">Controller log</summary>
+                            <pre className="mt-1 whitespace-pre-wrap break-words font-mono">
+                              {action.logLines.join('\n')}
+                            </pre>
+                          </details>
+                        ) : null}
                         <div className="mt-3 flex flex-wrap gap-3">
+                          {action.retryPermitted && action.operationId ? (
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+                              disabled={!canInvokeOperations || retryMutation.isPending}
+                              onClick={() => retryMutation.mutate(String(action.operationId))}
+                            >
+                              Retry update
+                            </button>
+                          ) : null}
                           {action.runDetailUrl ? (
                             <a
                               className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
