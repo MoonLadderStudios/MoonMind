@@ -428,9 +428,14 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
     workload_image = "sha256:" + "c" * 64
     with pytest.raises(
         RuntimeError, match="running launch evidence could not be persisted"
-    ):
+    ) as raised:
         await backend.start_container(request)
     assert ("rm", "--force", created.container_ref) in commands
+    # The workload was removed fail-closed; a start retry has nothing left to
+    # start, so the launch failure must not be retried into a misleading
+    # "no such container" outcome.
+    assert isinstance(raised.value, ContainerJobBackendError)
+    assert raised.value.failure_class is ContainerJobFailureClass.LAUNCH
 
 
 @pytest.mark.asyncio
