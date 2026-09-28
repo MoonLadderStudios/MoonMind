@@ -214,12 +214,14 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
         "frontend-static",
         "frontend-browser",
         "frontend-browser-webkit-targeted",
+        "operations-controller-browser",
     ]
     assert not any("uses" in step for step in aggregator["steps"])
     script = "\n".join(step.get("run", "") for step in aggregator["steps"])
     assert "frontend-static was selected" in script
     assert "frontend-browser was selected" in script
     assert "frontend-browser-webkit-targeted was selected" in script
+    assert "operations-controller-browser was selected" in script
     assert "skipped intentionally" in script
 
     webkit_targeted = jobs["frontend-browser-webkit-targeted"]
@@ -236,6 +238,23 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
         for step in webkit_targeted["steps"]
     )
 
+
+def test_operations_controller_browser_journey_runs_on_ui_or_api_changes() -> None:
+    # MoonLadderStudios/MoonMind#4502: the production-built Operations
+    # journey is the only CI runner of its tests/e2e module.
+    job = _load_workflow()["jobs"]["operations-controller-browser"]
+    assert job["needs"] == "select-test-suites"
+    assert "frontend_browser_chromium == 'true'" in job["if"]
+    assert "api_component == 'true'" in job["if"]
+    runs = [step.get("run", "") for step in job["steps"]]
+    build = next(i for i, run in enumerate(runs) if "npm run ui:build" in run)
+    journey = next(
+        i
+        for i, step in enumerate(job["steps"])
+        if "tests/e2e/test_operations_controller_browser.py" in step.get("run", "")
+    )
+    assert build < journey
+    assert job["steps"][journey]["env"]["RUN_E2E_TESTS"] == "1"
 
 def test_playwright_package_and_container_versions_match() -> None:
     import json

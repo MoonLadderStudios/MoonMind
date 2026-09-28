@@ -116,6 +116,16 @@ Run real-browser regressions locally with `npm run ui:test:browser`; it defaults
 
 Layout-overflow regressions for narrow phones live in `frontend/src/browser/mobileOverflow.browser.test.tsx` (MoonLadderStudios/MoonMind#4559). Those cases render the production components with the production stylesheet inside the shared shell composition and assert element bounds against the real content and clip ancestors at 320px and representative wider widths — a scrollbar-only assertion would miss defects hidden by the shell's `overflow-x: clip`. A targeted WebKit leg runs that file with `MOONMIND_BROWSER_ENGINES=webkit` (the `frontend-browser-webkit` CI job, selected through `tools/select_test_suites.py` for form/fieldset/overlay surface changes); the guard in `frontend/vitest.browser.config.ts` accepts `chromium`, `firefox`, and `webkit`.
 
+### Operations controller browser journey
+
+`tests/e2e/test_operations_controller_browser.py` (MoonLadderStudios/MoonMind#4502) serves the production dashboard build through the real API application and drives Settings → Operations against the shipped `deploy/controller` server: submit, observe the failed operation with its original error and redacted log, retry it, and reload. No workflow engine runs, and the only stand-in is the Docker CLI the controller calls. The `operations-controller-browser` CI job runs it on UI or API changes. To run it locally:
+
+```bash
+npm run ui:build
+python -m playwright install chromium
+RUN_E2E_TESTS=1 python -m pytest tests/e2e/test_operations_controller_browser.py
+```
+
 ### Native Workflow Chat browser verification
 
 The product requirements are owned by [Workflow Chat Panel](../UI/WorkflowChatPanel.md#41-application-readiness-and-failure-containment). The [Omnigent Bridge](../Omnigent/OmnigentBridge.md#browser-transport-api-preservation) owns browser transport and scoped network compatibility. A binding response or iframe load is not proof that the conversation rendered.
