@@ -712,7 +712,6 @@ def gate_dependent_targets(
             )
             if not _evidence_is_verified_merge(evidence, expected_target_ref=dependency):
                 unsatisfied.append(dependency)
-                unsatisfied.append(dependency)
         if unsatisfied:
             blocked.append(
                 {
