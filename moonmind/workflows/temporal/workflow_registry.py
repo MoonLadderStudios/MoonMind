@@ -323,9 +323,12 @@ class WorkflowProjectionExcluded(ValueError):
         super().__init__(f"{self.code}: {workflow_type!r} ({self.scope})")
 
 
-def require_product_projection(workflow_type: str | None) -> None:
-    """Admit product and historical types to product read views."""
-    if workflow_projection_scope(workflow_type) not in ("product", "historical"):
+def require_product_projection(
+    workflow_type: str | None, *, include_historical: bool = False
+) -> None:
+    """Admit registered product types; readers may also admit retired history."""
+    admitted = ("product", "historical") if include_historical else ("product",)
+    if workflow_projection_scope(workflow_type) not in admitted:
         raise WorkflowProjectionExcluded(workflow_type)
 
 

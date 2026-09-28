@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -37,10 +37,11 @@ _READ_ADAPTER_CALLS = {"describe_workflow"}
 
 @asynccontextmanager
 async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fields):
-    from api_service.api.routers import temporal_artifacts
+    from api_service.api.routers import executions, temporal_artifacts
     from api_service.api.routers.executions import (
         _get_service,
         get_temporal_client,
+        get_temporal_client_adapter,
         router,
     )
     from api_service.auth_providers import get_current_user, get_current_user_optional
@@ -105,6 +106,9 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
             ] = lambda: artifacts
             app.dependency_overrides[get_async_session] = lambda: session
             app.dependency_overrides[get_temporal_client] = _RetiredTemporalClient
+            # Routes that reach Temporal directly (reschedule) or through the
+            # adapter dependency (retry-publication) share the recorded adapter.
+            app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
             app.dependency_overrides[get_current_user()] = lambda: principal["user"]
             app.dependency_overrides[get_current_user_optional()] = (
                 lambda: principal["user"]
@@ -120,17 +124,20 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
                 )
 
             transport = ASGITransport(app=app)
-            async with AsyncClient(
-                transport=transport, base_url="http://testserver"
-            ) as client:
-                yield SimpleNamespace(
-                    client=client,
-                    record=record,
-                    adapter=adapter,
-                    artifacts=artifacts,
-                    session=session,
-                    act_as=act_as,
-                )
+            with patch.object(
+                executions, "get_temporal_client_adapter", lambda: adapter
+            ):
+                async with AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as client:
+                    yield SimpleNamespace(
+                        client=client,
+                        record=record,
+                        adapter=adapter,
+                        artifacts=artifacts,
+                        session=session,
+                        act_as=act_as,
+                    )
     finally:
         await engine.dispose()
 
@@ -323,31 +330,191 @@ async def test_historical_manifest_run_artifacts_stay_readable(
         assert _mutating_adapter_calls(ctx.adapter) == []
 
 
+async def _row_counts(session) -> dict[str, int]:
+    """Row count of every table: any durable mutation side effect shows up."""
+    from sqlalchemy import func, select
+
+    from api_service.db.models import Base
+
+    return {
+        table.name: int(
+            (await session.execute(select(func.count()).select_from(table))).scalar_one()
+        )
+        for table in Base.metadata.sorted_tables
+    }
+
+
+def _recover_body(record) -> dict:
+    from moonmind.schemas.workflow_recovery_models import (
+        deterministic_recovery_creation_key,
+    )
+    from moonmind.workflows.executions.runtime_capabilities import (
+        resolve_runtime_execution_capabilities,
+    )
+
+    digest = "sha256:historical-checkpoint"
+    return {
+        "target": {
+            "kind": "failed_step",
+            "logicalStepId": "implement",
+            "sourceStepExecutionId": "step-execution-1",
+        },
+        "source": {
+            "workflowId": record.workflow_id,
+            "runId": record.run_id,
+            "planRef": "artifact://plan/source",
+            "planDigest": "sha256:plan",
+            "taskInputSnapshotRef": "artifact://snapshot/source",
+        },
+        "checkpoint": {
+            "ref": "artifact://checkpoint/source",
+            "boundary": "before_execution",
+            "kind": "worktree_archive",
+            "digest": digest,
+            "validationRef": "artifact://checkpoint-validation",
+            "sourceWorkspaceRef": "workspace://source",
+        },
+        "continuation": {"phase": "rerun_failed_step"},
+        "capabilitySnapshot": resolve_runtime_execution_capabilities(
+            "omnigent"
+        ).model_dump(by_alias=True, mode="json"),
+        "preservedStepRefs": [],
+        "sideEffectDispositionRef": "artifact://side-effects",
+        "sideEffectSafe": True,
+        "destination": {
+            "workflowId": "mm:historical-recovery-destination",
+            "creationKey": deterministic_recovery_creation_key(
+                record.workflow_id,
+                record.run_id,
+                "failed_step",
+                digest,
+                "rerun_failed_step",
+            ),
+            "runtimeId": "omnigent",
+            "executionProfileRef": "provider-profile:primary",
+            "workspaceReservationId": "workspace-reservation:destination",
+        },
+    }
+
+
+# Each body passes route validation and each row state meets the route's own
+# precondition for an ordinary run, so only the historical denial can reject
+# the request. An open row is used where a live control would signal Temporal.
+_OPEN = MoonMindWorkflowState.EXECUTING
+_FAILED = MoonMindWorkflowState.FAILED
+_MUTATIONS = [
+    ("update", _OPEN, lambda r: {"updateName": "UpdateInputs", "parametersPatch": {"x": 1}}),
+    ("update", _OPEN, lambda r: {"updateName": "SetTitle", "title": "renamed"}),
+    ("update", _OPEN, lambda r: {"updateName": "RequestRerun"}),
+    ("signal", _OPEN, lambda r: {"signalName": "Pause"}),
+    ("signal", _OPEN, lambda r: {"signalName": "Resume"}),
+    ("cancel", _OPEN, lambda r: {"reason": "retire"}),
+    ("cancel", _OPEN, lambda r: {"reason": "retire", "graceful": False}),
+    ("reschedule", MoonMindWorkflowState.SCHEDULED, lambda r: {"scheduledFor": "2030-01-01T00:00:00Z"}),
+    ("rerun", _FAILED, lambda r: None),
+    ("continue", _FAILED, lambda r: {"idempotencyKey": "historical-continue"}),
+    ("recover", _FAILED, _recover_body),
+    ("recover-from-failed-step", _FAILED, lambda r: {"idempotencyKey": "historical-recover"}),
+    (
+        "recover-from-selected-step",
+        _FAILED,
+        lambda r: {
+            "idempotencyKey": "historical-resume",
+            "sourceWorkflowId": r.workflow_id,
+            "sourceRunId": r.run_id,
+            "selectedStartStepId": "step-1",
+        },
+    ),
+    ("retry-publication", _FAILED, lambda r: None),
+    (
+        "checkpoint-branches",
+        _FAILED,
+        lambda r: {
+            "source": {
+                "runId": r.run_id,
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+                "checkpointBoundary": "after_execution",
+                "checkpointRef": "artifact://checkpoints/after-implement",
+                "checkpointDigest": "sha256:checkpointdigest",
+            },
+            "label": "Historical branch",
+            "instructions": {"text": "Continue from the checkpoint."},
+            "workspacePolicy": "continue_from_previous_execution",
+            "idempotencyKey": "historical-branch",
+        },
+    ),
+]
+
+
 @pytest.mark.parametrize(
-    ("path", "body"),
-    [
-        ("update", {"updateName": "UpdateInputs", "parametersPatch": {"x": 1}}),
-        ("update", {"updateName": "SetTitle", "title": "renamed"}),
-        ("update", {"updateName": "RequestRerun"}),
-        ("signal", {"signalName": "Pause"}),
-        ("signal", {"signalName": "Resume"}),
-        ("cancel", {"reason": "retire"}),
-        ("cancel", {"reason": "retire", "graceful": False}),
-        ("rerun", None),
-        ("reschedule", {"scheduledFor": "2030-01-01T00:00:00Z"}),
-        ("continue", {}),
-        ("recover", {}),
-        ("recover-from-failed-step", {}),
-        ("retry-publication", {}),
-        ("checkpoint-branches", {"checkpointRef": "art_checkpoint_1"}),
-    ],
+    ("path", "state", "body"),
+    _MUTATIONS,
+    ids=[f"{path}-{index}" for index, (path, _s, _b) in enumerate(_MUTATIONS)],
 )
 @pytest.mark.asyncio
 async def test_historical_manifest_run_rejects_every_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     path: str,
-    body: dict | None,
+    state: MoonMindWorkflowState,
+    body,
+) -> None:
+    from api_service.db.models import TemporalExecutionRecord
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    owner = str(uuid4())
+    terminal = state is _FAILED
+    async with _historical_app(
+        tmp_path,
+        owner_id=owner,
+        state=state,
+        close_status=TemporalExecutionCloseStatus.FAILED if terminal else None,
+        closed_at=datetime(2026, 9, 1, 12, 30, tzinfo=UTC) if terminal else None,
+    ) as ctx:
+        ctx.act_as(owner)
+        record = ctx.record
+        # A read materializes the projection row; count only mutation effects.
+        read = await ctx.client.get(f"/api/executions/{record.workflow_id}")
+        assert read.status_code == 200, read.text
+        before = await _row_counts(ctx.session)
+
+        response = await ctx.client.post(
+            f"/api/executions/{record.workflow_id}/{path}", json=body(record)
+        )
+
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "execution_historical", detail
+        assert "historical MoonMind.ManifestIngest execution" in detail["message"]
+        assert _mutating_adapter_calls(ctx.adapter) == []
+        await ctx.session.refresh(record)
+        assert record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST
+        assert record.state is state
+        assert record.rerun_count == 0
+        assert await _row_counts(ctx.session) == before
+        projection = await ctx.session.get(TemporalExecutionRecord, record.workflow_id)
+        assert projection is None or projection.scheduled_for is None
+
+
+@pytest.mark.parametrize(
+    ("workflow_type", "entry", "expected_status", "signals"),
+    [
+        (TemporalWorkflowType.MANIFEST_INGEST, "manifest", 409, 0),
+        # Control: the same request still reschedules an ordinary run.
+        (TemporalWorkflowType.USER_WORKFLOW, "user_workflow", 202, 1),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reschedule_reaches_temporal_only_for_ordinary_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workflow_type: TemporalWorkflowType,
+    entry: str,
+    expected_status: int,
+    signals: int,
 ) -> None:
     from moonmind.config.settings import settings
 
@@ -356,22 +523,71 @@ async def test_historical_manifest_run_rejects_every_mutation(
     async with _historical_app(
         tmp_path,
         owner_id=owner,
-        # An open historical row is the riskiest case: a new release must not
-        # signal, cancel, or update a run it has no worker for.
-        state=MoonMindWorkflowState.EXECUTING,
+        workflow_type=workflow_type,
+        entry=entry,
+        state=MoonMindWorkflowState.SCHEDULED,
         close_status=None,
         closed_at=None,
     ) as ctx:
         ctx.act_as(owner)
-        record = ctx.record
+        ctx.adapter.send_reschedule_signal = AsyncMock(return_value=None)
 
         response = await ctx.client.post(
-            f"/api/executions/{record.workflow_id}/{path}", json=body
+            f"/api/executions/{ctx.record.workflow_id}/reschedule",
+            json={"scheduledFor": "2030-01-01T00:00:00Z"},
         )
 
-        assert response.status_code in (404, 409, 422), response.text
+        assert response.status_code == expected_status, response.text
+        assert ctx.adapter.send_reschedule_signal.await_count == signals
+
+
+@pytest.mark.parametrize(
+    "subpath",
+    ["checkpoints", "checkpoint-branches", "continuations", "remediations"],
+)
+@pytest.mark.asyncio
+async def test_historical_manifest_run_subresource_reads_are_not_denied(
+    tmp_path: Path,
+    subpath: str,
+) -> None:
+    owner = str(uuid4())
+    async with _historical_app(tmp_path, owner_id=owner) as ctx:
+        ctx.act_as(owner)
+
+        response = await ctx.client.get(
+            f"/api/executions/{ctx.record.workflow_id}/{subpath}"
+        )
+
+        assert response.status_code == 200, response.text
         assert _mutating_adapter_calls(ctx.adapter) == []
-        await ctx.session.refresh(record)
-        assert record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST
-        assert record.state is MoonMindWorkflowState.EXECUTING
-        assert record.rerun_count == 0
+
+
+@pytest.mark.parametrize(
+    "state",
+    [MoonMindWorkflowState.SCHEDULED, MoonMindWorkflowState.EXECUTING],
+)
+@pytest.mark.asyncio
+async def test_open_historical_manifest_run_offers_no_actions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: MoonMindWorkflowState,
+) -> None:
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    owner = str(uuid4())
+    async with _historical_app(
+        tmp_path, owner_id=owner, state=state, close_status=None, closed_at=None
+    ) as ctx:
+        ctx.act_as(owner)
+
+        detail = await ctx.client.get(f"/api/executions/{ctx.record.workflow_id}")
+
+        assert detail.status_code == 200, detail.text
+        actions = detail.json()["actions"]
+        offered = {
+            name for name, value in actions.items()
+            if name.startswith("can") and value is True
+        }
+        assert offered == set()
+        assert actions["disabledReasons"]["canCancel"] == "historical_workflow_type"

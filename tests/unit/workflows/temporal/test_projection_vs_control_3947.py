@@ -9,6 +9,7 @@ are readable but never current product UserWorkflows) and the quiesce-enumeratio
 (running-UserWorkflow point-in-time set only).
 """
 
+import pytest
 
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.workflows.temporal.remediation_actions import (
@@ -16,6 +17,7 @@ from moonmind.workflows.temporal.remediation_actions import (
     remediation_action_capability,
 )
 from moonmind.workflows.temporal.workflow_registry import (
+    WorkflowProjectionExcluded,
     product_read_workflow_types,
     product_workflow_types,
     require_product_projection,
@@ -52,9 +54,9 @@ def test_product_visible_type_denied_policy_unlisted_action() -> None:
 
 def test_retired_manifest_ingest_is_never_a_current_product_workflow() -> None:
     # MoonLadderStudios/MoonMind#4192 retired the native ManifestIngest
-    # product. Old rows stay readable through product views (#4189) as a
-    # historical scope, but the type is never registered, launchable, or
-    # coerced into a UserWorkflow.
+    # product. Old rows stay readable through product read views (#4189) as
+    # a historical scope, but the type is never registered, launchable, or
+    # coerced into a UserWorkflow, and only readers opt in to admit it.
     assert product_workflow_types() == ("MoonMind.UserWorkflow",)
     assert "MoonMind.ManifestIngest" not in workflow_projection_scopes()
     assert workflow_projection_scope("MoonMind.ManifestIngest") == "historical"
@@ -62,7 +64,11 @@ def test_retired_manifest_ingest_is_never_a_current_product_workflow() -> None:
         "MoonMind.UserWorkflow",
         "MoonMind.ManifestIngest",
     )
-    require_product_projection("MoonMind.ManifestIngest")
+    with pytest.raises(WorkflowProjectionExcluded):
+        require_product_projection("MoonMind.ManifestIngest")
+    require_product_projection("MoonMind.ManifestIngest", include_historical=True)
+    with pytest.raises(WorkflowProjectionExcluded):
+        require_product_projection("MoonMind.NotAType", include_historical=True)
 
 
 def test_quiesce_enumeration_type_matches_only_product_scope() -> None:

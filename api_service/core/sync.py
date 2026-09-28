@@ -291,7 +291,7 @@ async def map_temporal_state_to_projection(
 
     from moonmind.workflows.temporal.workflow_registry import require_product_projection
 
-    require_product_projection(desc.workflow_type)
+    require_product_projection(desc.workflow_type, include_historical=True)
     workflow_type = TemporalWorkflowType(desc.workflow_type)
 
     entry = str(
@@ -637,7 +637,9 @@ async def mutate_execution_projection(
             raise ValueError("projection mutation has no execution owner")
     else:
         from moonmind.workflows.temporal.workflow_registry import require_product_projection
-        require_product_projection(incoming.get("workflow_type"))
+        require_product_projection(
+            incoming.get("workflow_type"), include_historical=True
+        )
 
     # Select the freshest stored lifecycle before reconciling both rows.
     latest = max(records, key=lambda row: _record_semantic_time(row) or datetime.min.replace(tzinfo=UTC)) if records else None
