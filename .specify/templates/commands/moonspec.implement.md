@@ -21,7 +21,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 **Check for extension hooks (before implementation)**:
 - Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.before_implement` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, report an explicit hook-configuration failure naming `.specify/extensions.yml` and the parse error, and stop hook processing at this step. Do not silently skip required hook configuration.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
@@ -63,7 +63,7 @@ MoonSpec implements robust behavior from declarative designs through one-story s
 2. **Check checklists status** (if FEATURE_DIR/checklists/ exists):
    - Scan all checklist files in the checklists/ directory.
    - Count total, completed, and incomplete checklist items.
-   - If any checklist is incomplete, stop and ask whether to proceed. Continue only when the user explicitly says yes, proceed, or continue.
+   - If any checklist is incomplete, do not ask for blanket approval to proceed. Report the incomplete items and complete the ones that name in-scope prerequisites or artifacts by doing that bounded work, then re-scan and gather the required evidence. Never record an approval that was not given and never mark an unverified item complete. An item naming missing authority or consequential product ambiguity stays a specific decision: record it as the blocking item with its owner, continue independent safe work, and proceed past it only on that explicit decision.
 
 3. Load and analyze the implementation context:
    - **REQUIRED**: Read tasks.md for the complete task list and execution plan
@@ -79,8 +79,8 @@ MoonSpec implements robust behavior from declarative designs through one-story s
    - Extract source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*` so implementation and tests can be traced back to the original declarative design or feature request.
 
 4. **Project Setup Verification**:
-   - Create or verify ignore files based on actual project setup.
-   - Append only missing critical patterns. Do not rewrite existing ignore files wholesale.
+   - Verify only the ignore files for tooling the selected work actually uses, as detected from the repository.
+   - Create a missing file or append a missing critical pattern only when the story's own artifacts require it. Do not rewrite existing ignore files wholesale and do not set up tooling the story does not use.
    - Cover generated outputs, dependencies, local env files, logs, caches, and test artifacts for the detected stack.
 
 5. Parse tasks.md structure and extract:
@@ -134,7 +134,7 @@ Note: This command assumes a complete one-story task breakdown exists in tasks.m
 
 10. **Check for extension hooks**: After completion validation, check if `.specify/extensions.yml` exists in the project root.
     - If it exists, read it and look for entries under the `hooks.after_implement` key.
-    - If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally.
+    - If the YAML cannot be parsed or is invalid, report an explicit hook-configuration failure naming `.specify/extensions.yml` and the parse error, and stop hook processing at this step. Do not silently skip required hook configuration.
     - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
     - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions.
     - For executable hooks:

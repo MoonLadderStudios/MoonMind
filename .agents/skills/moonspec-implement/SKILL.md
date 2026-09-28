@@ -42,7 +42,7 @@ If `tasks.md` is missing or incomplete, stop and recommend `/moonspec.tasks`. If
 Before implementation, check for extension hooks:
 
 1. If `.specify/extensions.yml` exists, read it and look for `hooks.before_implement`.
-2. If the YAML cannot be parsed or is invalid, skip hook checking silently.
+2. If the YAML cannot be parsed or is invalid, report an explicit hook-configuration failure naming `.specify/extensions.yml` and the parse error, and stop hook processing at this step. Do not silently skip required hook configuration or proceed as if no hooks were registered. A missing file, or a file with no `hooks.before_implement` entries, means no hooks are registered: skip silently.
 3. Ignore hooks where `enabled` is explicitly `false`; hooks without `enabled` are enabled.
 4. Do not evaluate non-empty `condition` expressions. Treat hooks with no condition, null condition, or empty condition as executable. Skip hooks with non-empty conditions.
 5. For each executable hook:
@@ -107,7 +107,7 @@ Report a table:
 | requirements.md | 12 | 12 | 0 | PASS |
 ```
 
-If any checklist has incomplete items, stop and ask whether to proceed. Continue only when the user explicitly says yes, proceed, or continue.
+If any checklist has incomplete items, do not ask for blanket approval to proceed. Instead, report the incomplete items and complete the ones that name in-scope prerequisites or artifacts by doing that bounded work, then re-scan the checklists and gather the required evidence. Never record a user approval that was not given and never mark an unverified item complete. An incomplete item that names missing authority (credentials, access, or an approval the story explicitly requires) or a consequential product ambiguity the story does not resolve stays a specific decision: record it as the blocking item with its owner, continue independent safe work that does not depend on it, and proceed past it only on that explicit decision. An explicit approval the story requires is never waived.
 
 ## Load Context
 
@@ -135,17 +135,17 @@ If the spec contains multiple stories, stop and tell the user to split the desig
 
 ## Project Setup Verification
 
-Before story work, create or verify ignore files based on the actual repository:
+Before story work, verify only the ignore files for tooling the selected work actually uses, as detected from the repository:
 
-- If `git rev-parse --git-dir` succeeds, ensure `.gitignore` exists and covers generated outputs, dependencies, local env files, logs, caches, and test artifacts.
-- If Dockerfiles or Docker usage are present, create or verify `.dockerignore`.
-- If ESLint legacy config exists, create or verify `.eslintignore`; if `eslint.config.*` exists, ensure `ignores` covers required generated paths.
-- If Prettier config exists, create or verify `.prettierignore`.
-- If package publishing is present, create or verify `.npmignore`.
-- If Terraform files exist, create or verify `.terraformignore`.
-- If Helm charts exist, create or verify `.helmignore`.
+- If `git rev-parse --git-dir` succeeds and the story produces generated outputs, dependencies, local env files, logs, caches, or test artifacts, ensure `.gitignore` covers them.
+- If the story builds or ships containers and Dockerfiles or Docker usage are present, create or verify `.dockerignore`.
+- If the story touches JavaScript or TypeScript and ESLint legacy config exists, create or verify `.eslintignore`; if `eslint.config.*` exists, ensure `ignores` covers required generated paths.
+- If the story touches JavaScript or TypeScript and Prettier config exists, create or verify `.prettierignore`.
+- If the story publishes a package and package publishing is present, create or verify `.npmignore`.
+- If the story touches Terraform files, create or verify `.terraformignore`.
+- If the story touches Helm charts, create or verify `.helmignore`.
 
-Append only missing critical patterns. Do not rewrite existing ignore files wholesale.
+Create a missing file or append a missing critical pattern only when the story's own artifacts require it. Leave ignore files, dependencies, and durable guidance untouched when the selected work does not require the change. Append only missing critical patterns. Do not rewrite existing ignore files wholesale. Do not set up tooling the story does not use.
 
 Common patterns by stack:
 
