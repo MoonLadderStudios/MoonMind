@@ -144,8 +144,8 @@ def _write_user_identity(lines: list[str], name: str, email: str) -> list[str]:
 def ensure_workspace_git_identity(
     workspace: Path | str,
     *,
-    runtime_uid: int,
-    runtime_gid: int,
+    runtime_uid: int | None,
+    runtime_gid: int | None,
 ) -> bool:
     """Reapply the resolved commit identity to a materialized Git workspace.
 
@@ -155,7 +155,9 @@ def ensure_workspace_git_identity(
     overwrite it with the imported config. This rewrites only the ``[user]``
     name/email entries of the workspace's own config, preserving every other
     entry and all checked-out work, then hands the config to the selected
-    runtime owner like the rest of the promoted tree.
+    runtime owner like the rest of the promoted tree. A caller that cannot
+    change ownership (not running as root) passes ``None`` and keeps the
+    existing owner.
 
     Returns True when an identity was (re)applied, False when the workspace
     is not a Git checkout.
@@ -176,5 +178,6 @@ def ensure_workspace_git_identity(
         return False
     updated = _write_user_identity(existing, name, email)
     config.write_text("\n".join(updated) + "\n", encoding="utf-8")
-    os.chown(config, runtime_uid, runtime_gid, follow_symlinks=False)
+    if runtime_uid is not None and runtime_gid is not None:
+        os.chown(config, runtime_uid, runtime_gid, follow_symlinks=False)
     return True

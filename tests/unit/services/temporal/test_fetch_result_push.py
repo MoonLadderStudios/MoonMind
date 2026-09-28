@@ -2059,6 +2059,28 @@ class TestPushWorkspaceBranch:
         assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
         assert env["GIT_COMMITTER_EMAIL"] == "moonmind@example.com"
 
+    def test_workspace_command_env_defaults_git_identity_when_unconfigured(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        """The terminal checkpoint commit must not need optional settings."""
+        from moonmind.omnigent.git_identity import (
+            DEFAULT_GIT_USER_EMAIL,
+            DEFAULT_GIT_USER_NAME,
+        )
+
+        workspace = tmp_path / "run-1" / "repo"
+        (workspace.parent / ".moonmind" / "bin").mkdir(parents=True)
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setattr(settings.workflow, "git_user_name", None)
+        monkeypatch.setattr(settings.workflow, "git_user_email", None)
+
+        env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        assert env["GIT_AUTHOR_NAME"] == DEFAULT_GIT_USER_NAME
+        assert env["GIT_COMMITTER_NAME"] == DEFAULT_GIT_USER_NAME
+        assert env["GIT_AUTHOR_EMAIL"] == DEFAULT_GIT_USER_EMAIL
+        assert env["GIT_COMMITTER_EMAIL"] == DEFAULT_GIT_USER_EMAIL
+
     def test_workspace_command_env_overrides_preexisting_git_identity(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:
