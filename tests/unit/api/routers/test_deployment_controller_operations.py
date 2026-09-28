@@ -734,3 +734,102 @@ def test_installed_controller_with_recorded_work_never_falls_back_when_unreachab
     assert response.json()["detail"]["code"] == "deployment_controller_unavailable"
     assert temporal.created == []
     assert installed_controller.secret not in response.text
+
+
+def _make_secret_unreadable(controller: _Controller) -> Iterator[None]:
+    secret_file = controller.state_dir / "secrets" / "controller-bearer"
+    secret_file.chmod(0)
+    try:
+        yield
+    finally:
+        secret_file.chmod(0o600)
+
+
+@pytest.fixture
+def unreadable_secret(installed_controller: _Controller) -> Iterator[_Controller]:
+    """Bootstrap ran as another user (for example via sudo)."""
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 secret")
+    yield from _make_secret_unreadable(installed_controller)
+
+
+def test_unreadable_installed_secret_never_forks_the_legacy_updater(
+    installed_controller: _Controller, unreadable_secret: None
+) -> None:
+    installed_controller.store.begin(
+        stack="moonmind", desired_image=IMAGE_B, source_revision="abc123"
+    )
+    temporal = _TemporalRecording()
+    client = _client()
+    client.app.dependency_overrides[_get_temporal_execution_service] = lambda: temporal
+
+    response = _update(client)
+
+    # The installed controller owns recorded work; a credential this service
+    # cannot read is a truthful access problem, not "no controller".
+    assert response.status_code == 502, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "deployment_controller_access_denied"
+    assert "cannot read" in detail["message"]
+    assert "controller-bearer" not in response.text
+    assert temporal.created == []
+    assert installed_controller.applied == []
+
+
+def test_typed_update_tool_reports_an_unreadable_installed_secret(
+    installed_controller: _Controller, unreadable_secret: None
+) -> None:
+    import asyncio
+
+    from moonmind.workflows.skills.deployment_execution import (
+        build_deployment_update_handler,
+    )
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+
+    installed_controller.store.begin(
+        stack="moonmind", desired_image=IMAGE_B, source_revision="abc123"
+    )
+    with pytest.raises(ToolFailure) as denied:
+        asyncio.run(build_deployment_update_handler()(_tool_inputs(), {}))
+
+    assert denied.value.error_code == "DEPLOYMENT_CONTROLLER_ACCESS_DENIED"
+    assert denied.value.retryable is False
+    assert installed_controller.applied == []
+
+
+def test_unreadable_secret_of_a_never_started_bootstrap_keeps_the_transitional_owner(
+    installed_controller: _Controller, unreadable_secret: None
+) -> None:
+    installed_controller.stop()
+    temporal = _TemporalRecording()
+    client = _client()
+    client.app.dependency_overrides[_get_temporal_execution_service] = lambda: temporal
+
+    response = _update(client)
+
+    assert response.status_code == 202, response.text
+    assert len(temporal.created) == 1
+
+
+def test_api_refuses_the_legacy_updater_once_bootstrap_started_a_controller(
+    installed_controller: _Controller,
+) -> None:
+    # A controller bootstrap started but the stack cannot reach (for example
+    # not yet attached to the stack network) has recorded no work. The host
+    # command still reaches it on loopback, so the API must not pick the
+    # application-owned updater beside it.
+    installed_controller.bootstrap.record_controller_started(
+        installed_controller.state_dir
+    )
+    installed_controller.stop()
+    temporal = _TemporalRecording()
+    client = _client()
+    client.app.dependency_overrides[_get_temporal_execution_service] = lambda: temporal
+
+    response = _update(client)
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "deployment_controller_unavailable"
+    assert temporal.created == []

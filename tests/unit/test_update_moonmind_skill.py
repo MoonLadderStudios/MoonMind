@@ -966,3 +966,143 @@ def test_host_entrypoint_submits_only_the_operation_the_ui_observes(
     posted = _stub_controller_success(monkeypatch, image)
     assert update.main(["--repo", str(repo)]) == 0
     assert [payload["desiredImage"] for payload in posted] == [image]
+
+
+def _unreachable(*args, **kwargs):
+    raise update.ControllerUnreachableError("controller unavailable")
+
+
+@pytest.fixture
+def unreadable_secret(tmp_path):
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 secret")
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _install_controller_secret(repo)
+    secret = repo / "deploy/state/controller/secrets/controller-bearer"
+    secret.chmod(0)
+    try:
+        yield repo
+    finally:
+        secret.chmod(0o600)
+
+
+def test_unreadable_secret_of_an_owning_controller_never_falls_back(
+    unreadable_secret, monkeypatch
+):
+    operations = unreadable_secret / "deploy/state/controller/operations"
+    operations.mkdir()
+    (operations / "pending.json").write_text("{}")
+    monkeypatch.setattr(
+        update, "_submit_legacy_direct", lambda *a, **k: pytest.fail("fallback")
+    )
+    with pytest.raises(update.ControllerCredentialError, match="cannot read") as denied:
+        update._submit_release(
+            {"project": "moonmind", "image": "image"},
+            unreadable_secret,
+            controller_url="http://127.0.0.1:8472",
+            secret_file=None,
+            legacy_direct=False,
+        )
+    assert "controller-bearer" not in str(denied.value)
+
+
+def test_unreadable_secret_of_a_never_started_bootstrap_uses_application_updater(
+    unreadable_secret, monkeypatch
+):
+    monkeypatch.setattr(update, "_controller_call", _unreachable)
+    monkeypatch.setattr(update, "_submit_legacy_direct", lambda *a, **k: 7)
+    assert update._submit_release(
+        {"project": "moonmind", "image": "image"},
+        unreadable_secret,
+        controller_url="http://127.0.0.1:8472",
+        secret_file=None,
+        legacy_direct=False,
+    ) == 7
+
+
+def test_started_controller_keeps_recovery_authority_without_a_container(
+    tmp_path, monkeypatch
+):
+    # Bootstrap recorded a start: the stack services refuse the legacy
+    # updater from that record, so the host follows the same owner.
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _install_controller_secret(repo)
+    (repo / "deploy/state/controller/controller-identity.json").write_text(
+        json.dumps(
+            {"project": "moonmind-controller-test", "port": 8472, "startedAt": 1}
+        )
+    )
+    monkeypatch.setattr(update, "_controller_call", _unreachable)
+    monkeypatch.setattr(update, "run", lambda *a, **k: "")
+    monkeypatch.setattr(
+        update, "_submit_legacy_direct", lambda *a, **k: pytest.fail("fallback")
+    )
+    with pytest.raises(update.ControllerUnreachableError):
+        update._submit_release(
+            {"project": "moonmind", "image": "image"},
+            repo,
+            controller_url="http://127.0.0.1:8472",
+            secret_file=None,
+            legacy_direct=False,
+        )
+
+
+@pytest.mark.parametrize("attach_exit", [0, 1])
+def test_host_update_attaches_the_controller_to_the_stack_before_submitting(
+    tmp_path, monkeypatch, attach_exit
+):
+    import sys
+
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+    monkeypatch.delenv("MOONMIND_CONTROLLER_SECRET_FILE", raising=False)
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _install_controller_secret(repo)
+    (repo / "deploy/state/controller/controller-identity.json").write_text(
+        json.dumps({"project": "moonmind-controller-test", "port": 8533})
+    )
+    bootstrap = repo / "deploy/controller/bootstrap.py"
+    bootstrap.parent.mkdir(parents=True)
+    bootstrap.write_text("")
+    events = []
+
+    def command(args, **kwargs):
+        events.append(("attach", list(args), kwargs.get("cwd")))
+        return SimpleNamespace(returncode=attach_exit, stdout="", stderr="no docker")
+
+    def submit(_record, _repo, *, controller_url, secret_file):
+        events.append(("submit", controller_url))
+        return 0
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_controller_call", lambda *a, **k: (200, {}))
+    monkeypatch.setattr(update, "_submit_via_controller", submit)
+    assert update._submit_release(
+        {"project": "site-a", "image": "image"},
+        repo,
+        controller_url="http://127.0.0.1:8472",
+        secret_file=None,
+        legacy_direct=False,
+    ) == 0
+    # The stack's derived project is passed through, attachment runs before
+    # the submission, and an attachment failure never blocks the host path.
+    assert events == [
+        (
+            "attach",
+            [
+                sys.executable,
+                str(bootstrap),
+                "attach",
+                "--repo",
+                str(repo),
+                "--stack-project",
+                "site-a",
+            ],
+            repo,
+        ),
+        ("submit", "http://127.0.0.1:8533"),
+    ]

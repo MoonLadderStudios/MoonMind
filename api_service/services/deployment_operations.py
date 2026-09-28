@@ -39,6 +39,7 @@ CONTROLLER_DEFAULT_URL = "http://127.0.0.1:8472"
 CONTROLLER_DEFAULT_HOST = "127.0.0.1"
 _CONTROLLER_SECRET_RELATIVE_PATH = Path("secrets") / "controller-bearer"
 _CONTROLLER_IDENTITY_FILE = "controller-identity.json"
+_CONTROLLER_COMPOSE_FILE = "controller-compose.yaml"
 CONTROLLER_SUBMIT_TIMEOUT_SECONDS: float = 30
 CONTROLLER_STATUS_TIMEOUT_SECONDS: float = 10
 
@@ -95,6 +96,10 @@ def _installed_controller_state() -> Path | None:
         try:
             if (candidate / _CONTROLLER_SECRET_RELATIVE_PATH).is_file():
                 return candidate
+        except PermissionError:
+            # Bootstrap ran as another user and left its secrets directory
+            # closed to this one: the controller is still installed here.
+            return candidate
         except OSError:
             continue
     return None
@@ -144,7 +149,13 @@ def controller_base_url(explicit: str | None = None) -> str:
 
 
 def controller_secret() -> str | None:
-    """Return the deployment-owned controller bearer secret, if configured."""
+    """Return the deployment-owned controller bearer secret, if configured.
+
+    A secret that exists but cannot be read (for example bootstrap ran as
+    another user) is not "no controller": it raises
+    ``deployment_controller_access_denied`` so no competing updater is
+    chosen beside the installed controller.
+    """
     explicit = os.environ.get("MOONMIND_CONTROLLER_SECRET")
     if explicit and explicit.strip():
         return explicit.strip()
@@ -158,8 +169,16 @@ def controller_secret() -> str | None:
         candidate = state_dir / _CONTROLLER_SECRET_RELATIVE_PATH
     try:
         value = candidate.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return None
+    except OSError:
+        raise DeploymentOperationError(
+            "deployment_controller_access_denied",
+            "The standalone controller is installed, but this service cannot "
+            "read its deployment-owned credential; make the controller state "
+            "readable by the MoonMind service user (for example rerun "
+            "`python3 deploy/controller/bootstrap.py install` as that user).",
+        ) from None
     return value or None
 
 
@@ -168,10 +187,12 @@ def _bootstrap_never_started_controller() -> bool:
 
     Mirrors the host entrypoint's transitional rule: bootstrap may leave a
     secret before its controller can start (for example an unpublished
-    image). An unreachable controller that recorded no operation owns no
-    stack, so the application-owned updater remains the only writer. An
-    explicitly selected controller, or one with recorded work, keeps its
-    authority.
+    image). A controller that recorded no operation and that bootstrap never
+    started owns no stack, so the application-owned updater remains the
+    only writer. The host also asks Docker for the controller's containers;
+    this service has no Docker access, so it relies on bootstrap's recorded
+    start instead. An explicitly selected controller, one with recorded
+    work, one bootstrap started, or unreadable evidence keeps its authority.
     """
     if _controller_selected_explicitly():
         return False
@@ -179,10 +200,16 @@ def _bootstrap_never_started_controller() -> bool:
     if state_dir is None:
         return False
     operations_dir = state_dir / "operations"
+    identity_path = state_dir / _CONTROLLER_IDENTITY_FILE
     try:
-        return not (operations_dir.is_dir() and any(operations_dir.iterdir()))
-    except OSError:
+        if operations_dir.is_dir() and any(operations_dir.iterdir()):
+            return False
+        if not identity_path.exists():
+            return not (state_dir / _CONTROLLER_COMPOSE_FILE).exists()
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return False
+    return isinstance(identity, dict) and not identity.get("startedAt")
 
 
 def check_controller_operation_id(operation_id: str) -> str:
@@ -283,12 +310,18 @@ def submit_controller_update(
     """Submit the update to the standalone controller (same as host path).
 
     Returns the controller operation, or ``None`` only when no controller
-    is installed (no deployment-owned secret, or an unreachable bootstrap
-    controller that never recorded work). Every other outcome is the
-    controller's: failures raise :class:`DeploymentOperationError` with a
-    distinct code and never permit a competing legacy writer.
+    is installed (no deployment-owned secret, or a bootstrap controller that
+    never started or recorded work and cannot be reached or authenticated
+    to). Every other outcome is the controller's: failures raise
+    :class:`DeploymentOperationError` with a distinct code and never permit
+    a competing legacy writer.
     """
-    secret = controller_secret()
+    try:
+        secret = controller_secret()
+    except DeploymentOperationError:
+        if _bootstrap_never_started_controller():
+            return None
+        raise
     if not secret:
         return None
     try:
@@ -351,10 +384,12 @@ def observe_controller_operation(*, operation_id: str) -> dict[str, Any] | None:
     An unreadable observer is not evidence of failure: callers keep the
     last known state instead of marking the operation failed.
     """
-    secret = controller_secret()
-    if not secret or not operation_id:
+    if not operation_id:
         return None
     try:
+        secret = controller_secret()
+        if not secret:
+            return None
         return _controller_request(
             method="GET",
             path=f"/v1/operations/{check_controller_operation_id(operation_id)}",
