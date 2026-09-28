@@ -7767,8 +7767,8 @@ class TemporalAgentRuntimeActivities:
             # Preserve the specific failure class across the activity boundary
             # and fail fast on deterministic authority-sensitive denials so a
             # denied image, credential, or scope is not retried pointlessly.
-            # A launch the backend already failed closed (its container was
-            # removed) has nothing left for a retry to start.
+            # A launch the backend already failed closed has nothing a retry
+            # can start or recover.
             deterministic = {
                 ContainerJobFailureClass.IMAGE_USE_DENIED,
                 ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,

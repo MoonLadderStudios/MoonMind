@@ -868,11 +868,11 @@ class DockerContainerJobBackend:
     _SLOT_HOLDING_STATES = frozenset(
         {"restarting", "running", "paused", "removing"}
     )
-    #: The daemon reports ``exited`` only for a container whose process has
-    #: already run. A start retry that finds its own container exited (the
-    #: start was applied, its acknowledgment was lost, and the workload
-    #: finished) reconciles that outcome instead of executing it again.
-    _FINISHED_STATE = "exited"
+    #: The daemon reports ``exited`` or ``dead`` only for a container whose
+    #: process has already run. A start retry that finds its own container
+    #: finished (the start was applied, its acknowledgment was lost, and the
+    #: workload ended) reconciles that outcome instead of executing it again.
+    _FINISHED_STATES = frozenset({"exited", "dead"})
 
     async def _container_states(self) -> dict[str, str]:
         """Return {container name: state} for every owned container job."""
@@ -2378,11 +2378,23 @@ class DockerContainerJobBackend:
             states = await self._container_states()
             if request.resolved_resources is None:
                 request.resolved_resources = request.request.spec.resources.model_copy()
-            if states.get(container_name) == self._FINISHED_STATE:
+            if states.get(container_name) in self._FINISHED_STATES:
                 # A retry after an uncertain start whose workload already ran
                 # to completion: report the existing container so the workflow
                 # observes its one real outcome. Starting it again would
                 # re-execute the job, and it needs no slot to be observed.
+                if request.request.spec.network_mode == "bridge":
+                    # Restricted-egress acceptance needs launch evidence
+                    # observed while the workload ran, and Docker releases a
+                    # stopped container's endpoint, so it cannot be recovered
+                    # now. Fail closed rather than accept the pre-launch
+                    # evidence; the container stays for the workflow's
+                    # evidence publication and cleanup.
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.LAUNCH,
+                        "restricted-egress workload finished before its running "
+                        "launch evidence was recorded",
+                    )
                 return ContainerJobActivityResult(
                     containerRef=container_name,
                     running=False,
