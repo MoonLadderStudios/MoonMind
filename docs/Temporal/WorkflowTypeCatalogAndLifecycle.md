@@ -759,7 +759,10 @@ This document is “done” when:
 3. ~~Do we need `Pause/Resume` in v1?~~ Resolved: yes — `Pause`/`Resume` Updates are implemented per §6.2 (validator-guarded on `MoonMind.UserWorkflow` and `MoonMind.AgentRun`).
 4. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
 Product visibility is defined by each registration's `projection_scope` in
-`workflow_registry.py`. UserWorkflow is the product execution.
+`workflow_registry.py`. UserWorkflow is the product execution. Retired product
+types (`HISTORICAL_PRODUCT_WORKFLOW_TYPES`, currently `MoonMind.ManifestIngest`)
+have read-only `historical` scope: old rows appear in the DB-backed list and
+detail views, while every control on them is rejected.
 Managers, sessions, agent runs and control owners are operator-only; janitors,
 workspace cleanup and session reconciliation are excluded from product lists.
 Operator evidence remains available through Temporal and the owning resource

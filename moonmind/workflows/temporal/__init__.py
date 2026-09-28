@@ -97,6 +97,7 @@ from moonmind.workflows.temporal.remediation_tools import (
 )
 from moonmind.workflows.temporal.service import (
     TemporalExecutionCancelUndeliverableError,
+    TemporalExecutionHistoricalTypeError,
     TemporalExecutionError,
     TemporalExecutionListResult,
     TemporalExecutionNotFoundError,
@@ -186,6 +187,7 @@ __all__ = [
     "TemporalArtifactStateError",
     "TemporalArtifactValidationError",
     "TemporalExecutionCancelUndeliverableError",
+    "TemporalExecutionHistoricalTypeError",
     "TemporalExecutionError",
     "TemporalExecutionListResult",
     "TemporalExecutionNotFoundError",
