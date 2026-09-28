@@ -33,7 +33,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -118,7 +118,9 @@ def test_production_worker_registry_has_no_manifest_ingest() -> None:
 
     assert "MoonMind.ManifestIngest" not in product_workflow_types()
     assert "MoonMind.ManifestIngest" not in list_registered_workflow_types()
-    assert tuple(product_workflow_types()) == ("MoonMind.UserWorkflow",)
+    # Retirement invariant only: future supported workflows may join the
+    # catalog without touching this Manifest fixture.
+    assert "MoonMind.UserWorkflow" in product_workflow_types()
 
     handler_names = [
         activity._Definition.must_from_callable(handler).name
@@ -136,6 +138,8 @@ def test_production_worker_registry_has_no_manifest_ingest() -> None:
 
 def test_mounted_production_routes_expose_no_manifest_authoring() -> None:
     """The mounted production app serves executions but no Manifest registry."""
+    from fastapi.testclient import TestClient
+
     from api_service.main import app as production_app
 
     # The served OpenAPI is the mounted-route contract: it is generated from
@@ -148,6 +152,12 @@ def test_mounted_production_routes_expose_no_manifest_authoring() -> None:
     assert "/api/executions" in openapi_paths
     assert "/api/manifests" not in openapi_paths
     assert not any(str(p).startswith("/api/manifests/") for p in openapi_paths)
+    # OpenAPI omits include_in_schema=False routes, so probe the served app:
+    # retired authoring paths must return the ordinary not-found response.
+    client = TestClient(production_app, raise_server_exceptions=False)
+    for retired_path in ("/api/manifests", "/api/manifests/anything"):
+        response = client.get(retired_path)
+        assert response.status_code == 404, retired_path
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +170,8 @@ async def test_retired_submission_rejects_before_consequential_effects(
     tmp_path: Path,
 ) -> None:
     """Retired create/update reject before reader/network/launch effects."""
+    from unittest.mock import patch
+
     from moonmind.workflows.temporal.service import (
         RETIRED_MANIFEST_UPDATE_NAMES,
         TemporalExecutionService,
@@ -171,21 +183,37 @@ async def test_retired_submission_rejects_before_consequential_effects(
         service = TemporalExecutionService(session)
         service._validate_readable_temporal_artifact_ref = AsyncMock()  # type: ignore[method-assign]
         service._client_adapter.start_workflow = AsyncMock()  # type: ignore[attr-defined]
-        with pytest.raises(
-            TemporalExecutionValidationError, match="was retired"
-        ):
-            await service.create_execution(
-                workflow_type="MoonMind.ManifestIngest",
-                owner_id=uuid4(),
-                title=None,
-                input_artifact_ref=None,
-                plan_artifact_ref=None,
-                manifest_artifact_ref="artifact://manifest/1",
-                failure_policy=None,
-                initial_parameters={"task": {"instructions": "retired"}},
-                idempotency_key=f"retired-{uuid4()}",
-                _skip_pause_guard=True,
-            )
+        # Stale legacy runtime/profile must not mask the retirement rejection:
+        # retirement is checked before provider-profile resolution.
+        legacy_parameters = {
+            "task": {
+                "instructions": "retired",
+                "targetRuntime": "stale-runtime",
+                "providerProfileRef": "stale-profile",
+            },
+            "targetRuntime": "stale-runtime",
+        }
+        with patch(
+            "moonmind.workflows.temporal.service."
+            "require_launch_target_provider_profile_runtime",
+            new=AsyncMock(),
+        ) as provider_guard:
+            with pytest.raises(
+                TemporalExecutionValidationError, match="was retired"
+            ):
+                await service.create_execution(
+                    workflow_type="MoonMind.ManifestIngest",
+                    owner_id=uuid4(),
+                    title=None,
+                    input_artifact_ref=None,
+                    plan_artifact_ref=None,
+                    manifest_artifact_ref="artifact://manifest/1",
+                    failure_policy=None,
+                    initial_parameters=legacy_parameters,
+                    idempotency_key=f"retired-{uuid4()}",
+                    _skip_pause_guard=True,
+                )
+            provider_guard.assert_not_awaited()
         service._validate_readable_temporal_artifact_ref.assert_not_awaited()  # type: ignore[attr-defined]
         service._client_adapter.start_workflow.assert_not_awaited()  # type: ignore[attr-defined]
 
@@ -245,15 +273,20 @@ async def test_ordinary_manifest_yaml_flows_as_supported_content(
         await conn.run_sync(Base.metadata.create_all)
     try:
         async with factory() as session:
+            import hashlib
+
             service = TemporalArtifactService(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(str(tmp_path / "artifacts")),
             )
+            payload = b"name: ordinary-manifest\nkind: generic-artifact\n"
+            digest = hashlib.sha256(payload).hexdigest()
+            principal = f"user:{uuid4()}"
             artifact, _upload = await service.create(
-                principal=f"user:{uuid4()}",
+                principal=principal,
                 content_type="application/x-yaml",
-                size_bytes=64,
-                sha256="b" * 64,
+                size_bytes=len(payload),
+                sha256=digest,
                 retention_class="standard",
                 link=None,
                 metadata_json={"filename": "manifest.yaml"},
@@ -261,6 +294,18 @@ async def test_ordinary_manifest_yaml_flows_as_supported_content(
                 redaction_level=None,
             )
             assert artifact.artifact_id
+            completed = await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                payload=payload,
+                content_type="application/x-yaml",
+            )
+            assert completed.artifact_id == artifact.artifact_id
+            _read_artifact, read_bytes = await service.read(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+            )
+            assert read_bytes == payload
     finally:
         await engine.dispose()
         settings.workflow.temporal_artifact_backend = original_backend
@@ -310,6 +355,8 @@ async def test_historical_compile_and_node_reads_decode_without_replay(
     from api_service.api.routers.executions import (
         _degraded_step_execution_projection_payload,
         _resolve_execution_entry,
+        _serialize_execution,
+        _serialize_execution_list_item,
         _step_execution_manifest_refs,
     )
     from api_service.db.models import TemporalExecutionCanonicalRecord
@@ -327,6 +374,13 @@ async def test_historical_compile_and_node_reads_decode_without_replay(
         # Compile-history meaning: stored manifest_ref + manifest entry decode.
         assert stored.manifest_ref == "artifact://manifest/historical"
         assert _resolve_execution_entry(stored, {}) == "manifest"
+        # Served read path: the same persisted record serializes through the
+        # production list/detail projections used by GET /api/executions.
+        serialized = _serialize_execution(stored)
+        assert serialized.workflow_id == stored.workflow_id
+        assert serialized.workflow_type == str(stored.workflow_type.value)
+        list_item = _serialize_execution_list_item(stored)
+        assert list_item.workflow_id == stored.workflow_id
 
         # Node-history meaning: manifestArtifactRef refs decode from a
         # ledger row double; degraded metadata keeps its own position.
@@ -387,21 +441,23 @@ def test_retired_type_has_no_product_projection() -> None:
 
 
 def test_impact_selection_routes_retirement_boundaries_to_required_ci() -> None:
-    """Touched retirement boundaries stay selected in existing CI."""
+    """Changed retirement files stay selected in existing CI."""
     from tools.select_test_suites import select_suites
 
-    boundary_selection = select_suites(
-        [
-            "tests/unit/api/routers/test_manifest_retirement_boundaries_4193.py",
-            "api_service/api/routers/executions.py",
-            "moonmind/workflows/temporal/workflow_registry.py",
-            "moonmind/schemas/temporal_models.py",
-        ]
-    )
+    # This change touches only these two test paths; selection must be
+    # computed from the real changed list, not injected production paths.
+    changed = [
+        "tests/unit/api/routers/test_manifest_retirement_boundaries_4193.py",
+        "tests/unit/config/test_manifest_retirement_qualification_4193.py",
+    ]
+    boundary_selection = select_suites(changed)
     assert boundary_selection.unit_fast is True
     assert boundary_selection.api_component is True
-    assert boundary_selection.temporal_boundary is True
-    assert boundary_selection.integration_ci is True
+    # These hermetic boundary tests do not by themselves select the
+    # Temporal/integration lanes; those lanes are owned by the existing
+    # production-path suites that cover the same boundaries.
+    assert boundary_selection.temporal_boundary is False
+    assert boundary_selection.integration_ci is False
 
     # Empty input selects the full gate: missing execution cannot pass as
     # a successful inventory check.
@@ -435,6 +491,8 @@ async def test_normal_workflow_launches_without_manifest_or_vector(
         )
 
     async with _temporal_db(tmp_path) as session:
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+
         service = TemporalExecutionService(session)
         service._validate_readable_temporal_artifact_ref = AsyncMock()  # type: ignore[method-assign]
         service._client_adapter.start_workflow = AsyncMock(  # type: ignore[attr-defined]
@@ -454,6 +512,17 @@ async def test_normal_workflow_launches_without_manifest_or_vector(
         )
         assert created.workflow_id.startswith("mm:")
         service._client_adapter.start_workflow.assert_awaited_once()  # type: ignore[attr-defined]
+        # Runtime result: the launched execution persists and stays readable
+        # with ordinary parameters and no Manifest/vector residue.
+        stored = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert stored is not None
+        assert str(stored.workflow_type.value) == "MoonMind.UserWorkflow"
+        assert stored.manifest_ref is None
+        parameters = dict(stored.parameters or {})
+        assert "rag" not in parameters
+        assert "manifestArtifactRef" not in parameters
 
 
 def test_supported_agent_request_needs_no_manifest_or_vector() -> None:
