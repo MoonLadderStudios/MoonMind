@@ -12,22 +12,32 @@
 #
 # Fresh: tools/single_user_journey_checks.py reads the settings/preset
 # catalogs, submits one task with the dashboard's default repository as a
-# deferred start (and redelivers it), attaches an artifact, and dispatches a
-# recurring definition; the browser opens the built dashboard on that work;
-# the workflow worker restarts; the deferred task is canceled and must reach
-# the canceled state; a synthetic credential is bound through an instance
-# setting; everything saved is read back; the binding is released.
+# deferred start (and redelivers it), attaches an artifact, dispatches a
+# recurring definition, and saves a preset; the browser opens the built
+# dashboard on that work; the workflow worker restarts; the browser cancels
+# the deferred task from its workflow page and the API must report it
+# canceled; a synthetic credential is bound through an instance setting;
+# everything saved is read back; the binding is released.
 #
-# Upgrade: the same work is saved and canceled on the previously published
-# image (FIRST_RUN_3938_UPGRADE_FROM), the stack is recreated on the
-# candidate image (MOONMIND_IMAGE) against the same volumes, the saved work
-# must be readable through the API and dashboard, and a new journey runs on
-# the upgraded instance.
+# Upgrade: an account-era release from before the guarded single-user
+# conversion (FIRST_RUN_3938_UPGRADE_FROM_REVISION, its published image and
+# its own docker-compose.yaml) is deployed from a git worktree, and the same
+# work is saved and canceled there. The worktree is then checked out at the
+# candidate revision in place, as an operator's update would, and the stack
+# is recreated on the candidate image (MOONMIND_IMAGE) against the same
+# volumes and state directories. The API startup log must show the guarded
+# conversion classifying the retained data as one eligible operator. The
+# saved work, settings, credential binding, and preset version must be
+# readable through the API and dashboard, and a new journey runs on the
+# upgraded instance.
 #
 # Any failed, missing, or unobserved step exits non-zero. There is no smoke
 # mode. A model-backed step needs a provider credential, which this
 # credential-free run does not have, so no step runs to completion: the task
 # is deferred and canceled, and the recurring run is observed as dispatched.
+# The conversion outcome is printed either way. It publishes only when every
+# retained subsystem has a registered transform; until then it refuses
+# without mutation and the journey reports it as not published.
 #
 # Teardown is project-owned (down --remove-orphans on this project only; no
 # global prune). Credential-bearing named volumes are re-scoped to the
@@ -43,8 +53,13 @@
 #   MOONMIND_IMAGE                      candidate image under test
 #                                       (default ghcr.io/moonladderstudios/moonmind:latest;
 #                                       CI sets this to the checkout build)
-#   FIRST_RUN_3938_UPGRADE_FROM         image the upgrade starts from
-#                                       (default ghcr.io/moonladderstudios/moonmind:latest)
+#   FIRST_RUN_3938_UPGRADE_FROM_REVISION
+#                                       release the upgrade starts from
+#                                       (default 2c67aeb959482d17a72d75dea7766e1a8ee8adf0,
+#                                       the last published main build before
+#                                       the #4346 guarded conversion)
+#   FIRST_RUN_3938_UPGRADE_FROM         image the upgrade starts from (default
+#                                       ghcr.io/moonladderstudios/moonmind:sha-<revision>)
 #   FIRST_RUN_3938_API_BASE             default derived from the Compose
 #                                       binding (MOONMIND_API_PUBLISH_HOST /
 #                                       MOONMIND_API_HOST_PORT)
@@ -85,7 +100,8 @@ if [[ "$PUBLISH_HOST" == "0.0.0.0" || "$PUBLISH_HOST" == "::" ]]; then
 fi
 API_BASE="${FIRST_RUN_3938_API_BASE:-http://$PUBLISH_HOST:$PUBLISH_PORT}"
 CANDIDATE_IMAGE="${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}"
-UPGRADE_FROM="${FIRST_RUN_3938_UPGRADE_FROM:-ghcr.io/moonladderstudios/moonmind:latest}"
+UPGRADE_FROM_REVISION="${FIRST_RUN_3938_UPGRADE_FROM_REVISION:-2c67aeb959482d17a72d75dea7766e1a8ee8adf0}"
+UPGRADE_FROM="${FIRST_RUN_3938_UPGRADE_FROM:-ghcr.io/moonladderstudios/moonmind:sha-$UPGRADE_FROM_REVISION}"
 LOG_DIR="${FIRST_RUN_3938_LOG_DIR:-$REPO_ROOT/var/artifacts/first-run-3938}/$MODE"
 
 export CODEX_VOLUME_NAME="${CODEX_VOLUME_NAME:-$PROJECT_NAME-codex-auth}"
@@ -108,9 +124,15 @@ for tool in python3 node curl; do
   fi
 done
 
+# The deployment directory. The fresh journey deploys this checkout; the
+# upgrade journey deploys a worktree that starts at the old release.
+DEPLOY_DIR="$REPO_ROOT"
+COMPOSE_OVERRIDES=()
+
 compose() {
-  "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" -f "$COMPOSE_FILE" \
-    --project-directory "$REPO_ROOT" "$@"
+  "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" \
+    -f "$DEPLOY_DIR/docker-compose.yaml" ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} \
+    --project-directory "$DEPLOY_DIR" "$@"
 }
 
 redact() {
@@ -129,6 +151,13 @@ cleanup() {
     echo "Journey failed; bounded redacted logs are in $LOG_DIR." >&2
   fi
   compose down --remove-orphans >/dev/null 2>&1 || true
+  if [[ "$DEPLOY_DIR" != "$REPO_ROOT" ]]; then
+    # Containers may leave root-owned state behind; remove what this user
+    # can and let git forget the worktree.
+    git -C "$REPO_ROOT" worktree remove --force "$DEPLOY_DIR" >/dev/null 2>&1 \
+      || rm -rf "$DEPLOY_DIR" 2>/dev/null || true
+    git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1 || true
+  fi
   if [[ -n "$ENV_STASH_DIR" && -f "$ENV_STASH_DIR/.env" ]]; then
     mv "$ENV_STASH_DIR/.env" "$REPO_ROOT/.env"
     rmdir "$ENV_STASH_DIR" 2>/dev/null || true
@@ -155,7 +184,7 @@ STATE_DIR="$LOG_DIR/state"
 record_provenance() {
   {
     echo "journey=$MODE project=$PROJECT_NAME compose_file=docker-compose.yaml"
-    echo "revision=$(git -c safe.directory='*' -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+    echo "revision=$(git -c safe.directory='*' -C "$DEPLOY_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
     echo "moonmind_image=$MOONMIND_IMAGE"
     echo "image identities (provenance, not an equality gate):"
     compose images 2>/dev/null || true
@@ -201,11 +230,58 @@ EOF
 checks() {
   python3 "$SCRIPT_DIR/single_user_journey_checks.py" "$1" \
     --api-base "$API_BASE" --state-file "$STATE_DIR/$2.json" --label "$2" \
-    2>&1 | redact
+    "${@:3}" 2>&1 | redact
 }
 
 browser() {
-  node "$SCRIPT_DIR/single_user_journey_browser.mjs" "$API_BASE" "$STATE_DIR/$1.json"
+  node "$SCRIPT_DIR/single_user_journey_browser.mjs" "$API_BASE" "$STATE_DIR/$1.json" "${2:-view}"
+}
+
+cancel_from_dashboard() {
+  browser "$1" cancel
+  checks canceled "$1"
+}
+
+# Deploy the old release from its own tree so its docker-compose.yaml and
+# bind-mounted files match its image. CI checks out one commit, so fetch the
+# release revision when it is missing.
+prepare_upgrade_source() {
+  if ! git -C "$REPO_ROOT" cat-file -e "$UPGRADE_FROM_REVISION^{commit}" 2>/dev/null; then
+    git -C "$REPO_ROOT" fetch --no-tags --depth 1 origin "$UPGRADE_FROM_REVISION"
+  fi
+  CANDIDATE_REVISION="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]]; then
+    echo "Note: the upgrade checks out committed HEAD ($CANDIDATE_REVISION); uncommitted changes are not deployed." >&2
+  fi
+  DEPLOY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-upgrade-4356.XXXXXX")"
+  git -C "$REPO_ROOT" worktree add --detach --quiet "$DEPLOY_DIR" "$UPGRADE_FROM_REVISION"
+  # The old release pins quay.io/minio/minio, which is no longer publicly
+  # pullable. Substitute the MinIO image the candidate qualifies; the
+  # MoonMind services stay on the old release.
+  local minio_image
+  minio_image="$(compose_candidate_config | python3 -c \
+    'import json, sys; print(json.load(sys.stdin)["services"]["minio"]["image"])')"
+  mkdir -p "$STATE_DIR"
+  printf 'services:\n  minio:\n    image: %s\n' "$minio_image" > "$STATE_DIR/upgrade-source-override.yaml"
+  COMPOSE_OVERRIDES=(-f "$STATE_DIR/upgrade-source-override.yaml")
+  echo "Upgrade source: $UPGRADE_FROM_REVISION on $UPGRADE_FROM (MinIO $minio_image)."
+}
+
+compose_candidate_config() {
+  "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" -f "$COMPOSE_FILE" \
+    --project-directory "$REPO_ROOT" config --format json
+}
+
+# Update the deployment directory in place, as an operator's checkout would:
+# untracked state (var/, deploy/state) and the named volumes stay.
+upgrade_source_to_candidate() {
+  git -C "$DEPLOY_DIR" checkout --detach --quiet "$CANDIDATE_REVISION"
+  COMPOSE_OVERRIDES=()
+}
+
+require_conversion_outcome() {
+  compose logs --no-color api 2>&1 | redact > "$STATE_DIR/api-after-upgrade.log"
+  checks conversion "$1" --api-log "$STATE_DIR/api-after-upgrade.log"
 }
 
 restart_workflow_worker() {
@@ -219,7 +295,7 @@ fresh_journey() {
   checks populate "$label"
   browser "$label"
   restart_workflow_worker
-  checks cancel "$label"
+  cancel_from_dashboard "$label"
   checks credential "$label"
   checks verify "$label"
   checks release "$label"
@@ -230,16 +306,19 @@ if [[ "$MODE" == "fresh" ]]; then
   bring_up
   fresh_journey fresh
 else
+  prepare_upgrade_source
   export MOONMIND_IMAGE="$UPGRADE_FROM"
   bring_up
   checks populate before-upgrade
-  checks cancel before-upgrade
+  cancel_from_dashboard before-upgrade
   checks credential before-upgrade
   checks verify before-upgrade
 
-  echo "Upgrading $PROJECT_NAME from $UPGRADE_FROM to $CANDIDATE_IMAGE..." | redact
+  echo "Upgrading $PROJECT_NAME in place from $UPGRADE_FROM_REVISION to $CANDIDATE_REVISION ($CANDIDATE_IMAGE)..." | redact
+  upgrade_source_to_candidate
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
   bring_up
+  require_conversion_outcome before-upgrade
   checks verify before-upgrade
   browser before-upgrade
   checks release before-upgrade

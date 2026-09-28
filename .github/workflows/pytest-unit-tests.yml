@@ -877,8 +877,8 @@ jobs:
         # Compose installation (no .env, no inherited credentials, no seeded
         # person) driven through the real API and compiled dashboard:
         # settings/catalog, synthetic credential binding, submit/observe,
-        # artifacts, recurring dispatch, worker restart, cancellation, and
-        # read-back. Any failed or unobserved step fails the job.
+        # artifacts, recurring dispatch, presets, worker restart, dashboard
+        # cancellation, and read-back. Any failed or unobserved step fails the job.
         # MOONMIND_IMAGE pins the candidate build above.
         env:
           MOONMIND_IMAGE: moonmind-first-run-3938:ci
@@ -890,9 +890,11 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" var 2>/dev/null || true
           ./tools/first_run_journey_3938.sh
       - name: Run eligible-upgrade journey
-        # MoonLadderStudios/MoonMind#4356: work saved on the published image
-        # must survive recreation on the candidate image and the upgraded
-        # instance must accept new work.
+        # MoonLadderStudios/MoonMind#4356: work saved on an account-era
+        # release (before the guarded single-user conversion, deployed from
+        # its own docker-compose.yaml) must survive an in-place update to the
+        # candidate, the conversion must classify it as one eligible operator,
+        # and the upgraded instance must accept new work.
         env:
           MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |

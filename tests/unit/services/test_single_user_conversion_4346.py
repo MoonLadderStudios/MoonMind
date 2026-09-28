@@ -462,3 +462,58 @@ async def test_guarded_upgrade_converts_profile_secrets_with_real_transform(tmp_
         assert second.digest == result.digest
         rows2 = (await session.execute(select(ManagedSecret))).scalars().all()
         assert len(rows2) == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
+    """The API startup route logs why the conversion did not publish.
+
+    Operators and the upgrade journey read this line to tell a refusal that
+    waits for subsystem transforms from an attribution refusal. It carries
+    the sanitized decision detail only, never resource content.
+    """
+    import logging
+
+    from api_service.db import base as db_base
+    from api_service.db.models import RecurringWorkflowDefinition
+    from api_service.main import _run_guarded_single_user_upgrade
+
+    engine, factory = _factory(tmp_path, "startup-refusal.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        u = await _mk_user(session)
+        session.add(
+            RecurringWorkflowDefinition(
+                name="sched-secret-name",
+                cron="0 * * * *",
+                timezone="UTC",
+                owner_user_id=u.id,
+            )
+        )
+        await session.commit()
+    records: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    handler = _Collect(level=logging.WARNING)
+    main_logger = logging.getLogger("api_service.main")
+    main_logger.addHandler(handler)
+    original = db_base.async_session_maker
+    db_base.async_session_maker = factory
+    try:
+        summary = await _run_guarded_single_user_upgrade()
+    finally:
+        main_logger.removeHandler(handler)
+        db_base.async_session_maker = original
+        await engine.dispose()
+
+    logged = "\n".join(records)
+    assert summary["published"] is False
+    assert (
+        "Single-user guarded upgrade blocked (missing_transform_coverage: "
+        "retained subsystems lack registered transforms: schedules)"
+    ) in logged
+    assert "sched-secret-name" not in logged

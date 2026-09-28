@@ -1,9 +1,17 @@
 #!/usr/bin/env node
 /*
- * MoonLadderStudios/MoonMind#4356: open the dashboard compiled into the
- * image under test and observe the work a journey phase saved.
+ * MoonLadderStudios/MoonMind#4356: drive the dashboard compiled into the
+ * image under test on the work a journey phase saved.
  *
- * Usage: node tools/single_user_journey_browser.mjs <api-base> <state-file>
+ * Usage: node tools/single_user_journey_browser.mjs <api-base> <state-file> [view|cancel]
+ *
+ *   view    (default) open the new-workflow page, each saved workflow, the
+ *           recurring schedule, and settings.
+ *   cancel  cancel each execution marked for cancellation from its workflow
+ *           detail page, as an operator would, and wait for the page to show
+ *           it canceled. The request time is written back to the state file;
+ *           `single_user_journey_checks.py canceled` then confirms it came
+ *           before the deferred start and that the API reports canceled.
  *
  * The state file is written by tools/single_user_journey_checks.py. Every
  * page loads through the deployment's ordinary access path (loopback on the
@@ -13,9 +21,9 @@
 import { chromium } from "playwright";
 import fs from "node:fs";
 
-const [apiBase, stateFile] = process.argv.slice(2);
-if (!apiBase || !stateFile) {
-  console.error("usage: single_user_journey_browser.mjs <api-base> <state-file>");
+const [apiBase, stateFile, mode = "view"] = process.argv.slice(2);
+if (!apiBase || !stateFile || !["view", "cancel"].includes(mode)) {
+  console.error("usage: single_user_journey_browser.mjs <api-base> <state-file> [view|cancel]");
   process.exit(2);
 }
 const base = apiBase.replace(/\/$/, "");
@@ -39,22 +47,51 @@ try {
     console.log(`single-user-journey-browser: ${path} ok`);
   };
 
-  await visit("/workflows/new", () =>
-    page.getByLabel("Instructions").first().waitFor({ state: "visible" }),
-  );
-  for (const execution of state.executions || []) {
-    await visit(`/workflows/${encodeURIComponent(execution.workflowId)}`, () =>
-      page.getByText(execution.title).first().waitFor({ state: "visible" }),
+  const workflowPath = (execution) => `/workflows/${encodeURIComponent(execution.workflowId)}`;
+
+  if (mode === "view") {
+    await visit("/workflows/new", () =>
+      page.getByLabel("Instructions").first().waitFor({ state: "visible" }),
     );
-  }
-  if (state.recurring) {
-    await visit(`/schedules/${encodeURIComponent(state.recurring.definitionId)}`, () =>
-      page.getByText(state.recurring.name).first().waitFor({ state: "visible" }),
+    for (const execution of state.executions || []) {
+      await visit(workflowPath(execution), () =>
+        page.getByText(execution.title).first().waitFor({ state: "visible" }),
+      );
+    }
+    if (state.recurring) {
+      await visit(`/schedules/${encodeURIComponent(state.recurring.definitionId)}`, () =>
+        page.getByText(state.recurring.name).first().waitFor({ state: "visible" }),
+      );
+    }
+    await visit("/settings", () =>
+      page.locator("main, #root, [data-dashboard-root]").first().waitFor({ state: "visible" }),
     );
+  } else {
+    const targets = (state.executions || []).filter((execution) => execution.cancel);
+    if (!targets.length) {
+      throw new Error("no executions recorded to cancel");
+    }
+    for (const execution of targets) {
+      await visit(workflowPath(execution), async () => {
+        await page.getByText(execution.title).first().waitFor({ state: "visible" });
+        await page.locator(".toolbar").getByRole("button", { name: "Workflow actions" }).click();
+        const cancel = page
+          .getByRole("menu", { name: "Workflow actions" })
+          .getByRole("menuitem", { name: "Cancel", exact: true });
+        await cancel.waitFor({ state: "visible" });
+        execution.cancelRequestedAt = new Date().toISOString();
+        await cancel.click();
+        await page.getByText("Cancellation requested.").first().waitFor({ state: "visible" });
+        // The detail page polls until the workflow is terminal.
+        await page
+          .locator(".toolbar")
+          .getByText("Canceled", { exact: true })
+          .first()
+          .waitFor({ state: "visible", timeout: Math.max(timeout, 180000) });
+      });
+      console.log(`single-user-journey-browser: ${execution.workflowId} canceled from the dashboard`);
+    }
   }
-  await visit("/settings", () =>
-    page.locator("main, #root, [data-dashboard-root]").first().waitFor({ state: "visible" }),
-  );
   if (pageErrors.length) {
     throw new Error(`uncaught page errors: ${pageErrors.join(" | ")}`);
   }
@@ -63,5 +100,8 @@ try {
   console.error(`single-user-journey-browser: FAILED: ${error.message || error}`);
 } finally {
   await browser.close();
+  if (mode === "cancel") {
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  }
 }
 process.exit(failed ? 1 : 0);
