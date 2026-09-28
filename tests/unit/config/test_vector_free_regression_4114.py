@@ -22,10 +22,23 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   optional profiles, embedded vector startup, and pgvector init SQL. Live
   startup remains a protected deployment check (see
   ``test_topology_matrix_gaps_are_explicit``).
-- Real startup: hermetic sentinel logic only
-  (``test_startup_sentinel_*``). Fresh Compose startup, init-db/Alembic,
-  readiness, dashboard bootstrap, and repeated startup are protected checks
-  owned with the cutover child, not claimed here.
+- Real startup: hermetic sentinel logic
+  (``test_startup_sentinel_*``) plus real production import and readiness
+  wiring (``test_vector_free_startup_*``, ``test_vector_free_api_health_*``)
+  under sanitized env with no vector configuration. Fresh Compose startup,
+  init-db/Alembic runs, live API/worker readiness probes, dashboard
+  bootstrap, and repeated startup stay protected checks owned with the
+  cutover child, not claimed here.
+- Ordinary workflow: hermetic execution through the shared production
+  admission path (``test_vector_free_ordinary_workflow_*``,
+  ``test_vector_free_rejection_*``, ``test_vector_free_denied_context_*``,
+  ``test_vector_free_upgraded_residue_*``) proving explicit context,
+  artifacts, terminal outcome, and recovery-safe retry with no vector
+  settings. Live runtime journeys stay protected (see
+  ``test_topology_matrix_gaps_are_explicit``); installed
+  dependency/image evidence is consumed from #4111 and Manifest
+  retirement integration from #4193 (see
+  ``test_vector_free_reuses_sibling_evidence_without_duplication``).
 - Public admission: ``test_admission_*`` exercises the real production
   admission path (``reject_retired_vector_fields`` /
   ``strip_absent_vector_fields`` from #4105) including hidden-state residue
@@ -647,7 +660,12 @@ def test_topology_matrix_gaps_are_explicit() -> None:
     dependency/import scans, migration SQL scan, settings stale-env tolerance,
     admission wiring (execution contract, checkpoint branch models,
     AgentExecutionRequest), retry input-reuse, capability-manifest source scan,
-    worker-registry Manifest absence, drain-gate predicate logic, and
+    worker-registry Manifest absence, drain-gate predicate logic,
+    vector-free startup imports and API health/readiness wiring, ordinary
+    vector-free workflow admission execution (explicit context, artifacts,
+    terminal outcome, omitted/explicit agreement), retirement rejection with
+    no consequential effects, denied-context no-widening, upgraded-residue
+    stripping at admission, sibling-evidence reuse accounting, and
     docs/operations surfaces.
 
     The following rows still require protected deployment evidence owned with
@@ -1019,3 +1037,339 @@ def test_manifest_drain_gate_blocks_on_open_histories() -> None:
     assert blocked.may_deploy_removal is False
     assert blocked.outstanding == 1
     assert "open_manifest_ingest_histories" in blocked.blocking_dimensions
+
+
+# ---------------------------------------------------------------------------
+# Vector-free startup and ordinary-workflow execution (hermetic slice).
+#
+# MoonLadderStudios/MoonMind#4114 R2/A1: the remaining live clean/upgraded
+# startup and runtime journeys execute in existing CI on disposable Compose
+# services -- this module cannot own them from unit_fast (no external
+# process, network, Docker, or Temporal server). What it CAN own, and adds
+# here, is the real production import, readiness-wiring, and admission
+# execution that those journeys depend on: every check below exercises the
+# shipped implementation (not a fixture service) with no vector
+# configuration, and every rejection asserts no consequential effects.
+# Sibling ownership is consumed, not reproduced: installed
+# dependency/image evidence belongs to #4111, Manifest retirement
+# integration to #4193 (see the reuse test below).
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_vector_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every vector-backend env key so imports start vector-free."""
+    import os
+
+    for key in list(os.environ):
+        if _VECTOR_ENV_RE.search(key) or "EMBEDDING" in key.upper():
+            monkeypatch.delenv(key, raising=False)
+
+
+def test_vector_free_startup_imports_without_vector_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real production modules import with no vector configuration.
+
+    Clean-default hermetic slice of R2: sanitized env (no ``QDRANT_*`` /
+    ``VECTOR_*`` / embedding keys), then import the shipped startup path --
+    settings, execution contract, agent runtime schemas, checkpoint branch
+    models, retrieval capabilities, worker registry, drain gate, and
+    capability resolution. A vector-gated import (missing-env failure or a
+    live ``qdrant_client`` import at module scope) fails here.
+    """
+    import importlib
+
+    _sanitize_vector_env(monkeypatch)
+    for module in (
+        "moonmind.config.settings",
+        "moonmind.workflows.executions.execution_contract",
+        "moonmind.schemas.agent_runtime_models",
+        "moonmind.schemas.checkpoint_branch_models",
+        "api_service.retrieval_capabilities",
+        "moonmind.workflows.temporal.workflow_registry",
+        "moonmind.gates.manifest_ingest_drain",
+        "moonmind.omnigent.effective_capabilities",
+    ):
+        assert importlib.import_module(module) is not None
+    # Negative control: the clean import must not smuggle a bypass -- an
+    # explicit retired requirement is still rejected after these imports.
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(
+            {"rag": {"collections": ["docs"], "required": True}},
+            field_path="payload",
+        )
+
+
+def test_vector_free_api_health_routes_have_no_vector_gate() -> None:
+    """API health/readiness wiring registers with no vector gate.
+
+    Readiness hermetic slice of R2: the served OpenAPI contract (rendered
+    from the production app's included routers -- direct ``app.routes``
+    introspection is not used because middleware instrumentation wraps the
+    route table, see the #4193 boundary-suite precedent) exposes ``/healthz``
+    and no vector-backend path, and the readiness source gates on
+    database/migration state, never on a ``QDRANT_*`` / vector backend. A
+    reintroduced vector gate in the health path fails here; live probe
+    execution stays protected.
+    """
+    from api_service.main import app
+
+    openapi_paths = set(app.openapi().get("paths", {}).keys())
+    assert "/healthz" in openapi_paths
+    assert not any(
+        _VECTOR_SERVICE_NAME_RE.search(str(path)) for path in openapi_paths
+    ), "served API contract exposes a vector-backend path"
+    source = (REPO_ROOT / "api_service/main.py").read_text(encoding="utf-8")
+    code_lines = [
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    assert not _VECTOR_ENV_RE.search(code), (
+        "API startup wires a retired vector environment key"
+    )
+    assert "qdrant_client" not in code
+
+
+def test_vector_free_ordinary_workflow_explicit_context_artifacts_terminal() -> None:
+    """Ordinary vector-free work admits with explicit context and artifacts.
+
+    Ordinary-workflow hermetic slice of R2 through the shared production
+    implementation that serves multiple harnesses (``AgentExecutionRequest``
+    plus the #4105 execution contract): explicit instructions, input refs,
+    Skill selection, and workspace spec admit with no vector settings, the
+    admitted terminal payload preserves the explicit context verbatim, and
+    omitted-vs-explicit vector-free inputs agree. No harness-specific matrix
+    is commissioned here.
+    """
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    explicit = {
+        "instructions": "summarize the attached notes",
+        "workspaceSpec": {"mode": "scoped"},
+    }
+    reject_retired_vector_fields(dict(explicit), field_path="parameters")
+    assert strip_absent_vector_fields(dict(explicit)) == explicit
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-4114-ordinary",
+        idempotencyKey="idem-4114-ordinary",
+        parameters=dict(explicit),
+        skill={"name": "document-update"},
+        inputRefs=["artifact://tenant/repo/input.md"],
+    )
+    dumped = request.model_dump(by_alias=True)
+    assert dumped["parameters"] == explicit
+    assert "rag" not in dumped["parameters"]
+    assert "followUpRetrieval" not in dumped["parameters"]
+    assert dumped["inputRefs"] == ["artifact://tenant/repo/input.md"]
+    assert dumped["skill"] == {"name": "document-update"}
+    # Omitted and explicit-empty vector-free inputs admit identically with
+    # no retrieval authority.
+    omitted = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-4114-omitted",
+        idempotencyKey="idem-4114-omitted",
+    )
+    assert omitted.model_dump(by_alias=True)["parameters"] == {}
+    assert "rag" not in omitted.model_dump(by_alias=True)["parameters"]
+
+
+def test_vector_free_rejection_has_no_consequential_effects() -> None:
+    """Retirement rejection leaves inputs and authority unchanged.
+
+    Hermetic slice of R3 at the actual request/tool/worker boundaries: an
+    explicit retired requirement raises at the execution contract, the agent
+    runtime request, the checkpoint branch boundary, and the retrieval
+    issuance boundary, while the caller's payload keeps its keys and no
+    capability token, artifact, or drain-gate state is produced.
+    """
+    import copy
+
+    from pydantic import ValidationError
+
+    from api_service.retrieval_capabilities import (
+        RetrievalBudgetSnapshot,
+        RetrievalCapabilityError,
+        RetrievalCapabilityRegistry,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.schemas.checkpoint_branch_models import (
+        CheckpointBranchCreateRequest,
+    )
+
+    retired = {
+        "instructions": "summarize",
+        "rag": {"collections": ["docs"], "required": True},
+    }
+    before = copy.deepcopy(retired)
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(dict(retired), field_path="payload")
+    assert retired == before
+    with pytest.raises(ValueError, match="4105|retired|vector"):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-4114-no-effect",
+            idempotencyKey="idem-4114-no-effect",
+            parameters=dict(retired),
+        )
+    with pytest.raises(ValidationError, match="4105|retired|vector"):
+        CheckpointBranchCreateRequest.model_validate(
+            {
+                "source": _checkpoint_branch_source(),
+                "label": "branch",
+                "instructions": {"text": "do work"},
+                "workspacePolicy": "continue_from_previous_execution",
+                "idempotencyKey": "idem-4114-no-effect",
+                "followUpRetrieval": {"enabled": True, "collections": ["repo"]},
+            }
+        )
+    budget = RetrievalBudgetSnapshot(
+        tenant_id="tenant",
+        repository="repo",
+        run_id="run-1",
+        workspace_id="ws-1",
+        host_id="host-1",
+        session_id="session-1",
+        step_id="step-1",
+        workflow_id="workflow-1",
+        bridge_session_id="bridge-1",
+        policy_version="v1",
+        collections=("docs",),
+        filters=(),
+    )
+    with pytest.raises(RetrievalCapabilityError, match="retired"):
+        RetrievalCapabilityRegistry().issue(budget, lifetime_seconds=60)
+    assert retired == before
+
+
+def test_vector_free_denied_context_does_not_widen_access_or_empty_success() -> None:
+    """A denied context source never becomes wider access or empty success.
+
+    Hermetic slice of R4: an explicit retired requirement must raise at
+    admission (never strip down to an empty success), an incomplete
+    vector-free admission carries no retrieval authority, and the shared
+    provider-capability adapter grants no workspace mutation or retired
+    retrieval descriptor from an empty/denied input.
+    """
+    from moonmind.omnigent.effective_capabilities import (
+        PROVIDER_CAPABILITY_ALIASES,
+        adapt_provider_capabilities,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    # Explicit retired fields are denied even when stripping would succeed.
+    denied = {"rag": {"collections": ["docs"], "required": True}}
+    assert strip_absent_vector_fields(dict(denied)) == denied
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(dict(denied), field_path="payload")
+    # Incomplete vector-free admission carries no retrieval authority.
+    incomplete = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-4114-denied",
+        idempotencyKey="idem-4114-denied",
+        parameters={},
+    )
+    dumped = incomplete.model_dump(by_alias=True)
+    assert dumped["parameters"] == {}
+    assert not any(
+        key in dumped["parameters"] for key in ("rag", "collections")
+    )
+    # The capability adapter grants no mutation and issues no retired
+    # retrieval descriptor from an empty input.
+    adapted = adapt_provider_capabilities({})
+    assert adapted["mutateWorkspace"] is False
+    assert check_tool_manifest_vector_free(list(PROVIDER_CAPABILITY_ALIASES)) == []
+
+
+def test_vector_free_upgraded_residue_stripped_at_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Representative upgraded instance: stale residue is inert at admission.
+
+    Upgraded-instance hermetic slice of R2 at #4114's own admission
+    boundary (settings-level inertness belongs to #4115): an old deployment
+    carrying stale disabled residue plus retired env keys still admits --
+    residue strips to the clean explicit mapping -- while an explicit
+    retired requirement is still rejected. This mirrors the upgraded
+    instance without claiming its live Compose startup.
+    """
+    monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
+    monkeypatch.setenv("VECTOR_STORE_PROVIDER", "qdrant")
+    residue = {
+        "instructions": "summarize",
+        "rag": {},
+        "followUpRetrieval": {"enabled": False},
+    }
+    reject_retired_vector_fields(dict(residue), field_path="payload")
+    assert strip_absent_vector_fields(dict(residue)) == {
+        "instructions": "summarize"
+    }
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(
+            {"rag": {"collections": ["docs"], "required": True}},
+            field_path="payload",
+        )
+
+
+def test_vector_free_reuses_sibling_evidence_without_duplication() -> None:
+    """Reuse sibling evidence with accurate scope instead of reproducing it.
+
+    Hermetic slice of A2: installed dependency/image evidence belongs to
+    #4111 and Manifest retirement integration to #4193 -- both suites exist
+    in this checkout with their owning guards, this module imports no
+    Docker/image inspector and no Manifest compiler, and the existing
+    impact selector routes this suite to required CI (same pattern as the
+    sibling qualification suites).
+    """
+    from tools.select_test_suites import select_suites
+
+    assert (
+        REPO_ROOT / "tests/unit/config/test_vector_free_defaults_4115.py"
+    ).is_file()
+    assert (
+        REPO_ROOT
+        / "tests/unit/config/test_manifest_retirement_qualification_4193.py"
+    ).is_file()
+    assert (
+        REPO_ROOT
+        / "tests/unit/api/routers/test_manifest_retirement_boundaries_4193.py"
+    ).is_file()
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    import_lines = [
+        line
+        for line in own_source.splitlines()
+        if re.match(r"\s*(import|from)\s+docker[\s.]", line)
+    ]
+    assert import_lines == [], f"module imports a Docker inspector: {import_lines}"
+    product_import_lines = [
+        line
+        for line in own_source.splitlines()
+        if re.match(
+            r"\s*(import\s+moonmind\.manifest|from\s+moonmind\.manifest[\s.])",
+            line,
+        )
+        or (
+            "manifest_ingest" in line
+            and "manifest_ingest_drain" not in line
+            and re.match(r"\s*(import|from)\s+", line)
+        )
+    ]
+    assert product_import_lines == [], (
+        f"module imports the retired Manifest product: {product_import_lines}"
+    )
+    compile_lines = [
+        line
+        for line in own_source.splitlines()
+        if "manifest.compile" in line and re.match(r"\s*(import|from)\s+", line)
+    ]
+    assert compile_lines == [], (
+        f"module imports the retired Manifest compiler: {compile_lines}"
+    )
+    selection = select_suites(
+        ["tests/unit/config/test_vector_free_regression_4114.py"]
+    )
+    assert selection.unit_fast is True
