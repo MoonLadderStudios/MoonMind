@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 
 from moonmind.config.settings import settings
+from moonmind.omnigent.git_identity import ensure_workspace_git_identity
 from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -1639,6 +1640,25 @@ class DockerCodexManagedSessionController:
             or "remote ref does not exist" in normalized
         )
 
+    @classmethod
+    def _apply_workspace_git_identity(cls, workspace_path: Path) -> None:
+        """Give the prepared checkout the deployment's commit identity.
+
+        Retries and relaunches reuse the checkout, so clone-time setup never
+        runs again, and the session's git config carries no identity of its
+        own. Without one, ``git commit`` fails and remediation Skills stop as
+        blocked. Omnigent workspaces resolve the same identity, so a
+        repository MoonMind prepared authors commits the same way whichever
+        runtime creates them.
+        """
+
+        owned = cls._can_normalize_container_path_ownership()
+        ensure_workspace_git_identity(
+            workspace_path,
+            runtime_uid=_MANAGED_SESSION_CONTAINER_UID if owned else None,
+            runtime_gid=_MANAGED_SESSION_CONTAINER_GID if owned else None,
+        )
+
     async def _ensure_workspace_paths(
         self,
         request: LaunchCodexManagedSessionRequest,
@@ -2551,6 +2571,8 @@ class DockerCodexManagedSessionController:
                     image_ref=request.image_ref,
                 )
             ):
+                # A session prepared by earlier code may predate the identity.
+                self._apply_workspace_git_identity(Path(request.workspace_path))
                 return CodexManagedSessionHandle(
                     runtimeFamily=request.runtime_family,
                     sessionState=existing_record.session_state(),
@@ -2561,6 +2583,7 @@ class DockerCodexManagedSessionController:
                     controlUrl=existing_record.control_url,
                 )
         await self._ensure_workspace_paths(request)
+        self._apply_workspace_git_identity(Path(request.workspace_path))
         session_environment = dict(request.environment)
         session_environment.pop("GITHUB_TOKEN", None)
         # MM-861: expose the generic, project-agnostic workspace env vars to the

@@ -16,8 +16,30 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
 from moonmind.omnigent.host_ports import HostLaunchSpec, host_correlation_identity
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.security.egress import omnigent_proxy_env
+
+
+def _image_owned_executables(
+    tool_attachments: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+) -> tuple[str, ...]:
+    """Return the executables the plan expects the selected image to own.
+
+    Paths are derived exactly as exact-host attestation derives them, so the
+    launch-time choice and the attestation judge the same files.
+    """
+
+    paths: set[str] = set()
+    for attachment in tool_attachments:
+        if classify_tool_attachment(attachment) != "image":
+            continue
+        root = str(attachment.get("targetPath") or "").rstrip("/")
+        for tool in attachment.get("tools") or []:
+            relative = str((tool or {}).get("path") or "").lstrip("/")
+            if root and relative:
+                paths.add(f"{root}/{relative}")
+    return tuple(sorted(paths))
 
 
 class DockerOmnigentHostLauncher:
@@ -74,10 +96,58 @@ class DockerOmnigentHostLauncher:
             "accessMode": "read-only",
         }
 
+    async def _image_present(self, image_ref: str) -> bool:
+        try:
+            code, _, _ = await self._backend.run(
+                ["docker", "image", "inspect", image_ref, "--format", "{{.Id}}"],
+                check=False,
+            )
+        except Exception:
+            return False
+        return code == 0
+
+    async def _image_owns_tools(
+        self,
+        image_ref: str,
+        executables: tuple[str, ...],
+        host_class: HostClass | None,
+    ) -> bool:
+        """Probe, offline and credential-free, that ``image_ref`` owns the tools."""
+
+        runtime = host_class.runtime if host_class is not None else {}
+        try:
+            code, _, _ = await self._backend.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--user",
+                    f"{runtime.get('uid', 1000)}:{runtime.get('gid', 1000)}",
+                    "--entrypoint",
+                    "/bin/sh",
+                    image_ref,
+                    "-ceu",
+                    'for path in "$@"; do test -x "$path"; done',
+                    "--",
+                    *executables,
+                ],
+                timeout_seconds=60.0,
+                check=False,
+            )
+        except Exception:
+            return False
+        return code == 0
+
     async def _resolve_launch_image(
-        self, requested_ref: str, host_class: HostClass | None = None
+        self,
+        requested_ref: str,
+        host_class: HostClass | None = None,
+        *,
+        required_executables: tuple[str, ...] = (),
     ) -> str:
-        """Return the image to launch: exact when present, else qualified local.
+        """Return the image to launch: exact when usable, else qualified local.
 
         Rebuilt host images change SHA/patch while keeping major.minor. When
         the plan-pinned digest is absent locally, reuse a qualified
@@ -86,19 +156,20 @@ class DockerOmnigentHostLauncher:
         7GB exact pull or failing. Qualification happens before any bearer or
         credential reaches the fallback image; attestation re-verifies the
         series with live probes before any session starts.
+
+        A plan compiled before an update may pin an image that is still cached
+        but predates the image-owned tools the plan requires. Launching it can
+        only fail exact-host attestation, so when the deployment records a
+        different qualified image that owns those tools, launch that instead.
+        The planned image stays authoritative whenever it satisfies the plan,
+        and nothing is probed unless such an alternative exists.
         """
 
         requested = str(requested_ref or "").strip()
         if not requested:
             return requested
-        try:
-            code, _, _ = await self._backend.run(
-                ["docker", "image", "inspect", requested, "--format", "{{.Id}}"],
-                check=False,
-            )
-        except Exception:
-            code = 1
-        if code == 0:
+        requested_present = await self._image_present(requested)
+        if requested_present and not required_executables:
             return requested
         if "@sha256:" not in requested:
             return requested
@@ -115,25 +186,32 @@ class DockerOmnigentHostLauncher:
             )
         except Exception:
             fallback = None
-        if fallback is not None:
-            try:
-                fallback_code, _, _ = await self._backend.run(
-                    ["docker", "image", "inspect", fallback, "--format", "{{.Id}}"],
-                    check=False,
-                )
-            except Exception:
-                fallback_code = 1
-            if fallback_code == 0:
-                import logging
+        if fallback is None:
+            return requested
+        if requested_present and await self._image_owns_tools(
+            requested, required_executables, host_class
+        ):
+            return requested
+        if not await self._image_present(fallback):
+            return requested
+        if requested_present and not await self._image_owns_tools(
+            fallback, required_executables, host_class
+        ):
+            return requested
+        import logging
 
-                logging.getLogger(__name__).info(
-                    "host launch drift: reusing compatible local image "
-                    "for same repository (requested=%s fallback=%s)",
-                    requested[:80],
-                    fallback[:80],
-                )
-                return fallback
-        return requested
+        logging.getLogger(__name__).info(
+            "host launch drift: reusing compatible local image for same "
+            "repository (requested=%s fallback=%s reason=%s)",
+            requested[:80],
+            fallback[:80],
+            (
+                "planned image lacks image-owned tools"
+                if requested_present
+                else "planned image absent"
+            ),
+        )
+        return fallback
 
     async def launch(
         self,
@@ -205,7 +283,9 @@ class DockerOmnigentHostLauncher:
         # same effective image. Exact digest when present; otherwise the
         # deployment's current same-repository digest when present locally.
         launch_image = await self._resolve_launch_image(
-            host_class.imageRef, host_class
+            host_class.imageRef,
+            host_class,
+            required_executables=_image_owned_executables(spec.toolAttachments),
         )
         await self._backend.run(
             [

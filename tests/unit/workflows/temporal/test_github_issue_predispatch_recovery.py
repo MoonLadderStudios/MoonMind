@@ -31,11 +31,15 @@ from api_service.db.models import OmnigentRuntimeBindingRecord, ProviderProfileS
 from moonmind.workflows.temporal import github_issue_claim_recovery as recovery
 from moonmind.workflows.temporal import story_output_tools as tools
 from moonmind.workflows.temporal.github_issue_attempts import (
+    RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS,
     compute_effective_retry,
     parse_attempt_comment,
     render_attempt_comment,
 )
-from moonmind.workflows.temporal.github_issue_claim_lease import renew_owned_claim
+from moonmind.workflows.temporal.github_issue_claim_lease import (
+    parse_time,
+    renew_owned_claim,
+)
 from moonmind.workflows.temporal.issue_claim_store import (
     IssueClaimStore,
     publish_claim_comment,
@@ -276,14 +280,15 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
         retry_remaining=1 if fault == "exhausted" else 3,
     )
     if fault == "exhausted":
-        assert (
-            compute_effective_retry(
-                [handoff],
-                max_attempts=handoff.retry_allowance,
-                now_epoch=datetime.now(UTC).timestamp(),
-            ).reason_code
-            == "budget_exhausted"
+        # Even before the sweep records its outcome, a lapsed attempt no
+        # longer spends the single-attempt allowance.
+        before = compute_effective_retry(
+            [handoff],
+            max_attempts=handoff.retry_allowance,
+            now_epoch=datetime.now(UTC).timestamp(),
         )
+        assert before.reason_code == "allowed"
+        assert before.remaining == handoff.retry_allowance
     await publish_claim_comment(
         store, receipt, service, render_attempt_comment(handoff)
     )
@@ -359,7 +364,12 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
         now_epoch=datetime.now(UTC).timestamp(),
     )
     assert retry.remaining == handoff.retry_allowance
-    assert retry.reason_code == "cooling_down"
+    # The back-off runs from when the attempt ended two days ago, so the
+    # sweep's late recording does not defer the issue all over again.
+    assert parse_time(recovered.cooldown_until) == expired + timedelta(
+        seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS
+    )
+    assert retry.reason_code == "allowed"
     # After portable back-off, the actual search path admits a successor.
     elapsed = replace(recovered, cooldown_until=expired.isoformat())
     await publish_claim_comment(

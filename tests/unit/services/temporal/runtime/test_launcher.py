@@ -1502,6 +1502,78 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     assert captured_env["GITHUB_TOKEN"] == "ghp-runtime"
 
 @pytest.mark.asyncio
+async def test_launch_gives_an_unconfigured_deployment_a_commit_identity(
+    tmp_path, monkeypatch
+):
+    """Commit-capable runs must not depend on optional identity settings.
+
+    Without ``MOONMIND_GIT_USER_*`` the runtime had no author, so ``git
+    commit`` failed and remediation Skills stopped as blocked. The launch
+    resolves the same identity Omnigent workspaces use.
+    """
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.git_identity import (
+        DEFAULT_GIT_USER_EMAIL,
+        DEFAULT_GIT_USER_NAME,
+    )
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    for key in (
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(settings.workflow, "git_user_name", None)
+    monkeypatch.setattr(settings.workflow, "git_user_email", None)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        pid = 778
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-identity-1",
+        request=_make_request(),
+        profile=_make_profile(command_template=["echo", "hello"]),
+    )
+    await process.wait()
+
+    assert captured_env["GIT_AUTHOR_NAME"] == DEFAULT_GIT_USER_NAME
+    assert captured_env["GIT_COMMITTER_NAME"] == DEFAULT_GIT_USER_NAME
+    assert captured_env["GIT_AUTHOR_EMAIL"] == DEFAULT_GIT_USER_EMAIL
+    assert captured_env["GIT_COMMITTER_EMAIL"] == DEFAULT_GIT_USER_EMAIL
+
+
+@pytest.mark.asyncio
 async def test_launch_seeds_github_git_auth_before_initial_clone(
     tmp_path, monkeypatch
 ):

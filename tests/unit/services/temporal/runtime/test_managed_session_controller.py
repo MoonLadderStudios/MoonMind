@@ -2093,6 +2093,127 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
 
 
 @pytest.mark.asyncio
+async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A retried pr-resolver session must be able to commit its fixes.
+
+    Every retry reuses the checkout, so no clone runs, and the session's own
+    git config carried no identity: ``git commit`` exited 128 and each
+    attempt stopped as ``publish_unavailable`` -> manual review
+    (mm:65251ca1). The deployment's commit identity -- configured, or the
+    documented default Omnigent workspaces already use -- is reapplied to
+    the checkout on every launch.
+    """
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.git_identity import (
+        DEFAULT_GIT_USER_EMAIL,
+        DEFAULT_GIT_USER_NAME,
+    )
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", None)
+    monkeypatch.setattr(settings.workflow, "git_user_email", None)
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(workspace_path)], check=True)
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/Tactics",
+            "startingBranch": "moonmind-job-47d25995",
+        },
+    )
+    chowned: list[tuple[Path, int, int]] = []
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        lambda path, uid, gid, *, follow_symlinks=True: chowned.append(
+            (Path(path), uid, gid)
+        ),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.git_identity.os.chown",
+        lambda path, uid, gid, *, follow_symlinks=True: chowned.append(
+            (Path(path), uid, gid)
+        ),
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[0] == "git":
+            return 0, "true\n", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    git_env.update({"HOME": str(tmp_path), "GIT_CONFIG_NOSYSTEM": "1"})
+    ident = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.useConfigOnly=true",
+            "-C",
+            str(workspace_path),
+            "var",
+            "GIT_AUTHOR_IDENT",
+        ],
+        env=git_env,
+        capture_output=True,
+        text=True,
+    )
+    assert ident.returncode == 0, ident.stderr
+    assert ident.stdout.startswith(f"{DEFAULT_GIT_USER_NAME} <{DEFAULT_GIT_USER_EMAIL}>")
+    # The config stays writable by the session's runtime user.
+    assert (workspace_path / ".git" / "config", 1000, 1000) in chowned
+
+
+@pytest.mark.asyncio
 async def test_controller_launch_fetches_branch_refspec_for_target_branch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4244,6 +4365,93 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
         ("docker", "inspect", "-f", "{{.Image}}", "ctr-1"),
         ("docker", "image", "inspect", "-f", "{{.Id}}", "img"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_controller_reused_live_session_checkout_gets_a_commit_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session that survived the upgrade is reused, not relaunched.
+
+    Its checkout was prepared by the previous code and has no identity, so
+    the idempotent fast return must still apply it; otherwise every launch
+    keeps reusing the container while ``git commit`` exits 128.
+    """
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.git_identity import DEFAULT_GIT_USER_NAME
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", None)
+    monkeypatch.setattr(settings.workflow, "git_user_email", None)
+    monkeypatch.setattr(
+        "moonmind.omnigent.git_identity.os.chown",
+        lambda *_args, **_kwargs: None,
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "task-1" / "repo"
+    workspace_path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(workspace_path)], check=True)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/tmp/codex-home",
+        imageRef="img",
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath=request.workspace_path,
+            sessionWorkspacePath=request.session_workspace_path,
+            artifactSpoolPath=request.artifact_spool_path,
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        if command == ("docker", "inspect", "-f", "{{.Id}}", "ctr-1"):
+            return 0, "ctr-1\n", ""
+        if command == ("docker", "inspect", "-f", "{{.Image}}", "ctr-1"):
+            return 0, "sha256:current\n", ""
+        if command == ("docker", "image", "inspect", "-f", "{{.Id}}", "img"):
+            return 0, "sha256:current\n", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    handle = await controller.launch_session(request)
+
+    assert handle.session_state.container_id == "ctr-1"
+    configured = subprocess.run(
+        ["git", "-C", str(workspace_path), "config", "--local", "--get", "user.name"],
+        capture_output=True,
+        text=True,
+    )
+    assert configured.stdout.strip() == DEFAULT_GIT_USER_NAME
 
 
 @pytest.mark.asyncio
