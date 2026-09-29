@@ -36,13 +36,6 @@ DEPLOYMENT_CONTROL_SERVICE = "temporal-worker-deployment-control"
 #: replacement, so only the standalone deployment controller, which owns a
 #: direct Docker socket, reconciles it.
 DEPLOYMENT_TRANSPORT_SERVICE = "docker-proxy"
-#: Excluded from every release's main pass: the updater's own transport plus
-#: the stateful substrate (postgres, the egress gateway) the staged passes own.
-PROTECTED_SUBSTRATE_SERVICES = (
-    DEPLOYMENT_TRANSPORT_SERVICE,
-    "sandbox-egress-proxy",
-    "postgres",
-)
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _DOCKER_DESKTOP_HOST_MOUNT_ROOT = PurePosixPath("/run/desktop/mnt/host")

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from moonmind.workflows.skills.deployment_execution import (
     DEPLOYMENT_CONTROL_SERVICE as CONTROL_SERVICE,
-    PROTECTED_SUBSTRATE_SERVICES,
+    DEPLOYMENT_TRANSPORT_SERVICE,
     ToolFailure,
     ToolResult,
     _atomic_write_bytes,
@@ -28,6 +28,14 @@ from moonmind.workflows.skills.deployment_execution import (
     _resolved_digest_from_target_image,
 )
 from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECONDS
+
+#: Excluded from every release's main pass: the updater's own transport plus
+#: the stateful substrate (postgres, the egress gateway) the staged passes own.
+PROTECTED_SUBSTRATE_SERVICES = (
+    DEPLOYMENT_TRANSPORT_SERVICE,
+    "sandbox-egress-proxy",
+    "postgres",
+)
 
 
 DIAGNOSIS_BOUND = 1000
