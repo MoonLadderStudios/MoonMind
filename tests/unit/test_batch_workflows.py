@@ -1413,3 +1413,117 @@ def test_batch_skill_recipes_resolve_from_active_snapshot():
             f"${{MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}}/{skill_id}/bin/{helper}"
             in skill_doc
         )
+
+
+def _run_issue_fanout_over_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    describe: Any,
+) -> tuple[int, dict[str, Any], list[str]]:
+    """Drive ``main`` through the real POST/GET transport with a fake urlopen."""
+
+    module = _load_module()
+    methods: list[str] = []
+
+    class _Response:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def _urlopen(request: Any, **_kwargs: Any) -> _Response:
+        methods.append(request.get_method())
+        if request.get_method() == "POST":
+            return _Response({"workflowId": "mm:child-0"})
+        return _Response(describe())
+
+    monkeypatch.setattr(
+        module["_submit_issue_jobs_gated"].__globals__["urllib"].request,
+        "urlopen",
+        _urlopen,
+    )
+    targets_path = tmp_path / "targets.json"
+    targets_path.write_text(
+        json.dumps(
+            [
+                {
+                    "provider": "jira",
+                    "ref": "THOR-1",
+                    "jiraIssue": {"key": "THOR-1"},
+                    "repository": "acme/widgets",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    artifacts = tmp_path / "artifacts"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-read-back")
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    return_code = module["main"](
+        [
+            "--targets",
+            str(targets_path),
+            "--run-ref",
+            "skill:jira-verify",
+            "--publish-mode",
+            "none",
+            "--capacity-poll-interval",
+            "0",
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    evidence = json.loads(
+        (artifacts / "batch-workflows-result.json").read_text(encoding="utf-8")
+    )
+    return return_code, evidence, methods
+
+
+def test_issue_fanout_keeps_accepted_receipt_when_read_back_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    """A temporary read-back outage does not turn an accepted child into a failure."""
+
+    def describe() -> dict[str, Any]:
+        raise urllib.error.URLError("temporary read-back outage")
+
+    return_code, evidence, methods = _run_issue_fanout_over_transport(
+        tmp_path, monkeypatch, describe=describe
+    )
+
+    assert methods.count("POST") == 1
+    assert evidence["errors"] == []
+    assert evidence["created"] == 1
+    assert [(item["workflowId"], item["status"]) for item in evidence["queued"]] == [
+        ("mm:child-0", "unknown")
+    ]
+    assert evidence["status"] == "queued"
+    assert return_code == 0
+
+
+def test_issue_fanout_rerun_does_not_report_existing_failed_child_as_queued(
+    tmp_path, monkeypatch
+) -> None:
+    """A rerun resolving to an already-failed child reports that observed failure."""
+
+    return_code, evidence, _methods = _run_issue_fanout_over_transport(
+        tmp_path,
+        monkeypatch,
+        describe=lambda: {"workflowId": "mm:child-0", "status": "failed"},
+    )
+
+    assert [(item["workflowId"], item["status"]) for item in evidence["queued"]] == [
+        ("mm:child-0", "failed")
+    ]
+    assert evidence["status"] == "failed"
+    assert evidence["failure"]["code"] == "BATCH_FANOUT_FAILED"
+    assert return_code == 1

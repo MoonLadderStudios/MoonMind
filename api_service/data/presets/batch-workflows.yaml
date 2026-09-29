@@ -236,13 +236,13 @@ steps:
     shell echo, redirection, or interpolation of the value into a shell
     command); when empty, write no file, and the rendered command omits
     --constraints-file so a file left by an earlier run is never read.
-    Invoke the resolved Skill entrypoint exactly once with data-safe
-    arguments:
+    Invoke the resolved Skill entrypoint exactly once, quoted exactly as
+    rendered, with data-safe arguments:
     python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
     --targets artifacts/batch-workflows-targets.json \
-    --run-ref "{{ inputs.run_ref }}" \
-    --publish-mode "{{ inputs.publish_mode }}" \
-    --max-workflows "{{ inputs.max_workflows }}" \
+    --run-ref {{ inputs.run_ref | shell_quote }} \
+    --publish-mode {{ inputs.publish_mode | shell_quote }} \{% if inputs.max_workflows %}
+    --max-workflows {{ inputs.max_workflows | shell_quote }} \{% endif %}
     {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
     {% if inputs.update_status %}--update-status{% else %}--no-update-status{% endif %}{% if inputs.constraints %} \
     --constraints-file artifacts/batch-workflows-constraints.txt{% endif %}

@@ -337,22 +337,26 @@ esac
 
 [[ "$RESULTS_SUBDIR" != /* ]] || fail "--results-subdir must be relative to the repo"
 
+REPO_DIR="$(realpath "$REPO_DIR")"
+[[ -d "$REPO_DIR" ]] || fail "Repo directory not found: $REPO_DIR"
+
+if [[ -n "$GATE_FILE_INPUT" ]]; then
+  GATE_FILE="$(resolve_and_validate_gate_file "$GATE_FILE_INPUT")"
+else
+  GATE_FILE="$REPO_DIR/$RESULTS_SUBDIR/latest/gate.json"
+fi
+# Replace any earlier gate before further checks or work so a failed or
+# interrupted run never leaves a prior PASS readable as its result.
+write_gate_result
+
+[[ -f "$REPO_DIR/$UPROJECT_PATH" ]] || fail "Uproject not found: $REPO_DIR/$UPROJECT_PATH"
+
 if ! command -v docker >/dev/null 2>&1; then
   fail "docker command not found on PATH. Inside a MoonMind managed session
 Unreal build/test runs as a container job through 'moonmind container' and this
 script dispatches to it automatically; a missing Docker CLI here means the
 managed-session markers (MOONMIND_AGENT_RUN_ID, MOONMIND_RUNTIME_ID,
 MOONMIND_URL) were absent, not that the Unreal toolchain is unavailable."
-fi
-
-REPO_DIR="$(realpath "$REPO_DIR")"
-[[ -d "$REPO_DIR" ]] || fail "Repo directory not found: $REPO_DIR"
-[[ -f "$REPO_DIR/$UPROJECT_PATH" ]] || fail "Uproject not found: $REPO_DIR/$UPROJECT_PATH"
-
-if [[ -n "$GATE_FILE_INPUT" ]]; then
-  GATE_FILE="$(resolve_and_validate_gate_file "$GATE_FILE_INPUT")"
-else
-  GATE_FILE="$REPO_DIR/$RESULTS_SUBDIR/latest/gate.json"
 fi
 
 if [[ -n "$WORKSPACE_VOLUME" ]]; then
@@ -526,6 +530,20 @@ if [[ "$PHASE" == "all" || "$PHASE" == "test" ]]; then
     GATE_TEST_STATUS="fail"
     GATE_REASON="Test phase failed"
     echo "[FAIL] Test run failed. Log: $test_log"
+    exit 1
+  fi
+  # Exit 0 alone is not test success: act on positive log evidence of a
+  # failed result or an empty collection.
+  if grep -qiE 'Test Completed\. Result=\{Fail' "$test_log"; then
+    GATE_TEST_STATUS="fail"
+    GATE_REASON="Automation test reported a failed result"
+    echo "[FAIL] Automation test failed. Log: $test_log"
+    exit 1
+  fi
+  if grep -qiE 'no automation tests matched|found 0 automation tests' "$test_log"; then
+    GATE_TEST_STATUS="no_tests"
+    GATE_REASON="No automation tests matched the test filter"
+    echo "[FAIL] No automation tests ran. Log: $test_log"
     exit 1
   fi
   GATE_TEST_STATUS="pass"
