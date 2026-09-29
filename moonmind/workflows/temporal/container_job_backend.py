@@ -95,6 +95,7 @@ from moonmind.workloads.gpu import (
 )
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    DOCKER_FINISHED_STATES,
     attest_docker_workload_egress,
     bounded_denial_diagnostics,
     denied_connection_count,
@@ -868,12 +869,6 @@ class DockerContainerJobBackend:
     _SLOT_HOLDING_STATES = frozenset(
         {"restarting", "running", "paused", "removing"}
     )
-    #: The daemon reports ``exited`` or ``dead`` only for a container whose
-    #: process has already run. A start retry that finds its own container
-    #: finished (the start was applied, its acknowledgment was lost, and the
-    #: workload ended) reconciles that outcome instead of executing it again.
-    _FINISHED_STATES = frozenset({"exited", "dead"})
-
     async def _container_states(self) -> dict[str, str]:
         """Return {container name: state} for every owned container job."""
 
@@ -2378,7 +2373,8 @@ class DockerContainerJobBackend:
             states = await self._container_states()
             if request.resolved_resources is None:
                 request.resolved_resources = request.request.spec.resources.model_copy()
-            finished = states.get(container_name) in self._FINISHED_STATES
+            finished_before_start = states.get(container_name) in DOCKER_FINISHED_STATES
+            finished = finished_before_start
             # Reconcile an uncertain start without repeating a completed command.
             # Its retained network/image authority can still be published below.
             if not finished:
@@ -2434,7 +2430,9 @@ class DockerContainerJobBackend:
                     attestation=attestation,
                     attachment_identity=container_name,
                     workload_evidence=workload_evidence,
-                    reconciliation_result="not_required",
+                    reconciliation_result=(
+                        "recovered" if finished_before_start else "not_required"
+                    ),
                 )
                 if not diagnostics_ref:
                     raise RuntimeError(
@@ -2445,11 +2443,15 @@ class DockerContainerJobBackend:
                 # its logs/results for the workflow's normal evidence publication
                 # and cleanup. A reporting failure must not delete the only copy.
                 try:
-                    await self._runner(("stop", "--time", "5", container_name))
-                except Exception:
-                    logger.warning(
-                        "Failed to stop unattested container job", exc_info=True
-                    )
+                    await self.stop_container(request)
+                except Exception as stop_exc:
+                    # The existing Activity retry owns another shutdown attempt;
+                    # an unconfirmed stop is not a terminal launch rejection.
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.INFRASTRUCTURE,
+                        "restricted-egress launch failed and owned container "
+                        "shutdown could not be confirmed",
+                    ) from stop_exc
                 raise ContainerJobBackendError(
                     ContainerJobFailureClass.LAUNCH,
                     "restricted-egress running launch evidence could not be persisted",
@@ -2606,17 +2608,37 @@ class DockerContainerJobBackend:
 
     async def stop_container(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
-        ownership = await self._owned_ownership_label(ref)
-        if ownership is None:
-            return ContainerJobActivityResult(containerRef=ref, running=False)
-        if ownership != request.ownership_token:
-            raise RuntimeError("container job ownership mismatch; refusing stop")
-        await self._checked(
-            "stop", "--time", "10", ref
-        )
-        return ContainerJobActivityResult(
-            containerRef=ref, running=False
-        )
+        stopped = ContainerJobActivityResult(containerRef=ref, running=False)
+        last_error = None
+        for command in (("stop", "--time", "10", ref), ("kill", ref)):
+            # Recheck ownership before escalation: a failed command may race
+            # removal and replacement. Never delete the container's evidence.
+            ownership = await self._owned_ownership_label(ref)
+            if ownership is None:
+                return stopped
+            if ownership != request.ownership_token:
+                raise RuntimeError("container job ownership mismatch; refusing stop")
+            try:
+                await self._checked(*command)
+            except Exception as exc:
+                last_error = exc
+                try:
+                    running = await self._checked(
+                        "inspect", "--format", "{{.State.Running}}", ref
+                    )
+                except Exception:
+                    logger.warning(
+                        "Container-job stop outcome could not be observed",
+                        exc_info=True,
+                    )
+                else:
+                    if running == "false":
+                        return stopped
+            else:
+                return stopped
+        raise RuntimeError(
+            "owned container shutdown could not be confirmed"
+        ) from last_error
 
     async def remove_container(self, request: ContainerJobActivityRequest):
         # Re-read immutable ownership immediately before deletion. A prior

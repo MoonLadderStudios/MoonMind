@@ -23,6 +23,9 @@ from moonmind.security.docker_networks import resolve_control_plane_network
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 
+# Completed daemon states share the same retained launch-evidence contract.
+DOCKER_FINISHED_STATES = frozenset({"exited", "dead"})
+
 ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v2"
 _LEGACY_ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
 _LEGACY_CONFIG_DIGEST = (
@@ -780,13 +783,15 @@ async def attest_docker_workload_egress(
                 state["FinishedAt"].replace("Z", "+00:00")
             )
             finished = (
-                state.get("Status") == "exited"
+                state.get("Status") in DOCKER_FINISHED_STATES
                 and state.get("Running") is False
                 and observed.get("networkMode") == profile.network_ref
                 and datetime(1970, 1, 1, tzinfo=UTC) < launched_at <= ended_at
             )
         except (KeyError, TypeError, ValueError, AttributeError):
-            pass
+            # Missing or malformed timing cannot prove prior execution. Keep
+            # the ordinary incomplete-attachment rejection below authoritative.
+            finished = False
     if not network_id or (not finished and (not endpoint_id or not client_address)):
         raise RuntimeError(
             "restricted-egress network attachment identity is incomplete"
