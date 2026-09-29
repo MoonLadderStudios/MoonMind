@@ -37,9 +37,10 @@ def child_idempotency_key(
     target_slug: str,
     inputs_digest: str,
 ) -> str:
-    # ``inputs_digest`` binds the key to the child-affecting request, so an
-    # unchanged retry reconciles to the accepted child while a same-scope rerun
-    # with changed constraints, publish mode, or runtime is new work.
+    # ``inputs_digest`` binds the key to the child's intent (not the observed
+    # issue snapshot), so a retry reconciles to the accepted child while a
+    # same-scope rerun with changed constraints, publish mode, or runtime is new
+    # work.
     components = {
         "scope": batch_scope.strip(),
         "provider": provider,

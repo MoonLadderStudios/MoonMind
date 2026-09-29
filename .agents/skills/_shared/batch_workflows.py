@@ -587,6 +587,22 @@ def _canonical_digest(value: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# Provider-observed issue snapshots are re-read on every invocation and change
+# while the child runs (for example its own in-progress label). Identity stays
+# bound through ``github_issue_ref``/``jira_issue_key`` and the key's ``ref``.
+_ISSUE_SNAPSHOT_INPUTS = ("github_issue", "jira_issue")
+
+
+def _child_intent_digest(payload: dict[str, Any]) -> str:
+    task = dict(payload.get("task") or {})
+    task["inputs"] = {
+        name: value
+        for name, value in (task.get("inputs") or {}).items()
+        if name not in _ISSUE_SNAPSHOT_INPUTS
+    }
+    return _canonical_digest({**payload, "task": task})
+
+
 def build_child_request(
     target: dict[str, Any],
     *,
@@ -722,7 +738,7 @@ def build_child_request(
         ref=ref,
         target_kind=config.target_kind,
         target_slug=config.target_slug,
-        inputs_digest=_canonical_digest(payload_dict),
+        inputs_digest=_child_intent_digest(payload_dict),
     )
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
