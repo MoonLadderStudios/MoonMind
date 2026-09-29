@@ -173,6 +173,12 @@ permission to operate on an arbitrary project. The deployment-owned Compose file
 explicit repair operations only, never automatic escalation. Recreate only
 changed services by default.
 
+The updater reaches Docker through `docker-proxy`, so the main pass never
+recreates it, `postgres`, or `sandbox-egress-proxy`, whichever caller
+submitted the update. The egress gateway is aligned before the workers that
+attest it, and other excluded substrate is reconciled in a staged pass after
+the main stack verifies.
+
 Preserve dependency order and required `init-db`/schema migration gating before new dependent services start. Bring necessary infrastructure up in the existing Compose lifecycle. A failed migration preserves the original error and data rather than starting an incompatible application or attempting a destructive downgrade.
 
 ### 10.7 Verify desired state

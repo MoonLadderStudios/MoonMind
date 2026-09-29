@@ -29,6 +29,14 @@ from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECOND
 
 CONTROL_SERVICE = "temporal-worker-deployment-control"
 
+#: Services the updater never recreates in its main pass. It reaches Docker
+#: through docker-proxy, so recreating that service stops the proxy under the
+#: running update and strands the stack without a Docker transport; postgres
+#: and the egress gateway are stateful substrate the staged passes own. The
+#: release job protects them itself so every caller -- the host entrypoint and
+#: a Settings/workflow submission alike -- gets the same update.
+PROTECTED_SUBSTRATE_SERVICES = ("docker-proxy", "sandbox-egress-proxy", "postgres")
+
 DIAGNOSIS_BOUND = 1000
 _DIAGNOSIS_ELISION = "\n...[elided]...\n"
 
@@ -929,6 +937,7 @@ async def _run_job_body(request_file):
         raise ValueError(
             "A coherent versioned release must include the deployment worker; remove its obsolete self-preservation exclusion"
         )
+    excluded = tuple(dict.fromkeys((*excluded, *PROTECTED_SUBSTRATE_SERVICES)))
     runner = replace(
         executor.runner,
         excluded_services=excluded,
