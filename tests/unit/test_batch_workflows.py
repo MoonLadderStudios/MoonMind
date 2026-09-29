@@ -1620,3 +1620,99 @@ def test_issue_fanout_changed_inputs_in_same_scope_do_not_reuse_earlier_child(
     assert posted[-1]["payload"]["task"]["inputs"]["constraints"] == (
         "Only touch the renderer."
     )
+
+
+@pytest.mark.parametrize(
+    ("run_ref", "before", "after"),
+    [
+        (
+            "preset:github-issue-orchestrate",
+            {
+                "provider": "github",
+                "ref": "acme/widgets#7",
+                "repository": "acme/widgets",
+                "githubIssue": {
+                    "repository": "acme/widgets",
+                    "number": 7,
+                    "title": "Fix the parser",
+                    "body": "Original body.",
+                    "state": "open",
+                    "labels": [],
+                },
+            },
+            {
+                "provider": "github",
+                "ref": "acme/widgets#7",
+                "repository": "acme/widgets",
+                "githubIssue": {
+                    "repository": "acme/widgets",
+                    "number": 7,
+                    "title": "Fix the parser (edited)",
+                    "body": "Edited body.",
+                    "state": "open",
+                    "labels": ["status: in-progress"],
+                },
+            },
+        ),
+        (
+            "preset:jira-orchestrate",
+            {
+                "provider": "jira",
+                "ref": "MM-3",
+                "repository": "acme/widgets",
+                "jiraIssue": {"key": "MM-3", "summary": "Fix", "status": "To Do"},
+            },
+            {
+                "provider": "jira",
+                "ref": "MM-3",
+                "repository": "acme/widgets",
+                "jiraIssue": {
+                    "key": "MM-3",
+                    "summary": "Fix (edited)",
+                    "status": "In Progress",
+                },
+            },
+        ),
+    ],
+)
+def test_issue_fanout_rerun_after_issue_snapshot_changes_reuses_existing_child(
+    tmp_path, monkeypatch, run_ref, before, after
+) -> None:
+    """A re-invoked fan-out in the same scope must not duplicate an issue's child.
+
+    The provider re-resolves the issue on every invocation, and the child itself
+    changes labels or status. That observed snapshot is not child intent, so the
+    rerun reconciles to the accepted child through the same idempotency key.
+    """
+
+    accepted: dict[str, str] = {}
+    posted: list[dict[str, Any]] = []
+
+    def post(body: dict[str, Any]) -> dict[str, Any]:
+        posted.append(body)
+        key = body["payload"]["idempotencyKey"]
+        workflow_id = accepted.setdefault(key, f"mm:child-{len(accepted)}")
+        return {"workflowId": workflow_id}
+
+    def run(target: dict[str, Any]) -> dict[str, Any]:
+        _code, evidence, _methods = _run_issue_fanout_over_transport(
+            tmp_path,
+            monkeypatch,
+            describe=lambda: {"status": "queued"},
+            targets=[target],
+            extra_args=("--run-ref", run_ref),
+            post=post,
+        )
+        return evidence
+
+    first = run(before)
+    rerun = run(after)
+
+    assert [item["workflowId"] for item in first["queued"]] == ["mm:child-0"]
+    assert [item["workflowId"] for item in rerun["queued"]] == ["mm:child-0"]
+    assert len(accepted) == 1
+    assert len(posted) == 2
+    # The child still receives the freshly observed snapshot as its input.
+    inputs = posted[-1]["payload"]["task"]["inputs"]
+    snapshot = inputs.get("github_issue") or inputs.get("jira_issue")
+    assert snapshot == (after.get("githubIssue") or after.get("jiraIssue"))
