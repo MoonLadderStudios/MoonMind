@@ -15300,7 +15300,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         if self._plan_blocked_message:
             self._summary = self._plan_blocked_message
-        else:
+        elif self._publish_context.get("objectiveOutcome") != "idle":
+            # An idle stop already recorded why nothing remained to do.
             self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 

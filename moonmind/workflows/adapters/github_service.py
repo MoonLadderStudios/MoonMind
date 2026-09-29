@@ -2725,6 +2725,7 @@ class GitHubService:
         repo: str,
         label: str,
         color: str = "0e8a16",
+        description: str = "",
         github_token: str | None = None,
     ) -> dict[str, Any]:
         """Create one missing canonical label with authorized scope only."""
@@ -2744,7 +2745,11 @@ class GitHubService:
                 response = await client.post(
                     f"https://api.github.com/repos/{repo}/labels",
                     headers=headers,
-                    json={"name": label, "color": color},
+                    json={
+                        "name": label,
+                        "color": color,
+                        **({"description": description} if description else {}),
+                    },
                 )
                 response.raise_for_status()
                 return {"ready": True, "reasonCode": "created", "summary": f"Created label {label} in {repo}."}
