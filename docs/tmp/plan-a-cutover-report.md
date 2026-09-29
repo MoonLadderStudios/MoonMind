@@ -106,19 +106,19 @@ Red on `96e615fe4`, then green after the smallest owner fixes:
   the exited container again, a duplicate execution. Fix (in
   `container_job_backend.py`): under the capacity lock, a start that finds its
   own container finished (`exited` or `dead`) reports that container for
-  observation. It is never restarted and needs no slot. A restricted-egress
-  (`bridge`) job cannot be accepted that way: its running launch evidence was
-  never recorded and Docker has released the endpoint, so the retry fails
-  closed with the non-retryable `launch` class and leaves the container for
-  evidence publication and cleanup.
+  observation. It is never restarted and needs no slot. Restricted-egress
+  (`bridge`) jobs recover from retained terminal authority after endpoint
+  retirement, as defined in [Restricted Egress](../Security/RestrictedEgress.md).
+  Missing or invalid network authority still fails closed after confirmed
+  shutdown, leaving the container for evidence publication and cleanup.
 - **Lost start ack through the production workflow.** `start_container` ran
   with one attempt. A lost ack or a worker lost during start therefore failed
   the job and force-removed the live workload instead of reconciling it. Fix
   (in `activity_catalog.py`): start is retried, because each attempt
   reconciles the daemon's record of its own container first. A start that the
-  backend already failed closed (restricted-egress evidence unpublishable, so
-  the container was removed) raises the non-retryable `launch` class. A retry
-  therefore cannot replace that cause with a missing-container error.
+  backend already failed closed after confirming shutdown raises the
+  non-retryable `launch` class. Unconfirmed shutdown remains retryable, and
+  the original launch error and container evidence are retained.
 - **Real-Docker HostConfig through the production create route.**
   `test_real_docker_inspect_shows_stock_fixed_limits` now sends the stock
   `python_test_submission` spec through production `create_container` against
@@ -129,7 +129,7 @@ Red on `96e615fe4`, then green after the smallest owner fixes:
 New cases:
 - `test_same_job_retry_after_own_container_exited_does_not_rerun` (`exited`
   and `dead`)
-- `test_restricted_egress_retry_after_exit_fails_closed`
+- `test_restricted_egress_retry_without_network_evidence_fails_closed`
 - `test_real_docker_same_job_retry_after_exit_does_not_rerun` (Docker-gated,
   checks that `StartedAt` is unchanged)
 - `test_lost_start_ack_reconciles_through_production_workflow`
