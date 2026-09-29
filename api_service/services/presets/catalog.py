@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import re
+import shlex
 import socket
 import threading
 import time
@@ -1941,6 +1942,10 @@ class PresetCatalogService:
         self._template_env = SandboxedEnvironment(
             autoescape=False,
             undefined=StrictUndefined,
+        )
+        # Rendered shell commands pass operator values as one literal word.
+        self._template_env.filters["shell_quote"] = lambda value: shlex.quote(
+            "" if value is None else str(value)
         )
 
     async def check_saved_capabilities(

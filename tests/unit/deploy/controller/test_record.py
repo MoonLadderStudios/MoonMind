@@ -123,6 +123,34 @@ def test_begin_reattaches_to_completed_instead_of_forking_duplicate(
     assert again["installed"]["image"] == "ghcr.io/org/app@sha256:abc"
 
 
+def test_begin_does_not_reuse_success_superseded_by_a_later_install(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    first = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    store.confirm_installed(first["operationId"], image="ghcr.io/org/app@sha256:abc")
+    second = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:def",
+        source_revision="abc124",
+    )
+    store.confirm_installed(second["operationId"], image="ghcr.io/org/app@sha256:def")
+    # The first success no longer describes the installation, so requesting
+    # its image again is new work rather than an already-satisfied no-op.
+    again = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    assert again["operationId"] not in {first["operationId"], second["operationId"]}
+    assert again["status"] == "pending"
+
+
 def test_begin_still_forks_a_new_operation_for_a_new_image(
     controller_path, tmp_path
 ):

@@ -74,7 +74,7 @@ Core rules:
 1. The default view is Workflow-oriented and shows ordinary user-created Workflow Executions.
 2. The normal Workflows List page is not a workflow-kind browser. It does not need a `Kind` column.
 3. System workflows are hidden from ordinary Workflows List users. Provider-profile managers, internal monitors, maintenance workflows, and other platform-owned executions belong in an admin diagnostics surface instead of the main Workflow table.
-4. Manifest-ingest workflows belong on the Manifests page or a future user-workflow diagnostics view. They should not force a `Kind`, `Workflow Type`, or `Entry` column into the default Workflows list.
+4. Retired Manifest-ingest rows never appear in the normal Workflows List table and the Manifests page is removed (MoonLadderStudios/MoonMind#4192); retired `MoonMind.ManifestIngest` links show a recoverable retired-product message. They should not force a `Kind`, `Workflow Type`, or `Entry` column into the default Workflows list.
 5. Sorting and filtering are table behaviors and should be expressed on the relevant Workflow columns instead of as detached dropdowns above the table.
 6. The page should make the active query obvious through column filter indicators, active filter chips, and URL state where that state is server-authoritative.
 7. Pagination, sorting, and filtering must be deterministic across refreshes once server-authoritative sorting is enabled.
@@ -292,7 +292,7 @@ Rules:
 2. The normal table does not include `Workflow Type` or `Entry` columns by default.
 3. The default query is the Workflow-run list. In current API terms, this is equivalent to `WorkflowType = MoonMind.UserWorkflow` and `mm_entry = user_workflow`. Historical `entry=run` links are compatibility inputs, not the canonical query state.
 4. System workflow rows must not appear in the normal Workflow table, even through column filters or old URL parameters.
-5. Manifest ingest rows should stay on the Manifests page unless a separate user-workflow diagnostics view is explicitly designed.
+5. Retired Manifest-ingest rows stay out of the normal Workflow table; the Manifests page is removed (MoonLadderStudios/MoonMind#4192), so retired links show a recoverable retired-product message unless a separate user-workflow diagnostics view is explicitly designed.
 6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.
 7. The mobile filter sheet must expose the same filterable Workflow columns as desktop, including Progress after Progress filtering is implemented.
 8. The table must not expose raw Temporal Visibility query syntax to ordinary users.

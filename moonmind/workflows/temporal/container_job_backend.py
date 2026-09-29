@@ -95,6 +95,7 @@ from moonmind.workloads.gpu import (
 )
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    DOCKER_FINISHED_STATES,
     attest_docker_workload_egress,
     bounded_denial_diagnostics,
     denied_connection_count,
@@ -868,19 +869,8 @@ class DockerContainerJobBackend:
     _SLOT_HOLDING_STATES = frozenset(
         {"restarting", "running", "paused", "removing"}
     )
-
-    async def _slot_holders(self) -> dict[str, str]:
-        """Return {container name: state} for every owned container-job slot.
-
-        The daemon is the slot ledger: a container the daemon reports in a
-        slot-holding state occupies a slot however the worker that launched it
-        fared, so a worker lost after a successful start can neither duplicate
-        execution nor free a slot whose outcome is uncertain. Admission itself
-        runs at ``start`` under the cross-worker capacity lock, so a merely
-        created container has not yet claimed a slot and is not counted here.
-        An unreadable daemon fails closed rather than reading as an empty
-        backend.
-        """
+    async def _container_states(self) -> dict[str, str]:
+        """Return {container name: state} for every owned container job."""
 
         code, stdout, stderr = await self._runner(
             (
@@ -908,14 +898,36 @@ class DockerContainerJobBackend:
                 ContainerJobFailureClass.INFRASTRUCTURE,
                 "container-job slot inventory is unavailable",
             )
-        holders: dict[str, str] = {}
+        states: dict[str, str] = {}
         for line in stdout.decode(errors="replace").splitlines():
             name, _, state = line.partition("\t")
             name = name.strip().strip("/")
-            state = state.strip().lower()
-            if name and state in self._SLOT_HOLDING_STATES:
-                holders[name] = state
-        return holders
+            if name:
+                states[name] = state.strip().lower()
+        return states
+
+    async def _slot_holders(self) -> dict[str, str]:
+        """Return {container name: state} for every owned container-job slot.
+
+        The daemon is the slot ledger: a container the daemon reports in a
+        slot-holding state occupies a slot however the worker that launched it
+        fared, so a worker lost after a successful start can neither duplicate
+        execution nor free a slot whose outcome is uncertain. Admission itself
+        runs at ``start`` under the cross-worker capacity lock, so a merely
+        created container has not yet claimed a slot and is not counted here.
+        An unreadable daemon fails closed rather than reading as an empty
+        backend.
+        """
+
+        return self._holding_slots(await self._container_states())
+
+    @classmethod
+    def _holding_slots(cls, states: dict[str, str]) -> dict[str, str]:
+        return {
+            name: state
+            for name, state in states.items()
+            if state in cls._SLOT_HOLDING_STATES
+        }
 
     def _slot_wait_message(self) -> str:
         limit = int(self._settings.max_active_jobs)
@@ -925,7 +937,11 @@ class DockerContainerJobBackend:
         )
 
     async def _admit_job_slot(
-        self, request: ContainerJobActivityRequest, *, container_name: str
+        self,
+        request: ContainerJobActivityRequest,
+        *,
+        container_name: str,
+        states: dict[str, str],
     ) -> None:
         """Admit one job into its container-job slot or wait for one.
 
@@ -943,7 +959,7 @@ class DockerContainerJobBackend:
         host slot can still launch the test job it is waiting for.
         """
 
-        holders = await self._slot_holders()
+        holders = self._holding_slots(states)
         own_state = holders.get(container_name)
         if own_state in self._SLOT_HOLDING_STATES:
             # A retry after an uncertain start: the container provably holds
@@ -2354,25 +2370,33 @@ class DockerContainerJobBackend:
         started_at = datetime.now(timezone.utc)
         capacity_lease = await self._acquire_capacity_lock()
         try:
-            # Fixed count-only admission under the cross-worker lock. Waiting
-            # work returns to the durable capacity-wait state; the workflow
-            # retries under the existing overall job timeout and cancellation.
-            try:
-                await self._admit_job_slot(request, container_name=container_name)
-            except _CapacityWait as exc:
-                return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
+            states = await self._container_states()
             if request.resolved_resources is None:
                 request.resolved_resources = request.request.spec.resources.model_copy()
-            code, _, start_stderr = await self._runner(("start", container_name))
-            if code:
-                # The daemon resolves a device request when the container
-                # starts, so this is where an unavailable GPU runtime or device
-                # is refused. Classify it before the ordinary launch failure.
-                self._reject_gpu_launch_refusal(
-                    requested_gpu, stderr=start_stderr, exit_code=code
-                )
-                detail = start_stderr.decode(errors="replace").strip()[:1000]
-                raise RuntimeError(f"docker start failed: {detail}")
+            finished_before_start = states.get(container_name) in DOCKER_FINISHED_STATES
+            finished = finished_before_start
+            # Reconcile an uncertain start without repeating a completed command.
+            # Its retained network/image authority can still be published below.
+            if not finished:
+                # Fixed count-only admission under the cross-worker lock. Waiting
+                # work returns to the durable capacity-wait state; the workflow
+                # retries under the existing overall job timeout and cancellation.
+                try:
+                    await self._admit_job_slot(
+                        request, container_name=container_name, states=states
+                    )
+                except _CapacityWait as exc:
+                    return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
+                code, _, start_stderr = await self._runner(("start", container_name))
+                if code:
+                    # The daemon resolves a device request when the container
+                    # starts, so this is where an unavailable GPU runtime or device
+                    # is refused. Classify it before the ordinary launch failure.
+                    self._reject_gpu_launch_refusal(
+                        requested_gpu, stderr=start_stderr, exit_code=code
+                    )
+                    detail = start_stderr.decode(errors="replace").strip()[:1000]
+                    raise RuntimeError(f"docker start failed: {detail}")
         finally:
             try:
                 await self._capacity_lock.release(capacity_lease)
@@ -2398,28 +2422,43 @@ class DockerContainerJobBackend:
                     expected_image_ref=str(request.resolved_image_ref or ""),
                     started_at=started_at,
                 )
+                finished = (
+                    finished or workload_evidence.get("evidenceStage") == "finished"
+                )
                 diagnostics_ref = await self._publish_container_job_egress_launch(
                     request,
                     attestation=attestation,
                     attachment_identity=container_name,
                     workload_evidence=workload_evidence,
-                    reconciliation_result="not_required",
+                    reconciliation_result=(
+                        "recovered" if finished_before_start else "not_required"
+                    ),
                 )
                 if not diagnostics_ref:
                     raise RuntimeError(
                         "restricted-egress evidence publisher is unavailable"
                     )
             except Exception as exc:
-                # A running restricted workload without its immutable evidence
-                # chain is not ready. Remove only this owned container and fail
-                # before caller execution can proceed.
-                await self._runner(("rm", "--force", container_name))
-                raise RuntimeError(
-                    "restricted-egress running launch evidence could not be persisted"
+                # Stop a workload whose authority cannot be confirmed, but keep
+                # its logs/results for the workflow's normal evidence publication
+                # and cleanup. A reporting failure must not delete the only copy.
+                try:
+                    await self.stop_container(request)
+                except Exception as stop_exc:
+                    # The existing Activity retry owns another shutdown attempt;
+                    # an unconfirmed stop is not a terminal launch rejection.
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.INFRASTRUCTURE,
+                        "restricted-egress launch failed and owned container "
+                        "shutdown could not be confirmed",
+                    ) from stop_exc
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.LAUNCH,
+                    "restricted-egress running launch evidence could not be persisted",
                 ) from exc
         return ContainerJobActivityResult(
             containerRef=container_name,
-            running=True,
+            running=not finished,
             resolvedResources=request.resolved_resources,
             diagnosticsRef=diagnostics_ref,
             gpuObservation=gpu_observation(
@@ -2569,17 +2608,37 @@ class DockerContainerJobBackend:
 
     async def stop_container(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
-        ownership = await self._owned_ownership_label(ref)
-        if ownership is None:
-            return ContainerJobActivityResult(containerRef=ref, running=False)
-        if ownership != request.ownership_token:
-            raise RuntimeError("container job ownership mismatch; refusing stop")
-        await self._checked(
-            "stop", "--time", "10", ref
-        )
-        return ContainerJobActivityResult(
-            containerRef=ref, running=False
-        )
+        stopped = ContainerJobActivityResult(containerRef=ref, running=False)
+        last_error = None
+        for command in (("stop", "--time", "10", ref), ("kill", ref)):
+            # Recheck ownership before escalation: a failed command may race
+            # removal and replacement. Never delete the container's evidence.
+            ownership = await self._owned_ownership_label(ref)
+            if ownership is None:
+                return stopped
+            if ownership != request.ownership_token:
+                raise RuntimeError("container job ownership mismatch; refusing stop")
+            try:
+                await self._checked(*command)
+            except Exception as exc:
+                last_error = exc
+                try:
+                    running = await self._checked(
+                        "inspect", "--format", "{{.State.Running}}", ref
+                    )
+                except Exception:
+                    logger.warning(
+                        "Container-job stop outcome could not be observed",
+                        exc_info=True,
+                    )
+                else:
+                    if running == "false":
+                        return stopped
+            else:
+                return stopped
+        raise RuntimeError(
+            "owned container shutdown could not be confirmed"
+        ) from last_error
 
     async def remove_container(self, request: ContainerJobActivityRequest):
         # Re-read immutable ownership immediately before deletion. A prior

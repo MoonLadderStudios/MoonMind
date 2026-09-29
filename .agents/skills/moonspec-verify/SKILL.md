@@ -281,9 +281,15 @@ service and candidate. Persist readiness, setup actions, failures and resume
 commands with the inventory; continuation preserves this budget. Use available
 repository and managed container capabilities before declaring a dependency
 unavailable. A verification infrastructure failure preserves the same saved
-candidate and requests evidence retry. A demonstrated code defect requests
-remediation. Missing authority names the actual granting owner. These outcomes
-must not be conflated or consume each other's budgets.
+candidate. Request evidence retry only when an authorized setup attempt remains
+or a concrete environment or authority change allows a controlling check to
+obtain different evidence without another setup attempt. An exhausted setup
+budget remains exhausted across continuation. If the prerequisite is unchanged
+and no authorized recovery action remains, follow the Continuation Decision
+rules to return `blocked`, or `needs_human` only for an actual human-owned
+authority decision. A demonstrated code defect requests remediation. Missing
+authority names the actual granting owner. These outcomes must not be conflated
+or consume each other's budgets.
 
 Inspect production code before tests so behavior is verified directly.
 

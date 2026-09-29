@@ -7,8 +7,6 @@ handoffs:
     send: true
 scripts:
   sh: .specify/scripts/bash/setup-plan.sh --json
-agent_scripts:
-  sh: .specify/scripts/bash/update-agent-context.sh __AGENT__
 ---
 
 ## User Input
@@ -66,7 +64,6 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Evaluate principle conflicts (ERROR if violations are unjustified)
    - Phase 0: Generate research.md (resolve all NEEDS CLARIFICATION)
    - Phase 1: Generate data-model.md, contracts/, quickstart.md, including test-first validation scenarios
-   - Phase 1: Update agent context by running the agent script
    - Re-evaluate Principles Check post-design
 
 4. **Stop and report**: Command ends after design planning. Report branch, IMPL_PLAN path, generated artifacts, and the unit/integration test strategy to be used by `/moonspec.tasks`.
@@ -140,14 +137,9 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Examples: public APIs for libraries, command schemas for CLI tools, endpoints for web services, grammars for parsers, UI contracts for applications
    - Skip if project is purely internal (build scripts, one-off tools, etc.)
 
-3. **Agent context update**:
-   - Run `{AGENT_SCRIPT}`
-   - These scripts detect which AI agent is in use
-   - Update the appropriate agent-specific context file
-   - Add only new technology from current plan
-   - Preserve manual additions between markers
+3. **Agent context**: Keep technology and status in `plan.md`. Do not edit lasting agent guidance unless the user explicitly asks; then run `.specify/scripts/bash/update-agent-context.sh --write [agent]`.
 
-**Output**: data-model.md, /contracts/*, quickstart.md, agent-specific file
+**Output**: data-model.md, /contracts/*, quickstart.md
 
 ## Key rules
 

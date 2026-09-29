@@ -240,17 +240,31 @@ share a transaction.
 
 The canonical workflow registry explicitly assigns `product`, `operator`, or
 `excluded` projection scope. `MoonMind.UserWorkflow` belongs in product
-execution views (`MoonMind.ManifestIngest` was retired by
-MoonLadderStudios/MoonMind#4192: old rows stay readable as replay/drain
-evidence but are never registered for new work). Internal supervisors, managers and control
+execution views. Retired product types listed in
+`HISTORICAL_PRODUCT_WORKFLOW_TYPES` (currently `MoonMind.ManifestIngest`,
+retired by MoonLadderStudios/MoonMind#4192) have `historical` scope: they are
+never registered or launchable, but their old-release rows stay readable
+through the DB-backed list, detail, projection sync, and artifact readers
+(MoonLadderStudios/MoonMind#4189). `require_product_projection` admits only
+registered product types unless a reader passes `include_historical=True`.
+The executions router's owned-execution loader denies historical rows by
+default and only read routes opt in, so every mutating route (signal, cancel,
+update, reschedule, rerun, continue, recovery, publication retry, checkpoint
+branches) answers a permanent `409 execution_historical` before any Temporal
+call or durable write. The service control helpers raise
+`TemporalExecutionHistoricalTypeError` for non-HTTP callers. Detail offers no
+actions for a historical row, and missing owner evidence is reported as an
+empty `ownerId`, never as `system`.
+Internal supervisors, managers and control
 owners have operator scope; janitors and reconciliation loops are excluded.
 Unknown types are reported as unknown and never relabeled as UserWorkflow.
 Product admission and list/detail readers enforce the same registry policy.
 The direct-Temporal list/count, metrics, and facet paths share one query
 builder (`_build_temporal_execution_query`) whose product-domain clause is
 derived from the registry (`_product_temporal_scope_query`), with the
-caller's owner filter applied in the same upstream query; the DB-backed list
-filters `product_workflow_types()` in SQL.
+caller's owner filter applied in the same upstream query and stays limited
+to `product_workflow_types()`; the DB-backed list filters
+`product_read_workflow_types()` (product plus historical) in SQL.
 
 Direct-Temporal list totals are always `estimated_or_unknown` with a null
 count (MoonLadderStudios/MoonMind#3947): the page is filtered per row through

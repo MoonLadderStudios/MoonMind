@@ -52,6 +52,7 @@ def _run_helper(
     event_name: str,
     event_payload: dict | None = None,
     github_sha: str = "",
+    base_sha: str | None = None,
 ) -> tuple[str, list[str]]:
     out = tmp_path / "changed.txt"
     env = {
@@ -64,8 +65,11 @@ def _run_helper(
         event_path.write_text(json.dumps(event_payload), encoding="utf-8")
         env["GITHUB_EVENT_PATH"] = str(event_path)
 
+    args = ["bash", str(SCRIPT), str(out)]
+    if base_sha is not None:
+        args.append(base_sha)
     result = subprocess.run(
-        ["bash", str(SCRIPT), str(out)],
+        args,
         cwd=repo,
         env=env,
         text=True,
@@ -192,6 +196,73 @@ def test_schedule_is_unknown(tmp_path) -> None:
         tmp_path,
         event_name="schedule",
         event_payload={},
+    )
+
+    assert stdout == "resolution=unknown"
+    assert changed == []
+
+
+def test_workflow_dispatch_with_explicit_base_computes_exact_tree_diff(
+    tmp_path,
+) -> None:
+    # Manual runs carry no event base; a caller that resolved the
+    # default-branch merge base gets the same exact diff a PR would.
+    repo, base, head = _init_repo(tmp_path)
+
+    stdout, changed = _run_helper(
+        repo,
+        tmp_path,
+        event_name="workflow_dispatch",
+        event_payload={},
+        github_sha=head,
+        base_sha=base,
+    )
+
+    assert stdout == "resolution=known"
+    assert changed == ["b.txt"]
+
+
+def test_schedule_with_explicit_base_at_head_is_known_and_empty(tmp_path) -> None:
+    repo, _, head = _init_repo(tmp_path)
+
+    stdout, changed = _run_helper(
+        repo,
+        tmp_path,
+        event_name="schedule",
+        event_payload={},
+        github_sha=head,
+        base_sha=head,
+    )
+
+    assert stdout == "resolution=known"
+    assert changed == []
+
+
+def test_explicit_base_defaults_head_to_checkout(tmp_path) -> None:
+    repo, base, _ = _init_repo(tmp_path)
+
+    stdout, changed = _run_helper(
+        repo,
+        tmp_path,
+        event_name="workflow_dispatch",
+        event_payload={},
+        base_sha=base,
+    )
+
+    assert stdout == "resolution=known"
+    assert changed == ["b.txt"]
+
+
+def test_unavailable_explicit_base_is_unknown(tmp_path) -> None:
+    repo, _, head = _init_repo(tmp_path)
+
+    stdout, changed = _run_helper(
+        repo,
+        tmp_path,
+        event_name="workflow_dispatch",
+        event_payload={},
+        github_sha=head,
+        base_sha="1" * 40,
     )
 
     assert stdout == "resolution=unknown"

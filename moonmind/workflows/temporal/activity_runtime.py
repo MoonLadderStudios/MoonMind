@@ -7767,10 +7767,13 @@ class TemporalAgentRuntimeActivities:
             # Preserve the specific failure class across the activity boundary
             # and fail fast on deterministic authority-sensitive denials so a
             # denied image, credential, or scope is not retried pointlessly.
+            # A launch the backend already failed closed has nothing a retry
+            # can start or recover.
             deterministic = {
                 ContainerJobFailureClass.IMAGE_USE_DENIED,
                 ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
                 ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+                ContainerJobFailureClass.LAUNCH,
             }
             raise temporal_exceptions.ApplicationError(
                 str(exc),
@@ -8691,16 +8694,13 @@ class TemporalAgentRuntimeActivities:
                 },
             )
             gate_payload["gateResultRef"] = verify_ref.artifact_id
-            if not _first_non_empty_text(
-                gate_payload,
-                "remainingWorkRef",
-                "remaining_work_ref",
-            ) and remaining_work_declared:
-                # The resolved verifier bundle owns the remaining-work
-                # semantics. Its published JSON is therefore the durable
-                # evidence when the portable contract emits structured
-                # remainingWork inline but no separate artifact ref.
+            if remaining_work_declared and isinstance(remaining_work, list):
+                # The publisher owns the durable reference to the verifier's
+                # inline gaps. A model-authored URL or workspace path is useful
+                # report content, but cannot replace the artifact just stored.
+                # Reports without inline gaps retain their separate artifact.
                 gate_payload["remainingWorkRef"] = verify_ref.artifact_id
+                gate_payload.pop("remaining_work_ref", None)
             authoritative_ref = verify_ref.artifact_id
             remediation_verify_ref = (
                 await _publish_moonspec_remediation_verification_artifact(
@@ -9662,6 +9662,36 @@ class TemporalAgentRuntimeActivities:
             skill_materialization_metadata = await self._materialize_selected_agent_skill_for_turn(
                 request=request,
                 workspace_path=workspace_path_raw,
+            )
+        # Launch metadata can be requested before checkout exists. Project inputs
+        # in the real turn preparation, after launch, through the same artifact
+        # owner used by Omnigent. Never restore/reset the candidate repository.
+        workspace = Path(workspace_path_raw).expanduser().resolve()
+        attachment_root = workspace / ".moonmind" / "attachments"
+        has_attachment_projection = bool(workspace_path_raw) and (
+            attachment_root.exists() or attachment_root.is_symlink()
+        )
+        if (request.input_refs or has_attachment_projection) and not (
+            payload.get("metadataOnly") or payload.get("metadata_only")
+        ):
+            from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
+
+            if (
+                not workspace_path_raw
+                or self._managed_session_run_root_for_workspace(workspace) is None
+            ):
+                raise TemporalActivityRuntimeError(
+                    "inputRefs materialization requires a MoonMind-managed workspace"
+                )
+            ownership = workspace.stat()
+            await WorkspaceArtifactProjector(
+                self._artifact_service
+            ).project_attachments(
+                workspace,
+                refs=tuple(request.input_refs),
+                workflow_id=request.correlation_id,
+                runtime_uid=ownership.st_uid,
+                runtime_gid=ownership.st_gid,
             )
         remediation_evidence = await self._materialize_remediation_evidence_for_turn(
             request=request,

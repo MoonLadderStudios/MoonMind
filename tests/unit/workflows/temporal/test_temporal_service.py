@@ -5735,13 +5735,13 @@ async def test_fresh_rerun_expands_unexpanded_jira_orchestrate_template(
         rerun = await service.describe_execution(response["workflow_id"])
 
     workflow_payload = rerun.parameters["workflow"]
-    assert rerun.parameters["stepCount"] == 26
-    assert len(workflow_payload["steps"]) == 26
+    assert rerun.parameters["stepCount"] == 15
+    assert len(workflow_payload["steps"]) == 15
     assert workflow_payload["steps"][0]["tool"]["id"] == "jira.check_blockers"
     assert workflow_payload["steps"][3]["tool"]["id"] == "jira.update_issue_status"
     assert workflow_payload["steps"][7]["skill"]["id"] == "moonspec-tasks"
     assert workflow_payload["steps"][9]["skill"]["id"] == "moonspec-implement"
-    assert workflow_payload["steps"][25]["skill"]["id"] == "jira-issue-updater"
+    assert workflow_payload["steps"][14]["skill"]["id"] == "jira-issue-updater"
     assert workflow_payload["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert workflow_payload["recovery"] == {
         "kind": "exact_full_rerun",
@@ -8004,11 +8004,12 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             page_size=10,
             next_page_token=None,
         )
-        # MoonLadderStudios/MoonMind#4192: retired ManifestIngest rows stay
-        # readable as old-release replay/drain evidence but are excluded
-        # from the product listing (product scope is UserWorkflow only).
-        assert len(manifest_page.items) == 0
-        assert manifest_page.count == 0
+        # MoonLadderStudios/MoonMind#4189: retired ManifestIngest rows stay
+        # readable through the generic listing as historical records.
+        assert [item.workflow_type for item in manifest_page.items] == [
+            TemporalWorkflowType.MANIFEST_INGEST
+        ]
+        assert manifest_page.count == 1
 
 @pytest.mark.asyncio
 async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):

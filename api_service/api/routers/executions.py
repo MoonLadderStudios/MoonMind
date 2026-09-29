@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from moonmind.workflows.temporal.workflow_registry import (
     WorkflowProjectionExcluded,
+    is_historical_workflow_type,
     product_workflow_types,
 )
 
@@ -216,6 +217,7 @@ from moonmind.workflows.checkpoint_branches import (
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
+    TemporalExecutionHistoricalTypeError,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionRerunPlanError,
@@ -223,6 +225,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
+from moonmind.workflows.temporal.service import reject_historical_control
 from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
@@ -3445,6 +3448,19 @@ def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
     owner_id = str(record.owner_id or "").strip().lower()
     return "system" if owner_id == "system" or not owner_id else "user"
 
+def _execution_owner(record, search_attributes: dict[str, object]) -> tuple[str, str]:
+    """Return ``(ownerType, ownerId)`` from recorded owner evidence."""
+
+    owner_id = search_attributes.get("mm_owner_id") or getattr(record, "owner_id", None)
+    if not owner_id and is_historical_workflow_type(getattr(record, "workflow_type", None)):
+        # MoonLadderStudios/MoonMind#4189: a retired historical row without
+        # recorded owner evidence keeps its persisted owner type and reports
+        # the owner as unavailable rather than acquiring system ownership.
+        owner_type = _enum_value(getattr(record, "owner_type", None))
+        if owner_type in _ALLOWED_OWNER_TYPES:
+            return owner_type, ""
+    return _normalize_owner_type(record, search_attributes), str(owner_id or "system")
+
 def _coerce_temporal_scalar(value: object | None) -> str:
     if isinstance(value, (list, tuple)):
         for item in value:
@@ -4117,12 +4133,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         "mm_continue_as_new_cause"
     )
     raw_state = state_value
-    owner_type = _normalize_owner_type(record, search_attributes)
-    owner_id = str(
-        search_attributes.get("mm_owner_id")
-        or getattr(record, "owner_id", None)
-        or "system"
-    )
+    owner_type, owner_id = _execution_owner(record, search_attributes)
     title = str(memo.get("title") or "").strip() or workflow_type_value
 
     waiting_reason = (
@@ -4340,8 +4351,7 @@ def _serialize_execution(
     # retired. No status snapshot is built; record-attribute fallbacks below
     # preserve historical lineage refs for old-release executions.
     manifest_status = None
-    owner_type = _normalize_owner_type(record, search_attributes)
-    owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
+    owner_type, owner_id = _execution_owner(record, search_attributes)
     entry = _resolve_execution_entry(record, search_attributes)
     title = str(memo.get("title") or "").strip() or workflow_type_value
     summary = str(memo.get("summary") or "").strip() or "Execution updated."
@@ -7815,6 +7825,10 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             and publication_eligible
         ):
             enabled = enabled | {"can_retry_publication"}
+    historical = is_historical_workflow_type(workflow_type_value)
+    if historical:
+        # MoonLadderStudios/MoonMind#4189: retired history is read-only.
+        enabled = set()
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -7836,6 +7850,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     disabled_reasons = {}
     for field_name, alias in capability_values.items():
         if field_name in enabled:
+            continue
+        if historical:
+            disabled_reasons[alias] = "historical_workflow_type"
             continue
         if field_name in {
             "can_update_inputs",
@@ -12504,7 +12521,9 @@ async def _get_owned_execution(
     user: User,
     include_orphaned_projection: bool = False,
     use_cancel_target_fallback: bool = False,
+    allow_historical: bool = False,
 ):
+    """Load an execution for a route; only read routes admit retired history."""
     try:
         if use_cancel_target_fallback:
             record = await service.describe_cancel_target_execution(workflow_id)
@@ -12545,6 +12564,17 @@ async def _get_owned_execution(
     # any execution without a human-owner lookup; record owner fields
     # persist as non-authoritative provenance. State, source, and approval
     # validation stay at their owning boundaries.
+    if not allow_historical:
+        # MoonLadderStudios/MoonMind#4189: a retired historical run stays
+        # readable, but every mutating route is denied before its first side
+        # effect. Retrying cannot succeed, so this is a permanent conflict.
+        try:
+            reject_historical_control(record)
+        except TemporalExecutionHistoricalTypeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "execution_historical", "message": str(exc)},
+            ) from exc
     return record
 
 def _compute_schedule_delay(
@@ -14029,11 +14059,13 @@ async def list_remediation_collection(
                     service=service,
                     workflow_id=link.remediation_workflow_id,
                     user=user,
+                    allow_historical=True,
                 ),
                 _get_owned_execution(
                     service=service,
                     workflow_id=link.target_workflow_id,
                     user=user,
+                    allow_historical=True,
                 ),
             )
         except HTTPException as exc:
@@ -14090,7 +14122,12 @@ async def list_execution_remediations(
             },
         )
 
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        allow_historical=True,
+    )
     if direction == "inbound":
         links = await service.list_remediations_for_target(workflow_id)
     else:
@@ -15750,6 +15787,7 @@ async def describe_execution_step_executions(
         service=service,
         workflow_id=workflow_id,
         user=user,
+        allow_historical=True,
     )
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
     if workflow_type_value != "MoonMind.UserWorkflow":
@@ -15849,6 +15887,7 @@ async def describe_execution_step_execution(
         service=service,
         workflow_id=workflow_id,
         user=user,
+        allow_historical=True,
     )
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
     if workflow_type_value != "MoonMind.UserWorkflow":
@@ -15962,6 +16001,7 @@ async def describe_execution_steps(
         workflow_id=workflow_id,
         user=user,
         include_orphaned_projection=True,
+        allow_historical=True,
     )
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
     if workflow_type_value != "MoonMind.UserWorkflow":
@@ -15991,7 +16031,7 @@ async def list_execution_checkpoints(
     user: User = Depends(get_current_user()),
 ) -> CheckpointListResponse:
     record = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user
+        service=service, workflow_id=workflow_id, user=user, allow_historical=True
     )
     return CheckpointListResponse(items=_checkpoint_summaries_from_record(record))
 
@@ -16007,7 +16047,12 @@ async def list_checkpoint_branches(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchListResponse:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        allow_historical=True,
+    )
     conditions = [WorkflowCheckpointBranch.workflow_id == workflow_id]
     if active:
         conditions.append(WorkflowCheckpointBranch.state != "archived")
@@ -16223,7 +16268,12 @@ async def describe_checkpoint_branch(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchModel:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        allow_historical=True,
+    )
     return _branch_to_model(
         await _load_checkpoint_branch(
             session, workflow_id=workflow_id, branch_id=branch_id
@@ -16242,7 +16292,12 @@ async def list_checkpoint_branch_turns(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchTurnListResponse:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        allow_historical=True,
+    )
     await _load_checkpoint_branch(session, workflow_id=workflow_id, branch_id=branch_id)
     result = await session.execute(
         select(WorkflowCheckpointBranchTurn)
@@ -17025,7 +17080,12 @@ async def compare_checkpoint_branches(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchCompareResponse:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        allow_historical=True,
+    )
     branch = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=branch_id
     )
@@ -17615,6 +17675,7 @@ async def describe_execution(
             workflow_id=workflow_id,
             user=user,
             include_orphaned_projection=use_projection_read,
+            allow_historical=True,
         )
     except HTTPException as exc:
         if (
@@ -17732,6 +17793,7 @@ async def resolve_workflow_chat_binding(
         service=service,
         workflow_id=canonical_workflow_id,
         user=user,
+        allow_historical=True,
     )
     if alias_used:
         _mark_execution_alias_usage(
@@ -18060,7 +18122,7 @@ async def get_workflow_captured_evidence(
     """
 
     execution = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user
+        service=service, workflow_id=workflow_id, user=user, allow_historical=True
     )
     run_id = str(getattr(execution, "run_id", "") or "").strip() or None
     evidence = await _resolve_source_captured_evidence(
@@ -18107,7 +18169,7 @@ async def download_workflow_captured_evidence(
     """
 
     execution = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user
+        service=service, workflow_id=workflow_id, user=user, allow_historical=True
     )
     run_id = str(getattr(execution, "run_id", "") or "").strip() or None
     evidence = await _resolve_source_captured_evidence(
@@ -18849,13 +18911,21 @@ async def list_execution_continuations(
             },
         )
 
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        allow_historical=True,
+    )
     repository = SqlLinkedContinuationRepository(session)
 
     async def _visible_status(candidate_workflow_id: str) -> str | None:
         try:
             execution = await _get_owned_execution(
-                service=service, workflow_id=candidate_workflow_id, user=user
+                service=service,
+                workflow_id=candidate_workflow_id,
+                user=user,
+                allow_historical=True,
             )
         except HTTPException as exc:
             if exc.status_code == status.HTTP_404_NOT_FOUND:

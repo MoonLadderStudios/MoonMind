@@ -95,6 +95,7 @@ _RECOGNIZED_EXACT_EVENT_TYPES = {
     "session.mcp_startup",
     "session.model",
     "session.model_options",
+    "session.permission_mode",
     "session.presence",
     "session.reasoning_effort",
     "session.resource.created",

@@ -170,16 +170,19 @@ def generic_codex_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
 
 
 def generic_claude_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
-    """Return whether generic Claude admission is qualified for this deployment.
+    """Return whether generic Claude admission is enabled for this deployment.
 
-    Same contract as :func:`generic_codex_qualified` for ``claude-native``
-    (#3831). Default is false, so a deployment must opt in after exact
-    shared-image evidence exists.
+    ``claude-native`` has no retained profile-bound Omnigent realizer, so this
+    switch decides whether Claude Code is usable through Omnigent at all.
+    Default is enabled: a connected Anthropic OAuth Provider Profile works
+    without a manual rollout toggle, while image, policy, inventory, provider
+    readiness, and exact-host attestation still gate each launch
+    independently. Explicit false remains an emergency kill switch.
     """
 
     source = env if env is not None else os.environ
     return _parse_bool_with_default(
-        source.get(OMNIGENT_GENERIC_CLAUDE_QUALIFIED_ENV), default=False
+        source.get(OMNIGENT_GENERIC_CLAUDE_QUALIFIED_ENV), default=True
     )
 
 

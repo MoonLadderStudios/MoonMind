@@ -1664,12 +1664,16 @@ def build_default_activity_catalog(
                     300,
                 ),
                 retries=_activity_retries(
+                    # Start is retried: under the capacity lock it reconciles
+                    # the daemon's record of its own container first (a live
+                    # container keeps its slot, a finished one is observed,
+                    # never re-executed), so a lost acknowledgment or a worker
+                    # lost during start recovers instead of failing the job.
                     max_attempts=(
                         1
                         if name
                         in {
                             "create_container",
-                            "start_container",
                             "stop_container",
                             "remove_container",
                         }

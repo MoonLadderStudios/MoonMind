@@ -124,7 +124,7 @@ The TypeScript frontend owns:
 
 That means:
 
-- `/workflows`, `/workflows/new`, `/manifests`, `/schedules`, `/settings`, and similar paths continue to be server-routed.
+- `/workflows`, `/workflows/new`, `/schedules`, `/settings`, and similar paths continue to be server-routed. (The `/manifests` Manifest pages were removed with the retired native Manifest product, MoonLadderStudios/MoonMind#4192; `/manifests/*` resolves to no route.)
 - Client code may update query-string state and in-page filters.
 - Client code may enhance navigation behavior where useful.
 - Client code does **not** become the canonical source of route resolution in Phase 1.
@@ -194,6 +194,8 @@ The frontend source should be moved out of the static asset output directory and
 
 ### 7.1 Proposed Layout
 
+> Retired: the proposed `manifests-list.tsx` entrypoint and `features/manifests/` tree were removed with the native Manifest product (MoonLadderStudios/MoonMind#4192) and are intentionally absent below.
+
 ```text
 frontend/
  src/
@@ -205,7 +207,6 @@ frontend/
  workflows-home.tsx
  workflow-list.tsx
  workflow-detail.tsx
- manifests-list.tsx
  schedules-list.tsx
  schedule-create.tsx
  settings.tsx
@@ -217,7 +218,6 @@ frontend/
  feedback/
  features/
  workflows/
- manifests/
  schedules/
  settings/
  authProfiles/
