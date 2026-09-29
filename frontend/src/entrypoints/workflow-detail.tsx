@@ -98,6 +98,16 @@ import {
   normalizeGovernanceReportStatus,
 } from '../lib/governanceReport';
 import { WorkflowNativeChatRoute } from '../features/workflow-native-chat';
+import {
+  buildContinueInNewWorkflowBody,
+  buildSavedResultDownloadHref,
+  buildSavedResultPreviewHref,
+  canDownloadSavedResultRaw,
+  projectSavedResults,
+  resolveUncertainSavedResultSubmission,
+  savedResultIdempotencyKey,
+  shouldApplySavedResultResponse,
+} from './saved-results';
 
 export {
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
@@ -8534,6 +8544,376 @@ function ArtifactBrowserPanel({
   );
 }
 
+function SavedResultsSection({
+  workflowId,
+  runId,
+  apiBase,
+  execution,
+  artifacts,
+  isLoading,
+  error,
+  onRefresh,
+  onPublishSavedWork,
+  publishBusy,
+}: {
+  workflowId: string;
+  runId: string;
+  apiBase: string;
+  execution: z.infer<typeof ExecutionDetailSchema> | null | undefined;
+  artifacts: z.infer<typeof ArtifactSummarySchema>[];
+  isLoading: boolean;
+  error: Error | null;
+  onRefresh: () => void;
+  onPublishSavedWork: () => void;
+  publishBusy: boolean;
+}) {
+  const projection = useMemo(
+    () =>
+      projectSavedResults({
+        workflowId,
+        runId,
+        execution: (execution ?? {
+          workflowId,
+          runId,
+          state: 'unknown',
+        }) as unknown as Parameters<typeof projectSavedResults>[0]['execution'],
+        artifacts:
+          artifacts as unknown as Parameters<
+            typeof projectSavedResults
+          >[0]['artifacts'],
+        artifactsStale: false,
+        artifactsError: error,
+      }),
+    [workflowId, runId, execution, artifacts, error],
+  );
+  const selectionKeyRef = useRef(projection.selectedKey);
+  selectionKeyRef.current = projection.selectedKey;
+  const continueIdempotencyKey = useMemo(
+    () => savedResultIdempotencyKey(workflowId, runId, 'continue'),
+    [workflowId, runId],
+  );
+  const [continueState, setContinueState] = useState<{
+    status: 'idle' | 'pending' | 'succeeded' | 'failed';
+    destinationWorkflowId?: string | undefined;
+    operationId?: string | undefined;
+    reused?: boolean | undefined;
+    error?: string | undefined;
+  }>({ status: 'idle' });
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const completeRefs = projection.entries
+    .filter((entry) => entry.complete)
+    .map((entry) => entry.artifactId);
+  const terminalSource =
+    projection.computeOutcome === 'failed' ||
+    projection.computeOutcome === 'canceled' ||
+    projection.computeOutcome === 'completed';
+
+  const handleContinue = async () => {
+    if (
+      !window.confirm(
+        'Continue working from this saved result in a fresh admitted execution? The source run is never mutated.',
+      )
+    ) {
+      return;
+    }
+    const requestKey = selectionKeyRef.current;
+    setActionError(null);
+    setContinueState({ status: 'pending', operationId: continueIdempotencyKey });
+    try {
+      const body = buildContinueInNewWorkflowBody({
+        idempotencyKey: continueIdempotencyKey,
+        selectedSourceArtifactRefs: completeRefs,
+        instructions: 'Continue working from the selected saved result.',
+      });
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/continue`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as {
+        destinationWorkflowId?: string;
+        destination_workflow_id?: string;
+        operationId?: string;
+        detail?: { code?: string };
+      } | null;
+      // Late responses must never retarget a historical selection.
+      if (!shouldApplySavedResultResponse(requestKey, selectionKeyRef.current)) {
+        return;
+      }
+      if (!response.ok) {
+        const code =
+          (payload?.detail as { code?: string } | undefined)?.code ??
+          (payload as { code?: string } | null)?.code ??
+          null;
+        const operationId =
+          payload?.destinationWorkflowId ??
+          payload?.destination_workflow_id ??
+          payload?.operationId ??
+          null;
+        // Lost acknowledgment / double click reuses the returned operation.
+        const resolved = resolveUncertainSavedResultSubmission({
+          pendingOperationId: continueIdempotencyKey,
+          response: {
+            status: response.status,
+            code,
+            operationId,
+          },
+        });
+        if (resolved.reused) {
+          setContinueState({
+            status: 'succeeded',
+            destinationWorkflowId: operationId ?? undefined,
+            operationId: resolved.operationId,
+            reused: true,
+          });
+          return;
+        }
+        throw new Error(
+          textOf(payload) || `Continue: ${response.statusText || response.status}`,
+        );
+      }
+      setContinueState({
+        status: 'succeeded',
+        destinationWorkflowId:
+          payload?.destinationWorkflowId ??
+          payload?.destination_workflow_id ??
+          undefined,
+        operationId: continueIdempotencyKey,
+        reused: false,
+      });
+    } catch (err) {
+      if (!shouldApplySavedResultResponse(requestKey, selectionKeyRef.current)) {
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      setContinueState({ status: 'failed', error: message });
+      setActionError(message);
+    }
+  };
+
+  const handlePublish = () => {
+    if (
+      !window.confirm(
+        'Publish this saved work through the publication-only path? No model is rerun.',
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    onPublishSavedWork();
+  };
+
+  return (
+    <section className="stack td-saved-results-region td-evidence-region">
+      <div className="step-tl-section-header">
+        <h3>Saved Results</h3>
+        <span className="step-tl-count">
+          Selected run {runId || '—'} | {projection.entries.length} saved
+          output{projection.entries.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <p className="small">
+        Server-selected result with committed artifact references. Compute,
+        saving, requested publication, and cleanup stay independent: a failed
+        run may still have saved work, and pending cleanup never erases it.
+      </p>
+      {isLoading ? (
+        <p className="loading">Loading saved results...</p>
+      ) : projection.state === 'unavailable' ? (
+        <div className="stack">
+          <div className="notice">
+            Saved result evidence is unavailable for this selection.
+            {error ? ` ${error.message}` : ''}
+          </div>
+          <div className="actions">
+            <button type="button" className="secondary" onClick={onRefresh}>
+              Refresh
+            </button>
+          </div>
+        </div>
+      ) : projection.state === 'pending' ? (
+        <div className="stack">
+          <p className="small">Saved result evidence is pending.</p>
+          <div className="actions">
+            <button type="button" className="secondary" onClick={onRefresh}>
+              Refresh
+            </button>
+          </div>
+        </div>
+      ) : projection.state === 'stale' ? (
+        <div className="stack">
+          <div className="notice">Saved result evidence is stale.</div>
+          <div className="actions">
+            <button type="button" className="secondary" onClick={onRefresh}>
+              Refresh
+            </button>
+          </div>
+        </div>
+      ) : projection.entries.length === 0 ? (
+        <p className="small">No saved report, non-Git, or repository output.</p>
+      ) : (
+        <>
+          <div className="grid-2">
+            <Card label="Compute">{formatStatusLabel(projection.computeOutcome)}</Card>
+            <Card label="Save">{formatStatusLabel(projection.saveOutcome)}</Card>
+            <Card label="Publication">
+              {formatStatusLabel(projection.publicationOutcome)}
+            </Card>
+            <Card label="Cleanup">
+              {projection.cleanupPreserved ? 'Preserved' : 'Unknown'}
+            </Card>
+          </div>
+          <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Saved output</th>
+                  <th>Completeness</th>
+                  <th>Retention</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projection.entries.map((entry) => {
+                  const source = artifacts.find(
+                    (item) => item.artifactId === entry.artifactId,
+                  );
+                  const rawAllowed = source
+                    ? canDownloadSavedResultRaw(
+                        source as unknown as Parameters<
+                          typeof canDownloadSavedResultRaw
+                        >[0],
+                      )
+                    : false;
+                  return (
+                    <tr key={entry.artifactId}>
+                      <td>
+                        <code>{entry.title}</code>
+                        <div className="small">
+                          {formatStatusLabel(entry.kind)}
+                          {entry.expired ? ' · expired' : ''}
+                          {entry.restricted ? ' · restricted' : ''}
+                        </div>
+                      </td>
+                      <td>
+                        {entry.complete
+                          ? 'Complete'
+                          : `Incomplete (${entry.completenessReason})`}
+                        {entry.exclusions !== null ? (
+                          <div className="small">
+                            {entry.exclusions} excluded
+                          </div>
+                        ) : null}
+                      </td>
+                      <td>{entry.retention ?? 'Unknown'}</td>
+                      <td>
+                        <div className="actions">
+                          {source ? (
+                            <a
+                              className="button secondary"
+                              href={buildSavedResultPreviewHref(
+                                apiBase,
+                                source as unknown as Parameters<
+                                  typeof buildSavedResultPreviewHref
+                                >[1],
+                              )}
+                              title="Open safe preview"
+                            >
+                              Preview
+                            </a>
+                          ) : null}
+                          {source && rawAllowed ? (
+                            <a
+                              className="button secondary"
+                              href={buildSavedResultDownloadHref(
+                                apiBase,
+                                source as unknown as Parameters<
+                                  typeof buildSavedResultDownloadHref
+                                >[1],
+                              )}
+                              title="Download saved output"
+                            >
+                              Download
+                            </a>
+                          ) : (
+                            <span className="small">Raw unavailable</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="actions">
+            <button
+              type="button"
+              className="secondary"
+              disabled={!terminalSource || continueState.status === 'pending'}
+              title={
+                terminalSource
+                  ? undefined
+                  : 'Continue is available once the source run is terminal.'
+              }
+              onClick={handleContinue}
+            >
+              {continueState.status === 'pending'
+                ? 'Starting continuation...'
+                : 'Continue working'}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={publishBusy}
+              onClick={handlePublish}
+            >
+              Publish saved work
+            </button>
+          </div>
+          {continueState.status === 'succeeded' ? (
+            <p className="small">
+              Continuation admitted
+              {continueState.destinationWorkflowId
+                ? `: ${continueState.destinationWorkflowId}`
+                : ''}
+              {continueState.reused ? ' (reused operation).' : '.'}
+            </p>
+          ) : null}
+          {actionError ? (
+            <div className="notice error">{actionError}</div>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+function textOf(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value && typeof value === 'object') {
+    const detail = (value as Record<string, unknown>).detail;
+    if (typeof detail === 'string') {
+      return detail;
+    }
+    const message = (value as Record<string, unknown>).message;
+    if (typeof message === 'string') {
+      return message;
+    }
+  }
+  return '';
+}
+
 function InterventionMonitorPanel({
   execution,
 }: {
@@ -11048,6 +11428,22 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 primaryReport={primaryReport}
                 relatedArtifacts={relatedReports}
                 apiBase={payload.apiBase}
+              />
+
+              <SavedResultsSection
+                workflowId={workflowId}
+                runId={artifactRunId || ''}
+                apiBase={payload.apiBase}
+                execution={execution}
+                artifacts={artifactsQuery.data?.artifacts || []}
+                isLoading={artifactsQuery.isLoading}
+                error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
+                onRefresh={invalidate}
+                onPublishSavedWork={() => {
+                  setActionError(null);
+                  retryPublicationMutation.mutate();
+                }}
+                publishBusy={retryPublicationMutation.isPending}
               />
 
               <InputImagesSection
