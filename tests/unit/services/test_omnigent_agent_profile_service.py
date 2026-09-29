@@ -403,6 +403,79 @@ def test_qualified_claude_catalog_requires_observed_native_agent(monkeypatch):
     assert "claude-native" not in {row.id for row in unqualified.snapshot.harnesses}
 
 
+def test_codex_catalog_projects_observed_native_agent(monkeypatch):
+    import hashlib
+    import json
+    from datetime import UTC, datetime
+
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+    )
+    from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+
+    # The generic-host switch only selects Codex's realizer; the profile-bound
+    # default still needs the harness in the catalog.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+
+    def observed(agents, harnesses=()):
+        return HarnessCatalogSyncResult(
+            snapshot=create_catalog_snapshot(
+                endpointRef="default",
+                omnigentVersion="0.16.0",
+                omnigentBuildDigest="sha256:" + "c" * 64,
+                sourceDigest="sha256:"
+                + hashlib.sha256(json.dumps(agents).encode()).hexdigest(),
+                harnesses=list(harnesses),
+                observedAt=datetime(2026, 9, 28, tzinfo=UTC),
+            ),
+            trust_records=(),
+            diagnostics={"agents": agents},
+        )
+
+    empty = _overlay_native_harnesses(observed([]))
+    assert "codex-native" not in {row.id for row in empty.snapshot.harnesses}
+
+    stock = {
+        "id": "ag_codex",
+        "name": "codex-native-ui",
+        "version": "1",
+        "harness": "codex-native",
+    }
+    current = _overlay_native_harnesses(observed([stock]))
+    codex = next(row for row in current.snapshot.harnesses if row.id == "codex-native")
+    assert codex.capabilities.authModel == "oauth_volume"
+    assert codex.capabilities.integrationMode == "native-server"
+    assert codex.runtimeRequirements == {"runtimePackRef": "codex-native-pack@1"}
+    assert any(
+        trust.harnessId == "codex-native"
+        and trust.implementationRef == codex.implementation.implementation_ref()
+        and trust.trustState.value == "core_trusted"
+        for trust in current.trust_records
+    )
+    assert current.diagnostics["observedCodexNativeOverlay"] is True
+    # A stock agent version bump republishes the observation without moving
+    # the exact implementation identity existing plans are bound to.
+    updated = _overlay_native_harnesses(observed([{**stock, "version": "2"}]))
+    assert updated.snapshot.sourceDigest != current.snapshot.sourceDigest
+    assert (
+        next(
+            row for row in updated.snapshot.harnesses if row.id == "codex-native"
+        ).implementation.digest
+        == codex.implementation.digest
+    )
+    # An endpoint that advertises the wrapper itself stays authoritative.
+    advertised = observed(
+        [stock], harnesses=[codex.model_dump(by_alias=True, mode="json")]
+    )
+    readvertised = _overlay_native_harnesses(advertised)
+    assert [row.id for row in readvertised.snapshot.harnesses].count(
+        "codex-native"
+    ) == 1
+
+
 def test_overlay_skips_when_harness_present_or_support_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ):
