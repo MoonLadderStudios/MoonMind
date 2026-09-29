@@ -2378,51 +2378,29 @@ class DockerContainerJobBackend:
             states = await self._container_states()
             if request.resolved_resources is None:
                 request.resolved_resources = request.request.spec.resources.model_copy()
-            if states.get(container_name) in self._FINISHED_STATES:
-                # A retry after an uncertain start whose workload already ran
-                # to completion: report the existing container so the workflow
-                # observes its one real outcome. Starting it again would
-                # re-execute the job, and it needs no slot to be observed.
-                if request.request.spec.network_mode == "bridge":
-                    # Restricted-egress acceptance needs launch evidence
-                    # observed while the workload ran, and Docker releases a
-                    # stopped container's endpoint, so it cannot be recovered
-                    # now. Fail closed rather than accept the pre-launch
-                    # evidence; the container stays for the workflow's
-                    # evidence publication and cleanup.
-                    raise ContainerJobBackendError(
-                        ContainerJobFailureClass.LAUNCH,
-                        "restricted-egress workload finished before its running "
-                        "launch evidence was recorded",
+            finished = states.get(container_name) in self._FINISHED_STATES
+            # Reconcile an uncertain start without repeating a completed command.
+            # Its retained network/image authority can still be published below.
+            if not finished:
+                # Fixed count-only admission under the cross-worker lock. Waiting
+                # work returns to the durable capacity-wait state; the workflow
+                # retries under the existing overall job timeout and cancellation.
+                try:
+                    await self._admit_job_slot(
+                        request, container_name=container_name, states=states
                     )
-                return ContainerJobActivityResult(
-                    containerRef=container_name,
-                    running=False,
-                    resolvedResources=request.resolved_resources,
-                    diagnosticsRef=request.egress_attestation_ref,
-                    gpuObservation=gpu_observation(
-                        requested_gpu, backend_supported=True, launched=True
-                    ),
-                )
-            # Fixed count-only admission under the cross-worker lock. Waiting
-            # work returns to the durable capacity-wait state; the workflow
-            # retries under the existing overall job timeout and cancellation.
-            try:
-                await self._admit_job_slot(
-                    request, container_name=container_name, states=states
-                )
-            except _CapacityWait as exc:
-                return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
-            code, _, start_stderr = await self._runner(("start", container_name))
-            if code:
-                # The daemon resolves a device request when the container
-                # starts, so this is where an unavailable GPU runtime or device
-                # is refused. Classify it before the ordinary launch failure.
-                self._reject_gpu_launch_refusal(
-                    requested_gpu, stderr=start_stderr, exit_code=code
-                )
-                detail = start_stderr.decode(errors="replace").strip()[:1000]
-                raise RuntimeError(f"docker start failed: {detail}")
+                except _CapacityWait as exc:
+                    return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
+                code, _, start_stderr = await self._runner(("start", container_name))
+                if code:
+                    # The daemon resolves a device request when the container
+                    # starts, so this is where an unavailable GPU runtime or device
+                    # is refused. Classify it before the ordinary launch failure.
+                    self._reject_gpu_launch_refusal(
+                        requested_gpu, stderr=start_stderr, exit_code=code
+                    )
+                    detail = start_stderr.decode(errors="replace").strip()[:1000]
+                    raise RuntimeError(f"docker start failed: {detail}")
         finally:
             try:
                 await self._capacity_lock.release(capacity_lease)
@@ -2448,6 +2426,9 @@ class DockerContainerJobBackend:
                     expected_image_ref=str(request.resolved_image_ref or ""),
                     started_at=started_at,
                 )
+                finished = (
+                    finished or workload_evidence.get("evidenceStage") == "finished"
+                )
                 diagnostics_ref = await self._publish_container_job_egress_launch(
                     request,
                     attestation=attestation,
@@ -2460,19 +2441,22 @@ class DockerContainerJobBackend:
                         "restricted-egress evidence publisher is unavailable"
                     )
             except Exception as exc:
-                # A running restricted workload without its immutable evidence
-                # chain is not ready. Remove only this owned container and fail
-                # before caller execution can proceed. The launch class is not
-                # retried: nothing is left to start, so a retry would only
-                # replace this cause with a missing-container failure.
-                await self._runner(("rm", "--force", container_name))
+                # Stop a workload whose authority cannot be confirmed, but keep
+                # its logs/results for the workflow's normal evidence publication
+                # and cleanup. A reporting failure must not delete the only copy.
+                try:
+                    await self._runner(("stop", "--time", "5", container_name))
+                except Exception:
+                    logger.warning(
+                        "Failed to stop unattested container job", exc_info=True
+                    )
                 raise ContainerJobBackendError(
                     ContainerJobFailureClass.LAUNCH,
                     "restricted-egress running launch evidence could not be persisted",
                 ) from exc
         return ContainerJobActivityResult(
             containerRef=container_name,
-            running=True,
+            running=not finished,
             resolvedResources=request.resolved_resources,
             diagnosticsRef=diagnostics_ref,
             gpuObservation=gpu_observation(

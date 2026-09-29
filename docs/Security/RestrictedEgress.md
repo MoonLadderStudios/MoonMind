@@ -187,6 +187,17 @@ or an unavailable backend fail closed before workload start. Reconciliation
 and cleanup remain label/ownership scoped; they never remove an unowned
 network, gateway, container, or volume. Diagnostics contain bounded redacted
 destination metadata, never credentials, request bodies, or packet payloads.
+A completed Container Job retains its daemon-recorded network membership, launch
+labels, exact image, architecture, and start/finish times even after Docker
+retires its endpoint and address. A command that finishes before the launch
+observation uses that retained authority and proceeds to its actual exit result;
+retries never restart it. Missing endpoint/denial telemetry is explicitly
+unavailable, not zero or fabricated running evidence. A running or never-started
+container cannot use this terminal observation. Network, image, and label checks
+remain enforced. If launch authority cannot be confirmed, stop the owned job and
+retain its container until the normal evidence publisher captures diagnostics
+and cleanup removes it.
+
 Terminal Container Job diagnostics correlate the workload attachment with the
 gateway access log and persist only a hashed attachment address, denial count,
 and at most 20 normalized denied authorities. After removal, a separate

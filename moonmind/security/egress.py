@@ -717,7 +717,9 @@ async def attest_docker_workload_egress(
     format_value = (
         '{"labels":{{json .Config.Labels}},"networks":'
         '{{json .NetworkSettings.Networks}},"imageRef":{{json .Config.Image}},'
-        '"image":{{json .Image}}}'
+        '"image":{{json .Image}},"networkMode":{{json .HostConfig.NetworkMode}},'
+        '"state":{"Status":{{json .State.Status}},"Running":{{json .State.Running}},'
+        '"StartedAt":{{json .State.StartedAt}},"FinishedAt":{{json .State.FinishedAt}}}}'
     )
     code, stdout, _ = await runner(("inspect", "--format", format_value, identity))
     if code or not stdout.strip():
@@ -763,7 +765,29 @@ async def attest_docker_workload_egress(
     network_id = str(attachment.get("NetworkID") or "").strip()
     endpoint_id = str(attachment.get("EndpointID") or "").strip()
     client_address = str(attachment.get("IPAddress") or "").strip()
-    if not network_id or not endpoint_id or not client_address:
+    # Docker retires endpoint/IP fields as soon as a command exits. A short
+    # job can finish before this observation, including after an uncertain
+    # start Activity. Retained daemon state still proves its launch network;
+    # unavailable traffic telemetry must not invalidate the command's result.
+    finished = False
+    state = observed.get("state")
+    if not endpoint_id and not client_address and isinstance(state, dict):
+        try:
+            launched_at = datetime.fromisoformat(
+                state["StartedAt"].replace("Z", "+00:00")
+            )
+            ended_at = datetime.fromisoformat(
+                state["FinishedAt"].replace("Z", "+00:00")
+            )
+            finished = (
+                state.get("Status") == "exited"
+                and state.get("Running") is False
+                and observed.get("networkMode") == profile.network_ref
+                and datetime(1970, 1, 1, tzinfo=UTC) < launched_at <= ended_at
+            )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            pass
+    if not network_id or (not finished and (not endpoint_id or not client_address)):
         raise RuntimeError(
             "restricted-egress network attachment identity is incomplete"
         )
@@ -781,6 +805,25 @@ async def attest_docker_workload_egress(
         ) from exc
     if not isinstance(architecture, str) or not architecture.strip():
         raise RuntimeError("restricted-egress workload architecture is malformed")
+
+    if finished:
+        return {
+            **attestation.model_dump(by_alias=True, mode="json"),
+            "evidenceStage": "finished",
+            "startedAt": launched_at.isoformat(),
+            "finishedAt": ended_at.isoformat(),
+            "attachmentIdentity": identity,
+            "networkIdentity": network_id,
+            "endpointIdentity": None,
+            "attachmentAddressDigest": None,
+            "workloadImageDigest": image_digest,
+            "workloadImageRef": image_ref,
+            "architecture": architecture.strip(),
+            "deniedConnectionCount": None,
+            "denialDiagnostics": [
+                "Endpoint retired before observation; per-workload denial telemetry is unavailable."
+            ],
+        }
 
     code, access_log, _ = await runner(
         (
