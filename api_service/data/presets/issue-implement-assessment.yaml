@@ -95,6 +95,21 @@ steps:
     declaring tooling unavailable. Carry this map and its prerequisite ledger into
     later implementation and verification evidence without overwriting the immutable
     initial assessment or treating its verdict as objective acceptance or landing.
+    {% if inputs.issue_provider == 'github' %}
+
+    MoonMind automation runs only in Linux containers. Decide whether any unmet
+    requirement is work this runtime can do. If none is, because each one needs
+    Windows or macOS, special or physical hardware (event machines, consoles,
+    devices, a GPU or display this container cannot reach), physical presence,
+    or another action no agent in a Linux container can perform, add
+    `manualOnly` to {{ inputs.assessment_artifact_path }}:
+    `{"reason": "<why automation cannot finish this issue>", "manualActions": ["<each action a person must take>"]}`.
+    MoonMind then labels the issue manual-only and skips it until a person
+    removes the label. Omit `manualOnly` when any unmet requirement can be
+    advanced here, including repository changes and tests that run in a
+    container; that work proceeds and verification records what remains. A
+    missing credential, permission, or approval is not manual-only.
+    {% endif %}
   skill:
     id: moonspec-assess
     args:
