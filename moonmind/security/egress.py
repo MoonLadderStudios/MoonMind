@@ -35,7 +35,7 @@ _LEGACY_PROFILE_SET_DIGEST = (
     "sha256:ce9e19f22079cd8dc4dd4d14f943b4055b5788bed49188b5c9085b5af82b7ebc"
 )
 EGRESS_MAIN_CONFIG_DIGEST = (
-    "sha256:19e7521f6d20adedf18121c3d53a956d2314eb588c72e340ade75c1bda915641"
+    "sha256:140cbf7a1f875fe1e546129cd88461adeccea1608fa67f7ab08e518053d1d712"
 )
 EGRESS_POLICY_DIRECTORY = Path(
     os.environ.get("MOONMIND_EGRESS_POLICY_DIRECTORY")
@@ -466,6 +466,7 @@ DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
             for name in (
                 "anthropic.com",
                 "chatgpt.com",
+                "claude.com",
                 "ghcr.io",
                 "github.com",
                 "githubassets.com",

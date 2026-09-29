@@ -47,6 +47,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_CLAUDE_PROVIDER_RUNTIME_PATCH,
     RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
@@ -3674,6 +3675,52 @@ class TestReviewGateHelpers(unittest.TestCase):
             wf._accepted_review_summary("FULLY_IMPLEMENTED", retry_count=2),
             "Approved after 2 retries",
         )
+
+class TestOmnigentProviderProfileRuntimes(unittest.TestCase):
+    """An Omnigent child accepts each admitted provider runtime's Profile."""
+
+    @staticmethod
+    def _workflow_with_claude_snapshot() -> MoonMindRunWorkflow:
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {
+            "claude_anthropic_oauth": {
+                "profile_id": "claude_anthropic_oauth",
+                "runtime_id": "claude_code",
+                "provider_id": "anthropic",
+                "enabled": True,
+            }
+        }
+        return wf
+
+    def test_omnigent_child_accepts_claude_code_provider_profile(self) -> None:
+        wf = self._workflow_with_claude_snapshot()
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_CLAUDE_PROVIDER_RUNTIME_PATCH
+            ),
+        ):
+            self.assertEqual(
+                wf._validated_execution_profile_ref(
+                    "claude_anthropic_oauth",
+                    agent_id="omnigent",
+                    source_label="Plan node",
+                ),
+                "claude_anthropic_oauth",
+            )
+
+    def test_histories_before_the_marker_keep_the_recorded_rejection(self) -> None:
+        wf = self._workflow_with_claude_snapshot()
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=False,
+        ), self.assertRaisesRegex(ValueError, "belongs to runtime 'claude_code'"):
+            wf._validated_execution_profile_ref(
+                "claude_anthropic_oauth",
+                agent_id="omnigent",
+                source_label="Plan node",
+            )
+
 
 class TestFetchProfileSnapshots(unittest.TestCase):
     """Verify the _fetch_profile_snapshots method populates profile snapshots."""
