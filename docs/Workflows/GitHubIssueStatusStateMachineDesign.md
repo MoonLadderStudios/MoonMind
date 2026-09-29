@@ -54,7 +54,7 @@ The four canonical open-issue status labels are:
 | Needs attention | `status: needs-attention` | An unresolved decision, stop request, conflict, unsafe recovery, or exhausted budget requires intervention | Excluded from automatic implementation |
 | Closed | GitHub issue state is closed | GitHub records a terminal disposition | Excluded regardless of labels |
 
-Ordinary labels such as bug, feature, priority, or component are independent of this state machine. Existing dependency and blocker rules continue to apply. An issue without a status label can still be blocked by its prerequisites or outside the user's requested scope.
+Ordinary labels such as bug, feature, priority, or component are independent of this state machine. Existing dependency and blocker rules continue to apply. An issue without a status label can still be blocked by its prerequisites or outside the user's requested scope. The `manual-only` label is such a start blocker: people, not automation, must finish the issue (section 5.4).
 
 Search results distinguish an empty candidate set from candidates excluded by lifecycle,
 dependencies, author scope, or unresolved attempt ownership. `searchEvidence` retains
@@ -239,6 +239,20 @@ There is no `status: claiming` label or per-device status-label family. Extra la
 Fresh workflow IDs, device changes, and label removal do not reset the issue's automatic retry allowance. Admission evaluates linked attempt history and the applicable bounded policy. A continuation retains prior failures and no-progress evidence. Internal step retries are not separate issue attempts.
 
 An operator-authorized retry reset is recorded explicitly, as one released attempt record with the `retry_reset` outcome, posted by the authenticated operator account. It names who authorized it, when, why, and the attempts it supersedes. Trusted provenance is not reset authority: admission and the claim sweep honor a reset only when it was posted by the authenticated account the deployment itself posts as and its authorization names that account; a reset record from any other poster, including a collaborator or configured trusted poster, stays in lineage and resets nothing, and the retry explanation counts it in `unauthorizedResets`. Lineage is read in the order GitHub recorded it: the attempts a reset names that were recorded before it, and their back-offs, stay visible for prior-work assessment but are no longer charged. Every other attempt counts normally, including one recorded after the operator reviewed the history but before the reset was posted. A reset never releases an operator hold, and lifecycle tool inputs cannot mint one. Lapsed version-2 attempts never need one: they are not charged (section 3). `tools/reset_issue_retry_allowance.py` inventories the configured repository by default and writes nothing; it plans a reset only for issues whose exhausted allowance includes unfinished version-1 accounting (recorded outcomes need `--include-recorded-outcomes`), refuses live reservations, holds, and unreadable or conflicting evidence, and with `--apply --reason` re-verifies each plan against fresh GitHub evidence before posting and confirming the record. When the exhausted allowance is what sent the issue to Needs attention -- its latest attempt was finalized there with writers stopped and no allowance remaining -- the same authorized decision first resolves that attention through the `needs_attention -> available` guard and confirms it by read-back; a failed resolution posts no reset, so the command can simply be re-run. Attention that the retry history does not explain is refused as `attention_not_from_retry_budget` and left for its own resolution. The command never deletes or rewrites comments and touches no other labels. It exits 0 when every requested reset was recorded, 1 when `--apply` recorded nothing, and 2 when a reset could not be recorded or confirmed. Conflicting lineage or policy evidence fails to attention rather than inventing a fresh budget. Exact global retry-count enforcement is not claimed under simultaneous duplicate starts. It is likewise not claimed when attempt evidence was deleted without a tombstone: an Available issue with no observable attempt comments is indistinguishable from one that was never attempted, so admission treats it as no observable history and does not claim the shared retry/cooldown budget was verified. Strict-budget operators must rely on tombstones and explicit reset records, not on the absence of comments.
+
+### 5.4 Manual-only issues
+
+MoonMind agents run in Linux containers. Some issues can only be finished elsewhere: they need Windows or macOS, special or physical hardware, physical presence, or another action no agent in a Linux container can perform. Retrying such an issue spends an attempt without progress.
+
+For GitHub issues, the shared initial assessment decides this. When no unmet requirement is work the runtime can advance, it records `manualOnly` (`reason` and `manualActions`) in its assessment artifact. The trusted `github.check_issue_blockers` step then:
+
+* posts one comment explaining why and listing the manual actions;
+* adds the `manual-only` label;
+* ends the run as an idle outcome, with no implementation, publication, or failed status.
+
+The released claim follows the ordinary terminal handoff. A retried step reuses its comment. An issue with remaining container work, or one blocked only by a missing credential, permission, or approval, is not manual-only; that work proceeds, and verification records any manual remainder for the next assessment.
+
+`manual-only` is a start-blocking label. Search skips the issue. An explicit issue workflow stops at its blocker step and reports the label as its blocker. MoonMind never removes the label: a person removes it after doing the manual work, or when automation should try again.
 
 ## 6. Failure handling and recovery
 

@@ -39,6 +39,7 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     get_or_create_installation_id,
     new_attempt_id,
     reconcile_uncertain_creation,
+    redact_comment_body,
     render_attempt_comment,
     resolve_installation_id,
 )
@@ -106,6 +107,10 @@ GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
 GITHUB_FINALIZE_FAILED_ATTEMPT_TOOL_NAME = "github.finalize_failed_attempt"
 GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
+# People, not automation, must finish an issue carrying this label: its
+# remaining work needs Windows, special hardware, or another action no Linux
+# container can perform. Selection skips it until a person removes the label.
+GITHUB_MANUAL_ONLY_LABEL = "manual-only"
 # The status tool runs inside a 60-second activity. One fetch plus the targeted
 # label operations and optional comment must leave enough time for the activity
 # to classify results.
@@ -5615,7 +5620,10 @@ def _github_blockers_from_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]
     labels = [str(label).strip().lower() for label in issue.get("labels") or []]
     blockers: list[dict[str, Any]] = []
     for label in labels:
-        if label in {"blocked", "status: blocked", "status/blocked"} or label.startswith("blocked:"):
+        if (
+            label in {"blocked", "status: blocked", "status/blocked", GITHUB_MANUAL_ONLY_LABEL}
+            or label.startswith("blocked:")
+        ):
             blockers.append({"source": "label", "label": label, "statusKnown": False, "done": False})
     body = _string(issue.get("body"))
     match = re.search(r"(?im)^#+\s*block(?:ed|ers|ing)\b(?P<section>.*?)(?:^#+\s|\Z)", body, flags=re.DOTALL)
@@ -5690,6 +5698,18 @@ async def check_github_issue_blockers(
             },
         )
     issue = _github_issue_payload(issue_data, repository)
+    if assessment_verdict != "FULLY_IMPLEMENTED":
+        manual_only = _manual_only_declaration(await _assessment_payload(inputs, _context))
+        if manual_only is not None:
+            return await _mark_github_issue_manual_only(
+                repository=repository,
+                issue_number=issue_number,
+                issue=issue,
+                manual_only=manual_only,
+                context=_context,
+                service=github_service_factory(),
+                assessment_output=assessment_output,
+            )
     # This is the completion gate, not the start gate: it holds acceptance and
     # closure while a declared completion dependency is still open, even though
     # selection admits the issue's independently useful implementation work.
@@ -5733,6 +5753,124 @@ async def check_github_issue_blockers(
             **assessment_output,
         },
     )
+
+
+async def _assessment_payload(
+    inputs: Mapping[str, Any], context: Mapping[str, Any] | None
+) -> Mapping[str, Any] | None:
+    """The assessment handoff itself, preferring its durable ref."""
+    ref = _assessment_artifact_ref(inputs, context)
+    if ref:
+        payload = await _read_json_artifact_by_ref(ref, context)
+        if payload is not None:
+            return payload
+    path = _string(inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path"))
+    if path:
+        return _local_json_artifact_from_path(artifact_path=path, inputs=inputs, context=context)
+    return None
+
+
+def _manual_only_declaration(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Read the assessment's judgment that no unmet requirement is container work.
+
+    Its text is posted on the issue, so it is redacted like attempt comments.
+    """
+    raw = payload.get("manualOnly") if isinstance(payload, Mapping) else None
+    if raw is True:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        return None
+    reason = (
+        _string(raw.get("reason"))
+        or _string(payload.get("summary"))
+        or "The remaining work cannot be done from a Linux container."
+    )
+    actions = [
+        redact_comment_body(_string(action)[:500])
+        for action in _list(raw.get("manualActions"))
+        if _string(action)
+    ]
+    return {"reason": redact_comment_body(reason[:1000]), "manualActions": actions[:20]}
+
+
+async def _mark_github_issue_manual_only(
+    *,
+    repository: str,
+    issue_number: int,
+    issue: Mapping[str, Any],
+    manual_only: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    service: GitHubService,
+    assessment_output: Mapping[str, Any],
+) -> ToolResult:
+    """Hand the issue to people and end this run without implementation.
+
+    The label keeps automatic selection away until a person removes it, and the
+    comment says why and what to do. A retried call reuses both writes.
+    """
+    issue_ref = f"{repository}#{issue_number}"
+    outputs: dict[str, Any] = {
+        "issueRef": issue_ref,
+        # A caller that ignores the idle disposition still stops here.
+        "decision": "blocked",
+        "manualOnly": dict(manual_only),
+        "blockingIssues": [
+            {"source": "manual_only", "label": GITHUB_MANUAL_ONLY_LABEL, "statusKnown": True, "done": False}
+        ],
+        "summary": f"Marked {issue_ref} manual-only: {manual_only['reason']}",
+        **assessment_output,
+    }
+    labels = {str(label).strip().lower() for label in issue.get("labels") or []}
+    if GITHUB_MANUAL_ONLY_LABEL in labels:
+        return ToolResult(status="COMPLETED", outputs=outputs, completion_disposition="idle")
+    try:
+        owner = claim_owner(context)
+    except ValueError:
+        owner = ""
+    marker = f"<!-- moonmind-manual-only {owner} -->" if owner else "<!-- moonmind-manual-only -->"
+    listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+        return ToolResult(status="FAILED", outputs={
+            **outputs, "summary": f"Could not read {issue_ref} comments before marking it manual-only.",
+        })
+    if not any(marker in str(comment.get("body") or "") for comment in listed["comments"]):
+        lines = [
+            f"MoonMind marked this issue `{GITHUB_MANUAL_ONLY_LABEL}`: its remaining work "
+            "cannot be done by automation running in a Linux container.",
+            "",
+            f"**Why:** {manual_only['reason']}",
+        ]
+        if manual_only["manualActions"]:
+            lines += ["", "**Manual actions:**", *(f"- {action}" for action in manual_only["manualActions"])]
+        lines += [
+            "",
+            f"Automatic issue selection skips this issue while the `{GITHUB_MANUAL_ONLY_LABEL}` "
+            "label is present. Remove the label once the manual work is done or when "
+            "automation should try again.",
+            "",
+            marker,
+        ]
+        created = await service.create_issue_comment(
+            repo=repository, issue_number=issue_number, body="\n".join(lines)
+        )
+        if not created.get("ok") and created.get("reasonCode") != "outcome_unknown":
+            # The label is what stops automation; keep going and report this.
+            outputs["commentError"] = created.get("summary") or "Manual-only comment was not posted."
+    await service.ensure_lifecycle_label(
+        repo=repository,
+        label=GITHUB_MANUAL_ONLY_LABEL,
+        color="5319e7",
+        description="Needs Windows, special hardware, or other work outside a Linux container",
+    )
+    added = await service.add_issue_labels(
+        repo=repository, issue_number=issue_number, labels=[GITHUB_MANUAL_ONLY_LABEL]
+    )
+    if not added.get("ok"):
+        return ToolResult(status="FAILED", outputs={
+            **outputs,
+            "summary": f"Could not label {issue_ref} manual-only: {added.get('summary') or 'label add failed'}",
+        })
+    return ToolResult(status="COMPLETED", outputs=outputs, completion_disposition="idle")
 
 
 async def resolve_pull_request_target(
