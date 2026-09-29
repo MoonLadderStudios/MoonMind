@@ -73,16 +73,22 @@ def test_health_cli_creates_missing_output_dir(tmp_path, capsys) -> None:
     assert json.loads(output.read_text(encoding="utf-8"))["rolloutReady"] is True
 
 
-def test_health_cli_offline_runner_exits_one(tmp_path, capsys) -> None:
+def test_health_cli_reports_offline_runner_without_failing(tmp_path, capsys) -> None:
+    # Strict consumers fail closed on the projection itself; the scheduled
+    # observer records it rather than turning an unprovisioned runner red.
     document = _healthy_document()
     document["runner"] = {"status": "offline", "busy": False}
     status = tmp_path / "status.json"
     status.write_text(json.dumps(document), encoding="utf-8")
+    output = tmp_path / "projection.json"
 
-    rc = health_cli.main(["--status", str(status)])
+    rc = health_cli.main(["--status", str(status), "--output", str(output)])
 
-    assert rc == 1
-    assert "not ready" in capsys.readouterr().out
+    assert rc == 0
+    assert "::warning::Omnigent live verification is not ready" in capsys.readouterr().out
+    projection = json.loads(output.read_text(encoding="utf-8"))
+    assert projection["rolloutReady"] is False
+    assert "runner_online" in projection["notReadyReasons"]
 
 
 def test_health_cli_malformed_status_exits_two(tmp_path, capsys) -> None:

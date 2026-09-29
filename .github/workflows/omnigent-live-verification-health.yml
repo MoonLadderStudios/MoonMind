@@ -2,10 +2,11 @@ name: Provider / Omnigent Live Verification Health
 
 # Lightweight, credential-free observability for the protected Omnigent
 # provider-verification tier (MoonLadderStudios/MoonMind#3710).  It reads only
-# non-secret runner / workflow-run / acceptance-evidence status and fails
-# readiness closed when the protected tier is queued, offline, stale,
-# incomplete, or missing a successful canary for the deployed commit and
-# required image digests.  It never consumes provider credentials.
+# non-secret runner / workflow-run / acceptance-evidence status and publishes a
+# readiness projection that is not ready when the protected tier is queued,
+# offline, stale, incomplete, or missing a successful canary for the deployed
+# commit and required image digests.  Strict consumers fail closed on that
+# projection; this run only warns.  It never consumes provider credentials.
 
 on:
   schedule:
@@ -49,7 +50,7 @@ jobs:
           python tools/assemble_omnigent_live_status.py \
             --repository "${{ github.repository }}" \
             --output status.json
-      - name: Fail readiness closed on unhealthy protected tier
+      - name: Project protected-live readiness
         run: |
           python tools/omnigent_live_verification_health.py \
             --status status.json \

@@ -307,6 +307,81 @@ async def test_duplicate_effect_observation_distinguishes_pagination_from_remote
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "contender_order,contender_activity,proceeds",
+    [
+        ("later", "preparing", True),
+        ("earlier", "preparing", False),
+        ("later", "active", False),
+    ],
+)
+async def test_simultaneous_announcements_admit_only_the_earliest(
+    journey, monkeypatch, contender_order, contender_activity, proceeds
+):
+    """Two deployments that announce in the same instant must not both yield.
+
+    GitHub's comment IDs totally order the announcements, so the earliest
+    preparing claim continues and the later one quiesces. A contender that has
+    already started work still stops this attempt.
+    """
+    state, service, sessions = journey
+    other_owner = "default/other-deployment-attempt"
+    other = await tools._prepare_github_issue_claim(
+        inputs={"repository": "example/repo", "issueNumber": 3970},
+        context={"execution_owner": other_owner},
+        repository="example/repo", issue_number=3970, service=service,
+    )
+    # The other deployment's reservation lives only on GitHub.
+    assert await IssueClaimStore(sessions).abandon_unannounced(
+        other_owner, other.attempt_id
+    )
+    contender_body = other.comment_body.replace(
+        '"activity":"preparing"', f'"activity":"{contender_activity}"'
+    )
+    assert f'"activity":"{contender_activity}"' in contender_body
+    original_create = service.create_issue_comment
+
+    def announce_contender():
+        state["comments"].append(
+            {
+                "id": len(state["comments"]) + 1,
+                "body": contender_body,
+                "user": {"id": 123, "login": "fixture-owner"},
+                "author_association": "COLLABORATOR",
+                "created_at": "2026-09-01T00:00:00Z",
+            }
+        )
+
+    async def racing_create(**kwargs):
+        if contender_order == "earlier":
+            announce_contender()
+        created = await original_create(**kwargs)
+        if contender_order == "later":
+            announce_contender()
+        return created
+
+    monkeypatch.setattr(service, "create_issue_comment", racing_create)
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/this-deployment-attempt"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert state["posts"] == 1
+    if not proceeds:
+        assert brief.status == "FAILED", brief.outputs
+        assert brief.outputs["reasonCode"] == "active_attempt_conflict"
+        assert state["labels"] == []
+        return
+    assert brief.status == "COMPLETED", brief.outputs
+    assert state["labels"] == ["status: in-progress"]
+    started = await tools.update_github_issue_status(
+        {**inputs, "mode": "start"}, context, github_service_factory=lambda: service
+    )
+    assert started.status == "COMPLETED", started.outputs
+    assert started.outputs["attemptId"] == brief.outputs["attemptId"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["lose_release_ack", "reject_release"])
 async def test_failed_finalization_releases_durable_claim_after_remote_confirmation(
     journey, fault
