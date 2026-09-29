@@ -567,6 +567,7 @@ def _child_idempotency_key(
     ref: str,
     target_kind: str,
     target_slug: str,
+    inputs_digest: str,
 ) -> str | None:
     scope = _text(batch_scope)
     if not scope:
@@ -577,7 +578,13 @@ def _child_idempotency_key(
         ref=ref,
         target_kind=target_kind,
         target_slug=target_slug,
+        inputs_digest=inputs_digest,
     )
+
+
+def _canonical_digest(value: Any) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def build_child_request(
@@ -715,6 +722,7 @@ def build_child_request(
         ref=ref,
         target_kind=config.target_kind,
         target_slug=config.target_slug,
+        inputs_digest=_canonical_digest(payload_dict),
     )
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
@@ -739,10 +747,15 @@ def build_child_requests(
     inherit_runtime_from_caller: bool = False,
     default_repository: str | None = None,
 ) -> tuple[list[ChildSubmission], list[SkippedTarget]]:
-    """Build child requests, capped at ``max_workflows`` resolved targets."""
+    """Build child requests, capped at ``max_workflows`` resolved targets.
+
+    Targets that build an identical child request are one child: the first is
+    submitted and each repeat is skipped as ``duplicate_target``.
+    """
 
     submissions: list[ChildSubmission] = []
     skipped: list[SkippedTarget] = []
+    seen_requests: set[str] = set()
 
     limit = max(0, int(max_workflows))
     capped = targets[:limit]
@@ -768,6 +781,11 @@ def build_child_requests(
         if request is None:
             skipped.append(SkippedTarget(ref=ref, reason="unsupported_target"))
             continue
+        request_digest = _canonical_digest(request)
+        if request_digest in seen_requests:
+            skipped.append(SkippedTarget(ref=ref, reason="duplicate_target"))
+            continue
+        seen_requests.add(request_digest)
         submissions.append(
             ChildSubmission(
                 queue_request=request,
@@ -2418,7 +2436,9 @@ def main(argv: list[str] | None = None) -> int:
         inherit_runtime_from_caller=inherit_from_caller,
         default_repository=batch_repository,
     )
-        skipped = list(skipped)
+        # A repeated target is the same child, not another requested one.
+        duplicates = [item for item in skipped if item.reason == "duplicate_target"]
+        skipped = [item for item in skipped if item.reason != "duplicate_target"]
         created, errors, capacity_blocked = _submit_issue_jobs_gated(
         submissions,
         max_concurrency=int(args.max_concurrency),
@@ -2445,6 +2465,7 @@ def main(argv: list[str] | None = None) -> int:
     # An idempotent rerun can resolve to an existing child that already ended
     # unsuccessfully; that observed outcome is not newly queued work.
     live = [item for item in created if item["status"] not in {"failed", "canceled"}]
+    requested = len(targets) - len(duplicates)
     payload = {
         **base_result,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -2463,13 +2484,16 @@ def main(argv: list[str] | None = None) -> int:
         },
         "status": (
             "no_op" if not targets else
-            "queued" if len(live) == len(targets) and not errors and not skipped else
+            "queued" if len(live) == requested and not errors and not skipped else
             "partial_failure" if live else "failed"
         ),
-        "requested": len(targets),
+        "requested": requested,
         "created": len(created),
         "queued": created,
         "skipped": [{"ref": item.ref, "reason": item.reason} for item in skipped],
+        "duplicates": [
+            {"ref": item.ref, "reason": item.reason} for item in duplicates
+        ],
         "errors": errors,
         "failure": (
             {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if live else "BATCH_FANOUT_FAILED"}

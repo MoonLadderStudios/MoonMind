@@ -29,14 +29,24 @@ def normalize_runtime_id(value: str | None) -> str | None:
 
 
 def child_idempotency_key(
-    *, batch_scope: str, provider: str, ref: str, target_kind: str, target_slug: str
+    *,
+    batch_scope: str,
+    provider: str,
+    ref: str,
+    target_kind: str,
+    target_slug: str,
+    inputs_digest: str,
 ) -> str:
+    # ``inputs_digest`` binds the key to the child-affecting request, so an
+    # unchanged retry reconciles to the accepted child while a same-scope rerun
+    # with changed constraints, publish mode, or runtime is new work.
     components = {
         "scope": batch_scope.strip(),
         "provider": provider,
         "ref": ref,
         "targetKind": target_kind,
         "targetSlug": target_slug,
+        "inputs": inputs_digest,
     }
     if not components["scope"]:
         raise ValueError("batch_scope must be non-empty")
