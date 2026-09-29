@@ -250,7 +250,7 @@ For GitHub issues, the shared initial assessment decides this. When no unmet req
 * adds the `manual-only` label;
 * ends the run as an idle outcome, with no implementation, publication, or failed status.
 
-The released claim follows the ordinary terminal handoff. A retried step reuses its comment. An issue with remaining container work, or one blocked only by a missing credential, permission, or approval, is not manual-only; that work proceeds, and verification records any manual remainder for the next assessment.
+The label is applied only after the comment is confirmed on GitHub, including after an uncertain write, so a labelled issue always explains itself. A declaration without both a reason and at least one manual action is ignored, and the issue stays with automation. The released claim follows the ordinary terminal handoff. A retried step reuses its comment. An issue with remaining container work, or one blocked only by a missing credential, permission, or approval, is not manual-only; that work proceeds, and verification records any manual remainder for the next assessment.
 
 `manual-only` is a start-blocking label. Search skips the issue. An explicit issue workflow stops at its blocker step and reports the label as its blocker. MoonMind never removes the label: a person removes it after doing the manual work, or when automation should try again.
 

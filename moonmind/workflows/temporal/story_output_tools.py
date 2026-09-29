@@ -5773,24 +5773,25 @@ async def _assessment_payload(
 def _manual_only_declaration(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Read the assessment's judgment that no unmet requirement is container work.
 
+    Only a complete declaration counts: the person taking over needs both the
+    reason and the actions, so anything less leaves the issue to automation.
     Its text is posted on the issue, so it is redacted like attempt comments.
     """
     raw = payload.get("manualOnly") if isinstance(payload, Mapping) else None
-    if raw is True:
-        raw = {}
     if not isinstance(raw, Mapping):
         return None
-    reason = (
-        _string(raw.get("reason"))
-        or _string(payload.get("summary"))
-        or "The remaining work cannot be done from a Linux container."
-    )
+    reason = raw.get("reason").strip() if isinstance(raw.get("reason"), str) else ""
     actions = [
-        redact_comment_body(_string(action)[:500])
+        action.strip()
         for action in _list(raw.get("manualActions"))
-        if _string(action)
+        if isinstance(action, str) and action.strip()
     ]
-    return {"reason": redact_comment_body(reason[:1000]), "manualActions": actions[:20]}
+    if not reason or not actions:
+        return None
+    return {
+        "reason": redact_comment_body(reason[:1000]),
+        "manualActions": [redact_comment_body(action[:500]) for action in actions[:20]],
+    }
 
 
 async def _mark_github_issue_manual_only(
@@ -5828,34 +5829,47 @@ async def _mark_github_issue_manual_only(
     except ValueError:
         owner = ""
     marker = f"<!-- moonmind-manual-only {owner} -->" if owner else "<!-- moonmind-manual-only -->"
-    listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
-    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
-        return ToolResult(status="FAILED", outputs={
-            **outputs, "summary": f"Could not read {issue_ref} comments before marking it manual-only.",
-        })
-    if not any(marker in str(comment.get("body") or "") for comment in listed["comments"]):
-        lines = [
+
+    async def explained() -> bool | None:
+        listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+        if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+            return None
+        return any(marker in str(comment.get("body") or "") for comment in listed["comments"])
+
+    def stopped(summary: str) -> ToolResult:
+        # Never label without the explanation: the label alone would hide the
+        # issue from automation with no word on why or what a person must do.
+        return ToolResult(status="FAILED", outputs={**outputs, "summary": summary})
+
+    found = await explained()
+    if found is None:
+        return stopped(f"Could not read {issue_ref} comments before marking it manual-only.")
+    if not found:
+        body = "\n".join([
             f"MoonMind marked this issue `{GITHUB_MANUAL_ONLY_LABEL}`: its remaining work "
             "cannot be done by automation running in a Linux container.",
             "",
             f"**Why:** {manual_only['reason']}",
-        ]
-        if manual_only["manualActions"]:
-            lines += ["", "**Manual actions:**", *(f"- {action}" for action in manual_only["manualActions"])]
-        lines += [
+            "",
+            "**Manual actions:**",
+            *(f"- {action}" for action in manual_only["manualActions"]),
             "",
             f"Automatic issue selection skips this issue while the `{GITHUB_MANUAL_ONLY_LABEL}` "
             "label is present. Remove the label once the manual work is done or when "
             "automation should try again.",
             "",
             marker,
-        ]
+        ])
         created = await service.create_issue_comment(
-            repo=repository, issue_number=issue_number, body="\n".join(lines)
+            repo=repository, issue_number=issue_number, body=body
         )
-        if not created.get("ok") and created.get("reasonCode") != "outcome_unknown":
-            # The label is what stops automation; keep going and report this.
-            outputs["commentError"] = created.get("summary") or "Manual-only comment was not posted."
+        if not created.get("ok"):
+            # A lost response is unknown, not failure: reconcile by the marker.
+            if created.get("reasonCode") != "outcome_unknown" or not await explained():
+                return stopped(
+                    f"Could not post the manual-only explanation on {issue_ref}: "
+                    f"{created.get('summary') or 'comment create failed'}"
+                )
     await service.ensure_lifecycle_label(
         repo=repository,
         label=GITHUB_MANUAL_ONLY_LABEL,
