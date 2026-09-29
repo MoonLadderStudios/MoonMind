@@ -127,3 +127,38 @@ async def test_qualified_catalogs_are_confirmed_by_exact_membership() -> None:
     assert (available, present) == (["opencode-go/glm-5.3"], True)
     assert bare_present is False
     assert backend.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_model", ["claude-sonnet-5", "opus[1m]"])
+async def test_exact_claude_catalog_row_serves_without_a_probe(selected_model) -> None:
+    """Upstream: an exact row (picker id or wire model) always serves."""
+    backend = ServedProbeBackend("unserved")
+
+    _available, present = await confirm_exact_host_model(
+        backend=backend,
+        container_name="mm-host-1",
+        harness_id="claude-native",
+        model_options=_CLAUDE_OPTIONS,
+        selected_model=selected_model,
+    )
+
+    assert present is True
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_non_canonical_claude_selection_is_refused_without_a_probe() -> None:
+    """Upstream serves a non-exact id only as a canonical ``claude-`` id."""
+    backend = ServedProbeBackend("served")
+
+    _available, present = await confirm_exact_host_model(
+        backend=backend,
+        container_name="mm-host-1",
+        harness_id="claude-native",
+        model_options=_CLAUDE_OPTIONS,
+        selected_model="opencode-go/glm-5.3",
+    )
+
+    assert present is False
+    assert backend.calls == []

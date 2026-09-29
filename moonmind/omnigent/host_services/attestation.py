@@ -322,6 +322,16 @@ async def confirm_exact_host_model(
     )
     if not rows:
         return available, False
+    # The config-independent clauses of the upstream rule: an exact row (picker
+    # id or wire model) always serves, and a non-exact id serves only as a
+    # canonical ``claude-`` id. Only that family case needs the exact host.
+    if any(
+        row.get("id") == selected_model or row.get("model") == selected_model
+        for row in rows
+    ):
+        return available, True
+    if not selected_model.lower().startswith("claude-"):
+        return available, False
     probe = _substrate_guarded_probe(
         "import json, sys; " + _CLAUDE_NATIVE_IMPORT + "rows = json.loads(sys.argv[1]); "
         "config = claude_native.resolve_native_claude_config(spec=None); "
