@@ -767,32 +767,58 @@ async def verify_installed_fleet(runner, image, *, expected=None, attempts=60):
     )
 
 
+def _omnigent_release_store():
+    """Return the durable desired-state store, or None when there is none."""
+    from moonmind.workflows.skills.deployment_execution import (
+        FileDesiredStateStore,
+    )
+
+    env_file = str(
+        os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
+    ).strip()
+    if not env_file:
+        return None
+    return FileDesiredStateStore(
+        env_file_path=env_file,
+        json_file_path=os.environ.get(
+            "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", ""
+        )
+        or None,
+    )
+
+
+async def select_omnigent(runner, owner, image, *, actor="release"):
+    """Record the Omnigent release before the main pass renders it."""
+    from moonmind.workflows.skills.omnigent_release import (
+        production_drivers,
+        select_omnigent_release,
+    )
+
+    store = _omnigent_release_store()
+    if store is None:
+        return {"status": "skipped", "reason": "no durable desired-state file"}
+    return await select_omnigent_release(
+        store=store,
+        owner=owner,
+        drivers=production_drivers(
+            runner=runner, moonmind_image=image, actor=actor
+        ),
+    )
+
+
 async def migrate_omnigent(runner, owner, image, *, actor="release"):
     """Advance the singular Omnigent release; no-op when already aligned.
 
     Runs inside the primary success path so an omnigent migration failure
     blocks the release receipt exactly like a fleet verification failure.
     """
-    from moonmind.workflows.skills.deployment_execution import (
-        FileDesiredStateStore,
-    )
     from moonmind.workflows.skills.omnigent_release import (
         migrate_omnigent_release,
         production_drivers,
     )
 
-    store = FileDesiredStateStore(
-        env_file_path=os.environ.get(
-            "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", ""
-        ),
-        json_file_path=os.environ.get(
-            "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", ""
-        )
-        or None,
-    )
-    if not str(
-        os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
-    ).strip():
+    store = _omnigent_release_store()
+    if store is None:
         # No durable desired-state file: the singular record has nowhere to
         # live, so there is nothing to migrate. The receipt says so explicitly
         # instead of pretending alignment was verified.
@@ -972,6 +998,22 @@ async def _run_job_body(request_file):
                 runner, record["image"], request_file.parent, owner,
                 declared_urls=context.get("deployment_operator_urls"),
             )
+            # The main pass renders the recorded Omnigent refs, so select the
+            # Omnigent release first. A recorded server older than the one
+            # that migrated the Omnigent database would otherwise fail every
+            # update before the post-install migration could advance it.
+            # Selection failure is not fatal: the recorded release installs
+            # and the post-install migration reports the problem.
+            try:
+                omnigent_selection = await select_omnigent(
+                    runner, owner, record["image"]
+                )
+            except Exception as exc:
+                omnigent_selection = {"status": "failed", "error": str(exc)}
+            write_record(
+                request_file.parent / "omnigent-selection.json",
+                {"owner": owner, "selection": omnigent_selection},
+            )
             async with get_async_session_context() as session:
                 executor = replace(
                     executor,
@@ -1053,7 +1095,10 @@ async def _run_job_body(request_file):
                         result,
                         outputs={
                             **result.outputs,
-                            "omnigentRelease": omnigent_receipt,
+                            "omnigentRelease": {
+                                **omnigent_receipt,
+                                "preInstallSelection": omnigent_selection,
+                            },
                         },
                     )
             write_record(primary_file, {"owner": owner, "result": result.to_payload()})
