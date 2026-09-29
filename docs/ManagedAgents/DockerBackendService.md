@@ -739,12 +739,17 @@ deployment does not need, and #4012 already allowed a registry identity to use
 a provider-supported token. `MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED=false`
 restores the strict separation.
 
-The derivation is bound to `ghcr.io` and to deployment-declared images — a
-managed-session or Omnigent image from deployment configuration, or a container
-job's `imageSourceRef`. An image reference supplied by a job or any other
-workflow input is never authenticated this way, which is the exposure #4012
-step 5 guards against. Reading `GHCR_PULL_*` plaintext from agent-authored
-launch fields stays removed and must not be reintroduced. Incomplete
+The derivation is bound to `ghcr.io` and to deployment-declared repositories —
+a managed-session or Omnigent image from deployment configuration, a container
+job's `imageSourceRef`, or a direct container-job `image` whose registry and
+repository exactly equal those of a declared registry source that has no
+`registryCredentialRef` (for example a digest pin of that source's tag). The
+requested reference is pulled unchanged. Any other image reference supplied by
+a job or other workflow input is never authenticated this way, which is the
+exposure #4012 step 5 guards against, and a source bound to its own
+`registryCredentialRef` is reachable only through that source. Reading
+`GHCR_PULL_*` plaintext from agent-authored launch fields stays removed and
+must not be reintroduced. Incomplete
 pairs, unresolvable SecretRefs, rotation/disable between the paired reads,
 managed-store outage, and denied/revoked credentials fail at the registry
 boundary without trying another identity, ambient Docker login, or an
