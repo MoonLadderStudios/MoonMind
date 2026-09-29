@@ -1317,6 +1317,7 @@ def _submit_issue_jobs_gated(
                 "executionId": workflow_id,
                 "targetRef": submission.ref,
                 "idempotencyKey": idempotency_key,
+                "status": owned[workflow_id],
             }
         )
     return created, errors, blocked
@@ -1707,13 +1708,8 @@ def _submit_repository_child(
     )
     if status == "admission_lost":
         return None, "admission_unconfirmed: child missing immediately after queueing", None
-    if status == "unknown":
-        return (
-            None,
-            "admission_unconfirmed: child verification returned unknown; "
-            "preserved for bounded reconciliation instead of counting as queued",
-            None,
-        )
+    # The POST receipt's workflowId proves acceptance; an unavailable
+    # read-back leaves it accepted but unobserved ("unknown"), never rejected.
     return workflow_id, None, status
 
 
@@ -2204,7 +2200,7 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                 # as queued and fill the gate with finished children.
                 entry_status = (
                     owned_status
-                    if owned_status in {"succeeded", "failed", "canceled"}
+                    if owned_status in {"succeeded", "failed", "canceled", "unknown"}
                     else "queued"
                 )
                 per_target.append(
@@ -2446,6 +2442,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(failed, indent=2))
         return 2 if isinstance(exc, BatchInputError) else 1
 
+    # An idempotent rerun can resolve to an existing child that already ended
+    # unsuccessfully; that observed outcome is not newly queued work.
+    live = [item for item in created if item["status"] not in {"failed", "canceled"}]
     payload = {
         **base_result,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -2464,8 +2463,8 @@ def main(argv: list[str] | None = None) -> int:
         },
         "status": (
             "no_op" if not targets else
-            "queued" if len(created) == len(targets) and not errors and not skipped else
-            "partial_failure" if created else "failed"
+            "queued" if len(live) == len(targets) and not errors and not skipped else
+            "partial_failure" if live else "failed"
         ),
         "requested": len(targets),
         "created": len(created),
@@ -2473,8 +2472,8 @@ def main(argv: list[str] | None = None) -> int:
         "skipped": [{"ref": item.ref, "reason": item.reason} for item in skipped],
         "errors": errors,
         "failure": (
-            {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if created else "BATCH_FANOUT_FAILED"}
-            if errors or skipped else None
+            {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if live else "BATCH_FANOUT_FAILED"}
+            if errors or skipped or len(live) < len(created) else None
         ),
     }
     if payload["created"] == 0:

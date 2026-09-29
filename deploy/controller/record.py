@@ -228,21 +228,21 @@ class OperationStore:
     def find_completed(
         self, *, stack: str, desired_image: str
     ) -> dict | None:
-        """Return the newest completed record for the same target, if any.
+        """Return the completed record that still describes the installation.
 
         Only successful terminal states reattach: a retried submission for
         an already-installed image observes the recorded success instead
-        of repeating the mutation.
+        of repeating the mutation. An older success for the same image is
+        not proof once a later completed operation installed something else.
         """
-        matches = [
+        completed = [
             operation
             for operation in self.list_terminal(stack=stack)
-            if operation.get("desired", {}).get("image") == desired_image
-            and operation.get("status") in ("succeeded", "partially_verified")
+            if operation.get("status") in ("succeeded", "partially_verified")
         ]
-        if not matches:
+        if not completed or completed[-1].get("desired", {}).get("image") != desired_image:
             return None
-        return matches[-1]
+        return completed[-1]
 
     def supersede(self, operation_id: str, *, reason: str = "") -> dict:
         """Close an open operation as superseded without applying it.
