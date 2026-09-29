@@ -509,8 +509,11 @@ def _publication(
         latestResetBoundaryRef=None,
     )
 
+
+@pytest.mark.parametrize("input_refs", [[], ["artifact://art_original_brief"]])
 async def test_start_launches_missing_workflow_scoped_session_and_persists_result(
     tmp_path: Path,
+    input_refs,
 ) -> None:
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
@@ -595,6 +598,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     )
 
     request = _request(binding, workspace_path=str(workspace_path))
+    request.input_refs = input_refs
     request.step_execution = AgentRuntimeStepExecutionLaunch(
         workflowId="wf-user-1",
         runId="run-user-1",
@@ -3954,7 +3958,8 @@ async def test_start_populates_launch_metadata_from_prepared_turn_request(
         == "artifact_ref"
     )
 
-async def test_start_rejects_non_text_input_refs_for_session_turns(
+
+async def test_start_rejects_input_refs_without_materialization(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
@@ -3971,7 +3976,7 @@ async def test_start_rejects_non_text_input_refs_for_session_turns(
         load_session_snapshot=AsyncMock(),
         launch_session=AsyncMock(),
         session_status=AsyncMock(),
-        prepare_turn_instructions=_prepare_turn_instructions,
+        prepare_turn_instructions=None,
         send_turn=AsyncMock(),
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -3987,7 +3992,7 @@ async def test_start_rejects_non_text_input_refs_for_session_turns(
 
     with pytest.raises(
         ValueError,
-        match="does not support inputRefs",
+        match="inputRefs require turn instruction materialization",
     ):
         await adapter.start(request)
 
