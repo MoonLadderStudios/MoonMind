@@ -159,8 +159,9 @@ steps:
     requirement. Materialize the `constraints` input value to
     artifacts/batch-workflows-constraints.txt with a file write (never via
     shell echo, redirection, or interpolation of the value into a shell
-    command). When the constraints input is empty, leave the file absent
-    and send empty constraints.
+    command). When the constraints input is empty, write no file; the
+    rendered command then omits --constraints-file, so a file left by an
+    earlier run is never read.
 
     The trusted GitHub query excludes closed issues, pull requests, absent
     numbers, and responses without an explicit open state, rejects numeric
@@ -178,8 +179,8 @@ steps:
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
     --max-workflows "{{ inputs.max_workflows }}" \
-    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
-    --constraints-file artifacts/batch-workflows-constraints.txt
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %}{% if inputs.constraints %} \
+    --constraints-file artifacts/batch-workflows-constraints.txt{% endif %}
     The arbitrary constraints value travels only as batchOrchestration
     sharedInputs data and the fixed constraints file path; never interpolate
     the constraints value into shell commands. The batchOrchestration binding
