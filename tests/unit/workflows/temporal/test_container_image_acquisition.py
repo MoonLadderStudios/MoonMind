@@ -713,6 +713,45 @@ async def test_job_image_in_a_declared_ghcr_repository_uses_the_github_identity(
 
 
 @pytest.mark.asyncio
+async def test_denied_job_image_in_a_declared_repository_names_a_working_remedy(
+    tmp_path, monkeypatch
+) -> None:
+    """The remedy for a direct reference must be one that fixes it.
+
+    Adding a ``registryCredentialRef`` to the source makes the source usable
+    only through ``imageSourceRef``, so advising it for a direct reference
+    would leave the same request failing the same way.
+    """
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = b"unauthorized: authentication required\n"
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _unavailable(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _unavailable,
+    )
+
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(_request(GHCR_PINNED_IMAGE))
+
+    error = excinfo.value
+    assert error.failure_class is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    message = str(error)
+    assert GHCR_SOURCE_REF in message
+    assert "read:packages" in message
+    assert f"imageSourceRef {GHCR_SOURCE_REF!r}" in message
+    assert "registryCredentialRef" not in message
+
+
+@pytest.mark.asyncio
 async def test_job_image_outside_declared_ghcr_repositories_stays_anonymous(
     tmp_path, monkeypatch
 ) -> None:

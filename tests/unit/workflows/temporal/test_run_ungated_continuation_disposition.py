@@ -378,9 +378,10 @@ def test_real_provider_failure_with_rejected_continuation_remains_retryable(
 # Shape of a managed-session (codex_cli) child result whose adapter validated
 # the resolver's own terminal artifact and derived the failure from it. The
 # runtime failure is authoritative, so AgentRun never runs terminal-evidence
-# evaluation and no ``terminalContract*`` fields exist. Recorded on
-# 2026-09-29: each of four Tactics runs repeated the same blocked verdict three
-# more times, holding the single codex slot for queued runs.
+# evaluation and no ``terminalContract*`` fields exist. Observed on
+# 2026-09-29 (before the adapter marker existed): each of four Tactics runs
+# repeated the same blocked verdict three more times, holding the single
+# codex slot for queued runs.
 _ADAPTER_VALIDATED_BLOCKED_VERDICT: dict[str, Any] = {
     "outputRefs": ["sess:mm:474c70be:codex_cli/stdout.log"],
     "summary": (
@@ -399,6 +400,7 @@ _ADAPTER_VALIDATED_BLOCKED_VERDICT: dict[str, Any] = {
         "mergeAutomationDisposition": "manual_review",
         "prResolverFinalReason": "deferred_comments",
         "prResolverMergeGateOwned": False,
+        "prResolverTerminalVerdictApplied": True,
     },
 }
 
@@ -440,18 +442,45 @@ def test_adapter_validated_resolver_verdict_is_not_retried(
     )
 
 
+def test_adapter_verdict_from_a_valid_fallback_artifact_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected earlier candidate does not disqualify the applied verdict.
+
+    The loader keeps validation failures from ``var/pr_resolver/result.json``
+    while selecting a valid ``artifacts/pr_resolver_result.json``; the verdict
+    the adapter applied came from the valid one.
+    """
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+
+    assert (
+        workflow._activity_result_retryable(
+            _adapter_verdict_result(
+                workflow,
+                prResolverTerminalProvenance="artifacts/pr_resolver_result.json",
+                prResolverTerminalValidationFailures=[
+                    "var/pr_resolver/result.json: stale terminal artifact"
+                ],
+            ),
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     "metadata_overrides",
     [
-        # The artifact failed identity/freshness/shape validation.
-        {"prResolverTerminalValidationFailures": ["stale terminal artifact"]},
-        # No validated artifact backs the disposition.
-        {"prResolverTerminalProvenance": None},
+        # A valid verdict exists, but the adapter kept an unrelated runtime
+        # failure (for example a specific nonzero process exit) instead.
+        {"prResolverTerminalVerdictApplied": None},
         # A continuation, not a terminal answer.
         {"mergeAutomationDisposition": "reenter_gate"},
     ],
 )
-def test_unvalidated_adapter_resolver_state_remains_retryable(
+def test_unapplied_adapter_resolver_state_remains_retryable(
     monkeypatch: pytest.MonkeyPatch,
     metadata_overrides: dict[str, Any],
 ) -> None:
@@ -470,7 +499,9 @@ def test_real_provider_failure_beside_a_resolver_verdict_remains_retryable(
 ) -> None:
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
     workflow = MoonMindRunWorkflow()
-    result = _adapter_verdict_result(workflow)
+    result = _adapter_verdict_result(
+        workflow, prResolverTerminalVerdictApplied=None
+    )
     result["outputs"]["providerErrorCode"] = "RATE_LIMITED"
     result["outputs"]["retryRecommendation"] = "retry"
 
