@@ -17,6 +17,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from moonmind.workflows.skills.deployment_execution import (
+    DEPLOYMENT_CONTROL_SERVICE as CONTROL_SERVICE,
+    PROTECTED_SUBSTRATE_SERVICES,
     ToolFailure,
     ToolResult,
     _atomic_write_bytes,
@@ -27,15 +29,6 @@ from moonmind.workflows.skills.deployment_execution import (
 )
 from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECONDS
 
-CONTROL_SERVICE = "temporal-worker-deployment-control"
-
-#: Services the updater never recreates in its main pass. It reaches Docker
-#: through docker-proxy, so recreating that service stops the proxy under the
-#: running update and strands the stack without a Docker transport; postgres
-#: and the egress gateway are stateful substrate the staged passes own. The
-#: release job protects them itself so every caller -- the host entrypoint and
-#: a Settings/workflow submission alike -- gets the same update.
-PROTECTED_SUBSTRATE_SERVICES = ("docker-proxy", "sandbox-egress-proxy", "postgres")
 
 DIAGNOSIS_BOUND = 1000
 _DIAGNOSIS_ELISION = "\n...[elided]...\n"
@@ -932,12 +925,19 @@ async def _run_job_body(request_file):
     executor = _build_deployment_update_executor()
     if executor is None:
         raise ValueError("Deployment execution substrate is unavailable")
-    excluded = executor.excluded_services
-    if CONTROL_SERVICE in excluded:
-        raise ValueError(
-            "A coherent versioned release must include the deployment worker; remove its obsolete self-preservation exclusion"
+    # The release protects its own transport and stateful substrate for every
+    # caller: the host entrypoint and a Settings/workflow submission alike.
+    # The updater runs in its own one-off container, so the deployment worker
+    # is recreated with a coherent release; the obsolete runner exclusion that
+    # existing operator .env files still carry from the previous template is
+    # dropped instead of failing every workflow-submitted update.
+    excluded = tuple(
+        dict.fromkeys(
+            service
+            for service in (*executor.excluded_services, *PROTECTED_SUBSTRATE_SERVICES)
+            if service.strip().lower() != CONTROL_SERVICE
         )
-    excluded = tuple(dict.fromkeys((*excluded, *PROTECTED_SUBSTRATE_SERVICES)))
+    )
     runner = replace(
         executor.runner,
         excluded_services=excluded,

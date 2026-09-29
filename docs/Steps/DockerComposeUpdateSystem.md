@@ -176,8 +176,14 @@ changed services by default.
 The updater reaches Docker through `docker-proxy`, so the main pass never
 recreates it, `postgres`, or `sandbox-egress-proxy`, whichever caller
 submitted the update. The egress gateway is aligned before the workers that
-attest it, and other excluded substrate is reconciled in a staged pass after
-the main stack verifies.
+attest it. Other excluded substrate is reconciled in a staged pass after the
+main stack verifies when its image or its installed definition differs from
+the release. Definition drift compares each container's recorded Compose
+config hash with the release rendered under the project directory that
+container recorded, so a different spelling of the same checkout never
+counts as drift. The updater never recreates its own transport: a drifted
+`docker-proxy` stays running and fails the release as unconverged substrate
+for the standalone controller to reconcile.
 
 Preserve dependency order and required `init-db`/schema migration gating before new dependent services start. Bring necessary infrastructure up in the existing Compose lifecycle. A failed migration preserves the original error and data rather than starting an incompatible application or attempting a destructive downgrade.
 
