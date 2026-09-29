@@ -107,6 +107,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         "MOONMIND_EXECUTION_PROFILE_REF": "test-profile-exact",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": str(capability_file),
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH": str(spool),
+        "MOONMIND_STEP_EXECUTION_ID": "batch:run:node-1:execution:1",
     }
     try:
         for _ in range(2):
@@ -119,6 +120,19 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             summary = json.loads((spool / "batch_pr_resolver_result.json").read_text())
             assert summary["created"] == 4
             assert summary["errors"] == []
+            from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+            evaluation = evaluate_terminal_evidence(
+                {
+                    "contractId": "batch_pr_resolver_fanout.v1",
+                    "relativePath": "artifacts/batch_pr_resolver_result.json",
+                    "expectedSchemaVersion": "moonmind.batch-pr-resolver-result.v1",
+                    "executionRef": env["MOONMIND_STEP_EXECUTION_ID"],
+                },
+                workspace_path=str(tmp_path),
+                artifact_spool_path=str(spool),
+            )
+            assert evaluation.satisfied, evaluation
             assert {item["workflowId"] for item in summary["queued"]} == {
                 item["workflowId"] for item in records.values()
             }
@@ -151,6 +165,28 @@ def _load_module() -> dict[str, Any]:
             / "batch_pr_resolver.py"
         )
     )
+
+
+def test_discovery_failure_replaces_previous_success_evidence(tmp_path, monkeypatch):
+    module = _load_module()
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    result_path = artifacts / "batch_pr_resolver_result.json"
+    result_path.write_text(json.dumps({"status": "queued", "executionRef": "old"}))
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "current-attempt")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(artifacts))
+    monkeypatch.setattr(sys, "argv", ["batch_pr_resolver.py", "--repo", "owner/repo"])
+
+    def fail_discovery(**kwargs):
+        raise RuntimeError("GitHub discovery unavailable")
+
+    module["main"].__globals__["_run_pr_list"] = fail_discovery
+    with pytest.raises(RuntimeError, match="GitHub discovery unavailable"):
+        asyncio.run(module["main"]())
+    payload = json.loads(result_path.read_text())
+    assert payload["status"] == "running"
+    assert payload["executionRef"] == "current-attempt"
+    assert payload["created"] == 0
 
 def _expected_child_idempotency_key(
     *,
