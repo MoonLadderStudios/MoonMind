@@ -528,7 +528,7 @@ async def test_continue_conflicts_on_reused_key_with_changed_request(
 
 @pytest.mark.asyncio
 async def test_captured_evidence_projects_authorized_refs(monkeypatch) -> None:
-    async def _owned(*, service, workflow_id, user):  # noqa: ANN001
+    async def _owned(*, service, workflow_id, user, allow_historical=False):  # noqa: ANN001
         return SimpleNamespace(workflow_id="mm:source", run_id="run-1")
 
     async def _resolve(*, workflow_id, run_id):  # noqa: ANN001
@@ -568,7 +568,7 @@ async def test_list_continuations_outbound_and_inbound(monkeypatch) -> None:
         )
     destination_id = created.destination_workflow_id
 
-    async def _owned(*, service, workflow_id, user):  # noqa: ANN001
+    async def _owned(*, service, workflow_id, user, allow_historical=False):  # noqa: ANN001
         return TemporalExecutionRecord(
             workflow_id=workflow_id, run_id="r", state=MoonMindWorkflowState.COMPLETED
         )

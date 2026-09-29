@@ -979,12 +979,29 @@ def test_capability_sources_issue_no_retired_tool_descriptor() -> None:
 
 
 def test_worker_catalog_has_no_manifest_workflow_or_activity() -> None:
-    """New worker/catalog registers no Manifest workflow or Activity."""
+    """New worker/catalog registers no Manifest workflow or Activity.
+
+    Retired ManifestIngest rows stay readable through the historical read
+    scope (MoonLadderStudios/MoonMind#4189); that read-only name is the only
+    permitted mention and never becomes a registration.
+    """
+    from moonmind.workflows.temporal.workflow_registry import (
+        HISTORICAL_PRODUCT_WORKFLOW_TYPES,
+        workflow_projection_scopes,
+    )
+
+    assert HISTORICAL_PRODUCT_WORKFLOW_TYPES == ("MoonMind.ManifestIngest",)
+    assert not set(HISTORICAL_PRODUCT_WORKFLOW_TYPES) & set(
+        workflow_projection_scopes()
+    )
     registry = (
         REPO_ROOT / "moonmind/workflows/temporal/workflow_registry.py"
     ).read_text(encoding="utf-8")
     code_lines = [
-        line for line in registry.splitlines() if not line.lstrip().startswith("#")
+        line
+        for line in registry.splitlines()
+        if not line.lstrip().startswith("#")
+        and not line.startswith("HISTORICAL_PRODUCT_WORKFLOW_TYPES = ")
     ]
     code = "\n".join(code_lines)
     assert "ManifestIngest" not in code
