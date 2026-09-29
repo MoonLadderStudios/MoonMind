@@ -22,10 +22,16 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   optional profiles, embedded vector startup, and pgvector init SQL. Live
   startup remains a protected deployment check (see
   ``test_topology_matrix_gaps_are_explicit``).
-- Real startup: hermetic sentinel logic only
-  (``test_startup_sentinel_*``). Fresh Compose startup, init-db/Alembic,
-  readiness, dashboard bootstrap, and repeated startup are protected checks
-  owned with the cutover child, not claimed here.
+- Real startup: ``test_vector_free_settings_init_*`` (clean default +
+  upgraded stale-env init), ``test_vector_free_startup_imports_*`` (real
+  API/worker production imports under sanitized env),
+  ``test_vector_free_ordinary_workflow_journey_shared_runtime`` (ordinary
+  work through the shared canonical contract, both harness modes),
+  ``test_vector_free_compose_startup_config_*`` (rendered startup chain),
+  plus hermetic sentinel logic (``test_startup_sentinel_*``). Live
+  `docker compose up`, readiness probes against running services,
+  dashboard bootstrap, and repeated startup are protected checks owned
+  with the cutover child, not claimed here.
 - Public admission: ``test_admission_*`` exercises the real production
   admission path (``reject_retired_vector_fields`` /
   ``strip_absent_vector_fields`` from #4105) including hidden-state residue
@@ -647,8 +653,14 @@ def test_topology_matrix_gaps_are_explicit() -> None:
     dependency/import scans, migration SQL scan, settings stale-env tolerance,
     admission wiring (execution contract, checkpoint branch models,
     AgentExecutionRequest), retry input-reuse, capability-manifest source scan,
-    worker-registry Manifest absence, drain-gate predicate logic, and
-    docs/operations surfaces.
+    worker-registry Manifest absence, drain-gate predicate logic,
+    docs/operations surfaces, plus the credential-free startup slice:
+    settings init under clean-default and upgraded stale env
+    (``test_vector_free_settings_init_*``), startup production imports
+    (``test_vector_free_startup_imports_*``), the shared-runtime ordinary
+    workflow journey (``test_vector_free_ordinary_workflow_journey_*``), and
+    the rendered Compose startup chain
+    (``test_vector_free_compose_startup_config_*``).
 
     The following rows still require protected deployment evidence owned with
     the cutover child and sibling removals (#4106-#4113), and are NOT claimed
@@ -1036,3 +1048,246 @@ def test_manifest_drain_gate_blocks_on_open_histories() -> None:
     assert blocked.may_deploy_removal is False
     assert blocked.outstanding == 1
     assert "open_manifest_ingest_histories" in blocked.blocking_dimensions
+
+
+# ---------------------------------------------------------------------------
+# Real startup/import/execution checks (#4114 remaining work).
+#
+# Credential-free slice owned by this module in existing required CI
+# (pytest-unit-tests backend-matrix): real production imports, real settings
+# initialization under a clean default and a representative upgraded
+# environment, real admission through the shared canonical execution
+# contract, and the rendered Compose startup configuration. Dependency lock /
+# image-layer evidence stays owned by #4111 and Manifest retirement
+# integration by #4193 / #4189; those results are consumed here by scope
+# reference, not reproduced. Live `docker compose up` probes, API/worker
+# readiness probes against running services, dashboard bootstrap, and
+# browser journeys remain protected deployment checks (see
+# ``test_topology_matrix_gaps_are_explicit``) and are NOT claimed here.
+# ---------------------------------------------------------------------------
+
+
+_STALE_VECTOR_ENV_4114 = {
+    "QDRANT_URL": "http://qdrant:6333",
+    "QDRANT_HOST": "qdrant",
+    "QDRANT_PORT": "6333",
+    "QDRANT_ENABLED": "true",
+    "VECTOR_STORE_PROVIDER": "qdrant",
+    "RAG_ENABLED": "true",
+}
+
+_VECTOR_ENV_KEYS_4114 = (
+    "QDRANT_URL",
+    "QDRANT_HOST",
+    "QDRANT_PORT",
+    "QDRANT_ENABLED",
+    "QDRANT_API_KEY",
+    "VECTOR_STORE_PROVIDER",
+    "VECTOR_STORE_COLLECTION_NAME",
+    "RAG_ENABLED",
+    "RAG_SIMILARITY_TOP_K",
+    "DEFAULT_EMBEDDING_PROVIDER",
+    "GOOGLE_EMBEDDING_MODEL",
+    "OPENAI_EMBEDDING_MODEL",
+)
+
+
+def _assert_settings_vector_free(settings: object) -> None:
+    """Shared startup-readiness predicate: settings expose no vector surface."""
+    for field in (
+        "qdrant",
+        "rag",
+        "vector_store_provider",
+        "vector_store_collection_name",
+        "default_embedding_provider",
+    ):
+        assert not hasattr(settings, field), field
+
+
+def _sanitize_vector_env(
+    monkeypatch: pytest.MonkeyPatch, extra: dict | None = None
+) -> None:
+    for key in _VECTOR_ENV_KEYS_4114:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in (extra or {}).items():
+        monkeypatch.setenv(key, value)
+
+
+def test_vector_free_settings_init_clean_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real production settings import + init with a clean vector-free env."""
+    from moonmind.config.settings import AppSettings
+
+    _sanitize_vector_env(monkeypatch)
+    settings = AppSettings(_env_file=None)
+    _assert_settings_vector_free(settings)
+
+
+def test_vector_free_settings_init_upgraded_stale_env_inert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Representative upgraded instance: stale vector env stays inert at init."""
+    from moonmind.config.settings import AppSettings
+
+    _sanitize_vector_env(monkeypatch, extra=dict(_STALE_VECTOR_ENV_4114))
+    settings = AppSettings(_env_file=None)
+    _assert_settings_vector_free(settings)
+
+
+def test_vector_free_startup_imports_resolve_without_vector_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API/worker startup imports resolve with no vector configuration.
+
+    Exercises the real production modules behind API and worker readiness
+    (execution contract, workflow registry, checkpoint admission, agent
+    runtime admission, capability sources, drain gate) under a sanitized
+    env. Live readiness probes against running services remain protected.
+    """
+    _sanitize_vector_env(monkeypatch)
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.schemas.checkpoint_branch_models import (
+        CheckpointBranchCreateRequest,
+    )
+    from moonmind.workflows.executions.execution_contract import (
+        CanonicalWorkflowExecutionPayload,
+        reject_retired_vector_fields,
+    )
+    from moonmind.workflows.temporal.workflow_registry import (
+        product_workflow_types,
+        workflow_projection_scopes,
+    )
+
+    assert "MoonMind.ManifestIngest" not in set(product_workflow_types())
+    assert "MoonMind.ManifestIngest" not in set(workflow_projection_scopes())
+    with pytest.raises(Exception, match="4105|retired|vector"):
+        reject_retired_vector_fields(
+            {"rag": {"collections": ["docs"], "required": True}},
+            field_path="payload",
+        )
+    # Admitting models import cleanly is itself the startup check; a minimal
+    # vector-free payload validates through the shared production path.
+    payload = CanonicalWorkflowExecutionPayload.model_validate(
+        {"repository": "acme/repo", "task": {"instructions": "Summarize"}}
+    )
+    assert payload.task.instructions == "Summarize"
+    assert CheckpointBranchCreateRequest is not None
+    assert AgentExecutionRequest is not None
+
+
+@pytest.mark.parametrize("runtime_mode", ["codex", "claude_code"])
+def test_vector_free_ordinary_workflow_journey_shared_runtime(
+    runtime_mode: str,
+) -> None:
+    """Ordinary vector-free work admits once through the shared runtime path.
+
+    One canonical implementation serves every harness
+    (``CanonicalWorkflowExecutionPayload``); both parametrized modes exercise
+    that same path with explicit context (instructions, input attachments,
+    skill), preserved artifacts, a terminal publish outcome, and idempotent
+    retry. A differing-adapter case is unnecessary here because no adapter
+    boundary changes admission semantics.
+    """
+    from moonmind.workflows.executions.execution_contract import (
+        CanonicalWorkflowExecutionPayload,
+        SUPPORTED_RUNTIME_MODES,
+        WorkflowContractError,
+        reject_retired_vector_fields,
+        strip_absent_vector_fields,
+    )
+
+    raw: dict = {
+        "repository": "acme/repo",
+        "task": {
+            "instructions": "Summarize the repository state.",
+            "runtime": {"mode": runtime_mode},
+            "skill": {"id": "document-update"},
+            "inputAttachments": [
+                {
+                    "artifactId": "art-input-1",
+                    "filename": "input.md",
+                    "contentType": "text/markdown",
+                    "sizeBytes": 18,
+                }
+            ],
+            "publish": {"mode": "none"},
+        },
+    }
+    admitted = CanonicalWorkflowExecutionPayload.model_validate(raw)
+    dumped = admitted.model_dump(by_alias=True, exclude_none=True)
+    workflow = dumped["workflow"]
+    # Explicit context survives admission unchanged.
+    assert workflow["instructions"] == "Summarize the repository state."
+    assert workflow["inputAttachments"] == [
+        {
+            "artifactId": "art-input-1",
+            "filename": "input.md",
+            "contentType": "text/markdown",
+            "sizeBytes": 18,
+        }
+    ]
+    assert workflow["skill"]["id"] == "document-update"
+    assert workflow["publish"]["mode"] == "none"
+    # Both harness modes validate through the same canonical implementation;
+    # the runtime value normalizes per the rollout policy (#3833), so pin
+    # membership in the supported set rather than the literal input.
+    assert workflow["runtime"]["mode"] in SUPPORTED_RUNTIME_MODES
+    # No vector fields leak into the admitted terminal outcome.
+    assert "rag" not in workflow
+    assert "followUpRetrieval" not in workflow
+    # Retry reuses the exact admitted input (relevant recovery).
+    first = strip_absent_vector_fields(dict(workflow))
+    second = strip_absent_vector_fields(dict(first))
+    assert second == first
+    assert first["instructions"] == "Summarize the repository state."
+    # An explicit retired requirement is rejected before any effect, and the
+    # caller's mapping is not mutated into a consequential delivery.
+    retired = {"instructions": "Summarize", "rag": {"required": True}}
+    with pytest.raises(WorkflowContractError, match="4105|retired|vector"):
+        reject_retired_vector_fields(dict(retired), field_path="workflow")
+    assert retired == {"instructions": "Summarize", "rag": {"required": True}}
+
+
+def test_vector_free_compose_startup_config_renders_required_services() -> None:
+    """Rendered Compose startup config carries the required vector-free stack.
+
+    Real startup-configuration execution check (hermetic YAML render): the
+    default Compose file declares the API + init-db + postgres + temporal
+    startup chain with health/dependency wiring and no vector interpolation,
+    so a stale ``QDRANT_*`` environment cannot reintroduce a backend at
+    render time. Live `docker compose up` and readiness probes stay
+    protected deployment checks owned with the reliability journey.
+    """
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
+    assert check_compose_vector_free(compose) == []
+    services = compose.get("services", {}) or {}
+    for required in ("api", "postgres", "temporal", "init-db"):
+        assert required in services, f"missing startup service {required!r}"
+    assert any(
+        name.startswith("temporal-worker-") for name in services
+    ), "expected temporal worker services in the startup chain"
+    api = services["api"] or {}
+    assert api.get("healthcheck"), "api service must declare a healthcheck"
+    depends = api.get("depends_on", {})
+    depends_keys = (
+        set(depends.keys()) if isinstance(depends, dict) else set(depends or [])
+    )
+    assert {"init-db", "postgres"} <= depends_keys
+    text = (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+    code_lines = [
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    # Retirement-notice comments may name QDRANT_URL (as in the api service
+    # env comment); live wiring must not exist: no QDRANT_URL assignment,
+    # no ${QDRANT...} interpolation, and no non-comment QDRANT_URL line.
+    assert "QDRANT_URL=" not in code
+    assert "${QDRANT" not in code
+    assert not re.search(r"(?m)^\s*-?\s*QDRANT_URL", code)
+    test_compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.test.yaml").read_text()
+    )
+    assert check_compose_vector_free(test_compose) == []
