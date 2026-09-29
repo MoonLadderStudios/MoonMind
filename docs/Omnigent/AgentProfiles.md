@@ -59,10 +59,13 @@ upstream identity and version. Refresh commits only discovery in its own transac
 it cannot commit partial workflow authoring, change a selected profile, or replace
 an unavailable version. Failed refreshes remain actionable admission failures.
 
-Unless generic Claude admission is explicitly stopped, the authenticated stock `claude-native-ui`
-agent observation also supplies a `claude-native` harness record in the same
-persisted catalog snapshot. The upstream harness picker omits native wrappers;
-the catalog record is present only while the stock agent is observed.
+The upstream harness picker omits native wrappers, so an authenticated stock
+agent observation supplies each wrapper's harness record in the same persisted
+catalog snapshot: `codex-native-ui` supplies `codex-native`, and, unless generic
+Claude admission is explicitly stopped, `claude-native-ui` supplies
+`claude-native`. The picker's `codex` row is the separate CLI-subprocess harness
+and never stands in for `codex-native`. Each wrapper record is present only
+while its stock agent is observed.
 
 Workflow, schedule, checkpoint-branch, and remediation authoring expose
 Runtime and one Profile selection. Runtime stays visible and names a stable
