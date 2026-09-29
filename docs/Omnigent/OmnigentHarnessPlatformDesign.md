@@ -1102,8 +1102,12 @@ their original terminal errors. The attestor makes at most three catalog reads,
 separated by one and two seconds, using the same
 admitted model, image, credentials, workspace, and egress policy. A successful CLI
 exit alone does not prove model availability: OpenCode can return its bundled
-catalog when a refresh fails. Only an observation containing the exact selected
-model permits launch. Build, credential, and policy failures remain outside this
+catalog when a refresh fails. For qualified (`provider/model`) catalogs, only an
+observation containing the exact selected model permits launch. Claude Code
+catalogs list picker aliases and bare Anthropic ids (`opus[1m]` ->
+`claude-opus-5-5[1m]`), so the exact host evaluates the observed rows with its
+own upstream Claude serving rule and only a `served` answer permits launch.
+Build, credential, and policy failures remain outside this
 read-retry policy, and cancellation interrupts it. Model evidence retains the
 bounded observations and typed probe failures without raw CLI diagnostics. On
 exhaustion, the attestor publishes that evidence before host cleanup and reports

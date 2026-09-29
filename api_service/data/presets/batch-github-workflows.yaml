@@ -171,14 +171,15 @@ steps:
     Resolve the range and queue each matched issue with "{{ inputs.run_ref }}",
     publish override "{{ inputs.publish_mode }}", cap {{ inputs.max_workflows }}
     targets, and run_verify="{{ inputs.run_verify }}" from inputs. Invoke the
-    resolved Skill entrypoint exactly once with data-safe arguments:
+    resolved Skill entrypoint exactly once, quoted exactly as rendered, with
+    data-safe arguments:
     python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
-    --github-issue-range "{{ inputs.issue_range }}" \
-    --github-repository "{{ inputs.repository }}" \
+    --github-issue-range {{ inputs.issue_range | shell_quote }} \
+    --github-repository {{ inputs.repository | shell_quote }} \
     --repository-connection-ref "$MOONMIND_REPOSITORY_CONNECTION_REF" \
-    --run-ref "{{ inputs.run_ref }}" \
-    --publish-mode "{{ inputs.publish_mode }}" \
-    --max-workflows "{{ inputs.max_workflows }}" \
+    --run-ref {{ inputs.run_ref | shell_quote }} \
+    --publish-mode {{ inputs.publish_mode | shell_quote }} \{% if inputs.max_workflows %}
+    --max-workflows {{ inputs.max_workflows | shell_quote }} \{% endif %}
     {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %}{% if inputs.constraints %} \
     --constraints-file artifacts/batch-workflows-constraints.txt{% endif %}
     The arbitrary constraints value travels only as batchOrchestration

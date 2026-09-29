@@ -563,11 +563,20 @@ async def resolve_omnigent_images(
 
     # Persist provenance for every distinct selected image. Shared and Pi hosts
     # can be built independently of the OpenCode image and of the server.
+    # An immutable digest's labels and binary cannot change, so a probe that
+    # observed nothing (for example Docker unreachable while an update restarts
+    # its proxy) keeps the prior observation of that same digest instead of
+    # recording null provenance that blocks every Host Class admission.
+    previous_provenance = (
+        previous.details.get("hostImageProvenance") if previous else None
+    )
+    if not isinstance(previous_provenance, Mapping):
+        previous_provenance = {}
     host_provenance = {}
     observed_verdicts = {verdict.image_ref: verdict for verdict in verdicts}
     for image_ref in sorted({ref for ref in (opencode_ref, pi_ref, shared_ref) if ref}):
         verdict = observed_verdicts.get(image_ref)
-        host_provenance[image_ref] = {
+        observed = {
             "buildDigest": (
                 verdict.build_digest
                 if verdict
@@ -577,6 +586,12 @@ async def resolve_omnigent_images(
                 verdict.version if verdict else await _image_omnigent_version(image_ref)
             ),
         }
+        prior = previous_provenance.get(image_ref)
+        if _is_digest_pinned(image_ref) and isinstance(prior, Mapping):
+            for key, value in observed.items():
+                if not value and prior.get(key):
+                    observed[key] = prior[key]
+        host_provenance[image_ref] = observed
 
     # Architecture detection
     arch = "linux/amd64"

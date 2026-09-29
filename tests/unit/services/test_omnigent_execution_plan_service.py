@@ -1016,6 +1016,127 @@ async def test_qualified_claude_catalog_admits_pinned_native_harness(
 
 
 @pytest.mark.asyncio
+async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
+    monkeypatch, tmp_path
+) -> None:
+    """Codex via Omnigent compiles from the inventory a real endpoint reports.
+
+    Omnigent's ``/v1/harnesses`` picker lists the ``codex`` CLI harness but
+    omits the ``codex-native`` wrapper; only the ``codex-native-ui`` stock
+    agent in ``/v1/agents`` proves the wrapper exists. The seeded Codex Agent
+    Profile names ``codex-native`` and pins no catalog ref, so admission reads
+    the latest synchronized observation.
+    """
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db.models import Base
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        DbHarnessCatalogRepository,
+        OmnigentHarnessCatalogService,
+    )
+
+    class Endpoint:
+        async def get_version(self):
+            return "0.16.0"
+
+        async def list_harnesses(self):
+            return [
+                {
+                    "id": "codex",
+                    "label": "Codex",
+                    "capabilities": {
+                        "integration_mode": "cli-subprocess",
+                        "model_family": "gpt",
+                    },
+                }
+            ]
+
+        async def list_agents(self):
+            return [
+                {
+                    "id": "16a06503889b0c3034496821afd41b9e",
+                    "name": "codex-native-ui",
+                    "version": "1",
+                    "harness": "codex-native",
+                }
+            ]
+
+        async def list_hosts(self):
+            return []
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/codex.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    synchronized = await OmnigentHarnessCatalogService(
+        client=Endpoint(),
+        repository=DbHarnessCatalogRepository(factory),
+        endpoint_ref="default",
+        omnigent_build_digest="sha256:" + "b" * 64,
+        observation_overlay=_overlay_native_harnesses,
+    ).synchronize()
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="codex-native", policy="codex-on-demand@2")
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    snapshot = _snapshot(
+        harness="codex-native",
+        policy="codex-on-demand@2",
+        provider_id="codex-oauth",
+    )
+    result = await service.compile_and_persist_execution_plan(
+        session_factory=factory,
+        artifact_service=_ArtifactService(),
+        principal="user-1",
+        workflow_id="mm:test-codex-synchronized-inventory",
+        agent_profile_snapshot=snapshot,
+        provider_profile=SimpleNamespace(
+            profile_id="codex-oauth",
+            runtime_id="codex_cli",
+            provider_id="openai",
+        ),
+        initial_parameters={
+            "model": "gpt-5.5",
+            "targetRuntime": "omnigent",
+            "publishMode": "none",
+            "maxAttempts": 2,
+            "workflow": {"instructions": "Read the repository."},
+        },
+        authored_request_ref="art_request_1",
+        authored_request_digest="sha256:" + "1" * 64,
+        task_input_snapshot_ref="art_request_1",
+        task_input_snapshot_digest="sha256:" + "1" * 64,
+        execution_plan_store=_PlanStore(object()),
+    )
+
+    payload = result.envelope.payload
+    assert payload.executionRealizerRef == "codex-profile-bound@1"
+    assert payload.harnessCatalogRef == synchronized.snapshot.catalogRef
+    codex = next(
+        row for row in synchronized.snapshot.harnesses if row.id == "codex-native"
+    )
+    assert payload.harnessImplementationRef == (
+        codex.implementation.implementation_ref()
+    )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["factory", "session"])
 @pytest.mark.parametrize("failure", ["missing", "database_error"])
 async def test_catalog_authority_failure_cannot_select_fixture_or_latest(
