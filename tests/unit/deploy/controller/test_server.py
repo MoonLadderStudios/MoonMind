@@ -826,3 +826,87 @@ def test_status_and_list_reads_are_served_while_an_apply_runs(
         submitter.join(timeout=10)
         httpd.shutdown()
         thread.join(timeout=10)
+
+
+def _unix_get(path, request_path, secret=None):
+    import http.client
+    import socket
+
+    connection = http.client.HTTPConnection("localhost", timeout=10)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(str(path))
+    connection.sock = sock
+    headers = {"Authorization": f"Bearer {secret}"} if secret is not None else {}
+    try:
+        connection.request("GET", request_path, headers=headers)
+        response = connection.getresponse()
+        return response.status, json.loads(response.read().decode() or "{}")
+    finally:
+        connection.close()
+
+
+def test_state_dir_socket_serves_the_same_authenticated_endpoint(
+    controller_path, tmp_path
+):
+    """The API container reaches the controller through its mounted state.
+
+    The controller publishes TCP only on host loopback, which a container
+    cannot reach; the socket in the controller's own state directory is
+    visible wherever the deployment state is mounted and survives
+    target-project shutdown. The bearer secret still guards it.
+    """
+    import os
+    import socket
+    import stat
+
+    server_mod = load("server")
+    record = load("record")
+    state = tmp_path / "state"
+    store = record.OperationStore(state)
+    store.begin(stack="moonmind", desired_image="img:0", source_revision="")
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(state / server_mod.SOCKET_NAME))
+    stale.close()  # a crashed controller leaves its socket file behind
+
+    app = server_mod.build_app(store=store, secret="test-secret", applier=lambda op: None)
+    httpd = server_mod.make_unix_server(state, app)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        socket_path = state / server_mod.SOCKET_NAME
+        assert stat.S_IMODE(os.stat(socket_path).st_mode) == 0o666
+        status, _ = _unix_get(socket_path, "/v1/operations?stack=moonmind")
+        assert status == 401
+        status, listed = _unix_get(
+            socket_path, "/v1/operations?stack=moonmind", secret="test-secret"
+        )
+        assert status == 200, listed
+        assert [op["desired"]["image"] for op in listed["operations"]] == ["img:0"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=10)
+
+
+def test_state_dir_socket_refuses_to_steal_a_live_controller(controller_path, tmp_path):
+    import socket
+
+    server_mod = load("server")
+    record = load("record")
+    state = tmp_path / "state"
+    store = record.OperationStore(state)
+    state.mkdir(parents=True, exist_ok=True)
+    app = server_mod.build_app(store=store, secret="test-secret", applier=lambda op: None)
+    first = server_mod.make_unix_server(state, app)
+    try:
+        try:
+            server_mod.make_unix_server(state, app)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("a second listener replaced a live controller socket")
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.connect(str(state / server_mod.SOCKET_NAME))
+        probe.close()
+    finally:
+        first.server_close()
