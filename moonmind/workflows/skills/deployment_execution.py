@@ -31,6 +31,11 @@ DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
 DEPLOYMENT_ONE_SHOT_SERVICES = frozenset({"init-db"})
 DEPLOYMENT_CONTROL_SERVICE = "temporal-worker-deployment-control"
+#: The service the updater reaches Docker through. Recreating it from inside
+#: an update stops the proxy under the running command and strands its
+#: replacement, so only the standalone deployment controller, which owns a
+#: direct Docker socket, reconciles it.
+DEPLOYMENT_TRANSPORT_SERVICE = "docker-proxy"
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _DOCKER_DESKTOP_HOST_MOUNT_ROOT = PurePosixPath("/run/desktop/mnt/host")
@@ -899,10 +904,103 @@ class HostDockerComposeRunner:
             "projectName": self.project_name,
             "configuredServices": configured_services,
             "configuredServiceImages": configured_service_images,
+            "definitionDrift": await self._installed_definition_drift(services),
             "services": services,
             "images": images,
             "capturedAt": _utc_now(),
         }
+
+    async def _installed_definition_drift(
+        self, services: Sequence[Any]
+    ) -> dict[str, bool]:
+        """Whether each running service's installed definition differs.
+
+        Image equality misses a changed environment, mount, or health check,
+        so compare the config hash Compose recorded on each container with the
+        hash the selected release renders. Compose hashes the project
+        directory *string* it rendered with, and Docker Desktop reports a
+        checkout the host CLI installed as ``/Users/...`` under
+        ``/host_mnt/Users/...``; rendering with any other spelling changes the
+        hash of every bind-mounted service. Each container is therefore
+        compared under the directory it recorded. A service whose evidence is
+        unreadable is left out -- unknown, never drift -- so nothing is
+        recreated on a guess.
+        """
+        identifiers = [
+            str(entry.get("ID") or "").strip()
+            for entry in services
+            if isinstance(entry, Mapping)
+            and str(entry.get("State") or "").strip().lower() == "running"
+            and str(entry.get("ID") or "").strip()
+        ]
+        if not identifiers:
+            return {}
+        inspected = await asyncio.to_thread(
+            _docker_json_lines,
+            ["docker", "inspect", "--format", "{{json .Config.Labels}}", *identifiers],
+        )
+        installed: dict[str, list[tuple[str, str]]] = {}
+        for labels in inspected:
+            if not isinstance(labels, Mapping):
+                continue
+            if str(labels.get("com.docker.compose.oneoff") or "").lower() == "true":
+                continue
+            service = str(labels.get("com.docker.compose.service") or "").strip()
+            config_hash = str(labels.get("com.docker.compose.config-hash") or "").strip()
+            working_dir = str(
+                labels.get("com.docker.compose.project.working_dir") or ""
+            ).strip()
+            # The Linux updater can only render a POSIX project directory; a
+            # Windows spelling would resolve binds differently and fake drift.
+            if not service or not config_hash or not working_dir.startswith("/"):
+                continue
+            installed.setdefault(working_dir, []).append((service, config_hash))
+        drift: dict[str, bool] = {}
+        for working_dir, containers in installed.items():
+            rendered = await self._compose_config_hashes(Path(working_dir))
+            if not rendered:
+                continue
+            for service, config_hash in containers:
+                expected = rendered.get(service)
+                if not expected:
+                    continue
+                drift[service] = drift.get(service, False) or expected != config_hash
+        return drift
+
+    async def _compose_config_hashes(self, project_dir: Path) -> Mapping[str, str] | None:
+        """Per-service config hashes the release renders under ``project_dir``."""
+        try:
+            await self._record_daemon_host_dir()
+            command = self._compose_command(
+                ("docker", "compose", "config", "--hash", "*"),
+                project_dir=project_dir,
+            )
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=str(self._local_dir()),
+                env=os.environ.copy(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self.command_timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+                return None
+        except (OSError, ToolFailure):
+            return None
+        if process.returncode != 0:
+            return None
+        hashes: dict[str, str] = {}
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                hashes[parts[0]] = parts[1]
+        return hashes
 
     async def pull(
         self,
@@ -1866,13 +1964,38 @@ class DeploymentUpdateExecutor:
             expected_images=expected_images,
         )
         pending_services = [str(item["service"]) for item in pending]
+        pending_services += _substrate_definition_drift(
+            state=before_state,
+            targets=[service for service in targets if service not in pending_services],
+        )
+        # The updater reaches Docker through its transport: recreating it here
+        # would stop the proxy under this command. Hand it to the controller.
+        transport = [
+            {
+                "service": service,
+                "reason": (
+                    "the updater cannot recreate its own Docker transport; "
+                    "reconcile it through the standalone deployment controller"
+                ),
+            }
+            for service in pending_services
+            if service.strip().lower() == DEPLOYMENT_TRANSPORT_SERVICE
+        ]
+        handed_off = {str(item["service"]) for item in transport}
         report: dict[str, Any] = {
             "targets": list(targets),
             "pendingBefore": list(pending_services),
             "reconciled": [],
             "remaining": [],
         }
-        if not pending_services or not verified:
+        pending_services = [
+            service for service in pending_services if service not in handed_off
+        ]
+        if not verified or not (pending_services or transport):
+            command_log["substrate"] = report
+            return report
+        if not pending_services:
+            report["remaining"] = transport
             command_log["substrate"] = report
             return report
         _add_progress(
@@ -1916,13 +2039,24 @@ class DeploymentUpdateExecutor:
             targets=tuple(pending_services),
             expected_images=expected_images,
         )
+        remaining += [
+            {"service": service, "reason": "installed definition differs from the release"}
+            for service in _substrate_definition_drift(
+                state=substrate_state,
+                targets=[
+                    service
+                    for service in pending_services
+                    if service not in {str(item["service"]) for item in remaining}
+                ],
+            )
+        ]
         remaining_services = {str(item["service"]) for item in remaining}
         report["reconciled"] = [
             service
             for service in pending_services
             if service not in remaining_services
         ]
-        report["remaining"] = remaining
+        report["remaining"] = [*remaining, *transport]
         command_log["substrate"] = report
         return report
 
@@ -2903,6 +3037,20 @@ def _substrate_reconciliation_targets(
         if _service_is_excluded(service_name, excluded):
             targets.append(str(service_name).strip())
     return tuple(targets)
+
+
+def _substrate_definition_drift(
+    *, state: Mapping[str, Any], targets: Sequence[str]
+) -> list[str]:
+    """Targets whose captured installed definition differs from the release.
+
+    Only positive evidence counts: a target the capture could not compare
+    stays with the image check alone rather than being recreated on a guess.
+    """
+    drift = state.get("definitionDrift")
+    if not isinstance(drift, Mapping):
+        return []
+    return [service for service in targets if drift.get(service) is True]
 
 
 def _normalize_configured_image(value: Any) -> str:

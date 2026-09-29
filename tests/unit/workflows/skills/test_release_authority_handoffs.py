@@ -429,6 +429,103 @@ async def test_verified_primary_resume_does_not_repeat_operator_admission(
     assert json.loads((tmp_path / "result.json").read_text()) == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "",
+        "docker-proxy",
+        "temporal-worker-integrations",
+        # The previous .env-template default, still present in existing
+        # operator .env files. The updater runs in its own one-off container,
+        # so the obsolete runner exclusion is dropped rather than failing
+        # every workflow-submitted update.
+        "temporal-worker-deployment-control",
+        "temporal-worker-deployment-control,temporal-worker-integrations",
+    ],
+)
+async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
+    tmp_path, monkeypatch, configured
+):
+    """A Settings/workflow update inherits the worker's empty exclusion list.
+
+    The updater reaches Docker through docker-proxy, so recreating it in the
+    main pass stops the proxy under the updater and strands the stack with no
+    Docker transport. Only the host entrypoint used to inject the protection,
+    so workflow-launched releases recreated docker-proxy on every update.
+    """
+    from contextlib import asynccontextmanager
+
+    from api_service.db import base as db_base
+    from moonmind import release_identity
+    from moonmind.workflows.skills.deployment_execution import (
+        DeploymentUpdateExecutor,
+        DeploymentUpdateLockManager,
+        HostDockerComposeRunner,
+        InMemoryDesiredStateStore,
+        InMemoryEvidenceWriter,
+        ToolResult,
+    )
+    from moonmind.workflows.temporal import artifacts, worker_runtime
+
+    excluded = tuple(part for part in configured.split(",") if part)
+    executor = DeploymentUpdateExecutor(
+        DeploymentUpdateLockManager(),
+        InMemoryDesiredStateStore(),
+        InMemoryEvidenceWriter(),
+        HostDockerComposeRunner(
+            project_dir=str(tmp_path), excluded_services=excluded
+        ),
+        excluded_services=excluded,
+    )
+    monkeypatch.setattr(
+        worker_runtime, "_build_deployment_update_executor", lambda: executor
+    )
+    monkeypatch.setattr(
+        release_identity, "installed_release", lambda: {"sourceRevision": "source"}
+    )
+    monkeypatch.setattr(release, "prepare_operator_access", AsyncMock(return_value=[]))
+
+    @asynccontextmanager
+    async def session_context():
+        yield None
+
+    monkeypatch.setattr(db_base, "get_async_session_context", session_context)
+    monkeypatch.setattr(artifacts, "TemporalArtifactRepository", lambda session: None)
+    monkeypatch.setattr(artifacts, "TemporalArtifactService", lambda repository: None)
+    observed = {}
+
+    async def execute(self, inputs, context):
+        observed["executor"] = self.excluded_services
+        observed["runner"] = self.runner.excluded_services
+        return ToolResult(status="FAILED", outputs={"failure": {"reason": "stop"}})
+
+    monkeypatch.setattr(DeploymentUpdateExecutor, "execute", execute)
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "authored": {
+                    "owner": "owner",
+                    "context": {},
+                    "inputs": {"sourceRevision": "source"},
+                },
+                "image": "example/image@sha256:pinned",
+            }
+        )
+    )
+    with pytest.raises(RuntimeError, match="stop"):
+        await release._run_job_body(request)
+    for scope in ("executor", "runner"):
+        assert {"docker-proxy", "sandbox-egress-proxy", "postgres"} <= set(
+            observed[scope]
+        )
+        # Operator exclusions survive alongside the protected substrate.
+        assert set(excluded) - {release.CONTROL_SERVICE} <= set(observed[scope])
+        assert release.CONTROL_SERVICE not in observed[scope]
+        assert len(observed[scope]) == len(set(observed[scope]))
+
+
 @pytest.mark.parametrize(
     "headers",
     [
