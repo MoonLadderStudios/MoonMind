@@ -1346,3 +1346,120 @@ def test_artifact_store_failure_blocks_install_without_erasing_confirmed():
     confirmed = state.mark_installed(record, installed_image="img", service_images={})
     assert state.apply_already_complete(confirmed) is True
     assert confirmed["status"] == "installed"
+
+
+def _serve_through_real_handler(tmp_path, *, run):
+    """Route client POST/GET through the real submission handler and state."""
+    import json as _json
+
+    from moonmind_controller import server, state
+
+    class _Response:
+        def __init__(self, body):
+            self._body = (_json.dumps(body) + "\n").encode()
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        if request.get_method() == "POST":
+            final, error, code = server.handle_operation_submission(
+                tmp_path,
+                _json.loads(request.data.decode()),
+                stack="moonmind",
+                run=run,
+                service_statuses={"api": "running"},
+            )
+            assert code == 200 and error is None
+            return _Response(server.status_payload(final))
+        return _Response(
+            server.status_payload(state.read_record(server._state_path_for(tmp_path)))
+        )
+
+    return fake_urlopen
+
+
+def _exhaust_operation(tmp_path, operation_id, image):
+    from moonmind_controller import apply, server, state
+
+    def failing_run(command, *, timeout, env=None):
+        return apply.CommandResult(returncode=1, output="pull failed")
+
+    raw = {
+        "operationId": operation_id,
+        "desired": {"targetImage": image, "services": ["api"]},
+    }
+    for _attempt in range(state.MAX_ATTEMPTS):
+        server.handle_operation_submission(
+            tmp_path, raw, stack="moonmind", run=failing_run,
+            service_statuses={"api": "running"},
+        )
+    stored = state.read_record(server._state_path_for(tmp_path))
+    assert stored["status"] == "failed"
+
+
+def test_client_refuses_foreign_unfinished_operation_returned_for_submission(
+    tmp_path, monkeypatch
+):
+    """HTTP 200 carrying another operation's record is not this update's success."""
+    import urllib.request as _urlopen_mod
+
+    import pytest
+
+    from moonmind_controller import client
+
+    _exhaust_operation(tmp_path, "host-update:old", "img-a")
+    compose_calls: list = []
+
+    def run(command, *, timeout, env=None):
+        compose_calls.append(tuple(command))
+        raise AssertionError("a foreign record must not be applied")
+
+    monkeypatch.setattr(
+        _urlopen_mod, "urlopen", _serve_through_real_handler(tmp_path, run=run)
+    )
+    payload = client.build_operation_payload(
+        operation_id="host-update:new", target_image="img-b"
+    )
+
+    with pytest.raises(client.ControllerBusyError, match="host-update:old"):
+        client.submit_operation(
+            payload, base_url="http://127.0.0.1:8099", secret="s3cret",
+            wait_for_terminal=True, poll_interval=0, poll_timeout=0,
+        )
+    assert compose_calls == []
+
+
+def test_client_reports_failed_own_operation_returned_for_submission(
+    tmp_path, monkeypatch
+):
+    """A submission whose own record is exhausted reports failure, not success."""
+    import urllib.request as _urlopen_mod
+
+    import pytest
+
+    from moonmind_controller import client
+
+    _exhaust_operation(tmp_path, "host-update:same", "img-a")
+
+    def run(command, *, timeout, env=None):
+        raise AssertionError("an exhausted record must not be re-applied")
+
+    monkeypatch.setattr(
+        _urlopen_mod, "urlopen", _serve_through_real_handler(tmp_path, run=run)
+    )
+    payload = client.build_operation_payload(
+        operation_id="host-update:same", target_image="img-a"
+    )
+
+    with pytest.raises(client.ControllerFailedError, match="host-update:same"):
+        client.submit_operation(
+            payload, base_url="http://127.0.0.1:8099", secret="s3cret",
+            wait_for_terminal=True, poll_interval=0, poll_timeout=0,
+        )

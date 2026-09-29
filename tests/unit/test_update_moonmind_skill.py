@@ -914,3 +914,79 @@ def test_legacy_direct_propagates_compose_file_selection(tmp_path, monkeypatch):
     assert len(launched) == 1
     command = [str(part) for part in launched[0]]
     assert str(repo / "site.yaml") in command
+
+
+def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
+    """POST returns pending; each GET yields the next status or raises it."""
+    import urllib.error
+
+    _install_controller_secret(tmp_path)
+    gets = []
+
+    class FakeResponse:
+        def __init__(self, status, payload):
+            self.status = status
+            self._payload = payload
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        if request.method == "POST":
+            return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
+        outcome = statuses[min(len(gets), len(statuses) - 1)]
+        gets.append(outcome)
+        if outcome == "unreachable":
+            raise urllib.error.URLError("connection refused")
+        return FakeResponse(
+            200, {"operationId": "op-1", "status": outcome, "installed": {"image": "img"}}
+        )
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(update, "_sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        update,
+        "run",
+        lambda args, **kwargs: json.dumps({"name": "moonmind", "services": {"api": {}}}),
+    )
+    record = {
+        "project": "moonmind",
+        "image": "img",
+        "inputs": {"sourceRevision": "rev1", "reason": "test"},
+        "context": {"idempotency_key": "host-update:sub-1"},
+    }
+    return record, gets
+
+
+def test_controller_status_read_outage_does_not_fail_confirmed_update(
+    tmp_path, monkeypatch
+):
+    record, gets = _controller_poll_fixture(
+        tmp_path, monkeypatch, ["unreachable", "succeeded"]
+    )
+
+    assert (
+        update._submit_via_controller(
+            record, tmp_path, controller_url="http://127.0.0.1:8472", secret_file=None
+        )
+        == 0
+    )
+    assert gets == ["unreachable", "succeeded"]
+
+
+def test_controller_poll_timeout_names_the_resumable_submission(
+    tmp_path, monkeypatch
+):
+    record, _gets = _controller_poll_fixture(tmp_path, monkeypatch, ["applying"])
+    monkeypatch.setattr(update, "_CONTROLLER_POLL_TIMEOUT_SECONDS", -1)
+
+    with pytest.raises(RuntimeError, match="--resume sub-1 "):
+        update._submit_via_controller(
+            record, tmp_path, controller_url="http://127.0.0.1:8472", secret_file=None
+        )
