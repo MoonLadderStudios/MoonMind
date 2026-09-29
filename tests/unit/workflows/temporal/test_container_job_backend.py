@@ -313,8 +313,12 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("finish_timing", ["running", "after_start", "before_retry"])
+@pytest.mark.parametrize("exit_code", [0, 7])
 async def test_bridge_start_publishes_exact_running_attachment_authority(
     tmp_path,
+    finish_timing,
+    exit_code,
 ) -> None:
     (tmp_path / "art_workspace").mkdir()
     commands: list[tuple[str, ...]] = []
@@ -322,6 +326,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
     lock = AsyncMock()
     lock.acquire.return_value = object()
     workload_image = "sha256:" + "a" * 64
+    finished = finish_timing != "running"
 
     async def publish(_request, name, data):
         published.append((name, bytes(data)))
@@ -330,6 +335,19 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
     async def runner(args):
         args = tuple(args)
         commands.append(args)
+        if args[:3] == ("inspect", "--format", "{{json .State}}"):
+            return (
+                0,
+                json.dumps(
+                    {
+                        "Running": False,
+                        "ExitCode": exit_code,
+                        "StartedAt": "2026-09-28T22:00:00Z",
+                        "FinishedAt": "2026-09-28T22:00:01Z",
+                    }
+                ).encode(),
+                b"",
+            )
         if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
             return 1, b"", b"no such container"
         if args[:2] == ("network", "inspect"):
@@ -377,10 +395,17 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
                 "networks": {
                     EGRESS_NETWORK_REF: {
                         "NetworkID": "restricted-network-id",
-                        "EndpointID": "container-job-endpoint-id",
-                        "IPAddress": "172.31.0.7",
+                        "EndpointID": "" if finished else "container-job-endpoint-id",
+                        "IPAddress": "" if finished else "172.31.0.7",
                     }
                 },
+                "state": {
+                    "Status": "exited" if finished else "running",
+                    "Running": not finished,
+                    "StartedAt": "2026-09-28T22:00:00Z",
+                    "FinishedAt": "2026-09-28T22:00:01Z",
+                },
+                "networkMode": EGRESS_NETWORK_REF,
                 "imageRef": workload_image,
                 "image": workload_image,
             }
@@ -392,6 +417,8 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
             # probed from memory *and* CPU, not memory alone.
             return 0, f"{8 * 1024**3}\t8".encode(), b""
         if args[:2] == ("ps", "--all"):
+            if finish_timing == "before_retry":
+                return 0, f"{backend._name(request)}\texited\n".encode(), b""
             return 0, b"", b""
         return 0, b"", b""
 
@@ -414,26 +441,38 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
         published[-1][1], location="container-job-running-authority-test"
     )
     assert evidence["conformanceRow"] == "generic_container_job"
-    assert evidence["evidenceStage"] == "running"
+    assert evidence["evidenceStage"] == ("finished" if finished else "running")
     assert evidence["attachmentIdentity"] == created.container_ref
     assert evidence["networkIdentity"] == "restricted-network-id"
-    assert evidence["endpointIdentity"] == "container-job-endpoint-id"
+    assert evidence["endpointIdentity"] == (
+        None if finished else "container-job-endpoint-id"
+    )
     assert evidence["workloadImageDigest"] == "sha256:" + "a" * 64
     assert evidence["workloadImageRef"] == "sha256:" + "a" * 64
     assert evidence["architecture"] == "amd64"
     assert evidence["cleanupResult"] == "pending"
-    assert evidence["deniedConnectionCount"] == 0
+    assert evidence["deniedConnectionCount"] == (None if finished else 0)
+    assert started.running is (not finished)
+    assert not any(cmd[0] == "rm" for cmd in commands)
+    assert sum(cmd[0] == "start" for cmd in commands) == (
+        0 if finish_timing == "before_retry" else 1
+    )
     assert lock.release.await_count == 1
+    if finished:
+        observed = await backend.observe_container(request)
+        assert observed.exit_code == exit_code
+        assert observed.terminal_state == ("succeeded" if exit_code == 0 else "failed")
+        assert observed.duration_ms == 1000
 
     workload_image = "sha256:" + "c" * 64
     with pytest.raises(
         RuntimeError, match="running launch evidence could not be persisted"
     ) as raised:
         await backend.start_container(request)
-    assert ("rm", "--force", created.container_ref) in commands
-    # The workload was removed fail-closed; a start retry has nothing left to
-    # start, so the launch failure must not be retried into a misleading
-    # "no such container" outcome.
+    assert ("stop", "--time", "5", created.container_ref) in commands
+    assert not any(cmd[0] == "rm" for cmd in commands)
+    # Stop unauthorized execution, retain its logs until the workflow publishes
+    # evidence, and preserve the original non-retryable launch failure.
     assert isinstance(raised.value, ContainerJobBackendError)
     assert raised.value.failure_class is ContainerJobFailureClass.LAUNCH
 
