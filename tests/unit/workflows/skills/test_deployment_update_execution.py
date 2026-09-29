@@ -621,6 +621,52 @@ async def test_lifecycle_persists_desired_state_after_runner_safety_check() -> N
 
 
 @pytest.mark.asyncio
+async def test_before_compose_hook_runs_under_the_lock_before_any_up() -> None:
+    """Desired state the Compose pass renders is settled after image identity."""
+    from dataclasses import replace
+
+    executor, _store, evidence, _runner, events = _executor()
+
+    async def before_compose():
+        events.append("hook:before-compose")
+        return {"status": "advanced", "revision": 2}
+
+    executor = replace(executor, before_compose=before_compose)
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    assert events.index("runner:inspect-image") < events.index("hook:before-compose")
+    assert events.index("hook:before-compose") < events.index("desired:persist")
+    assert events.index("hook:before-compose") < events.index("runner:up")
+    logs = next(payload for kind, payload in evidence.records if kind == "command-log")
+    assert logs["beforeCompose"] == {"status": "advanced", "revision": 2}
+
+
+@pytest.mark.asyncio
+async def test_before_compose_hook_does_not_run_for_an_unverified_image() -> None:
+    from dataclasses import replace
+
+    events: list[str] = []
+    executor, _store, _evidence, _runner, _ = _executor(
+        runner=RecordingRunner(
+            events,
+            target_repo_digests=(
+                "ghcr.io/moonladderstudios/moonmind@sha256:" + "c" * 64,
+            ),
+        ),
+        events=events,
+    )
+
+    async def before_compose():
+        events.append("hook:before-compose")
+
+    executor = replace(executor, before_compose=before_compose)
+    with pytest.raises(ToolFailure):
+        await executor.execute(_inputs())
+    assert "hook:before-compose" not in events
+
+
+@pytest.mark.asyncio
 async def test_lifecycle_persists_pulled_digest_for_mutable_tag() -> None:
     events: list[str] = []
     runner = RecordingRunner(

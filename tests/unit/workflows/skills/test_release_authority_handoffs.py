@@ -528,15 +528,17 @@ async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("selection_fails", [False, True])
-async def test_release_selects_omnigent_before_the_main_compose_pass(
+async def test_release_selects_omnigent_inside_the_main_compose_pass(
     tmp_path, monkeypatch, selection_fails
 ):
     """The main `up` renders `.env.deploy`, so the Omnigent pin is chosen first.
 
     Advancing the Omnigent record only after the fleet verified meant a stale
     server pin that cannot open its database failed the main pass forever.
-    A selection failure is not fatal: the recorded release still installs and
-    the post-install migration reports the problem.
+    Selection runs through the executor's pre-Compose hook, so it holds the
+    same deployment lock as the pass that renders it. A selection failure is
+    not fatal: the recorded release still installs, and every attempt's
+    outcome is kept with credentials redacted.
     """
     from contextlib import asynccontextmanager
 
@@ -574,15 +576,18 @@ async def test_release_selects_omnigent_before_the_main_compose_pass(
     monkeypatch.setattr(artifacts, "TemporalArtifactRepository", lambda session: None)
     monkeypatch.setattr(artifacts, "TemporalArtifactService", lambda repository: None)
     order = []
+    token = "ghp_" + "a" * 36
 
     async def select(runner, owner, image):
         order.append(("select", owner, image))
         if selection_fails:
-            raise RuntimeError("registry unavailable")
+            raise RuntimeError(f"registry refused https://x:{token}@ghcr.io")
         return {"status": "advanced", "revision": 2}
 
     async def execute(self, inputs, context):
-        order.append(("execute",))
+        order.append(("lock",))
+        await self.before_compose()
+        order.append(("compose",))
         return ToolResult(status="FAILED", outputs={"failure": {"reason": "stop"}})
 
     monkeypatch.setattr(release, "select_omnigent", select)
@@ -600,21 +605,24 @@ async def test_release_selects_omnigent_before_the_main_compose_pass(
             }
         )
     )
-    with pytest.raises(RuntimeError, match="stop"):
-        await release._run_job_body(request)
+    for _attempt in range(2):
+        with pytest.raises(RuntimeError, match="stop"):
+            await release._run_job_body(request)
     assert order == [
+        ("lock",),
         ("select", "owner", "example/image@sha256:pinned"),
-        ("execute",),
-    ]
+        ("compose",),
+    ] * 2
     selection = json.loads((tmp_path / "omnigent-selection.json").read_text())
     assert selection["owner"] == "owner"
-    if selection_fails:
-        assert selection["selection"] == {
-            "status": "failed",
-            "error": "registry unavailable",
-        }
-    else:
-        assert selection["selection"] == {"status": "advanced", "revision": 2}
+    assert len(selection["attempts"]) == 2
+    for attempt in selection["attempts"]:
+        if selection_fails:
+            assert attempt["status"] == "failed"
+            assert "registry refused" in attempt["error"]
+            assert token not in attempt["error"]
+        else:
+            assert attempt == {"status": "advanced", "revision": 2}
 
 
 @pytest.mark.parametrize(
