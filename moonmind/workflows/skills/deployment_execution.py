@@ -1780,6 +1780,11 @@ class DeploymentUpdateExecutor:
         ]
         | None
     ) = None
+    # Settles release-owned desired state that the Compose passes render (the
+    # Omnigent release record) under this update's lock, after the target
+    # image verifies and before any service is recreated. Its result is kept
+    # in the command log.
+    before_compose: Callable[[], Awaitable[Mapping[str, Any] | None]] | None = None
 
     async def _reconcile_stale_workers(
         self,
@@ -2325,6 +2330,10 @@ class DeploymentUpdateExecutor:
                     before_state=before_state,
                     target_image=target_image,
                 )
+                if self.before_compose is not None:
+                    command_log["beforeCompose"] = dict(
+                        await self.before_compose() or {}
+                    )
 
                 _add_progress(
                     progress_events,

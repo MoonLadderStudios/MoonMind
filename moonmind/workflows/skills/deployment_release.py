@@ -788,7 +788,11 @@ def _omnigent_release_store():
 
 
 async def select_omnigent(runner, owner, image, *, actor="release"):
-    """Record the Omnigent release before the main pass renders it."""
+    """Record the Omnigent release before the main pass renders it.
+
+    Called from the executor's ``before_compose`` hook, which holds the
+    deployment lock of the pass that renders the selection.
+    """
     from moonmind.workflows.skills.omnigent_release import (
         production_drivers,
         select_omnigent_release,
@@ -806,7 +810,9 @@ async def select_omnigent(runner, owner, image, *, actor="release"):
     )
 
 
-async def migrate_omnigent(runner, owner, image, *, actor="release"):
+async def migrate_omnigent(
+    runner, owner, image, *, actor="release", selected_revision=None
+):
     """Advance the singular Omnigent release; no-op when already aligned.
 
     Runs inside the primary success path so an omnigent migration failure
@@ -832,6 +838,7 @@ async def migrate_omnigent(runner, owner, image, *, actor="release"):
             runner=runner, moonmind_image=image, actor=actor
         ),
         actor=actor,
+        selected_revision=selected_revision,
     )
 
 
@@ -998,22 +1005,46 @@ async def _run_job_body(request_file):
                 runner, record["image"], request_file.parent, owner,
                 declared_urls=context.get("deployment_operator_urls"),
             )
-            # The main pass renders the recorded Omnigent refs, so select the
-            # Omnigent release first. A recorded server older than the one
-            # that migrated the Omnigent database would otherwise fail every
-            # update before the post-install migration could advance it.
-            # Selection failure is not fatal: the recorded release installs
-            # and the post-install migration reports the problem.
-            try:
-                omnigent_selection = await select_omnigent(
-                    runner, owner, record["image"]
+            selection_file = request_file.parent / "omnigent-selection.json"
+            omnigent_selection: dict = {}
+
+            async def select_before_compose():
+                # The main pass renders the recorded Omnigent refs, so select
+                # the Omnigent release under the executor's lock first. A
+                # recorded server older than the one that migrated the
+                # Omnigent database would otherwise fail every update before
+                # the post-install migration could advance it. Selection
+                # failure is not fatal: the recorded release installs and the
+                # post-install migration reports the problem.
+                nonlocal omnigent_selection
+                try:
+                    omnigent_selection = dict(
+                        await select_omnigent(runner, owner, record["image"])
+                    )
+                except Exception as exc:
+                    from moonmind.utils.logging import redact_sensitive_text
+
+                    omnigent_selection = {
+                        "status": "failed",
+                        "error": redact_sensitive_text(str(exc))[:1000],
+                    }
+                # Retried attempts append, so the outcome that first changed
+                # desired state is never overwritten.
+                try:
+                    previous = json.loads(selection_file.read_text())
+                except (OSError, ValueError):
+                    previous = {}
+                attempts = (
+                    list(previous.get("attempts") or [])
+                    if isinstance(previous, dict) and previous.get("owner") == owner
+                    else []
                 )
-            except Exception as exc:
-                omnigent_selection = {"status": "failed", "error": str(exc)}
-            write_record(
-                request_file.parent / "omnigent-selection.json",
-                {"owner": owner, "selection": omnigent_selection},
-            )
+                write_record(
+                    selection_file,
+                    {"owner": owner, "attempts": [*attempts, omnigent_selection]},
+                )
+                return omnigent_selection
+
             async with get_async_session_context() as session:
                 executor = replace(
                     executor,
@@ -1029,6 +1060,7 @@ async def _run_job_body(request_file):
                         ),
                         execution_ref=_execution_ref_from_context(context),
                     ),
+                    before_compose=select_before_compose,
                 )
                 result = await executor.execute(parsed, context)
                 if result.status != "COMPLETED":
@@ -1073,7 +1105,13 @@ async def _run_job_body(request_file):
                         omnigent_receipt = await migrate_omnigent(
                             runner,
                             owner,
-                            record["image"]
+                            record["image"],
+                            selected_revision=(
+                                omnigent_selection.get("revision")
+                                if omnigent_selection.get("status")
+                                in ("advanced", "converge", "noop")
+                                else None
+                            ),
                         )
                     except Exception as exc:
                         write_record(

@@ -116,14 +116,15 @@ def test_decide_adopts_live_server_that_already_moved_to_the_candidate():
 
     That server may already have migrated the Omnigent database forward.
     Converging back to the older record would pin a server that refuses the
-    newer schema, so the release adopts the candidate the server runs.
+    newer schema, so the decision proposes adopting the candidate; selection
+    confirms the running container before it advances.
     """
     release = _release()
     live = {k: v for k, v in _refs(server=NEW_SERVER).items() if k != "codex"}
     action, target = decide_release_transition(
         live, release, _refs(server=NEW_SERVER, host=NEW_HOST)
     )
-    assert action == "advance"
+    assert action == "adopt"
     assert target["server"] == NEW_SERVER
     assert target["opencode"] == NEW_HOST
 
@@ -210,7 +211,7 @@ def _disable_omnigent(monkeypatch):
     monkeypatch.setattr(settings, "build_omnigent_gate", lambda: gate)
 
 
-def _drivers(calls, *, candidates=None, live=None):
+def _drivers(calls, *, candidates=None, live=None, running=None):
     async def deployment_inputs():
         return {"OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server"}
 
@@ -243,7 +244,8 @@ def _drivers(calls, *, candidates=None, live=None):
 
     async def verify_live_container(server_ref):
         calls.append("verify-live")
-        return server_ref
+        # running="" models no running omnigent container.
+        return server_ref if running is None else (running or None)
 
     return OmnigentReleaseDrivers(
         deployment_inputs=deployment_inputs,
@@ -405,7 +407,17 @@ async def test_select_records_the_advance_before_compose_renders_it(
         owner="test",
         drivers=_drivers(calls, candidates=new_refs, live=_refs()),
     )
-    assert selection == {"status": "advanced", "revision": 2, "serverImageRef": NEW_SERVER}
+    assert selection == {
+        "status": "advanced",
+        "revision": 2,
+        "serverImageRef": NEW_SERVER,
+        "hostImageRefs": {
+            "codex": NEW_HOST,
+            "opencode": NEW_HOST,
+            "shared": NEW_HOST,
+            "pi": NEW_HOST,
+        },
+    }
     assert calls == ["resolve", "live"]
     env_entries, record_doc = store.read()
     assert env_entries["OMNIGENT_IMAGE_REF"] == NEW_SERVER
@@ -420,6 +432,7 @@ async def test_select_records_the_advance_before_compose_renders_it(
         runner=object(),
         owner="test",
         drivers=_drivers(after, candidates=new_refs, live=new_refs),
+        selected_revision=2,
     )
     assert receipt["status"] == "aligned"
     assert receipt["revision"] == 2
@@ -440,9 +453,98 @@ async def test_select_leaves_the_record_when_live_is_unobserved(tmp_path, monkey
         owner="test",
         drivers=_drivers([], candidates=_refs(server=NEW_SERVER), live={}),
     )
-    assert selection == {"status": "converge", "revision": 4, "serverImageRef": OLD_SERVER}
+    assert selection["status"] == "converge"
+    assert selection["revision"] == 4
+    assert selection["serverImageRef"] == OLD_SERVER
     env_entries, _record = store.read()
     assert env_entries["OMNIGENT_IMAGE_REF"] == OLD_SERVER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "running,expected_status,expected_server",
+    [
+        (NEW_SERVER, "advanced", NEW_SERVER),
+        # resolved-images.json can be stale or name a server whose container
+        # never started; only the running container justifies adoption.
+        ("", "converge", OLD_SERVER),
+        (OLD_SERVER, "converge", OLD_SERVER),
+    ],
+)
+async def test_select_adopts_only_a_running_candidate_server(
+    tmp_path, monkeypatch, running, expected_status, expected_server
+):
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release()
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    live = {k: v for k, v in _refs(server=NEW_SERVER).items() if k != "codex"}
+    drivers = _drivers(
+        [], candidates=_refs(server=NEW_SERVER), live=live, running=running
+    )
+    selection = await select_omnigent_release(
+        store=store, owner="test", drivers=drivers
+    )
+    assert selection["status"] == expected_status
+    assert selection["serverImageRef"] == expected_server
+    env_entries, _record = store.read()
+    assert env_entries["OMNIGENT_IMAGE_REF"] == expected_server
+
+
+@pytest.mark.asyncio
+async def test_migrate_finishes_the_selected_revision_without_resolving_again(
+    tmp_path, monkeypatch
+):
+    """A tag that moves during the update must not reach the fleet unverified."""
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release(revision=2)
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    calls: list[str] = []
+    receipt = await migrate_omnigent_release(
+        store=store,
+        runner=object(),
+        owner="test",
+        drivers=_drivers(
+            calls, candidates=_refs(server=NEW_SERVER, host=NEW_HOST), live={}
+        ),
+        selected_revision=2,
+    )
+    assert receipt["status"] == "converged"
+    assert receipt["revision"] == 2
+    assert receipt["serverImageRef"] == OLD_SERVER
+    assert "resolve" not in calls
+    env_entries, _record = store.read()
+    assert env_entries["OMNIGENT_IMAGE_REF"] == OLD_SERVER
+
+
+@pytest.mark.asyncio
+async def test_migrate_rejects_a_record_that_moved_after_selection(
+    tmp_path, monkeypatch
+):
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release(revision=3)
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    calls: list[str] = []
+    with pytest.raises(OmnigentReleaseError, match="conflict"):
+        await migrate_omnigent_release(
+            store=store,
+            runner=object(),
+            owner="test",
+            drivers=_drivers(calls, live=_refs()),
+            selected_revision=2,
+        )
+    assert "restart" not in calls
 
 
 @pytest.mark.asyncio
@@ -641,7 +743,10 @@ async def test_release_migrate_wires_store_runner_and_image(tmp_path, monkeypatc
 
     seen: dict[str, object] = {}
 
-    async def fake_migrate(*, store, runner, owner, moonmind_image, drivers, actor):
+    async def fake_migrate(
+        *, store, runner, owner, moonmind_image, drivers, actor, selected_revision
+    ):
+        seen["selected_revision"] = selected_revision
         seen["owner"] = owner
         seen["moonmind_image"] = moonmind_image
         seen["actor"] = actor
@@ -657,9 +762,10 @@ async def test_release_migrate_wires_store_runner_and_image(tmp_path, monkeypatc
     )
     passed_runner = object()
     receipt = await deployment_release.migrate_omnigent(
-        passed_runner, "owner-1", "img@sha256:" + "f" * 64
+        passed_runner, "owner-1", "img@sha256:" + "f" * 64, selected_revision=7
     )
     assert receipt == {"status": "aligned", "revision": 0}
+    assert seen["selected_revision"] == 7
     assert seen["owner"] == "owner-1"
     assert seen["moonmind_image"] == "img@sha256:" + "f" * 64
     assert seen["actor"] == "release"
