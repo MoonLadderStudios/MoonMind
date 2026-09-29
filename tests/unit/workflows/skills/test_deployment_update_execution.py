@@ -2815,15 +2815,20 @@ class SubstrateRunner(RecordingRunner):
         *,
         before_services: list[dict[str, str]],
         substrate_services: list[dict[str, str]],
+        before_drift: Mapping[str, bool] | None = None,
+        substrate_drift: Mapping[str, bool] | None = None,
     ) -> None:
         super().__init__(events)
         self.before_services = before_services
         self.substrate_services = substrate_services
+        self.before_drift = before_drift
+        self.substrate_drift = substrate_drift
 
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         self.events.append(f"runner:capture:{phase}")
         running = self.substrate_services if phase == "substrate" else self.before_services
-        return {
+        drift = self.substrate_drift if phase == "substrate" else self.before_drift
+        state: dict[str, Any] = {
             "stack": stack,
             "phase": phase,
             "configuredServices": list(_SUBSTRATE_CONFIGURED),
@@ -2831,6 +2836,9 @@ class SubstrateRunner(RecordingRunner):
             "services": running,
             "images": [],
         }
+        if drift is not None:
+            state["definitionDrift"] = dict(drift)
+        return state
 
 
 def test_substrate_targets_cover_configured_exclusions_but_never_the_runner():
@@ -3003,6 +3011,190 @@ async def test_update_fails_when_substrate_does_not_converge(monkeypatch) -> Non
 
     assert result.status == "FAILED"
     assert "substrate" in str(result.outputs.get("failure", {}).get("reason", "")).lower()
+
+
+@pytest.mark.asyncio
+async def test_staged_substrate_never_recreates_the_updaters_docker_transport(
+    monkeypatch,
+) -> None:
+    """The updater reaches Docker through docker-proxy.
+
+    Recreating it from inside the update stops the proxy under the running
+    command and strands the replacement, so a drifted proxy is handed to the
+    standalone controller and reported instead of being recreated.
+    """
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = SubstrateRunner(
+        events,
+        before_services=_substrate_ps(
+            postgres_image="postgres:16",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.0",
+        ),
+        substrate_services=_substrate_ps(
+            postgres_image="postgres:17",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.0",
+        ),
+    )
+    executor, _store, evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "FAILED"
+    ups = [command[1] for command in runner.commands if command[0] == "up"]
+    pulls = [command[1] for command in runner.commands if command[0] == "pull"]
+    assert all("docker-proxy" not in tuple(command) for command in ups)
+    assert all("docker-proxy" not in tuple(command) for command in pulls)
+    assert any("postgres" in tuple(command) for command in ups)
+    verification = next(
+        payload for kind, payload in evidence.records if kind == "verification"
+    )
+    substrate = verification["substrate"]
+    assert substrate["reconciled"] == ["postgres"]
+    assert [item["service"] for item in substrate["remaining"]] == ["docker-proxy"]
+    assert "controller" in substrate["remaining"][0]["reason"]
+    assert "docker-proxy" in str(result.outputs["failure"]["reason"])
+
+
+@pytest.mark.asyncio
+async def test_update_reconciles_substrate_definition_drift_with_an_unchanged_image(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    converged = _substrate_ps(
+        postgres_image="postgres:17",
+        proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+    )
+    runner = SubstrateRunner(
+        events,
+        before_services=converged,
+        substrate_services=converged,
+        before_drift={"postgres": True, "docker-proxy": False, "api": True},
+        substrate_drift={"postgres": False, "docker-proxy": False},
+    )
+    executor, _store, evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    substrate_up = next(
+        command[1]
+        for command in runner.commands
+        if command[0] == "up" and "postgres" in tuple(command[1])
+    )
+    assert "--no-deps" in substrate_up
+    assert "docker-proxy" not in substrate_up
+    verification = next(
+        payload for kind, payload in evidence.records if kind == "verification"
+    )
+    assert verification["substrate"]["pendingBefore"] == ["postgres"]
+    assert verification["substrate"]["reconciled"] == ["postgres"]
+    assert verification["substrate"]["remaining"] == []
+
+
+@pytest.mark.asyncio
+async def test_update_fails_when_substrate_definition_stays_drifted(monkeypatch) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    converged = _substrate_ps(
+        postgres_image="postgres:17",
+        proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+    )
+    runner = SubstrateRunner(
+        events,
+        before_services=converged,
+        substrate_services=converged,
+        before_drift={"postgres": True},
+        substrate_drift={"postgres": True},
+    )
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "FAILED"
+    assert "postgres" in str(result.outputs["failure"]["reason"])
+
+
+@pytest.mark.asyncio
+async def test_definition_drift_renders_with_each_containers_recorded_project_dir(
+    tmp_path, monkeypatch
+) -> None:
+    """Compose hashes the project directory string it rendered with.
+
+    Docker Desktop reports the checkout as ``/host_mnt/Users/...`` while the
+    host CLI installed it as ``/Users/...``; rendering with the daemon spelling
+    changes every bind-mounted service's hash. Each container is compared
+    under the directory it recorded, and unreadable evidence is unknown,
+    never drift.
+    """
+    runner = HostDockerComposeRunner(project_dir=str(tmp_path))
+    labels = {
+        "pg1": {
+            "com.docker.compose.service": "postgres",
+            "com.docker.compose.oneoff": "False",
+            "com.docker.compose.config-hash": "installed-postgres",
+            "com.docker.compose.project.working_dir": "/Users/operator/MoonMind",
+        },
+        "proxy1": {
+            "com.docker.compose.service": "docker-proxy",
+            "com.docker.compose.oneoff": "False",
+            "com.docker.compose.config-hash": "installed-proxy",
+            "com.docker.compose.project.working_dir": "/host_mnt/Users/operator/MoonMind",
+        },
+        "minio1": {
+            "com.docker.compose.service": "minio",
+            "com.docker.compose.oneoff": "False",
+            "com.docker.compose.config-hash": "installed-minio",
+            "com.docker.compose.project.working_dir": "C:\\Users\\operator\\MoonMind",
+        },
+        "run1": {
+            "com.docker.compose.service": "postgres",
+            "com.docker.compose.oneoff": "True",
+            "com.docker.compose.config-hash": "one-off",
+            "com.docker.compose.project.working_dir": "/elsewhere",
+        },
+    }
+    monkeypatch.setattr(
+        deployment_execution,
+        "_docker_json_lines",
+        lambda args, **_kwargs: [labels[identifier] for identifier in args[4:]],
+    )
+    rendered: list[str] = []
+
+    async def config_hashes(self, project_dir: Path) -> Mapping[str, str]:
+        rendered.append(str(project_dir))
+        if str(project_dir) == "/Users/operator/MoonMind":
+            return {"postgres": "installed-postgres", "docker-proxy": "other"}
+        return {"postgres": "other", "docker-proxy": "changed-proxy"}
+
+    monkeypatch.setattr(
+        HostDockerComposeRunner, "_compose_config_hashes", config_hashes
+    )
+    services = [
+        {"ID": identifier, "Service": entry["com.docker.compose.service"], "State": "running"}
+        for identifier, entry in labels.items()
+    ]
+
+    drift = await runner._installed_definition_drift(services)
+
+    assert drift == {"postgres": False, "docker-proxy": True}
+    assert sorted(rendered) == [
+        "/Users/operator/MoonMind",
+        "/host_mnt/Users/operator/MoonMind",
+    ]
+
+    async def unreadable(self, project_dir: Path) -> Mapping[str, str] | None:
+        return None
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_compose_config_hashes", unreadable)
+    assert await runner._installed_definition_drift(services) == {}
 
 
 class _RecordingReleaseCohort:
