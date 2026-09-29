@@ -712,9 +712,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             binding=binding,
             request=request,
         )
-        if request.input_refs:
+        if request.input_refs and self._prepare_turn_instructions is None:
             raise ValueError(
-                "CodexSessionAdapter does not support inputRefs for managed session turns"
+                "Managed inputRefs require turn instruction materialization"
             )
         prepared_instructions: str | None = None
         if self._defer_turn_instructions_until_session_launch:

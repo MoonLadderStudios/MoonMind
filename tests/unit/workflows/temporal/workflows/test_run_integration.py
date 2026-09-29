@@ -8606,9 +8606,11 @@ def test_additional_work_draft_publish_patch_preserves_old_history_behavior(
     )
 
 
+@pytest.mark.parametrize("merge_enabled", [False, True])
 def test_moonspec_draft_publication_supersedes_blocking_gate(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
+    merge_enabled: bool,
 ) -> None:
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -8617,6 +8619,7 @@ def test_moonspec_draft_publication_supersedes_blocking_gate(
         in {
             RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH,
             RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+            "run-preserved-draft-defers-merge-v1",
         },
     )
     mock_run_workflow._record_moonspec_verify_gate(
@@ -8648,10 +8651,8 @@ def test_moonspec_draft_publication_supersedes_blocking_gate(
     )
     mock_run_workflow._publish_status = "published"
     mock_run_workflow._authoritative_publish_outcome_enabled = True
-    status, _message, publish_failure = (
-        mock_run_workflow._determine_publish_completion(
-            parameters={"publishMode": "pr"}
-        )
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr", "mergeAutomation": {"enabled": merge_enabled}}
     )
     assert publish_failure is False
     assert status == "success"
