@@ -1162,6 +1162,7 @@ class DockerContainerJobBackend:
         image: str,
         *,
         image_source_ref: str | None = None,
+        direct_reference: bool = False,
         auth_dir: Path | None = None,
         secrets: Sequence[str] = (),
     ) -> tuple[int, str | None]:
@@ -1191,6 +1192,26 @@ class DockerContainerJobBackend:
             if (
                 failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
                 and image_source_ref is not None
+                and direct_reference
+            ):
+                # The job named an image inside a declared ghcr.io repository,
+                # which authenticates only through the deployment GitHub
+                # credential. A source registryCredentialRef would not apply
+                # to this request, so never advise it here.
+                detail = (
+                    f"docker pull failed for the requested image ({failure.value}): "
+                    f"the image is in the repository of deployment image source "
+                    f"{image_source_ref!r}, but no deployment GitHub credential "
+                    "was available, so the pull was anonymous and the registry "
+                    "denied it. Give the deployment GITHUB_TOKEN (or GITHUB_PAT) "
+                    "read:packages and leave "
+                    "MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED enabled, or "
+                    f"submit imageSourceRef {image_source_ref!r} instead of a "
+                    "direct image."
+                )
+            elif (
+                failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and image_source_ref is not None
             ):
                 # This source took the public path because it declares no
                 # credential, and the registry denied the anonymous pull. Name
@@ -1215,15 +1236,43 @@ class DockerContainerJobBackend:
             )
         return duration_ms, diagnostics_ref
 
+    def _declared_registry_source_ref(self, image: str) -> str | None:
+        """Return the credential-free ghcr.io source declaring ``image``'s repository.
+
+        Matching is exact on registry and repository, never on tag or digest,
+        so the requested reference is pulled unchanged. Only ``ghcr.io`` can
+        match, because only there does a declared source supply a credential
+        (the deployment GitHub identity). A source bound to its own
+        ``registryCredentialRef`` never matches: that identity is selected
+        through the source and its grant, not replaced by another one.
+        """
+
+        requested = normalize_image_reference(image)
+        if requested.registry.lower() != "ghcr.io":
+            return None
+        for source in self._settings.image_sources:
+            if not isinstance(source, RegistryImageSource):
+                continue
+            if source.registry_credential_ref:
+                continue
+            declared = normalize_image_reference(source.image)
+            if (
+                declared.registry.lower() == requested.registry.lower()
+                and declared.repository == requested.repository
+            ):
+                return source.source_ref
+        return None
+
     async def _deployment_ghcr_credential(
         self, image: str, image_source_ref: str | None
     ) -> RegistryCredential | None:
         """Derive a ``ghcr.io`` identity for a deployment-declared image.
 
-        Restricted on purpose. The reference must come from a deployment image
-        source, never from job input, and the registry must be ``ghcr.io``,
-        because a GitHub token is meaningless anywhere else and must not be
-        presented to a registry an image string could name.
+        Restricted on purpose. The repository must come from a deployment image
+        source, never from job input alone, and the registry must be
+        ``ghcr.io``, because a GitHub token is meaningless anywhere else and
+        must not be presented to a registry or repository an image string
+        could name.
         """
 
         if image_source_ref is None:
@@ -1634,6 +1683,7 @@ class DockerContainerJobBackend:
             policy = source.pull_policy
             image_source_ref = source.source_ref
             credential_ref = source.registry_credential_ref
+            declared_source_ref = image_source_ref
         else:
             if spec.image is None:  # schema validation is the public guard
                 raise ImageAcquisitionError(
@@ -1644,6 +1694,15 @@ class DockerContainerJobBackend:
             policy = spec.pull_policy
             image_source_ref = None
             credential_ref = spec.registry_credential_ref
+            # A direct reference inside a repository the deployment already
+            # declared is that source's image at another tag or digest, so it
+            # authenticates as that source would. Any other reference stays
+            # workflow input and is pulled anonymously.
+            declared_source_ref = (
+                self._declared_registry_source_ref(image)
+                if credential_ref is None
+                else None
+            )
 
         authorization = request.registry_authorization
         if authorization is not None and authorization.credential_ref != credential_ref:
@@ -1730,11 +1789,14 @@ class DockerContainerJobBackend:
                             action="reuse",
                         )
                     derived = await self._deployment_ghcr_credential(
-                        image, image_source_ref
+                        image, declared_source_ref
                     )
                     if derived is None:
                         pull_ms, diagnostics_ref = await self._pull_image(
-                            request, image, image_source_ref=image_source_ref
+                            request,
+                            image,
+                            image_source_ref=declared_source_ref,
+                            direct_reference=image_source_ref is None,
                         )
                     else:
                         auth_dir = self._auth_dir(request)
@@ -1747,7 +1809,8 @@ class DockerContainerJobBackend:
                             pull_ms, diagnostics_ref = await self._pull_image(
                                 request,
                                 image,
-                                image_source_ref=image_source_ref,
+                                image_source_ref=declared_source_ref,
+                                direct_reference=image_source_ref is None,
                                 auth_dir=auth_dir,
                                 secrets=(derived.username, derived.secret),
                             )

@@ -290,6 +290,7 @@ _ESSENTIAL_PUBLISHED_METADATA_KEYS = frozenset(
         "childWorkflowId",
         "failureCode",
         "mergeAutomationDisposition",
+        "prResolverTerminalVerdictApplied",
         "providerErrorCode",
         "providerFailure",
         "queuedChildCount",

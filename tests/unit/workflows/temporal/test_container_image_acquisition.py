@@ -669,6 +669,155 @@ async def test_job_supplied_ghcr_image_never_borrows_the_github_identity(
     assert all("--config" not in cmd for cmd in daemon.commands)
 
 
+GHCR_PINNED_IMAGE = (
+    "ghcr.io/moonladderstudios/tactics-ue-base@sha256:"
+    "9251c83b0ef1da2b5c1c13568c21b7852dddf5124904b0a3f96297a8990f35b4"
+)
+
+
+@pytest.mark.asyncio
+async def test_job_image_in_a_declared_ghcr_repository_uses_the_github_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """A pinned reference to a declared repository is not a new endpoint.
+
+    Agents pin the exact digest their repository documents rather than the
+    deployment source's tag. The deployment already declared that ghcr.io
+    repository, so presenting its credential there exposes nothing new, and an
+    anonymous pull of a private package can only be denied.
+    """
+    daemon = FakeDaemon()
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _derived(*_a, **_k):
+        return ("octocat", "gh-token-value")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _derived,
+    )
+
+    result = await backend.acquire_image(_request(GHCR_PINNED_IMAGE))
+
+    # The exact requested digest is pulled; no tag or image is substituted.
+    assert daemon.pulls == [GHCR_PINNED_IMAGE]
+    assert any("--config" in cmd for cmd in daemon.commands)
+    assert "gh-token-value" not in " ".join(" ".join(c) for c in daemon.commands)
+    # The caller asked for an image, not a source; the observation says so.
+    assert result.image_observation.image_source_ref is None
+
+
+@pytest.mark.asyncio
+async def test_denied_job_image_in_a_declared_repository_names_a_working_remedy(
+    tmp_path, monkeypatch
+) -> None:
+    """The remedy for a direct reference must be one that fixes it.
+
+    Adding a ``registryCredentialRef`` to the source makes the source usable
+    only through ``imageSourceRef``, so advising it for a direct reference
+    would leave the same request failing the same way.
+    """
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = b"unauthorized: authentication required\n"
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _unavailable(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _unavailable,
+    )
+
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(_request(GHCR_PINNED_IMAGE))
+
+    error = excinfo.value
+    assert error.failure_class is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    message = str(error)
+    assert GHCR_SOURCE_REF in message
+    assert "read:packages" in message
+    assert f"imageSourceRef {GHCR_SOURCE_REF!r}" in message
+    assert "registryCredentialRef" not in message
+
+
+@pytest.mark.asyncio
+async def test_job_image_outside_declared_ghcr_repositories_stays_anonymous(
+    tmp_path, monkeypatch
+) -> None:
+    """Declaring one repository does not open ghcr.io to workflow input."""
+    daemon = FakeDaemon()
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _unexpected(*_a, **_k):
+        raise AssertionError("workflow input must not select a registry identity")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _unexpected,
+    )
+
+    await backend.acquire_image(_request("ghcr.io/someone-else/tactics-ue-base:5.8"))
+    await backend.acquire_image(_request("ghcr.io/moonladderstudios/other:5.8"))
+    assert all("--config" not in cmd for cmd in daemon.commands)
+
+
+@pytest.mark.asyncio
+async def test_job_image_never_borrows_identity_from_a_source_with_its_own_credential(
+    tmp_path, monkeypatch
+) -> None:
+    """A source bound to an explicit credential selects that identity only.
+
+    Its repository is reachable through ``imageSourceRef`` with the configured
+    credential; a direct reference must not reach it with a different one.
+    """
+    daemon = FakeDaemon()
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(
+            {
+                "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES": json.dumps(
+                    [
+                        {
+                            "sourceRef": GHCR_SOURCE_REF,
+                            "image": GHCR_IMAGE,
+                            "registryCredentialRef": "db://tactics-ghcr-pull",
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+
+    async def _unexpected(*_a, **_k):
+        raise AssertionError("a configured credential must not be replaced")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _unexpected,
+    )
+
+    await backend.acquire_image(_request(GHCR_PINNED_IMAGE))
+    assert all("--config" not in cmd for cmd in daemon.commands)
+
+
 @pytest.mark.asyncio
 async def test_derived_pull_preserves_non_auth_failure_classes(
     tmp_path, monkeypatch

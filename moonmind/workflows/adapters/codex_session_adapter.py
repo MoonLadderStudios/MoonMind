@@ -69,6 +69,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     _pr_resolver_disposition,
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
+    mark_pr_resolver_verdict_applied,
 )
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.codex_session_timeouts import (
@@ -1420,6 +1421,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         ):
                             should_apply_derived = True
                         if should_apply_derived:
+                            mark_pr_resolver_verdict_applied(
+                                metadata, resolver_disposition
+                            )
                             result = result.model_copy(
                                 update={
                                     "failure_class": derived_failure_class,
