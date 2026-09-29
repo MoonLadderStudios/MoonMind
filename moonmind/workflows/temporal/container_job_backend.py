@@ -1215,15 +1215,39 @@ class DockerContainerJobBackend:
             )
         return duration_ms, diagnostics_ref
 
+    def _declared_registry_source_ref(self, image: str) -> str | None:
+        """Return the credential-free registry source declaring ``image``'s repository.
+
+        Matching is exact on registry and repository, never on tag or digest,
+        so the requested reference is pulled unchanged. A source bound to its
+        own ``registryCredentialRef`` never matches: that identity is selected
+        through the source and its grant, not replaced by another one.
+        """
+
+        requested = normalize_image_reference(image)
+        for source in self._settings.image_sources:
+            if not isinstance(source, RegistryImageSource):
+                continue
+            if source.registry_credential_ref:
+                continue
+            declared = normalize_image_reference(source.image)
+            if (
+                declared.registry.lower() == requested.registry.lower()
+                and declared.repository == requested.repository
+            ):
+                return source.source_ref
+        return None
+
     async def _deployment_ghcr_credential(
         self, image: str, image_source_ref: str | None
     ) -> RegistryCredential | None:
         """Derive a ``ghcr.io`` identity for a deployment-declared image.
 
-        Restricted on purpose. The reference must come from a deployment image
-        source, never from job input, and the registry must be ``ghcr.io``,
-        because a GitHub token is meaningless anywhere else and must not be
-        presented to a registry an image string could name.
+        Restricted on purpose. The repository must come from a deployment image
+        source, never from job input alone, and the registry must be
+        ``ghcr.io``, because a GitHub token is meaningless anywhere else and
+        must not be presented to a registry or repository an image string
+        could name.
         """
 
         if image_source_ref is None:
@@ -1634,6 +1658,7 @@ class DockerContainerJobBackend:
             policy = source.pull_policy
             image_source_ref = source.source_ref
             credential_ref = source.registry_credential_ref
+            declared_source_ref = image_source_ref
         else:
             if spec.image is None:  # schema validation is the public guard
                 raise ImageAcquisitionError(
@@ -1644,6 +1669,15 @@ class DockerContainerJobBackend:
             policy = spec.pull_policy
             image_source_ref = None
             credential_ref = spec.registry_credential_ref
+            # A direct reference inside a repository the deployment already
+            # declared is that source's image at another tag or digest, so it
+            # authenticates as that source would. Any other reference stays
+            # workflow input and is pulled anonymously.
+            declared_source_ref = (
+                self._declared_registry_source_ref(image)
+                if credential_ref is None
+                else None
+            )
 
         authorization = request.registry_authorization
         if authorization is not None and authorization.credential_ref != credential_ref:
@@ -1730,11 +1764,11 @@ class DockerContainerJobBackend:
                             action="reuse",
                         )
                     derived = await self._deployment_ghcr_credential(
-                        image, image_source_ref
+                        image, declared_source_ref
                     )
                     if derived is None:
                         pull_ms, diagnostics_ref = await self._pull_image(
-                            request, image, image_source_ref=image_source_ref
+                            request, image, image_source_ref=declared_source_ref
                         )
                     else:
                         auth_dir = self._auth_dir(request)
@@ -1747,7 +1781,7 @@ class DockerContainerJobBackend:
                             pull_ms, diagnostics_ref = await self._pull_image(
                                 request,
                                 image,
-                                image_source_ref=image_source_ref,
+                                image_source_ref=declared_source_ref,
                                 auth_dir=auth_dir,
                                 secrets=(derived.username, derived.secret),
                             )

@@ -649,6 +649,13 @@ RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH = "run-terminal-contract-retry-decisi
 RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH = (
     "run-terminal-contract-retry-flattened-outputs-v1"
 )
+# A managed-session adapter that validates the resolver's own terminal artifact
+# derives the step failure itself, so AgentRun skips terminal-evidence
+# evaluation and the result carries no ``terminalContract*`` fields. Without
+# this patch the parent retried that validated verdict three more times.
+RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH = (
+    "run-adapter-resolver-verdict-retry-decision-v1"
+)
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
@@ -15517,6 +15524,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if (
                 terminal_contract_outcome == "continuation_requested"
                 and provider_error_code == "pr_resolver_reenter_gate"
+            ):
+                return False
+
+        if self._workflow_patch_enabled(
+            RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH
+        ):
+            # The adapter reports a disposition beside its provenance only
+            # after the artifact passed identity, freshness, and shape
+            # validation. A real provider failure keeps its own retry below.
+            if (
+                str(outputs.get("mergeAutomationDisposition") or "")
+                .strip()
+                .lower()
+                in {"manual_review", "failed"}
+                and outputs.get("prResolverTerminalProvenance")
+                and not outputs.get("prResolverTerminalValidationFailures")
+                and provider_error_code is None
+                and retry_recommendation is None
             ):
                 return False
 
