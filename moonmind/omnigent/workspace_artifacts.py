@@ -323,7 +323,13 @@ class WorkspaceArtifactProjector:
         runtime_uid: int,
         runtime_gid: int,
     ) -> list[dict[str, Any]]:
-        """Admit current inputs without replaying a repository/checkpoint restore."""
+        """Reconcile current inputs without restoring the candidate repository."""
+        root = workspace / ".moonmind" / "attachments"
+        if root.parent.is_symlink() or root.is_symlink():
+            raise WorkspaceArtifactProjectionError(
+                "attachment directories must not be symlinks",
+                code="WORKSPACE_AUTHORITY_MISMATCH",
+            )
         evidence = await self._materialize_bundle(
             workspace,
             refs=refs,
@@ -334,6 +340,24 @@ class WorkspaceArtifactProjector:
             runtime_uid=runtime_uid,
             runtime_gid=runtime_gid,
         )
+        # Do not remove previous evidence until every replacement is admitted.
+        # This directory is a turn's input projection; an empty turn clears it,
+        # while repository files and restore inputs remain untouched.
+        retained = {Path(item["path"]).name for item in evidence}
+        if root.exists():
+            try:
+                for child in root.iterdir():
+                    if child.name in retained:
+                        continue
+                    if child.is_dir() and not child.is_symlink():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+            except OSError as exc:
+                raise WorkspaceArtifactProjectionError(
+                    "stale attachments could not be cleared",
+                    code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                ) from exc
         if evidence:
             self._exclude_attachments_from_git(workspace)
         return evidence

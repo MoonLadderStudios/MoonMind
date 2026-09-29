@@ -148,6 +148,10 @@ When publication is authorized and required to start CI, the publication owner m
 preserve a coherent candidate on the existing PR under the admitted draft policy.
 This is a checkpoint/evidence handoff, not completion, permission to merge, or a
 request for mandatory manual review. Explicit publication `none` stays `none`.
+A confirmed preserved draft defers the requested merge outcome for that attempt;
+it completes with attention required and the original non-pass verdict. The
+terminal outcome must not require the merge that draft publication intentionally
+disabled. Required reports and confirmed PR publication remain required.
 Continue the same PR from its validated current head; never create another PR to
 escape a failed gate or exhausted budget. Keep its actual issue/change title.
 
@@ -181,6 +185,12 @@ continues to require the actual intended target evidence, not candidate approval
 Review provenance binds provider/model, `evidenceDigest`, `reviewAttemptIdentity`,
 review attempt, and timeout policy. Record large evidence in the existing artifact
 store and expose a bounded step-ledger check and artifact link in the dashboard.
+When a verifier supplies inline remaining work, the artifact publisher owns its
+compact `remainingWorkRef`: it points to the stored full report, even if the model
+also supplied a URL or workspace path. Those authored references remain report
+content and do not turn a valid non-pass decision into a routing failure.
+Reports without inline remaining work preserve their separate remaining-work
+artifact reference so the next turn receives the actual gaps.
 Diagnostics must remain readable without another LLM invocation. Distinguish
 implementation failures, report defects, missing evidence, infrastructure failures,
 and real human decisions rather than displaying all as manual review.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,25 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--ubt-volume")
     parser.add_argument("--pull")
     return parser
+
+
+# Positive log evidence only: the job output may be a bounded tail, so the
+# absence of a per-test line is not proof that nothing ran.
+_NO_TESTS_PATTERN = re.compile(
+    r"no automation tests matched|found 0 automation tests", re.IGNORECASE
+)
+_FAILED_TEST_PATTERN = re.compile(r"Test Completed\. Result=\{Fail", re.IGNORECASE)
+
+
+def _test_log_outcome(log_path: Path) -> tuple[str, str]:
+    """Classify a zero-exit test phase from its log; exit 0 alone is not success."""
+
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    if _FAILED_TEST_PATTERN.search(text):
+        return "fail", "Automation test reported a failed result"
+    if _NO_TESTS_PATTERN.search(text):
+        return "no_tests", "No automation tests matched the test filter"
+    return "pass", ""
 
 
 def _relative_path(value: str, *, field: str) -> Path:
@@ -113,15 +133,33 @@ def main() -> int:
     repo = Path(args.repo).resolve()
     if not repo.is_dir():
         raise ValueError(f"repository does not exist: {repo}")
-    uproject = _relative_path(args.uproject, field="--uproject")
-    if not (repo / uproject).is_file():
-        raise ValueError(f"uproject does not exist: {repo / uproject}")
     results_subdir = _relative_path(args.results_subdir, field="--results-subdir")
     gate_path = (
         repo / _relative_path(args.gate_file, field="--gate-file")
         if args.gate_file
         else repo / results_subdir / "latest" / "gate.json"
     )
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    results_dir = repo / results_subdir / timestamp
+    if not args.dry_run:
+        # Replace any earlier gate before validation or work so a failed or
+        # interrupted run never leaves a prior PASS readable as its result.
+        gate_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_gate(
+            gate_path,
+            {
+                "status": "INCOMPLETE",
+                "reason": "Run started; no terminal result recorded",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "source": "moonmind-container-job",
+                "repo": str(repo),
+                "phase": args.phase,
+                "resultsDir": str(results_dir),
+            },
+        )
+    uproject = _relative_path(args.uproject, field="--uproject")
+    if not (repo / uproject).is_file():
+        raise ValueError(f"uproject does not exist: {repo / uproject}")
 
     # A dry-run preview is explicitly non-mutating: it must never create,
     # overwrite, or erase the gate artifact (MoonLadderStudios/MoonMind#4277).
@@ -129,8 +167,6 @@ def main() -> int:
     # result survives the preview. This covers the supported managed path
     # where the shell entrypoint execs this runner before any shell guard.
     if args.dry_run:
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        results_dir = repo / results_subdir / timestamp
         if args.phase in {"all", "build"}:
             _run_job(
                 _base_spec(timeout_seconds=14400),
@@ -148,10 +184,7 @@ def main() -> int:
         print('Gate preview: status="SKIPPED" (dry-run; no gate artifact written)')
         return 0
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    results_dir = repo / results_subdir / timestamp
     results_dir.mkdir(parents=True, exist_ok=True)
-    gate_path.parent.mkdir(parents=True, exist_ok=True)
 
     build_status = "not_run"
     test_status = "not_run"
@@ -231,6 +264,11 @@ def main() -> int:
         test_status = "pass" if exit_code == 0 else "fail"
         if exit_code:
             reason = "Test phase failed"
+        else:
+            test_status, log_reason = _test_log_outcome(test_log)
+            if test_status != "pass":
+                exit_code = 1
+                reason = log_reason
 
     gate: dict[str, Any] = {
         "status": "PASS" if exit_code == 0 else "FAIL",
@@ -250,8 +288,14 @@ def main() -> int:
         gate["buildLog"] = str(results_dir / "build.log")
     if args.phase in {"all", "test"}:
         gate["testLog"] = str(results_dir / "test.log")
-    gate_path.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
+    _write_gate(gate_path, gate)
     return exit_code
+
+
+def _write_gate(gate_path: Path, gate: dict[str, Any]) -> None:
+    temporary = gate_path.with_name(f".{gate_path.name}.tmp")
+    temporary.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, gate_path)
 
 
 if __name__ == "__main__":

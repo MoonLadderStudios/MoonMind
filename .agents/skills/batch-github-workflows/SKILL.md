@@ -79,8 +79,12 @@ execute the same portable fan-out engine from the resolved active Skill snapshot
 
    The engine binds GitHub issue data into the selected child, stamps
    `runtimeInheritance="caller"` plus the parent's effective runtime fallback,
-   applies one publish policy, creates a stable per-target idempotency key, and
-   submits through `POST /api/executions` at `MOONMIND_URL`.
+   applies one publish policy, creates a per-target idempotency key bound to the
+   child's inputs, and submits through `POST /api/executions` at `MOONMIND_URL`.
+   A retry resolves to the accepted child even when the re-read issue snapshot
+   (title, body, status, labels) changed; changed constraints, publish mode, or
+   runtime are new work. Targets that build the same child are
+   submitted once and listed under `duplicates`, not counted as requested twice.
 
    When MoonMind supplies `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE`
    (preferred) or `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN`, forward that scoped

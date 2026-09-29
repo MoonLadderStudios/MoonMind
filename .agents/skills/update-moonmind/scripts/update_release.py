@@ -670,10 +670,17 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
     print(f"Controller operation: {operation_id}", flush=True)
     deadline = time.time() + _CONTROLLER_POLL_TIMEOUT_SECONDS
     last_status = None
+    submission_id = str(context.get("idempotency_key", "")).removeprefix("host-update:")
     while True:
-        _, operation = _controller_call(
-            controller_url, secret, "GET", f"/v1/operations/{operation_id}"
-        )
+        try:
+            _, operation = _controller_call(
+                controller_url, secret, "GET", f"/v1/operations/{operation_id}"
+            )
+        except ControllerUnreachableError as exc:
+            # A status-read outage is not a failed update: the controller
+            # keeps its durable record, so keep observing until the deadline.
+            operation = {"status": last_status}
+            print(f"Controller status unavailable; retrying: {exc}", flush=True)
         status = operation.get("status")
         if status != last_status:
             print(f"Controller operation {operation_id}: {status}", flush=True)
@@ -698,7 +705,7 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
             raise RuntimeError(
                 f"Controller operation {operation_id} did not finish within "
                 f"{_CONTROLLER_POLL_TIMEOUT_SECONDS}s; reattach with "
-                f"--resume {record.get('submissionId', '')} or inspect the "
+                f"--resume {submission_id} or inspect the "
                 "controller operation directly."
             )
         _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
