@@ -1578,8 +1578,14 @@ async def test_real_docker_lost_start_ack_reconciles_before_retry(
             timeout=120,
         )
         assert stopped.returncode == 0, stopped.stderr
-        holders = await survivor._slot_holders()
-        assert first_name not in holders, "a stopped container frees its slot"
+        # After a SIGKILL stop the daemon can still list the container as
+        # running for a moment; admission waits on the same observation.
+        for _ in range(120):
+            if first_name not in await survivor._slot_holders():
+                break
+            await asyncio.sleep(0.25)
+        else:
+            pytest.fail("a stopped container frees its slot")
         proceeded = await survivor.start_container(second)
         assert proceeded.running is True
         assert await _real_container_status(second_name) == "running"

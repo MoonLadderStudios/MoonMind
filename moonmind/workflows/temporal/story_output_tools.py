@@ -6629,7 +6629,8 @@ async def _validate_post_merge_issue_handoff(
     """Validate an actual merge, independently of assessment/verification prose.
 
     Only the existing merge-automation Activity supplies this handoff. The
-    remote merge must be for its exact tracked head and current target revision.
+    remote merge must be for its exact tracked head, and the completion target
+    must still contain that merge. Later merges onto the target are expected.
     """
     if pull_request.get("repo") != repository:
         return "The merged pull request repository does not match the issue"
@@ -6642,20 +6643,30 @@ async def _validate_post_merge_issue_handoff(
         return reason
     if pr.get("number") != pull_request.get("number"):
         return "The merged pull request does not match the tracked pull request number"
-    if pr.get("merged") is not True or pr.get("state") != "closed" or not pr.get("merge_commit_sha"):
+    merge_commit = _string(pr.get("merge_commit_sha"))
+    if pr.get("merged") is not True or pr.get("state") != "closed" or not merge_commit:
         return "GitHub has not confirmed the exact candidate was merged"
+    # Workspaces record their publish base as a remote-tracking name
+    # ("origin/main"); the remote branch is its short name.
     base_branch = _string(pull_request.get("baseBranch"))
+    for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+        base_branch = base_branch.removeprefix(prefix)
     try:
         target = await service.read_repository_target(
             repository, expected_ref or (f"refs/heads/{base_branch}" if base_branch else "")
         )
-    except Exception:
-        return "Re-read the merged completion target through the authorized repository reader"
-    if (
-        target.get("ref") != f"refs/heads/{_mapping(pr.get('base')).get('ref', '')}"
-        or target.get("revision") != pr.get("merge_commit_sha")
-    ):
-        return "The completion target changed after merge; verify its current content before finalizing the issue"
+        if target.get("ref") != f"refs/heads/{_mapping(pr.get('base')).get('ref', '')}":
+            return "The pull request merged into a different branch than the completion target"
+        contained = target.get("revision") == merge_commit or await service.commit_is_ancestor(
+            repository, merge_commit, _string(target.get("revision"))
+        )
+    except Exception as exc:
+        return (
+            "Re-read the merged completion target through the authorized repository "
+            f"reader ({type(exc).__name__})"
+        )
+    if not contained:
+        return "The completion target no longer contains the merge; verify its current content before finalizing the issue"
     return None
 
 

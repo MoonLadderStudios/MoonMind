@@ -40,7 +40,7 @@ def test_health_workflow_runs_on_reliable_infra_without_provider_secrets() -> No
     assert not re.search(r"secrets\.", raw)
 
 
-def test_health_workflow_fails_readiness_closed_via_cli() -> None:
+def test_health_workflow_projects_readiness_via_cli() -> None:
     steps = _workflow()["jobs"]["health"]["steps"]
     assemble = next(
         step for step in steps if step.get("name") == "Assemble non-secret status document"
@@ -48,7 +48,7 @@ def test_health_workflow_fails_readiness_closed_via_cli() -> None:
     gate = next(
         step
         for step in steps
-        if step.get("name") == "Fail readiness closed on unhealthy protected tier"
+        if step.get("name") == "Project protected-live readiness"
     )
     assert "tools/assemble_omnigent_live_status.py" in assemble["run"]
     assert "tools/omnigent_live_verification_health.py" in gate["run"]
