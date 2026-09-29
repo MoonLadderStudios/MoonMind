@@ -466,6 +466,16 @@ def test_codex_catalog_projects_observed_native_agent(monkeypatch):
         ).implementation.digest
         == codex.implementation.digest
     )
+    # Stock inventory may omit its optional version; the wrapper still exists
+    # and keeps the same identity.
+    versionless = {key: value for key, value in stock.items() if key != "version"}
+    unversioned = _overlay_native_harnesses(observed([versionless]))
+    assert (
+        next(
+            row for row in unversioned.snapshot.harnesses if row.id == "codex-native"
+        ).implementation.digest
+        == codex.implementation.digest
+    )
     # An endpoint that advertises the wrapper itself stays authoritative.
     advertised = observed(
         [stock], harnesses=[codex.model_dump(by_alias=True, mode="json")]

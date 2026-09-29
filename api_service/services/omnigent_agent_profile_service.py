@@ -501,6 +501,9 @@ def _observed_native_harness_row(
         harness_auth_model,
     )
 
+    # Stock inventory rows may omit their optional version, exactly as
+    # bootstrap reconciliation accepts them; the wrapper identity below does
+    # not depend on it.
     stock = next(
         (
             row
@@ -509,7 +512,6 @@ def _observed_native_harness_row(
             and row.get("name") == native.stock_agent_name
             and row.get("harness") == native.harness_id
             and str(row.get("id") or "").strip()
-            and str(row.get("version") or "").strip()
         ),
         None,
     )
