@@ -9,6 +9,7 @@ controller operation rather than a ``MoonMind.UserWorkflow``.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -43,7 +44,13 @@ class _TemporalStopped:
 
 
 class _Controller:
-    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        mounted_state: Path | None = None,
+    ) -> None:
         monkeypatch.syspath_prepend(str(CONTROLLER_DIR))
         for name in _CONTROLLER_MODULES:
             sys.modules.pop(name, None)
@@ -53,18 +60,31 @@ class _Controller:
 
         self.engine = engine
         self.record = record
-        self.store = record.OperationStore(tmp_path / "controller-state")
         self.applied: list[str] = []
         self.behavior: Callable[[dict[str, Any]], None] = self._succeed
-        app = server.build_app(store=self.store, secret=SECRET, applier=self._apply)
-        self.httpd = make_server(
-            "127.0.0.1", 0, app, server_class=server.ThreadingWSGIServer
-        )
-        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        if mounted_state is None:
+            self.store = record.OperationStore(tmp_path / "controller-state")
+            app = server.build_app(store=self.store, secret=SECRET, applier=self._apply)
+            self.httpd = make_server(
+                "127.0.0.1", 0, app, server_class=server.ThreadingWSGIServer
+            )
+            self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+            monkeypatch.setenv("MOONMIND_CONTROLLER_URL", self.url)
+            monkeypatch.setenv("MOONMIND_CONTROLLER_SECRET", SECRET)
+        else:
+            # The host bootstrap's layout: secret and record in the
+            # controller's own state directory, served on its socket.
+            secret_file = mounted_state / "secrets" / "controller-bearer"
+            secret_file.parent.mkdir(parents=True)
+            secret_file.write_text(SECRET + "\n")
+            secret_file.chmod(0o600)
+            self.store = record.OperationStore(mounted_state)
+            app = server.build_app(
+                store=self.store, secret_file=str(secret_file), applier=self._apply
+            )
+            self.httpd = server.make_unix_server(mounted_state, app)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
-        monkeypatch.setenv("MOONMIND_CONTROLLER_URL", self.url)
-        monkeypatch.setenv("MOONMIND_CONTROLLER_SECRET", SECRET)
 
     def _apply(self, operation: dict[str, Any]) -> None:
         self.applied.append(operation["operationId"])
@@ -84,6 +104,7 @@ class _Controller:
 
     def close(self) -> None:
         self.httpd.shutdown()
+        self.httpd.server_close()
         self.thread.join(timeout=10)
         for name in _CONTROLLER_MODULES:
             sys.modules.pop(name, None)
@@ -343,6 +364,84 @@ def test_unknown_operation_reads_are_not_found(
     assert unsafe.status_code in (404, 422)
 
 
+def _clear_controller_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "MOONMIND_CONTROLLER_URL",
+        "MOONMIND_CONTROLLER_SECRET",
+        "MOONMIND_CONTROLLER_SECRET_FILE",
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _api_container(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Lay out the default API container: /app CWD, ./deploy/state mounted.
+
+    docker-compose.yaml mounts the checkout's ``deploy/state`` at
+    ``/workspace/deployment_state`` and points the desired-state sidecar
+    there; nothing else tells the API where the controller lives.
+    """
+    _clear_controller_environment(monkeypatch)
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    monkeypatch.chdir(app_dir)
+    mounted = tmp_path / "deployment_state"
+    mounted.mkdir()
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE",
+        str(mounted / "desired-state.json"),
+    )
+    return mounted / "controller"
+
+
+def test_api_container_reaches_the_installed_controller_through_mounted_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admin: TestClient
+) -> None:
+    controller_state = _api_container(tmp_path, monkeypatch)
+    harness = _Controller(tmp_path, monkeypatch, mounted_state=controller_state)
+    try:
+        response = _submit(admin)
+
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert body["owner"] == "controller"
+        assert body["workflowId"] is None
+        assert body["operationId"] == harness.applied[0]
+        _assert_no_secret(response)
+        state = admin.get("/api/v1/operations/deployment/stacks/moonmind")
+        assert state.status_code == 200, state.text
+        assert state.json()["controllerAvailability"] == "available"
+        assert state.json()["latestAction"]["operationId"] == body["operationId"]
+        _assert_no_secret(state)
+    finally:
+        harness.close()
+
+
+def test_installed_controller_with_an_unreadable_credential_never_forks_a_workflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admin: TestClient
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root reads any file; the permission boundary is not observable")
+    controller_state = _api_container(tmp_path, monkeypatch)
+    harness = _Controller(tmp_path, monkeypatch, mounted_state=controller_state)
+    secret_file = controller_state / "secrets" / "controller-bearer"
+    secret_file.chmod(0)
+    try:
+        response = _submit(admin)
+
+        assert response.status_code == 502, response.text
+        assert (
+            response.json()["detail"]["code"] == "deployment_controller_access_denied"
+        )
+        assert "controller-bearer" in response.json()["detail"]["message"]
+        assert harness.applied == []
+        state = admin.get("/api/v1/operations/deployment/stacks/moonmind")
+        assert state.json()["controllerAvailability"] == "unavailable"
+    finally:
+        secret_file.chmod(0o600)
+        harness.close()
+
+
 def test_controller_endpoint_and_secret_derive_from_the_bootstrap_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -351,12 +450,7 @@ def test_controller_endpoint_and_secret_derive_from_the_bootstrap_install(
         controller_secret,
     )
 
-    for name in (
-        "MOONMIND_CONTROLLER_URL",
-        "MOONMIND_CONTROLLER_SECRET",
-        "MOONMIND_CONTROLLER_SECRET_FILE",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    _clear_controller_environment(monkeypatch)
     monkeypatch.chdir(tmp_path)
     assert controller_secret() is None
     assert controller_base_url() == "http://127.0.0.1:8472"

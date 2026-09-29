@@ -8,13 +8,11 @@ import json
 import os
 import re
 import socket
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID, uuid4
 
 from moonmind.workflows.skills.deployment_tools import (
@@ -41,6 +39,7 @@ CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
 CONTROLLER_STATUS_TIMEOUT_SECONDS = 10
 CONTROLLER_LIST_LIMIT = 10
 _CONTROLLER_STATE_DIR = Path("deploy") / "state" / "controller"
+CONTROLLER_SOCKET_NAME = "controller.sock"
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _CONTROLLER_OPEN_STATUSES = ("pending", "staged", "applying")
 _CONTROLLER_ACTION_STATUSES = {
@@ -68,13 +67,29 @@ class _ControllerNoResponse(RuntimeError):
     """The request may have reached the controller; its outcome is unknown."""
 
 
-def _installed_controller_port() -> int:
+def _controller_state_dir() -> Path:
+    """Locate the host bootstrap's controller state as this process sees it.
+
+    The API container mounts the checkout's ``deploy/state`` where the
+    desired-state sidecar lives (``/workspace/deployment_state``), so the
+    controller state is its ``controller`` directory; a host process falls
+    back to the checkout-relative ``deploy/state/controller``.
+    """
+    sidecar = str(
+        os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE") or ""
+    ).strip()
+    if sidecar:
+        mounted = Path(sidecar).expanduser().parent / "controller"
+        if mounted.is_dir():
+            return mounted
+    return _CONTROLLER_STATE_DIR
+
+
+def _installed_controller_port(state_dir: Path) -> int:
     """Read the port the host bootstrap recorded for this deployment."""
     try:
         identity = json.loads(
-            (_CONTROLLER_STATE_DIR / "controller-identity.json").read_text(
-                encoding="utf-8"
-            )
+            (state_dir / "controller-identity.json").read_text(encoding="utf-8")
         )
     except (OSError, ValueError):
         return CONTROLLER_DEFAULT_PORT
@@ -85,32 +100,87 @@ def _installed_controller_port() -> int:
 
 
 def controller_base_url() -> str:
-    """Return the standalone controller endpoint (loopback only by default)."""
+    """Return the standalone controller endpoint.
+
+    An explicit ``MOONMIND_CONTROLLER_URL`` wins. Otherwise the controller's
+    socket in its own state directory (reachable from the API container
+    through the mounted deployment state), else its host-loopback port.
+    """
     configured = os.environ.get("MOONMIND_CONTROLLER_URL")
     if configured:
         return configured.rstrip("/")
-    return f"http://127.0.0.1:{_installed_controller_port()}"
+    state_dir = _controller_state_dir()
+    socket_path = state_dir / CONTROLLER_SOCKET_NAME
+    if socket_path.is_socket():
+        return f"unix://{socket_path.resolve()}"
+    return f"http://127.0.0.1:{_installed_controller_port(state_dir)}"
 
 
 def controller_secret() -> str | None:
-    """Return the deployment-owned controller bearer secret, if configured."""
+    """Return the deployment-owned controller bearer secret, if installed.
+
+    A credential that exists but this process cannot read means the
+    controller is installed, so it is a distinct refusal rather than
+    permission to fall back to the legacy workflow.
+    """
     explicit = os.environ.get("MOONMIND_CONTROLLER_SECRET")
     if explicit and explicit.strip():
         return explicit.strip()
     candidates = [
         os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE") or "",
-        str(_CONTROLLER_STATE_DIR / "secrets" / "controller-bearer"),
+        str(_controller_state_dir() / "secrets" / "controller-bearer"),
     ]
     for candidate in candidates:
         if not candidate:
             continue
         try:
             value = Path(candidate).read_text(encoding="utf-8").strip()
-        except OSError:
+        except FileNotFoundError:
             continue
+        except OSError:
+            raise DeploymentOperationError(
+                "deployment_controller_access_denied",
+                "The deployment controller is installed, but this API process "
+                f"cannot read its deployment-owned credential ({Path(candidate).name}). "
+                + _HOST_COMMAND_HINT,
+            ) from None
         if value:
             return value
     return None
+
+
+class _UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: str, *, timeout: float) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self._socket_path = socket_path
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect(self._socket_path)
+        except BaseException:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+def _controller_connection(
+    timeout: float,
+) -> tuple[http.client.HTTPConnection, str]:
+    base_url = controller_base_url()
+    if base_url.startswith("unix://"):
+        return _UnixHTTPConnection(base_url[len("unix://") :], timeout=timeout), ""
+    endpoint = urlsplit(base_url)
+    connection_class = (
+        http.client.HTTPSConnection
+        if endpoint.scheme == "https"
+        else http.client.HTTPConnection
+    )
+    connection = connection_class(
+        endpoint.hostname or "127.0.0.1", endpoint.port, timeout=timeout
+    )
+    return connection, endpoint.path.rstrip("/")
 
 
 def _controller_request(
@@ -122,37 +192,41 @@ def _controller_request(
     timeout: float,
 ) -> tuple[int, dict[str, Any]]:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request = urllib.request.Request(
-        f"{controller_base_url()}{path}",
-        data=body,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {secret}",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8") or "{}"
-            parsed = json.loads(raw)
-            return response.status, parsed if isinstance(parsed, dict) else {}
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = exc.read().decode("utf-8", errors="replace") or "{}"
-            parsed = json.loads(detail)
-        except (OSError, ValueError):
-            parsed = {}
-        return exc.code, parsed if isinstance(parsed, dict) else {}
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, (ConnectionRefusedError, socket.gaierror)):
-            raise _ControllerUnreachable(str(exc.reason)) from None
-        raise _ControllerNoResponse(str(exc.reason)) from None
-    except ConnectionRefusedError as exc:
+        connection, prefix = _controller_connection(timeout)
+    except ValueError as exc:
         raise _ControllerUnreachable(str(exc)) from None
-    except (OSError, ValueError, http.client.HTTPException) as exc:
-        # Timeouts, resets, and truncated replies: the controller may have
-        # accepted the request, so the caller must reconcile, not repeat.
-        raise _ControllerNoResponse(type(exc).__name__) from None
+    try:
+        try:
+            connection.connect()
+        except OSError as exc:
+            # Nothing was sent, so nothing can have been accepted.
+            raise _ControllerUnreachable(type(exc).__name__) from None
+        try:
+            connection.request(
+                method,
+                f"{prefix}{path}",
+                body=body,
+                headers={
+                    "Authorization": f"Bearer {secret}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response = connection.getresponse()
+            raw = response.read().decode("utf-8", errors="replace") or "{}"
+        except (OSError, http.client.HTTPException) as exc:
+            # Timeouts, resets, and truncated replies: the controller may have
+            # accepted the request, so the caller must reconcile, not repeat.
+            raise _ControllerNoResponse(type(exc).__name__) from None
+    finally:
+        connection.close()
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        if 200 <= response.status < 300:
+            raise _ControllerNoResponse("unreadable acknowledgment") from None
+        parsed = {}
+    return response.status, parsed if isinstance(parsed, dict) else {}
 
 
 def _controller_error(
@@ -670,7 +744,10 @@ class DeploymentOperationsService:
         """
         policy = self.get_policy(stack)
         stored = self._recent_actions.get(policy.stack, ())
-        secret = controller_secret()
+        try:
+            secret = controller_secret()
+        except DeploymentOperationError:
+            return DeploymentStackObservation("unavailable", stored)
         if not secret:
             return DeploymentStackObservation("not_installed", stored)
         try:

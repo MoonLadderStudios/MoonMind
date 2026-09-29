@@ -17,11 +17,13 @@ import hmac
 import json
 import os
 import re
+import socket
 import socketserver
+import stat
 import threading
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
-from wsgiref.simple_server import WSGIServer
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
 import engine
 import lock as lock_mod
@@ -41,6 +43,51 @@ class ThreadingWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
     """Serve status, list, and duplicate submissions while an apply runs."""
 
     daemon_threads = True
+
+
+# The same endpoint on a socket in the controller's own state directory. The
+# MoonMind API container mounts the deployment state (read-only) but cannot
+# reach the host-loopback TCP port, so this is how it submits and observes
+# operations without a published port or a network shared with the target
+# project; it survives target-project shutdown. The bearer secret still
+# guards every request, so the socket itself is world-connectable.
+SOCKET_NAME = "controller.sock"
+
+
+class UnixThreadingWSGIServer(ThreadingWSGIServer):
+    address_family = socket.AF_UNIX
+
+    def server_bind(self) -> None:
+        path = self.server_address
+        with contextlib.suppress(FileNotFoundError):
+            if stat.S_ISSOCK(os.lstat(path).st_mode):
+                probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    probe.connect(path)
+                except ConnectionRefusedError:
+                    os.unlink(path)  # left behind by a stopped controller
+                else:
+                    raise OSError(f"another controller is listening on {path}")
+                finally:
+                    probe.close()
+        socketserver.TCPServer.server_bind(self)
+        os.chmod(path, 0o666)
+        self.server_name = "localhost"
+        self.server_port = 0
+        self.setup_environ()
+
+    def get_request(self):
+        request, _ = self.socket.accept()
+        return request, ("local", 0)
+
+
+def make_unix_server(state_dir, app) -> UnixThreadingWSGIServer:
+    """Bind the endpoint to ``<state_dir>/controller.sock``."""
+    httpd = UnixThreadingWSGIServer(
+        os.path.join(str(state_dir), SOCKET_NAME), WSGIRequestHandler
+    )
+    httpd.set_app(app)
+    return httpd
 
 
 class LegacyWriterUnknown(RuntimeError):
@@ -916,6 +963,15 @@ def main(argv=None) -> int:
     app = build_app(store=store, secret_file=secret_file, legacy_writer_probe=probe)
     httpd = make_server("0.0.0.0", args.port, app, server_class=ThreadingWSGIServer)
     print(f"moonmind-controller listening on 0.0.0.0:{args.port}", flush=True)
+    try:
+        unix_httpd = make_unix_server(args.state_dir, app)
+    except OSError as exc:
+        # The host command still reaches the TCP port; the API reports the
+        # controller as installed but unreachable instead of falling back.
+        print(f"moonmind-controller state-dir socket unavailable: {exc}", flush=True)
+    else:
+        threading.Thread(target=unix_httpd.serve_forever, daemon=True).start()
+        print(f"moonmind-controller listening on {unix_httpd.server_address}", flush=True)
     httpd.serve_forever()
     return 0
 
