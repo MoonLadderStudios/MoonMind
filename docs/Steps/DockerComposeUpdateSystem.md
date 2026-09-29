@@ -198,8 +198,8 @@ An unavailable optional integration is reported separately. Missing mandatory ve
 An ordinary MoonMind update also checks the deployment-configured Omnigent
 server and required host image channels (image/tag inputs present in the operator `.env` or worker environment) for newly published artifacts. Resolve
 mutable tags to concrete digests, assess the required runtime behavior, and
-advance the installed release when a suitable new image is available for a configured channel; channels without configured inputs retain their recorded refs. Record
-the selected digests in deployment-owned state before restarting consumers and refresh their running
+advance the installed release when a suitable new image is available for a configured channel; channels without configured inputs retain their recorded refs. A running server container that already carries the candidate outside the release, for example after a plain `docker compose up` rendered the mutable tag, is adopted rather than converged back, because it may already have migrated the Omnigent database forward. Record
+the selected digests in deployment-owned state under the same deployment lock as the main Compose pass, before that pass renders them, so it installs the selected server rather than one that refuses the current schema. After the fleet verifies, the migration finishes that selected revision without resolving the channels again, and refreshes the running
 consumers through the same Compose owner. This includes the server, API and
 agent runtime worker; already-running static host profiles follow a changed
 shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
