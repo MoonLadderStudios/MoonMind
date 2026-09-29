@@ -5064,6 +5064,90 @@ async def test_fetch_result_maps_failed_pr_resolver_artifact_for_completed_run(
     assert result.summary is not None
     assert "pr-resolver reported status 'failed'" in result.summary
     assert "pr_not_found" in result.summary
+    assert result.metadata["prResolverTerminalVerdictApplied"] is True
+
+
+async def test_fetch_result_keeps_runtime_failure_beside_a_resolver_verdict(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "blocked",\n'
+            '  "final_reason": "deferred_comments",\n'
+            '  "next_step": "manual_review"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    run_id = "run-runtime-failure-beside-verdict"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="failed",
+            startedAt=datetime.now(tz=UTC),
+            workspacePath=str(workspace_path),
+        )
+    )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_async_noop,
+        launch_session=_async_noop,
+        session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_async_noop,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_async_noop,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    adapter._save_run_state(
+        run_id=run_id,
+        agent_id="codex_cli",
+        locator={
+            "sessionId": "sess:wf-task-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        },
+        active_turn_id=None,
+        result={
+            "summary": "Model stream disconnected before completion",
+            "failureClass": "execution_error",
+            "metadata": {},
+        },
+        status="failed",
+        started_at=datetime.now(tz=UTC),
+    )
+
+    result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
+
+    assert result.failure_class == "execution_error"
+    assert "reported status 'blocked'" not in (result.summary or "")
+    assert result.metadata["mergeAutomationDisposition"] == "manual_review"
+    assert "prResolverTerminalVerdictApplied" not in result.metadata
 
 async def test_fetch_result_treats_pr_resolver_reenter_gate_as_continuation(
     tmp_path: Path,

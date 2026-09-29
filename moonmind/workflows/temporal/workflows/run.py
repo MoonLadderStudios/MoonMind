@@ -651,8 +651,9 @@ RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH = (
 )
 # A managed-session adapter that validates the resolver's own terminal artifact
 # derives the step failure itself, so AgentRun skips terminal-evidence
-# evaluation and the result carries no ``terminalContract*`` fields. Without
-# this patch the parent retried that validated verdict three more times.
+# evaluation and the result carries no ``terminalContract*`` fields; the adapter
+# marks it with ``prResolverTerminalVerdictApplied`` instead. Without this patch
+# the parent retried that validated verdict three more times.
 RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH = (
     "run-adapter-resolver-verdict-retry-decision-v1"
 )
@@ -15530,18 +15531,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if self._workflow_patch_enabled(
             RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH
         ):
-            # The adapter reports a disposition beside its provenance only
-            # after the artifact passed identity, freshness, and shape
-            # validation. A real provider failure keeps its own retry below.
-            if (
+            # Artifact fields alone only say a valid verdict exists; the run
+            # may still have failed for an unrelated runtime reason. The
+            # adapter marks the result only when the failure it reported is
+            # that validated verdict, so any other failure keeps its retry.
+            if outputs.get("prResolverTerminalVerdictApplied") is True and (
                 str(outputs.get("mergeAutomationDisposition") or "")
                 .strip()
                 .lower()
                 in {"manual_review", "failed"}
-                and outputs.get("prResolverTerminalProvenance")
-                and not outputs.get("prResolverTerminalValidationFailures")
-                and provider_error_code is None
-                and retry_recommendation is None
             ):
                 return False
 
