@@ -63,7 +63,9 @@ def test_issue_brief_authority_preserves_source_with_history_compatibility(patch
             "art_full" if patched else "art_agent_copy"
         )
         refs = wf._append_durable_handoff_attachment_refs([], agent_kind="managed")
-        assert refs == []
+        assert refs == [
+            "artifact://art_full" if patched else "artifact://art_agent_copy"
+        ]
         refs = wf._append_durable_handoff_attachment_refs([], agent_kind="external")
         assert refs == [
             "artifact://art_full" if patched else "artifact://art_agent_copy"
