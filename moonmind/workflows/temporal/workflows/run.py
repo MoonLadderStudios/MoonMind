@@ -9847,7 +9847,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         """Declare durable prior-step artifacts as fresh-workspace attachments."""
 
         merged = [str(ref).strip() for ref in input_refs if str(ref).strip()]
-        if agent_kind == "managed":
+        if agent_kind == "managed" and not self._patched_or_false_outside_workflow(
+            "run-managed-handoff-attachments-v1"
+        ):
             return list(dict.fromkeys(merged))
         artifact_refs = [
             self._assessment_context.get("assessmentArtifactRef")
@@ -19397,7 +19399,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return "publishMode 'pr' requested but no PR was created"
         if publish_mode == "branch" and self._publish_status is None:
             return "branch publish outcome unknown"
-        if self._merge_required(parameters) and not self._merge_happened():
+        draft_preserved = (
+            self._moonspec_draft_publication_reason is not None
+            and self._publish_status == "published"
+            and self._pull_request_created()
+            and self._patched_or_false_outside_workflow(
+                "run-preserved-draft-defers-merge-v1"
+            )
+        )
+        if (
+            self._merge_required(parameters)
+            and not self._merge_happened()
+            and not draft_preserved
+        ):
             return "merge automation requested but PR was not merged"
         if self._report_requested(parameters) and not self._report_created:
             return "reportOutput requested but no final report was created"
