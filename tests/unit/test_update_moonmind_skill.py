@@ -990,3 +990,71 @@ def test_controller_poll_timeout_names_the_resumable_submission(
         update._submit_via_controller(
             record, tmp_path, controller_url="http://127.0.0.1:8472", secret_file=None
         )
+
+
+def test_bare_update_is_a_client_of_the_single_controller_operation_api(
+    tmp_path, monkeypatch
+):
+    """MoonLadderStudios/MoonMind#4502: the host command and the Operations
+    API submit to the same controller operation API. An exported deployment
+    secret never routes the host through a second controller client."""
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    digest = "sha256:" + "c" * 64
+    image = f"ghcr.io/moonladderstudios/moonmind@{digest}"
+    original_run = subprocess.run
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [image], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = json.dumps({"name": "existing-project", "services": {"api": {}}})
+        else:
+            assert args[1] == "pull", args
+            output = ""
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    class FakeResponse:
+        def __init__(self, status, payload):
+            self.status = status
+            self._payload = payload
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    paths = []
+
+    def fake_urlopen(request, timeout=None):
+        from urllib.parse import urlsplit
+
+        paths.append(urlsplit(request.full_url).path)
+        if request.method == "POST":
+            return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
+        if request.full_url.endswith("/v1/healthz"):
+            return FakeResponse(200, {"status": "ok"})
+        return FakeResponse(
+            200,
+            {"operationId": "op-1", "status": "succeeded", "installed": {"image": image}},
+        )
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv(
+        "MOONMIND_CONTROLLER_SECRET_FILE",
+        str(repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"),
+    )
+    _install_controller_secret(repo)
+
+    assert update.main(["--repo", str(repo)]) == 0
+    assert paths == ["/v1/operations", "/v1/operations/op-1"]

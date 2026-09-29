@@ -94,6 +94,12 @@ const WorkerShardHealthSchema = z.object({
 type WorkerShardHealth = z.infer<typeof WorkerShardHealthSchema>;
 type WorkerShard = WorkerShardHealth['shards'][number];
 
+const DeploymentVerificationCheckSchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  detail: z.string().optional().nullable(),
+});
+
 const DeploymentActionSchema = z
   .object({
     kind: z.string().optional().nullable(),
@@ -114,6 +120,13 @@ const DeploymentActionSchema = z
     afterSummary: z.string().optional().nullable(),
     beforeBuildId: z.string().optional().nullable(),
     afterBuildId: z.string().optional().nullable(),
+    owner: z.enum(['controller', 'workflow']).optional().nullable(),
+    operationId: z.string().optional().nullable(),
+    installedImage: z.string().optional().nullable(),
+    originalError: z.string().optional().nullable(),
+    errorSummary: z.string().optional().nullable(),
+    verification: z.array(DeploymentVerificationCheckSchema).optional().default([]),
+    retryable: z.boolean().optional(),
     rollbackEligibility: z
       .object({
         eligible: z.boolean(),
@@ -165,9 +178,69 @@ const DeploymentStackStateSchema = z
     currentImage: DeploymentCurrentImageSchema.default({ evidence: 'unavailable' }),
     latestAction: DeploymentActionSchema.optional().nullable(),
     recentActions: z.array(DeploymentActionSchema).optional().default([]),
+    controllerAvailability: z
+      .enum(['not_installed', 'available', 'unavailable'])
+      .optional()
+      .default('not_installed'),
     policy: DeploymentPolicySchema,
   })
   .passthrough();
+
+const DeploymentOperationDetailSchema = z
+  .object({
+    operation: DeploymentActionSchema,
+    logs: z
+      .object({
+        errorSummary: z.string().optional().nullable(),
+        attempts: z
+          .array(
+            z
+              .object({
+                attempt: z.number().optional().nullable(),
+                attemptGroup: z.number().optional().nullable(),
+                error: z.string().optional().nullable(),
+                at: z.string().optional().nullable(),
+              })
+              .passthrough(),
+          )
+          .default([]),
+        verification: z.array(DeploymentVerificationCheckSchema).default([]),
+        reportingFailures: z.array(z.string()).default([]),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+type DeploymentOperationDetail = z.infer<typeof DeploymentOperationDetailSchema>;
+
+interface DeploymentSubmissionReceipt {
+  deploymentUpdateRunId: string;
+  operationId?: string | null;
+  owner?: 'controller' | 'workflow';
+  status: string;
+}
+
+// Controller operations still in flight are re-read on a bounded interval so
+// progress survives browser reloads and API replacement.
+const CONTROLLER_PROGRESS_POLL_MS = 5_000;
+const CONTROLLER_IN_FLIGHT_STATUSES = ['QUEUED', 'RUNNING'];
+const CONTROLLER_HOST_COMMAND = './tools/update-moonmind.sh';
+
+function submissionNotice(receipt: DeploymentSubmissionReceipt, kind: string): string {
+  if (receipt.owner === 'controller' && receipt.operationId) {
+    return `Deployment ${kind} accepted by the deployment controller: operation ${receipt.operationId} (${formatStatusLabel(receipt.status)})`;
+  }
+  return `Deployment ${kind} queued: ${receipt.deploymentUpdateRunId}`;
+}
+
+async function responseErrorMessage(response: Response): Promise<string> {
+  const errorPayload = await response.json().catch(() => ({}));
+  return typeof errorPayload.detail?.message === 'string'
+    ? errorPayload.detail.message
+    : typeof errorPayload.detail === 'string'
+      ? errorPayload.detail
+      : `Server error: ${response.status}`;
+}
 
 const ImageTargetsSchema = z
   .object({
@@ -479,6 +552,36 @@ export function OperationsSettingsSection({
       }
       return DeploymentStackStateSchema.parse(await response.json());
     },
+    refetchInterval: (query) =>
+      query.state.data?.recentActions.some(
+        (action) =>
+          action.owner === 'controller' &&
+          CONTROLLER_IN_FLIGHT_STATUSES.includes(String(action.status || '')),
+      )
+        ? CONTROLLER_PROGRESS_POLL_MS
+        : false,
+  });
+
+  const [expandedOperationId, setExpandedOperationId] = useState<string | null>(null);
+  const {
+    data: operationDetail,
+    isError: isOperationDetailError,
+    error: operationDetailError,
+  } = useQuery<DeploymentOperationDetail>({
+    queryKey: ['deployment-operation', expandedOperationId],
+    enabled: Boolean(expandedOperationId),
+    queryFn: async () => {
+      const response = await fetch(
+        `/api/v1/operations/deployment/operations/${encodeURIComponent(
+          String(expandedOperationId),
+        )}`,
+        { headers: { Accept: 'application/json' } },
+      );
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response));
+      }
+      return DeploymentOperationDetailSchema.parse(await response.json());
+    },
   });
 
   const {
@@ -587,16 +690,9 @@ export function OperationsSettingsSection({
         }),
       });
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        const detail =
-          typeof errorPayload.detail?.message === 'string'
-            ? errorPayload.detail.message
-            : typeof errorPayload.detail === 'string'
-              ? errorPayload.detail
-              : `Server error: ${response.status}`;
-        throw new Error(detail);
+        throw new Error(await responseErrorMessage(response));
       }
-      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+      return response.json() as Promise<DeploymentSubmissionReceipt>;
     },
     onSuccess: (result) => {
       if (!result) {
@@ -604,7 +700,7 @@ export function OperationsSettingsSection({
       }
       setUpdateNotice({
         level: 'ok',
-        text: `Deployment update queued: ${result.deploymentUpdateRunId}`,
+        text: submissionNotice(result, 'update'),
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
@@ -664,16 +760,9 @@ export function OperationsSettingsSection({
         }),
       });
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        const detail =
-          typeof errorPayload.detail?.message === 'string'
-            ? errorPayload.detail.message
-            : typeof errorPayload.detail === 'string'
-              ? errorPayload.detail
-              : `Server error: ${response.status}`;
-        throw new Error(detail);
+        throw new Error(await responseErrorMessage(response));
       }
-      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+      return response.json() as Promise<DeploymentSubmissionReceipt>;
     },
     onSuccess: (result) => {
       if (!result) {
@@ -681,7 +770,7 @@ export function OperationsSettingsSection({
       }
       setRollbackNotice({
         level: 'ok',
-        text: `Deployment rollback queued: ${result.deploymentUpdateRunId}`,
+        text: submissionNotice(result, 'rollback'),
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
@@ -690,6 +779,30 @@ export function OperationsSettingsSection({
         level: 'error',
         text: mutationError.message,
       });
+    },
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (operationId: string) => {
+      const response = await fetch(
+        `/api/v1/operations/deployment/operations/${encodeURIComponent(operationId)}/retry`,
+        { method: 'POST', headers: { Accept: 'application/json' } },
+      );
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response));
+      }
+      return response.json() as Promise<DeploymentSubmissionReceipt>;
+    },
+    onSuccess: (result) => {
+      setRollbackNotice({
+        level: 'ok',
+        text: `Retry accepted for operation ${result.operationId} (${formatStatusLabel(result.status)})`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
+      queryClient.invalidateQueries({ queryKey: ['deployment-operation'] });
+    },
+    onError: (mutationError: Error) => {
+      setRollbackNotice({ level: 'error', text: mutationError.message });
     },
   });
 
@@ -835,6 +948,8 @@ export function OperationsSettingsSection({
           : 'Resume requested; confirmation pending'
       : 'Work admission open';
 
+  const controllerUnavailable = deploymentState?.controllerAvailability === 'unavailable';
+
   return (
     <div className="space-y-6">
       {!canInvokeOperations ? (
@@ -926,9 +1041,23 @@ export function OperationsSettingsSection({
                 </p>
               ) : null}
 
+              {controllerUnavailable ? (
+                <p
+                  role="alert"
+                  className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300"
+                >
+                  The deployment controller is installed but not reachable, so this
+                  dashboard cannot submit updates. Run{' '}
+                  <code>{CONTROLLER_HOST_COMMAND}</code> on the deployment host; it
+                  starts or repairs the controller.
+                </p>
+              ) : null}
+
               <button
                 type="submit"
-                disabled={deploymentMutation.isPending || !canInvokeOperations}
+                disabled={
+                  deploymentMutation.isPending || !canInvokeOperations || controllerUnavailable
+                }
                 className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
               >
                 Update MoonMind
@@ -983,7 +1112,90 @@ export function OperationsSettingsSection({
                           {action.completedAt || action.startedAt || '-'}
                           {action.operator ? ` · ${action.operator}` : ''}
                         </div>
+                        {action.owner === 'controller' && action.operationId ? (
+                          <div className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
+                            <div className="break-all font-mono">
+                              Operation {action.operationId}
+                            </div>
+                            <div className="break-all">
+                              Installed: {action.installedImage || 'not confirmed'}
+                            </div>
+                            {action.originalError ? (
+                              <div className="break-all text-rose-700 dark:text-rose-400">
+                                Original error: {action.originalError}
+                              </div>
+                            ) : null}
+                            {action.verification
+                              .filter((check) => check.status !== 'passed')
+                              .map((check) => (
+                                <div
+                                  key={`${check.name}:${check.status}`}
+                                  className="break-all text-amber-700 dark:text-amber-300"
+                                >
+                                  Verification {check.name}: {formatStatusLabel(check.status)}
+                                  {check.detail ? ` · ${check.detail}` : ''}
+                                </div>
+                              ))}
+                          </div>
+                        ) : null}
+                        {action.owner === 'controller' &&
+                        action.operationId &&
+                        expandedOperationId === action.operationId ? (
+                          <div className="mt-2 rounded-xl bg-white p-3 font-mono text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            {isOperationDetailError ? (
+                              <p className="text-rose-700 dark:text-rose-400">
+                                {(operationDetailError as Error).message}
+                              </p>
+                            ) : operationDetail ? (
+                              <ul className="space-y-1">
+                                {operationDetail.logs.attempts.map((attempt) => (
+                                  <li key={`${attempt.attemptGroup}:${attempt.attempt}`} className="break-all">
+                                    attempt {attempt.attempt}: {attempt.error}
+                                  </li>
+                                ))}
+                                {operationDetail.logs.reportingFailures.map((failure) => (
+                                  <li key={failure} className="break-all">
+                                    reporting: {failure}
+                                  </li>
+                                ))}
+                                {!operationDetail.logs.attempts.length &&
+                                !operationDetail.logs.reportingFailures.length ? (
+                                  <li>No recorded errors.</li>
+                                ) : null}
+                              </ul>
+                            ) : (
+                              <p>Loading logs...</p>
+                            )}
+                          </div>
+                        ) : null}
                         <div className="mt-3 flex flex-wrap gap-3">
+                          {action.owner === 'controller' && action.operationId ? (
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+                              onClick={() =>
+                                setExpandedOperationId(
+                                  expandedOperationId === action.operationId
+                                    ? null
+                                    : String(action.operationId),
+                                )
+                              }
+                            >
+                              {expandedOperationId === action.operationId ? 'Hide logs' : 'Show logs'}
+                            </button>
+                          ) : null}
+                          {action.owner === 'controller' && action.operationId && action.retryable ? (
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+                              disabled={
+                                !canInvokeOperations || controllerUnavailable || retryMutation.isPending
+                              }
+                              onClick={() => retryMutation.mutate(String(action.operationId))}
+                            >
+                              Retry
+                            </button>
+                          ) : null}
                           {action.runDetailUrl ? (
                             <a
                               className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"

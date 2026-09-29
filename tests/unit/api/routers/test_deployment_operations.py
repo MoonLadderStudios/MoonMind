@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
 from uuid import uuid4
@@ -21,7 +20,6 @@ from api_service.services.deployment_operations import (
     DeploymentRecentAction,
     RollbackEligibilityDecision,
     RollbackImageTarget,
-    _ControllerUnavailable,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_tools import (
@@ -653,24 +651,25 @@ def test_update_prefers_standalone_controller_over_legacy_workflow(
 
     assert response.status_code == 202
     payload = response.json()
-    assert payload["workflowId"] == "op-1"
-    assert payload["taskId"] == "op-1"
-    assert payload["status"] == "QUEUED"
+    assert payload["operationId"] == "op-1"
+    assert payload["owner"] == "controller"
+    assert payload["workflowId"] is None
+    assert payload["taskId"] is None
+    assert payload["status"] == "RUNNING"
     # The same controller operation is submitted instead of a second updater:
     # no Temporal workflow is created while the controller owns the stack.
     assert execution_service.requests == []
 
 
-def test_controller_unavailable_falls_back_to_legacy_workflow(
+def test_controller_not_installed_uses_legacy_workflow_until_cutover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import asyncio
 
+    # No deployment-owned controller secret: the controller is not installed.
     monkeypatch.setattr(
         "api_service.services.deployment_operations.submit_controller_update",
-        lambda **kwargs: (_ for _ in ()).throw(
-            _ControllerUnavailable("down")
-        ),
+        lambda **kwargs: None,
     )
     service = DeploymentOperationsService()
     policy = service.get_policy("moonmind")
@@ -683,6 +682,8 @@ def test_controller_unavailable_falls_back_to_legacy_workflow(
         )
     )
     assert queued["status"] == "QUEUED"
+    assert queued["owner"] == "workflow"
+    assert queued["operationId"] is None
     assert len(execution_service.requests) == 1
 
 
@@ -711,61 +712,3 @@ def test_controller_ownership_never_forks_legacy_workflow(
             )
         )
     assert execution_service.requests == []
-
-
-def test_recent_actions_observe_the_same_controller_operation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    monkeypatch.setattr(
-        "api_service.services.deployment_operations.submit_controller_update",
-        lambda **kwargs: {"operationId": "op-9", "status": "applying"},
-    )
-    monkeypatch.setattr(
-        "api_service.services.deployment_operations.observe_controller_operation",
-        lambda **kwargs: {"operationId": "op-9", "status": "succeeded"},
-    )
-    service = DeploymentOperationsService()
-    policy = service.get_policy("moonmind")
-    asyncio.run(
-        service.queue_update(
-            execution_service=_FakeExecutionService(),
-            policy=policy,
-            submission=_update_submission(),
-        )
-    )
-    actions = service.recent_actions("moonmind")
-    assert len(actions) == 1
-    assert actions[0].run_id == "ctl_op-9"
-    # The status consumer observes the controller record, not a workflow.
-    assert actions[0].status == "SUCCEEDED"
-
-
-def test_stack_state_surfaces_durable_controller_operations(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import json as _json
-
-    operations_dir = tmp_path / "operations"
-    operations_dir.mkdir()
-    (operations_dir / "op-7.json").write_text(
-        _json.dumps(
-            {
-                "operationId": "op-7",
-                "stack": "moonmind",
-                "status": "succeeded",
-                "desired": {"image": "img:7", "reason": "host path"},
-                "installed": {"image": "img:7", "confirmedAt": "t"},
-                "createdAt": "t2",
-                "updatedAt": "t3",
-            }
-        )
-    )
-    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(tmp_path))
-    service = DeploymentOperationsService()
-    actions = service.recent_actions("moonmind")
-    assert [(action.run_id, action.status) for action in actions] == [
-        ("ctl_op-7", "SUCCEEDED")
-    ]
