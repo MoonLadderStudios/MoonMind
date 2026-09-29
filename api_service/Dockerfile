@@ -95,7 +95,7 @@ RUN rm -rf /build/api_service/static/workflow_console/dist \
     && python3 /build/tools/verify_vite_manifest.py
 
 # ---------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm AS python-requirements
+FROM python:3.13-slim-bookworm AS python-requirements
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /deps
 
@@ -110,7 +110,7 @@ RUN poetry export --only main --format requirements.txt --without-hashes --outpu
     && poetry export --only main --extras tests --format requirements.txt --without-hashes --output /deps/requirements-tests.txt
 
 # ---------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm AS runtime-dependencies
+FROM python:3.13-slim-bookworm AS runtime-dependencies
 
 ARG CODEX_CLI_VERSION
 # Use bash with pipefail and strict mode in the runtime image as well so
