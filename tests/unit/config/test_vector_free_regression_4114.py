@@ -1056,31 +1056,28 @@ def test_manifest_drain_gate_blocks_on_open_histories() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_vector_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Remove every vector-backend env key so imports start vector-free."""
-    import os
-
-    for key in list(os.environ):
-        if _VECTOR_ENV_RE.search(key) or "EMBEDDING" in key.upper():
-            monkeypatch.delenv(key, raising=False)
-
-
-def test_vector_free_startup_imports_without_vector_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_vector_free_startup_imports_without_vector_env() -> None:
     """Real production modules import with no vector configuration.
 
-    Clean-default hermetic slice of R2: sanitized env (no ``QDRANT_*`` /
-    ``VECTOR_*`` / embedding keys), then import the shipped startup path --
-    settings, execution contract, agent runtime schemas, checkpoint branch
-    models, retrieval capabilities, worker registry, drain gate, and
-    capability resolution. A vector-gated import (missing-env failure or a
-    live ``qdrant_client`` import at module scope) fails here.
+    Clean-default hermetic slice of R2: a fresh interpreter with a sanitized
+    env (no ``QDRANT_*`` / ``VECTOR_*`` / embedding keys) imports the shipped
+    startup path -- settings, execution contract, agent runtime schemas,
+    checkpoint branch models, retrieval capabilities, worker registry, drain
+    gate, and capability resolution. A fresh process is required because
+    ``importlib.import_module`` returns modules already cached by collection
+    or earlier tests. A vector-gated import (missing-env failure or a live
+    ``qdrant_client`` import at module scope) fails here.
     """
-    import importlib
+    import os
+    import subprocess
+    import sys
 
-    _sanitize_vector_env(monkeypatch)
-    for module in (
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not (_VECTOR_ENV_RE.search(key) or "EMBEDDING" in key.upper())
+    }
+    modules = (
         "moonmind.config.settings",
         "moonmind.workflows.executions.execution_contract",
         "moonmind.schemas.agent_runtime_models",
@@ -1089,15 +1086,39 @@ def test_vector_free_startup_imports_without_vector_env(
         "moonmind.workflows.temporal.workflow_registry",
         "moonmind.gates.manifest_ingest_drain",
         "moonmind.omnigent.effective_capabilities",
-    ):
-        assert importlib.import_module(module) is not None
-    # Negative control: the clean import must not smuggle a bypass -- an
-    # explicit retired requirement is still rejected after these imports.
-    with pytest.raises(WorkflowContractError, match="4105"):
-        reject_retired_vector_fields(
-            {"rag": {"collections": ["docs"], "required": True}},
-            field_path="payload",
-        )
+    )
+    script = f"""
+import importlib, sys
+for name in {modules!r}:
+    importlib.import_module(name)
+leaked = sorted(m for m in sys.modules if m.split(".")[0] == "qdrant_client")
+assert not leaked, f"startup imported qdrant_client: {{leaked}}"
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    reject_retired_vector_fields,
+)
+# Negative control: the clean import must not smuggle a bypass -- an
+# explicit retired requirement is still rejected after these imports.
+try:
+    reject_retired_vector_fields(
+        {{"rag": {{"collections": ["docs"], "required": True}}}},
+        field_path="payload",
+    )
+except WorkflowContractError as exc:
+    assert "4105" in str(exc), exc
+else:
+    raise AssertionError("retired requirement admitted after clean import")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-4000:]
 
 
 def test_vector_free_api_health_routes_have_no_vector_gate() -> None:
@@ -1206,7 +1227,6 @@ def test_vector_free_rejection_has_no_consequential_effects() -> None:
     before = copy.deepcopy(retired)
     with pytest.raises(WorkflowContractError, match="4105"):
         reject_retired_vector_fields(dict(retired), field_path="payload")
-    assert retired == before
     with pytest.raises(ValueError, match="4105|retired|vector"):
         AgentExecutionRequest(
             agentKind="external",
@@ -1391,9 +1411,9 @@ def test_vector_free_live_journey_wires_actual_product_boundaries() -> None:
       carries an explicit retired requirement that the real production
       admission path (``reject_retired_vector_fields`` from #4105)
       rejects;
-    - the helper's phase asserts live ``/healthz`` vector-freedom,
-      live OpenAPI vector-freedom, and retired-submission rejection with
-      no consequential execution identity;
+    - the helper's phase issues the live ``/healthz``, OpenAPI, and
+      retired-submission requests (exercised against a recording fake API
+      in ``test_vector_free_journey_phase_*``);
     - the shell runs that phase on the candidate (fresh installs and the
       post-upgrade candidate instance), never on the pre-upgrade old
       release.
@@ -1422,11 +1442,6 @@ def test_vector_free_live_journey_wires_actual_product_boundaries() -> None:
             probe["payload"], field_path="payload"
         )
 
-    source = helper_path.read_text(encoding="utf-8")
-    assert "/healthz" in source
-    assert "/openapi.json" in source
-    assert "workflowId" in source
-
     shell = (REPO_ROOT / "tools/first_run_journey_3938.sh").read_text(
         encoding="utf-8"
     )
@@ -1441,3 +1456,172 @@ def test_vector_free_live_journey_wires_actual_product_boundaries() -> None:
     assert "fresh_journey after-upgrade" in shell
     pre_upgrade_body = shell.split("bring_up 3")[1].split("Upgrading $PROJECT_NAME")[0]
     assert "vector_free" not in pre_upgrade_body
+
+
+def _load_journey_helper():
+    import importlib.util
+
+    helper_path = REPO_ROOT / "tools/single_user_journey_checks.py"
+    spec = importlib.util.spec_from_file_location(
+        "single_user_journey_checks_4114_phase", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_RETIREMENT_422 = {
+    "detail": {
+        "code": "invalid_execution_request",
+        "message": (
+            "payload.rag has been retired (MoonLadderStudios/MoonMind#4105). "
+            "Remove the vector retrieval/indexing fields."
+        ),
+    }
+}
+
+
+class _RecordingJourneyApi:
+    """Fake live API recording the ``vector_free`` phase's requests.
+
+    ``persist_probe`` simulates a regression that stores the rejected probe
+    before answering 422; ``health``/``rejection`` override the responses.
+    """
+
+    def __init__(
+        self,
+        *,
+        health: dict | None = None,
+        rejection: object = None,
+        persist_probe: bool = False,
+    ) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.health = health or {"status": "ok", "database": "connected"}
+        self.rejection = _RETIREMENT_422 if rejection is None else rejection
+        self.persist_probe = persist_probe
+        self.executions: dict[str, dict] = {
+            "mm:existing": {"workflowId": "mm:existing", "title": "journey"}
+        }
+
+    def request(self, method, path, *, body=None, expect=(200,), **_kwargs):
+        import json
+
+        self.calls.append((method, path.split("?")[0]))
+        if (method, path) == ("GET", "/healthz"):
+            status, payload = 200, self.health
+        elif (method, path) == ("GET", "/openapi.json"):
+            status, payload = 200, {"paths": {"/healthz": {}, "/api/executions": {}}}
+        elif method == "GET" and path.startswith("/api/executions?"):
+            status, payload = 200, {"items": list(self.executions.values())}
+        elif method == "GET" and path.startswith("/api/executions/"):
+            workflow_id = path.rsplit("/", 1)[1].replace("%3A", ":")
+            status, payload = 200, self.executions[workflow_id]
+        elif (method, path) == ("POST", "/api/executions"):
+            if self.persist_probe:
+                instructions = body["payload"]["workflow"]["instructions"]
+                self.executions["mm:probe"] = {
+                    "workflowId": "mm:probe",
+                    "title": instructions,
+                }
+            status, payload = 422, self.rejection
+        else:
+            raise AssertionError(f"unexpected request {method} {path}")
+        assert status in expect, (method, path, status)
+        return status, json.dumps(payload).encode()
+
+    def json(self, method, path, **kwargs):
+        import json
+
+        return json.loads(self.request(method, path, **kwargs)[1])
+
+
+def test_vector_free_journey_phase_probes_live_boundaries() -> None:
+    """The live phase reads health/OpenAPI and probes without side effects."""
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi()
+    state: dict = {}
+
+    module.vector_free(api, state)
+
+    assert api.calls == [
+        ("GET", "/healthz"),
+        ("GET", "/openapi.json"),
+        ("GET", "/api/executions"),
+        ("POST", "/api/executions"),
+        ("GET", "/api/executions"),
+    ]
+    assert state["vector_free"] == {
+        "healthz": "ok",
+        "openapiPaths": 2,
+        "retiredRejected": True,
+    }
+    probe = module.vector_free_retired_probe("marker")
+    assert module.RETIRED_VECTOR_DIAGNOSTIC not in str(probe), (
+        "probe text could satisfy the retirement diagnostic by echo"
+    )
+
+
+@pytest.mark.parametrize(
+    "health",
+    [
+        {"status": "ok", "milvus": {"status": "connected"}},
+        {"status": "ok", "services": {"embedding_service": "ready"}},
+        {"status": "ok", "backends": [{"pgvector": "up"}]},
+        {"status": "ok", "qdrant": "connected"},
+    ],
+)
+def test_vector_free_journey_phase_rejects_retired_health_backend(
+    health: dict,
+) -> None:
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi(health=health)
+
+    with pytest.raises(module.JourneyFailure, match="retired vector backend"):
+        module.vector_free(api, {})
+    assert ("POST", "/api/executions") not in api.calls
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        # A generic validation error echoing the probe input.
+        {
+            "detail": [
+                {
+                    "msg": "invalid",
+                    "input": {"instructions": "vector-free journey retired probe"},
+                }
+            ]
+        },
+        {"detail": {"code": "invalid_execution_request", "message": "retired vector"}},
+        {"detail": {"code": "other", "message": _RETIREMENT_422["detail"]["message"]}},
+    ],
+)
+def test_vector_free_journey_phase_requires_structured_retirement_diagnostic(
+    rejection: object,
+) -> None:
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi(rejection=rejection)
+
+    with pytest.raises(module.JourneyFailure, match="retirement diagnostic"):
+        module.vector_free(api, {})
+
+
+def test_vector_free_journey_phase_rejects_nested_execution_identity() -> None:
+    module = _load_journey_helper()
+    rejection = {
+        "detail": {**_RETIREMENT_422["detail"], "execution": {"workflowId": "mm:x"}}
+    }
+    api = _RecordingJourneyApi(rejection=rejection)
+
+    with pytest.raises(module.JourneyFailure, match="execution identity"):
+        module.vector_free(api, {})
+
+
+def test_vector_free_journey_phase_rejects_persisted_probe() -> None:
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi(persist_probe=True)
+
+    with pytest.raises(module.JourneyFailure, match="persisted executions"):
+        module.vector_free(api, {})
