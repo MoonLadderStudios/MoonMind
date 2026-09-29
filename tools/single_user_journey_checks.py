@@ -18,6 +18,12 @@ recreated stack, can verify what an earlier phase saved):
     run-now, and save a preset. Without a provider credential no model-backed
     step can stay in flight, so the deferred start is what the dashboard
     later cancels (``tools/single_user_journey_browser.mjs ... cancel``).
+``vector-free``
+    Against the running candidate instance (MoonLadderStudios/MoonMind#4114):
+    readiness with no pending migration, a settings catalog that wires no
+    retired retrieval backend, and rejection of an explicit retired-retrieval
+    submission before any effect. Runs after ``populate`` so its evidence
+    accumulates in the same state file.
 ``canceled``
     Confirm the dashboard cancellation: each execution marked for
     cancellation must have been canceled through the dashboard before its
@@ -88,6 +94,13 @@ class Api:
     def __init__(self, base: str, *, timeout: float = 30.0) -> None:
         self.base = base.rstrip("/")
         self.timeout = timeout
+        # The disposable journey always targets the local Compose stack
+        # derived from its published binding. Container-job and CI hosts
+        # export an egress proxy; routing loopback journey traffic through
+        # it can only fail, so this helper never honors proxy variables.
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({})
+        )
 
     def request(
         self,
@@ -108,7 +121,7 @@ class Api:
             self.base + path, data=data, method=method, headers=all_headers
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with self._opener.open(request, timeout=self.timeout) as response:
                 status, payload = response.status, response.read()
         except urllib.error.HTTPError as exc:
             status, payload = exc.code, exc.read()
@@ -485,6 +498,115 @@ def canceled(api: Api, state: dict[str, Any], *, timeout: float) -> None:
         log(f"execution {execution['workflowId']} canceled through the dashboard")
 
 
+# Vector-free startup posture (MoonLadderStudios/MoonMind#4114): the clean
+# default and upgraded candidate instances run docker-compose.yaml with no
+# vector configuration. This phase proves it against the running services:
+# readiness with no pending migration, a settings catalog that wires no
+# retired retrieval backend, and rejection of an explicit retired-retrieval
+# submission before any effect. Any failed, missing, or unobserved step
+# exits non-zero; admitting retired retrieval fails as a consequential
+# delivery.
+_RETIRED_CATALOG_TOKENS = (
+    "qdrant",
+    "followUpRetrieval",
+    "follow_up_retrieval",
+    "VECTOR_STORE_PROVIDER",
+    "RAG_ENABLED",
+)
+_RETIRED_PROBE_RE = re.compile(r"4105|retired|vector", re.IGNORECASE)
+
+
+def retired_execution_probe_body() -> dict[str, Any]:
+    """Exact submission the live journey uses to probe retired retrieval."""
+    return {
+        "type": "task",
+        "payload": {
+            "task": {
+                "instructions": (
+                    "Vector-free startup probe: ordinary work needs no "
+                    "retrieval backend."
+                ),
+                "rag": {"collections": ["docs"], "required": True},
+                "idempotencyKey": f"vector-free-probe-{uuid.uuid4().hex}",
+            }
+        },
+    }
+
+
+def check_health_ready(health: Any) -> None:
+    """Require a ready instance with no pending migration or setup."""
+    if not isinstance(health, dict):
+        raise JourneyFailure(f"/healthz response is not JSON: {health!r}")
+    problems = [
+        key
+        for key, bad in (
+            ("status", health.get("status") != "ok"),
+            ("db", health.get("db") != "connected"),
+            ("migration_required", bool(health.get("migration_required"))),
+            ("setup_required", bool(health.get("setup_required"))),
+        )
+        if bad
+    ]
+    if problems:
+        raise JourneyFailure(f"/healthz reports {problems}: {health}")
+
+
+def check_catalog_vector_free(catalog: Any) -> None:
+    """Require a settings catalog that wires no retired retrieval backend."""
+    text = json.dumps(catalog).lower()
+    for token in _RETIRED_CATALOG_TOKENS:
+        if token.lower() in text:
+            raise JourneyFailure(
+                "settings catalog wires retired retrieval backend "
+                f"({token})"
+            )
+
+
+def vector_free(api: Api, state: dict[str, Any], *, label: str) -> None:
+    """Prove the running candidate instance started and stays vector-free."""
+    health = api.json("GET", "/healthz")
+    check_health_ready(health)
+    log(f"healthz ok without vector wiring (uptime {health.get('uptime_seconds')}s)")
+    catalog = api.json("GET", "/api/v1/settings/catalog")
+    if not catalog:
+        raise JourneyFailure("settings catalog is empty")
+    check_catalog_vector_free(catalog)
+    log("settings catalog wires no retired retrieval backend")
+
+    try:
+        status, payload = api.request(
+            "POST",
+            "/api/executions",
+            body=retired_execution_probe_body(),
+            expect=(422,),
+        )
+    except JourneyFailure as exc:
+        raise JourneyFailure(
+            f"retired retrieval probe was admitted or lost: {exc}"
+        ) from exc
+    text = payload.decode(errors="replace")
+    if not _RETIRED_PROBE_RE.search(text):
+        raise JourneyFailure(
+            "retired retrieval probe was not rejected as retired "
+            f"(HTTP {status}): {text[:800]}"
+        )
+    if "workflowId" in text:
+        raise JourneyFailure(
+            "retired retrieval probe created work before rejection"
+        )
+    log("explicit retired retrieval rejected before any effect")
+    state["vector_free"] = {
+        "label": label,
+        "health": {
+            "status": health.get("status"),
+            "db": health.get("db"),
+            "migration_required": bool(health.get("migration_required")),
+        },
+        "catalog": "vector-free",
+        "retired_probe": {"status": status, "workflow_created": False},
+    }
+
+
 def conversion(state: dict[str, Any], *, api_log: Path) -> None:
     """Require an eligible guarded conversion outcome after an account-era upgrade."""
 
@@ -592,6 +714,7 @@ def main(argv: list[str] | None = None) -> int:
         "phase",
         choices=(
             "populate",
+            "vector-free",
             "canceled",
             "credential",
             "verify",
@@ -620,6 +743,8 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
                 defer_seconds=args.defer_seconds,
             )
+        elif args.phase == "vector-free":
+            vector_free(api, state, label=args.label)
         elif args.phase == "canceled":
             canceled(api, state, timeout=args.timeout)
         elif args.phase == "conversion":

@@ -1062,8 +1062,12 @@ def test_manifest_drain_gate_blocks_on_open_histories() -> None:
 # integration by #4193 / #4189; those results are consumed here by scope
 # reference, not reproduced. Live `docker compose up` probes, API/worker
 # readiness probes against running services, dashboard bootstrap, and
-# browser journeys remain protected deployment checks (see
-# ``test_topology_matrix_gaps_are_explicit``) and are NOT claimed here.
+# browser journeys run in the integration-ci disposable fresh + upgrade
+# journeys (tools/first_run_journey_3938.sh vector-free phase); this module
+# binds that live probe shape to the production admission contract
+# (``test_vector_free_live_probe_matches_production_admission``) but does
+# NOT claim the live execution itself (see
+# ``test_topology_matrix_gaps_are_explicit``).
 # ---------------------------------------------------------------------------
 
 
@@ -1291,3 +1295,35 @@ def test_vector_free_compose_startup_config_renders_required_services() -> None:
         (REPO_ROOT / "docker-compose.test.yaml").read_text()
     )
     assert check_compose_vector_free(test_compose) == []
+
+
+def test_vector_free_live_probe_matches_production_admission() -> None:
+    """The disposable-journey probe is rejected by the production contract.
+
+    ``tools/single_user_journey_checks.py`` owns the exact retired-retrieval
+    submission the integration-ci fresh + upgrade journeys send to the
+    running candidate API. This binds that probe to the real admission
+    contract (the same ``reject_retired_vector_fields`` the API applies at
+    the payload and task levels), so the live 422 and the hermetic rejection
+    prove the same boundary. The journey's readiness/catalog predicates
+    accept clean posture and reject residue here as well.
+    """
+    from tools.single_user_journey_checks import (
+        check_catalog_vector_free,
+        check_health_ready,
+        retired_execution_probe_body,
+    )
+
+    body = retired_execution_probe_body()
+    task = body["payload"]["task"]
+    assert task["rag"] == {"collections": ["docs"], "required": True}
+    with pytest.raises(WorkflowContractError, match="4105|retired|vector"):
+        reject_retired_vector_fields(dict(task), field_path="workflow")
+    check_health_ready({"status": "ok", "db": "connected"})
+    check_catalog_vector_free({"sections": ["ok"]})
+    with pytest.raises(Exception, match="retired retrieval backend"):
+        check_catalog_vector_free({"settings": [{"key": "QDRANT_URL"}]})
+    with pytest.raises(Exception, match="healthz"):
+        check_health_ready(
+            {"status": "ok", "db": "connected", "migration_required": True}
+        )
