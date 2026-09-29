@@ -352,7 +352,10 @@ Managed session turn preparation stages declared `inputRefs`, including the trus
 original issue brief and prior verification reports, in `.moonmind/attachments/`
 through the shared workspace artifact projector after checkout. The projector
 checks workflow ownership and artifact integrity and replaces input bytes safely
-on retries without restoring or resetting the candidate repository. Launch-only
+on retries without restoring or resetting the candidate repository. Every real
+turn reconciles that directory to its declared inputs, including an empty set;
+stale briefs and reports are removed only after replacements are admitted.
+Restore inputs and candidate files are preserved. Launch-only
 metadata preparation does not require an existing checkout. Retained histories
 keep their original attachment dispatch through the workflow patch boundary.
 

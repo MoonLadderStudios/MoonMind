@@ -8694,10 +8694,11 @@ class TemporalAgentRuntimeActivities:
                 },
             )
             gate_payload["gateResultRef"] = verify_ref.artifact_id
-            if remaining_work_declared:
+            if remaining_work_declared and isinstance(remaining_work, list):
                 # The publisher owns the durable reference to the verifier's
                 # inline gaps. A model-authored URL or workspace path is useful
                 # report content, but cannot replace the artifact just stored.
+                # Reports without inline gaps retain their separate artifact.
                 gate_payload["remainingWorkRef"] = verify_ref.artifact_id
                 gate_payload.pop("remaining_work_ref", None)
             authoritative_ref = verify_ref.artifact_id
@@ -9665,12 +9666,16 @@ class TemporalAgentRuntimeActivities:
         # Launch metadata can be requested before checkout exists. Project inputs
         # in the real turn preparation, after launch, through the same artifact
         # owner used by Omnigent. Never restore/reset the candidate repository.
-        if request.input_refs and not (
+        workspace = Path(workspace_path_raw).expanduser().resolve()
+        attachment_root = workspace / ".moonmind" / "attachments"
+        has_attachment_projection = bool(workspace_path_raw) and (
+            attachment_root.exists() or attachment_root.is_symlink()
+        )
+        if (request.input_refs or has_attachment_projection) and not (
             payload.get("metadataOnly") or payload.get("metadata_only")
         ):
             from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
 
-            workspace = Path(workspace_path_raw).expanduser().resolve()
             if (
                 not workspace_path_raw
                 or self._managed_session_run_root_for_workspace(workspace) is None

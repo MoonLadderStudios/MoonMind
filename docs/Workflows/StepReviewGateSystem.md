@@ -189,6 +189,8 @@ When a verifier supplies inline remaining work, the artifact publisher owns its
 compact `remainingWorkRef`: it points to the stored full report, even if the model
 also supplied a URL or workspace path. Those authored references remain report
 content and do not turn a valid non-pass decision into a routing failure.
+Reports without inline remaining work preserve their separate remaining-work
+artifact reference so the next turn receives the actual gaps.
 Diagnostics must remain readable without another LLM invocation. Distinguish
 implementation failures, report defects, missing evidence, infrastructure failures,
 and real human decisions rather than displaying all as manual review.

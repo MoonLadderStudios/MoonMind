@@ -1710,3 +1710,65 @@ async def test_expired_claim_is_reaped_for_new_grant(tmp_path, monkeypatch):
         runtime_gid=os.getgid(),
     )
     assert owned["accessMode"] == "read-write"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("linked_dir", [".moonmind", ".moonmind/attachments"])
+async def test_attachment_reconciliation_rejects_linked_directories(
+    tmp_path, linked_dir
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    (retained / "candidate.py").write_text("saved work")
+    link = workspace / linked_dir
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(retained, target_is_directory=True)
+    with pytest.raises(WorkspaceArtifactProjectionError, match="symlink"):
+        await WorkspaceArtifactProjector(None).project_attachments(
+            workspace,
+            refs=(),
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    assert (retained / "candidate.py").read_text() == "saved work"
+
+
+@pytest.mark.asyncio
+async def test_attachment_reconciliation_preserves_inputs_until_replacement_is_admitted(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = FakeArtifactService(
+        {"old": b"previous brief", "current": b"current brief"}
+    )
+    projector = WorkspaceArtifactProjector(service)
+    parameters = dict(
+        workflow_id="workflow-1", runtime_uid=os.getuid(), runtime_gid=os.getgid()
+    )
+    old = await projector.project_attachments(
+        workspace, refs=("artifact://old",), **parameters
+    )
+    old_path = workspace / old[0]["path"]
+    service.link_workflow_id = "unrelated-workflow"
+    with pytest.raises(WorkspaceArtifactProjectionError, match="workflow"):
+        await projector.project_attachments(
+            workspace, refs=("artifact://current",), **parameters
+        )
+    assert old_path.read_bytes() == b"previous brief"
+    service.link_workflow_id = "workflow-1"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("unrelated work")
+    nested = old_path.parent / "stale-directory"
+    nested.mkdir()
+    (nested / "link").symlink_to(outside)
+    await projector.project_attachments(
+        workspace, refs=("artifact://current",), **parameters
+    )
+    assert not old_path.exists()
+    assert not nested.exists()
+    assert outside.read_text() == "unrelated work"
+    assert [p.read_bytes() for p in old_path.parent.iterdir()] == [b"current brief"]
