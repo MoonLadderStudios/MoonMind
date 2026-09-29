@@ -15,7 +15,10 @@ import pytest
 
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal import story_output_tools as tools
-from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
+from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
+
+# Reuse the claim journey's real GitHub HTTP fixture for selection tests.
+journey = claim_journey.journey
 
 REPOSITORY = "example/repo"
 ISSUE_NUMBER = 2713
@@ -39,7 +42,9 @@ class _AssessmentArtifacts:
 
 @pytest.fixture
 def github(monkeypatch):
-    state = {"labels": [], "comments": [], "repo_labels": [], "writes": []}
+    # comment_fault: "lost_ack" stores the comment then drops the response,
+    # "dropped" drops the request, "denied" rejects it.
+    state = {"labels": [], "comments": [], "repo_labels": [], "writes": [], "comment_fault": None}
 
     def handle(request: httpx.Request) -> httpx.Response:
         path = unquote(request.url.path)
@@ -63,8 +68,15 @@ def github(monkeypatch):
         if path == f"{issue_path}/comments":
             if request.method == "GET":
                 return httpx.Response(200, json=state["comments"])
+            fault = state["comment_fault"]
+            if fault == "denied":
+                return httpx.Response(403, json={"message": "Resource not accessible"})
+            if fault == "dropped":
+                raise httpx.ConnectTimeout("fixture dropped the request", request=request)
             comment = {"id": len(state["comments"]) + 1, "body": body["body"]}
             state["comments"].append(comment)
+            if fault == "lost_ack":
+                raise httpx.ReadTimeout("fixture lost the response", request=request)
             return httpx.Response(201, json=comment)
         if request.method == "POST" and path == f"/repos/{REPOSITORY}/labels":
             if body["name"] in state["repo_labels"]:
@@ -141,6 +153,13 @@ async def test_manual_only_assessment_marks_issue_and_stops_without_failing(gith
         {"verdict": "PARTIALLY_IMPLEMENTED", "manualOnly": False},
         # A completed implementation has no manual remainder to hand off.
         {"verdict": "FULLY_IMPLEMENTED", "manualOnly": MANUAL_ONLY},
+        # Incomplete declarations cannot tell a person what to do, so they do
+        # not exclude the issue from automation.
+        {"verdict": "PARTIALLY_IMPLEMENTED", "manualOnly": True},
+        {"verdict": "PARTIALLY_IMPLEMENTED", "manualOnly": {}},
+        {"verdict": "PARTIALLY_IMPLEMENTED", "manualOnly": {"reason": MANUAL_ONLY["reason"]}},
+        {"verdict": "PARTIALLY_IMPLEMENTED", "manualOnly": {"reason": " ", "manualActions": ["x"]}},
+        {"verdict": "PARTIALLY_IMPLEMENTED", "manualOnly": {"reason": "x", "manualActions": [" ", 7]}},
     ],
 )
 async def test_automatable_assessment_continues_without_marking(github, assessment):
@@ -153,7 +172,7 @@ async def test_automatable_assessment_continues_without_marking(github, assessme
 
 
 @pytest.mark.asyncio
-async def test_search_skips_manual_only_issue_until_the_label_is_removed(journey):  # noqa: F811
+async def test_search_skips_manual_only_issue_until_the_label_is_removed(journey):
     state, service, _sessions = journey
     state["labels"] = ["manual-only"]
     search = {"repository": "example/repo", "issueSearch": "", "includeAllAuthors": False}
@@ -172,6 +191,39 @@ async def test_search_skips_manual_only_issue_until_the_label_is_removed(journey
     assert selected.status == "COMPLETED", selected.outputs
     assert selected.completion_disposition is None
     assert selected.outputs["issue"]["number"] == 3970
+
+
+@pytest.mark.asyncio
+async def test_lost_comment_acknowledgement_is_reconciled_before_labelling(github):
+    github["comment_fault"] = "lost_ack"
+
+    result = await _check_blockers({"verdict": "BLOCKED", "manualOnly": MANUAL_ONLY})
+
+    assert result.status == "COMPLETED", result.outputs
+    assert result.completion_disposition == "idle"
+    assert len(github["comments"]) == 1
+    assert github["labels"] == ["manual-only"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["dropped", "denied"])
+async def test_issue_is_not_labelled_without_its_explanation(github, fault):
+    github["comment_fault"] = fault
+
+    result = await _check_blockers({"verdict": "BLOCKED", "manualOnly": MANUAL_ONLY})
+
+    # The run stops rather than continuing into implementation, and a later
+    # assessment can mark the issue once the explanation can be posted.
+    assert result.status == "FAILED", result.outputs
+    assert result.outputs["decision"] == "blocked"
+    assert github["comments"] == []
+    assert github["labels"] == []
+
+    github["comment_fault"] = None
+    retried = await _check_blockers({"verdict": "BLOCKED", "manualOnly": MANUAL_ONLY})
+    assert retried.completion_disposition == "idle"
+    assert len(github["comments"]) == 1
+    assert github["labels"] == ["manual-only"]
 
 
 @pytest.mark.asyncio
