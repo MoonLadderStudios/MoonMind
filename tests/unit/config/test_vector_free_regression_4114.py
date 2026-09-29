@@ -13,8 +13,17 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   removed the manifest-only distributions:
   ``test_dependency_removal_landed_no_manifest_only_distributions`` asserts
   ``pyproject.toml`` and ``poetry.lock`` carry no ``qdrant-client``,
-  ``llama-index``, or reader packages. Image-level qualification stays a
-  protected deployment check (see ``test_topology_matrix_gaps_are_explicit``).
+  ``llama-index``, or reader packages. The installed graph is qualified by
+  ``test_installed_distributions_carry_no_qdrant_sdk`` (existing
+  ``check_dependency_vector_free`` guard over real installed-package
+  metadata, MoonLadderStudios/MoonMind#4111) and the shipped image layering
+  by ``test_runtime_image_installs_from_poetry_export`` (the
+  ``runtime-dependencies`` layer derives from ``poetry export`` output, so
+  lock evidence transfers to sharing images). Surviving ordinary libraries
+  stay explicitly declared
+  (``test_surviving_dependency_libraries_remain_supported``). Image-level
+  live qualification stays a protected deployment check (see
+  ``test_topology_matrix_gaps_are_explicit``).
 - Topology: ``test_compose_*`` guards the rendered default Compose file, the
   test Compose file, every declared profile, and every documented
   ``--profile``/``COMPOSE_PROFILES`` combination (hermetic YAML render under
@@ -761,6 +770,153 @@ def test_poetry_lock_has_no_qdrant_distribution_transitive() -> None:
     assert check_dependency_vector_free(["Qdrant-Client"]) != []
     lock = (REPO_ROOT / "poetry.lock").read_text(encoding="utf-8")
     assert not re.search(r'name\s*=\s*"qdrant[^"]*"', lock, re.IGNORECASE)
+
+
+def _installed_distribution_names() -> list[str]:
+    """Enumerate live installed distribution names via package metadata."""
+    from importlib import metadata as importlib_metadata
+
+    names: list[str] = []
+    for distribution in importlib_metadata.distributions():
+        name = (distribution.metadata.get("Name") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def test_installed_distributions_carry_no_qdrant_sdk() -> None:
+    """The live installed graph carries no Qdrant distribution.
+
+    MoonLadderStudios/MoonMind#4111: declaration/lock checks alone do not
+    prove a clean install. This reuses the existing
+    ``check_dependency_vector_free`` guard over real installed-package
+    metadata instead of creating a dependency scanner: wherever the suite
+    runs (required CI, managed containers), the executing dependency layer
+    itself is qualified. A fixture offender
+    (``test_dependency_guard_rejects_transitive_fixture_requirement``)
+    proves the guard would fail a reintroduced client.
+    """
+    names = _installed_distribution_names()
+    assert names, "expected installed distributions to enumerate"
+    assert check_dependency_vector_free(names) == []
+
+
+def test_surviving_dependency_libraries_remain_supported() -> None:
+    """Ordinary provider/HTTP/YAML/source-control libraries stay declared.
+
+    MoonLadderStudios/MoonMind#4111: vector removal must not take ordinary
+    libraries with it. ``pyproject.toml`` must still explicitly declare the
+    provider, HTTP, YAML, artifact, source-control, and workspace libraries.
+    Real importability is proven by the managed-container runs themselves
+    (CLI help and worker-catalog tests import this graph); this hermetic pin
+    keeps declaration support explicit without a warm-environment install.
+    """
+    import tomllib
+
+    with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
+        pyproject = tomllib.load(handle)
+    declared = {
+        name.lower() for name in pyproject["tool"]["poetry"]["dependencies"]
+    }
+    for library in (
+        "openai",
+        "anthropic",
+        "httpx",
+        "requests",
+        "aiohttp",
+        "boto3",
+        "PyYAML",
+        "gitpython",
+        "SQLAlchemy",
+        "temporalio",
+        "typer",
+        "fastapi",
+    ):
+        assert library.lower() in declared, (
+            f"surviving library {library!r} is no longer declared"
+        )
+
+
+def check_dockerfile_install_vector_free(dockerfile_text: str) -> list[str]:
+    """Return problems when the image install layer bypasses the clean lock.
+
+    The shipped ``runtime-dependencies`` layer must derive from ``poetry
+    export`` output so lock evidence transfers to every image sharing that
+    layer. A direct vector ``pip install`` or ``--no-deps`` on the exported
+    requirements would hide a transitive offender from the installed graph.
+    """
+    problems: list[str] = []
+    code_lines = [
+        line
+        for line in dockerfile_text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    if "poetry export --only main" not in code:
+        problems.append(
+            "image installs do not derive from poetry export --only main"
+        )
+    if "requirements-main.txt" not in code:
+        problems.append(
+            "image does not install the exported main requirements layer"
+        )
+    for lineno, line in enumerate(dockerfile_text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "pip install" in stripped and re.search(
+            r"qdrant|llama-index|llama_index|mem0ai", stripped, re.IGNORECASE
+        ):
+            problems.append(
+                "line "
+                f"{lineno} installs a retired vector distribution: "
+                f"{stripped!r}"
+            )
+        if "-r /tmp/requirements-" in stripped and "--no-deps" in stripped:
+            problems.append(
+                f"line {lineno} hides transitive deps with --no-deps "
+                "on exported requirements"
+            )
+    return problems
+
+
+def test_runtime_image_installs_from_poetry_export() -> None:
+    """Shipped image layers share the verified dependency layer (#4111).
+
+    ``api_service/Dockerfile`` builds ``runtime-dependencies`` from
+    ``poetry export`` output (main plus the test overlay), so lock-level
+    vector-free evidence transfers to every image sharing that layer
+    instead of requiring a duplicate issue-specific rebuild. The local
+    ``pip install --no-deps .`` project install stays out of this guard:
+    it installs the first-party project itself rather than its dependency
+    closure, and predates the removal.
+    """
+    text = (REPO_ROOT / "api_service/Dockerfile").read_text(encoding="utf-8")
+    assert check_dockerfile_install_vector_free(text) == []
+
+
+def test_dockerfile_guard_rejects_direct_vector_install() -> None:
+    """Negative control: a direct vector install fails the layering guard."""
+    fixture = (
+        "RUN poetry export --only main --format requirements.txt "
+        "--without-hashes --output /deps/requirements-main.txt\n"
+        "RUN pip install --disable-pip-version-check "
+        "-r /tmp/requirements-main.txt\n"
+        "RUN pip install qdrant-client==1.19.0\n"
+    )
+    problems = check_dockerfile_install_vector_free(fixture)
+    assert any("retired vector distribution" in p for p in problems)
+
+
+def test_dockerfile_guard_rejects_no_deps_on_exported_requirements() -> None:
+    """Negative control: ``--no-deps`` on exports fails the layering guard."""
+    fixture = (
+        "RUN poetry export --only main --format requirements.txt "
+        "--without-hashes --output /deps/requirements-main.txt\n"
+        "RUN pip install --no-deps -r /tmp/requirements-main.txt\n"
+    )
+    problems = check_dockerfile_install_vector_free(fixture)
+    assert any("--no-deps" in p for p in problems)
 
 
 # ---------------------------------------------------------------------------
