@@ -432,7 +432,17 @@ async def test_verified_primary_resume_does_not_repeat_operator_admission(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "configured",
-    ["", "docker-proxy", "temporal-worker-integrations"],
+    [
+        "",
+        "docker-proxy",
+        "temporal-worker-integrations",
+        # The previous .env-template default, still present in existing
+        # operator .env files. The updater runs in its own one-off container,
+        # so the obsolete runner exclusion is dropped rather than failing
+        # every workflow-submitted update.
+        "temporal-worker-deployment-control",
+        "temporal-worker-deployment-control,temporal-worker-integrations",
+    ],
 )
 async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
     tmp_path, monkeypatch, configured
@@ -511,7 +521,8 @@ async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
             observed[scope]
         )
         # Operator exclusions survive alongside the protected substrate.
-        assert set(excluded) <= set(observed[scope])
+        assert set(excluded) - {release.CONTROL_SERVICE} <= set(observed[scope])
+        assert release.CONTROL_SERVICE not in observed[scope]
         assert len(observed[scope]) == len(set(observed[scope]))
 
 
