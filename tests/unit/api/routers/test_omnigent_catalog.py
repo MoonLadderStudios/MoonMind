@@ -983,7 +983,7 @@ def test_claude_catalog_respects_generic_rollout_gate(monkeypatch):
         provider_id="anthropic",
         runtime_id="claude_code",
     )
-    monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", raising=False)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "false")
     disabled = (
         TestClient(_app(monkeypatch, session=_Session([profile])))
         .get("/api/omnigent/codex-catalog-readiness")
@@ -999,7 +999,9 @@ def test_claude_catalog_respects_generic_rollout_gate(monkeypatch):
         reason["code"] for reason in claude_disabled["gateReasons"]
     }
 
-    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    # Omitting the switch is the shipped default: a connected Anthropic OAuth
+    # Profile is not held back by a manual rollout toggle.
+    monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", raising=False)
     enabled = (
         TestClient(_app(monkeypatch, session=_Session([profile])))
         .get("/api/omnigent/codex-catalog-readiness")

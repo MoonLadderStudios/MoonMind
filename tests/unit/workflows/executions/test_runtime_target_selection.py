@@ -130,7 +130,7 @@ def test_denied_selection_records_the_fallback_denial_metric():
         resolve_runtime_target_selection(
             surface=AuthoringSurface.api_submission,
             requested_target_id="claude.generic-omnigent",
-            policy=_policy(),
+            policy=_policy({_CLAUDE_GATE: "false"}),
         )
         denials = [
             (labels, value)
@@ -223,7 +223,7 @@ def test_claude_and_opencode_promotion_is_independent():
     policy = _policy({_CLAUDE_GATE: "true"})
     catalog = resolve_runtime_target_catalog(policy=policy)
     states = {view.target_id: view.rollout_state for view in catalog}
-    assert states["claude.generic-omnigent"] is RolloutState.new_work_default
+    assert states["claude.generic-omnigent"] is RolloutState.explicit_only
     assert states["opencode.generic-omnigent"] is RolloutState.new_work_default
     assert states["codex.generic-omnigent"] is RolloutState.disabled
 
@@ -333,7 +333,7 @@ def test_explicit_target_selection_of_a_disabled_row_fails_closed():
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.api_submission,
         requested_target_id="claude.generic-omnigent",
-        policy=_policy(),
+        policy=_policy({_CLAUDE_GATE: "false"}),
     )
     assert selection.available is False
     assert selection.replacement_required is True
