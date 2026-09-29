@@ -309,6 +309,13 @@ The parent loads the unified `publishEvidence` artifact reference from the child
 
 Batch coordinators produce enqueue/target evidence such as `batch_pr_resolver_result.json`, `batch_dependabot_resolver_result.json`, `batch-workflows-result.json`, and `skill_outcome.json`. Their own compiled mode is `none`. They are not required to manufacture remote-head publication evidence.
 
+Both PR batch Skills declare execution-bound terminal contracts. Their helpers
+record `running` before discovery and a terminal result with verified child IDs,
+skips, and errors afterward. The shared terminal-evidence evaluator accepts a
+fully accounted queue or no-op, preserves partial failures, and rejects missing
+or stale results. A harness returning to idle after a permission denial does not
+prove that the coordinator completed.
+
 Display their objective outcome as children queued, verified no targets, partial, or failed, separately from descendant publication progress. `PUBLISH_DISABLED` describes local publication disposition only where appropriate; it must not imply the whole batch was forbidden to publish or that child work completed.
 
 ### Managed Branch/PR Publication
