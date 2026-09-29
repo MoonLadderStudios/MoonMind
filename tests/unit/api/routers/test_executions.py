@@ -16279,7 +16279,7 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
         ]
 
 def test_retired_manifest_update_is_rejected_actionably() -> None:
-    """Retired manifest-only updates surface the service rejection as 422."""
+    """A retired manifest update on a historical row is denied before the service."""
 
     from moonmind.workflows.temporal.service import TemporalExecutionValidationError
 
@@ -16304,8 +16304,9 @@ def test_retired_manifest_update_is_rejected_actionably() -> None:
             },
         )
 
-        assert response.status_code == 422
-        assert response.json()["detail"]["code"] == "invalid_update_request"
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "execution_historical"
+        service.update_execution.assert_not_awaited()
 
 def test_retired_manifest_status_route_is_gone() -> None:
     # MoonLadderStudios/MoonMind#4192: the manifest-status endpoint is
@@ -17931,25 +17932,25 @@ def test_temporal_workflow_editing_actions_require_run_workflow_and_feature_flag
     assert disabled_actions.disabled_reasons["canUpdateInputs"] == "temporal_workflow_editing_disabled"
 
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
-    manifest_record = _build_execution_record(
-        workflow_type=TemporalWorkflowType.MANIFEST_INGEST,
+    non_user_record = _build_execution_record(
+        workflow_type=TemporalWorkflowType.PROVIDER_PROFILE_MANAGER,
         state=MoonMindWorkflowState.COMPLETED,
     )
 
-    manifest_actions = _serialize_execution(manifest_record).actions
-    assert manifest_actions.can_edit_for_rerun is False
+    non_user_actions = _serialize_execution(non_user_record).actions
+    assert non_user_actions.can_edit_for_rerun is False
     assert (
-        manifest_actions.disabled_reasons["canEditForRerun"]
+        non_user_actions.disabled_reasons["canEditForRerun"]
         == "unsupported_workflow_type"
     )
-    assert manifest_actions.can_rerun is False
-    assert manifest_actions.disabled_reasons["canRerun"] == "unsupported_workflow_type"
+    assert non_user_actions.can_rerun is False
+    assert non_user_actions.disabled_reasons["canRerun"] == "unsupported_workflow_type"
 
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", False)
-    disabled_manifest_actions = _serialize_execution(manifest_record).actions
-    assert disabled_manifest_actions.can_rerun is False
+    disabled_non_user_actions = _serialize_execution(non_user_record).actions
+    assert disabled_non_user_actions.can_rerun is False
     assert (
-        disabled_manifest_actions.disabled_reasons["canRerun"]
+        disabled_non_user_actions.disabled_reasons["canRerun"]
         == "unsupported_workflow_type"
     )
 
