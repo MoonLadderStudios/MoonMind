@@ -876,3 +876,54 @@ def test_package_registry_policy_digest_tracks_the_enabled_setting(
     enabled = configured_egress().EGRESS_CONFIG_DIGEST
     monkeypatch.setenv("MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED", "false")
     assert configured_egress().EGRESS_CONFIG_DIGEST != enabled
+
+
+def _enforced_sandbox_domains() -> tuple[str, ...]:
+    """Return the enforcer's ``allowed_sandbox_domains`` dstdomain entries."""
+    from moonmind.security import egress
+
+    lines = (
+        (egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "squid.conf")
+        .read_text()
+        .splitlines()
+    )
+    start = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("acl allowed_sandbox_domains dstdomain")
+    )
+    entries: list[str] = []
+    for line in lines[start + 1 :]:
+        entries.append(line.strip().removesuffix("\\").strip())
+        if not line.rstrip().endswith("\\"):
+            break
+    return tuple(entry for entry in entries if entry)
+
+
+def _squid_dstdomain_matches(entry: str, host: str) -> bool:
+    if entry.startswith("."):
+        return host == entry[1:] or host.endswith(entry)
+    return host == entry
+
+
+@pytest.mark.parametrize(
+    "host",
+    (
+        # Claude Code refreshes its OAuth access token here; blocking it leaves
+        # an enrolled Anthropic Provider Profile unable to run past expiry.
+        "platform.claude.com",
+        "api.anthropic.com",
+    ),
+)
+def test_claude_code_oauth_and_api_hosts_are_allowed(host):
+    from moonmind.security import egress
+
+    assert any(
+        _squid_dstdomain_matches(entry, host) for entry in _enforced_sandbox_domains()
+    )
+    for profile in (egress.DEFAULT_EGRESS_PROFILE, egress.OMNIGENT_EGRESS_PROFILE):
+        assert any(
+            host == destination.dns_name
+            or host.endswith("." + destination.dns_name)
+            for destination in profile.destinations
+        )

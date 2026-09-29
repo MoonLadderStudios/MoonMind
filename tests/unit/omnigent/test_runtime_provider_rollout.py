@@ -186,6 +186,34 @@ def test_codex_generic_is_disabled_until_the_deployment_qualifies_it():
     assert promoted.default_eligible is True
 
 
+def test_claude_generic_is_admitted_by_default_until_explicitly_stopped():
+    combination = _combination(
+        harnessId="claude-native",
+        runtimePackRef="claude-native-pack@1",
+        hostClassRef="omnigent-claude@1",
+        credentialMaterializerRef="claude-oauth-home@1",
+        providerRuntimeId="claude_code",
+    )
+    admitted = resolve_rollout_decision(
+        policy=_policy(), combination=combination, context=_qualified_context()
+    )
+    assert admitted.target_id == "claude.generic-omnigent"
+    assert admitted.state is RolloutState.explicit_only
+    assert admitted.explicit_selection_allowed is True
+    # Claude is chosen through its Provider Profile; it never becomes the
+    # promoted default that ordinary new work records as its target.
+    assert admitted.default_eligible is False
+
+    stopped = resolve_rollout_decision(
+        policy=_policy({_CLAUDE_GATE: "false"}),
+        combination=combination,
+        context=_qualified_context(),
+    )
+    assert stopped.state is RolloutState.disabled
+    assert stopped.explicit_selection_allowed is False
+    assert RolloutReason.rollout_disabled in stopped.unavailable_reasons
+
+
 def test_claude_and_opencode_rows_are_independent():
     policy = _policy({_CLAUDE_GATE: "true"})
     claude = resolve_rollout_decision(
@@ -199,8 +227,8 @@ def test_claude_and_opencode_rows_are_independent():
         ),
         context=_qualified_context(),
     )
-    assert claude.state is RolloutState.new_work_default
-    # Promoting Claude does not promote Codex.
+    assert claude.state is RolloutState.explicit_only
+    # Admitting Claude does not promote Codex.
     codex = resolve_rollout_decision(
         policy=policy, combination=_combination(), context=_qualified_context()
     )
@@ -501,7 +529,7 @@ def test_rollback_controls_are_independent_per_combination():
         ),
         context=_qualified_context(),
     )
-    assert claude.state is RolloutState.new_work_default
+    assert claude.state is RolloutState.explicit_only
     assert claude.rollback_controls_applied == ()
 
 
