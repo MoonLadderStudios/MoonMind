@@ -35,10 +35,16 @@ interchangeable responsibilities.
 
 - A shared image never authorizes every installed runtime. Each Host Class
   declares only its own harness, runtime pack, and materializers.
-- Generic Codex and Claude Code combinations are `disabled` until their
-  exact protected-live evidence passes and the qualification flag promotes
-  them (see `RuntimeProviderRollout.md`); selection before qualification
-  fails closed and never falls back to another runtime, profile, or host mode.
+- The generic Codex combination is `disabled` until its exact protected-live
+  evidence passes and the qualification flag promotes it (see
+  `RuntimeProviderRollout.md`); selection before qualification fails closed and
+  never falls back to another runtime, profile, or host mode.
+- Generic Claude Code has no profile-bound Omnigent realizer, so it is admitted
+  as an explicit choice by default: selecting a connected Anthropic OAuth
+  Provider Profile needs no manual toggle. Image, policy, inventory, credential
+  readiness, and exact-host attestation still gate each launch, and
+  `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` stops new admission without
+  falling back.
 - "Supported" means repository evidence or a protected live artifact proves the
   exact combination (image digest, harness, pack, materializer, model, policy,
   realizer). Code presence alone is "implemented" or "unverified".

@@ -280,6 +280,79 @@ async def _read_exact_host_model_options(
     return payload, "exact-host-opencode-cli"
 
 
+_CLAUDE_NATIVE_IMPORT = (
+    "import importlib, importlib.util; "
+    "claude_native = importlib.import_module("
+    "'omnigent.harnesses.claude_native.main' "
+    "if importlib.util.find_spec('omnigent.harnesses') is not None "
+    "and importlib.util.find_spec('omnigent.harnesses.claude_native') is not None "
+    "else 'omnigent.claude_native'); "
+)
+
+
+async def confirm_exact_host_model(
+    *,
+    backend: DockerCommandBackend,
+    container_name: str,
+    harness_id: str,
+    model_options: Any,
+    selected_model: str,
+) -> tuple[list[str], bool]:
+    """Return the host's advertised model ids and whether it serves the selection.
+
+    Qualified catalogs (``provider/model``) confirm by exact membership. Claude
+    Code rows name picker aliases and bare Anthropic ids (``opus[1m]`` ->
+    ``claude-opus-5-5[1m]``), and whether a launch of the selected id is served
+    is Claude harness truth, so the exact host answers with its own upstream
+    rule for exactly these rows instead of MoonMind re-deriving it.
+    """
+
+    if harness_id != "claude-native":
+        available = sorted(_model_ids(model_options))
+        return available, selected_model in available
+    models = model_options.get("models") if isinstance(model_options, dict) else None
+    rows = [row for row in models or [] if isinstance(row, dict)]
+    available = sorted(
+        {
+            str(row[key])
+            for row in rows
+            for key in ("id", "model")
+            if isinstance(row.get(key), str) and row[key]
+        }
+    )
+    if not rows:
+        return available, False
+    probe = _substrate_guarded_probe(
+        "import json, sys; " + _CLAUDE_NATIVE_IMPORT + "rows = json.loads(sys.argv[1]); "
+        "config = claude_native.resolve_native_claude_config(spec=None); "
+        "print('served' if claude_native.claude_catalog_serves_model("
+        "rows, sys.argv[2], config) else 'unserved')"
+    )
+    code, stdout, stderr = await backend.run(
+        [
+            "docker",
+            "exec",
+            container_name,
+            "/opt/venv/bin/python",
+            "-c",
+            probe,
+            json.dumps(rows),
+            selected_model,
+        ],
+        timeout_seconds=45.0,
+        check=False,
+    )
+    _raise_if_probe_substrate_unavailable(
+        code, stderr, boundary="Claude model catalog"
+    )
+    if code != 0:
+        raise HarnessPlatformError(
+            "exact host Claude model catalog probe failed",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        )
+    return available, stdout.strip() == "served"
+
+
 async def _run_exact_host_runner_command(
     *,
     backend: DockerCommandBackend,
@@ -397,6 +470,35 @@ def _declared_access_is_writable(access_mode: Any) -> bool:
     """
 
     return str(access_mode or "").strip().replace("_", "-").lower() == "read-write"
+
+
+async def credential_mount_access(
+    backend: DockerCommandBackend,
+    container_name: str,
+    attachment: dict[str, Any],
+) -> str | None:
+    """Return the observed access of one exact credential mount, if present.
+
+    ``run_runtime_command`` redacts credential-home paths such as
+    ``/home/app/.claude`` from command output, so an echoed mount table cannot
+    be compared against the attachment. Docker's template evaluator compares
+    the exact source and destination and prints one bounded token instead.
+    """
+
+    source = json.dumps(str(attachment["sourceRef"]))
+    destination = json.dumps(str(attachment["targetPath"]))
+    template = (
+        "{{range .Mounts}}"
+        f"{{{{if and (or (eq .Name {source}) (eq .Source {source})) "
+        f"(eq .Destination {destination})}}}}"
+        "{{if .RW}}rw{{else}}ro{{end}}"
+        "{{end}}{{end}}"
+    )
+    _code, observed, _err = await backend.run(
+        ["docker", "container", "inspect", "--format", template, container_name],
+        failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+    )
+    return {"rw": "read-write", "ro": "read-only"}.get(observed.strip())
 
 
 def _attest_workspace_mount(
@@ -1084,16 +1186,8 @@ class DockerOmnigentHostAttestor:
         credential_mount_evidence: list[dict[str, Any]] = []
         for handle in credential_handles:
             for attachment in handle.get("attachments", []):
-                matched = next(
-                    (
-                        mount
-                        for mount in mounts
-                        if str(mount.get("Name") or mount.get("Source") or "")
-                        == str(attachment["sourceRef"])
-                        and str(mount.get("Destination") or "")
-                        == str(attachment["targetPath"])
-                    ),
-                    None,
+                observed_access = await credential_mount_access(
+                    self._backend, launch_result["containerName"], attachment
                 )
                 # OAuth homes declare read-write so vendor token refresh persists;
                 # all other credential attachments are read-only. Compare the
@@ -1102,12 +1196,12 @@ class DockerOmnigentHostAttestor:
                 expected_writable = _declared_access_is_writable(
                     attachment.get("accessMode")
                 )
-                if matched is None:
+                if observed_access is None:
                     raise HarnessPlatformError(
                         "credential volume mount is missing",
                         code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
                     )
-                if bool(matched.get("RW")) != expected_writable:
+                if (observed_access == "read-write") != expected_writable:
                     raise HarnessPlatformError(
                         "credential volume mount mode does not match "
                         "the declared accessMode",
@@ -1257,11 +1351,19 @@ class DockerOmnigentHostAttestor:
                         harness_id=plan.payload.harnessId,
                     )
                 )
-                available_models = sorted(_model_ids(model_options))
+                available_models, selected_model_present = (
+                    await confirm_exact_host_model(
+                        backend=self._backend,
+                        container_name=launch_result["containerName"],
+                        harness_id=plan.payload.harnessId,
+                        model_options=model_options,
+                        selected_model=selected_model,
+                    )
+                )
                 observation.update(
                     availableModels=available_models,
                     source=model_options_source,
-                    selectedModelPresent=selected_model in available_models,
+                    selectedModelPresent=selected_model_present,
                 )
                 model_evidence.update(
                     availableModels=available_models, source=model_options_source

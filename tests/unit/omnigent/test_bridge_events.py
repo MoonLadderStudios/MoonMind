@@ -78,6 +78,23 @@ def test_execution_critical_drift_fails_closed() -> None:
         normalize_omnigent_observation({"type": "response.unexpected"})
 
 
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"type": "session.collaboration_mode", "conversation_id": "c", "mode": "plan"},
+        # claude-native counterpart: the Claude forwarder reports the pane's
+        # permission mode, a transient UI state that never changes run status.
+        {
+            "type": "session.permission_mode",
+            "conversation_id": "c",
+            "permission_mode": "auto",
+        },
+    ),
+)
+def test_native_session_mode_updates_are_non_terminal_state(payload) -> None:
+    assert normalize_omnigent_observation(payload) is None
+
+
 def test_session_created_normalizes_without_explicit_status() -> None:
     assert normalize_omnigent_observation({"type": "session.created"}) == "created"
 
