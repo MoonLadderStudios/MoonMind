@@ -164,6 +164,7 @@ class _FakeDockerDaemon:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
         self.states: dict[str, str] = {}
+        self.ownership: dict[str, str] = {}
         self.running_now = 0
         self.max_overlap = 0
         self.start_calls = 0
@@ -196,16 +197,25 @@ class _FakeDockerDaemon:
                 raise RuntimeError("injected lost start acknowledgment")
             return 0, name.encode(), b""
         if command[0] == "stop":
-            self.states[command[1]] = "exited"
+            self.states[command[-1]] = "exited"
             self._record_running()
             return 0, b"", b""
         if command[0] == "inspect":
             # Containers the daemon never created read as absent (its 404),
             # so create-path ownership checks behave like production. Known
-            # containers report an empty label set.
+            # containers report their explicit ownership, when provided.
             name = command[-1]
             if name not in self.states:
                 return 1, b"", f"Error: No such object: {name}".encode()
+            if (
+                command[:3] == ("inspect", "--format", "{{json .Config.Labels}}")
+                and name in self.ownership
+            ):
+                return (
+                    0,
+                    json.dumps({LABEL_OWNERSHIP: self.ownership[name]}).encode(),
+                    b"",
+                )
             return 0, b"{}", b""
         if command[0] == "create":
             return 0, command[command.index("--name") + 1].encode(), b""
@@ -737,17 +747,14 @@ async def test_same_job_retry_after_own_container_exited_does_not_rerun(
     assert daemon.states[name] == finished_state
 
 
-async def test_restricted_egress_retry_after_exit_fails_closed(
+async def test_restricted_egress_retry_without_network_evidence_fails_closed(
     tmp_path: Path,
 ) -> None:
-    """R2: a bridge job that finished before its running evidence never passes.
+    """R2: prior completion cannot substitute for missing network authority.
 
-    Restricted-egress acceptance requires launch evidence observed while the
-    workload ran; Docker releases a stopped container's endpoint, so a retry
-    that finds the job already finished cannot recover it. The retry fails
-    closed with the non-retryable launch class instead of reporting the
-    pre-launch ``created_unstarted`` evidence, never re-executes the job, and
-    leaves the container for the workflow's evidence publication and cleanup.
+    The daemon has an owned, completed job but supplies no network evidence.
+    Reject that launch without restarting the command or removing its logs.
+    Valid retained terminal authority is covered by the egress/backend tests.
     """
     daemon = _FakeDockerDaemon()
     (backend,) = _backends(tmp_path, daemon, count=1)
@@ -756,14 +763,17 @@ async def test_restricted_egress_retry_after_exit_fails_closed(
     request.egress_attestation_ref = "art_created_unstarted_launch_evidence"
     name = DockerContainerJobBackend._name(request)
     daemon.states[name] = "exited"
+    daemon.ownership[name] = request.ownership_token
 
     with pytest.raises(ContainerJobBackendError) as raised:
         await backend.start_container(request)
 
     assert raised.value.failure_class is ContainerJobFailureClass.LAUNCH
+    assert "network attestation is malformed" in str(raised.value.__cause__)
     assert daemon.real_starts == 0, "retry must not re-execute the container"
     assert not any(c[0] in {"start", "rm"} for c in daemon.commands)
-    assert daemon.states[name] == "exited"
+    assert daemon.states == {name: "exited"}
+    assert any(c[0] == "stop" and c[-1] == name for c in daemon.commands)
 
 
 async def test_own_paused_container_keeps_its_slot_on_retry(tmp_path: Path) -> None:

@@ -338,8 +338,12 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
 
 
 @pytest.mark.asyncio
-async def test_workload_attestation_binds_exact_sole_attachment_image_and_denials():
+@pytest.mark.parametrize("status", ["running", "exited", "dead"])
+async def test_workload_attestation_binds_exact_sole_attachment_image_and_denials(
+    status,
+):
     attestation = _attestation()
+    finished = status != "running"
     client_address = "172.31.0.7"
     denial_time = datetime(2026, 8, 12, tzinfo=UTC).timestamp()
 
@@ -349,6 +353,13 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
                 0,
                 json.dumps(
                     {
+                        "state": {
+                            "Status": status,
+                            "Running": not finished,
+                            "StartedAt": "2026-08-12T00:00:00Z",
+                            "FinishedAt": "2026-08-12T00:00:01Z",
+                        },
+                        "networkMode": DEFAULT_EGRESS_PROFILE.network_ref,
                         "labels": {
                             "moonmind.egress.profile": attestation.profile_ref,
                             "moonmind.egress.profile_digest": attestation.profile_digest,
@@ -359,8 +370,8 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
                         "networks": {
                             DEFAULT_EGRESS_PROFILE.network_ref: {
                                 "NetworkID": "network-id",
-                                "EndpointID": "endpoint-id",
-                                "IPAddress": client_address,
+                                "EndpointID": "" if finished else "endpoint-id",
+                                "IPAddress": "" if finished else client_address,
                             }
                         },
                         "imageRef": "image@sha256:" + "b" * 64,
@@ -393,14 +404,22 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
 
     assert evidence["attachmentIdentity"] == "container-id"
     assert evidence["networkIdentity"] == "network-id"
-    assert evidence["endpointIdentity"] == "endpoint-id"
+    assert evidence["endpointIdentity"] == (None if finished else "endpoint-id")
     assert evidence["workloadImageDigest"] == "sha256:" + "c" * 64
     assert evidence["workloadImageRef"] == "image@sha256:" + "b" * 64
     assert evidence["architecture"] == "amd64"
-    assert evidence["deniedConnectionCount"] == 1
-    assert evidence["denialDiagnostics"] == [
-        "denied metadata.invalid:443 TCP_DENIED/403"
-    ]
+    if finished:
+        assert evidence["evidenceStage"] == "finished"
+        assert evidence["startedAt"] == "2026-08-12T00:00:00+00:00"
+        assert evidence["finishedAt"] == "2026-08-12T00:00:01+00:00"
+        assert evidence["deniedConnectionCount"] is None
+        assert evidence["attachmentAddressDigest"] is None
+        assert "unavailable" in evidence["denialDiagnostics"][0]
+    else:
+        assert evidence["deniedConnectionCount"] == 1
+        assert evidence["denialDiagnostics"] == [
+            "denied metadata.invalid:443 TCP_DENIED/403"
+        ]
     assert client_address not in json.dumps(evidence)
 
 
@@ -926,4 +945,79 @@ def test_claude_code_oauth_and_api_hosts_are_allowed(host):
             host == destination.dns_name
             or host.endswith("." + destination.dns_name)
             for destination in profile.destinations
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "running",
+        "never_started",
+        "missing_time",
+        "malformed_time",
+        "naive_time",
+        "non_string_time",
+        "reversed_time",
+        "wrong_network",
+        "partial_endpoint",
+        "missing_network_id",
+        "secondary_network",
+    ],
+)
+@pytest.mark.parametrize("status", ["exited", "dead"])
+async def test_retired_endpoint_requires_confirmed_terminal_launch(mutation, status):
+    attestation = _attestation()
+    attachment = {"NetworkID": "network-id", "EndpointID": "", "IPAddress": ""}
+    observed = {
+        "labels": {
+            "moonmind.egress.profile": attestation.profile_ref,
+            "moonmind.egress.profile_digest": attestation.profile_digest,
+            "moonmind.egress.applied_rule_digest": attestation.applied_rule_digest,
+        },
+        "networks": {DEFAULT_EGRESS_PROFILE.network_ref: attachment},
+        "networkMode": DEFAULT_EGRESS_PROFILE.network_ref,
+        "imageRef": "image@sha256:" + "b" * 64,
+        "image": "sha256:" + "c" * 64,
+        "state": {
+            "Status": status,
+            "Running": False,
+            "StartedAt": "2026-09-28T22:00:00Z",
+            "FinishedAt": "2026-09-28T22:00:01Z",
+        },
+    }
+    if mutation == "running":
+        observed["state"].update(Status="running", Running=True)
+    elif mutation == "never_started":
+        observed["state"]["StartedAt"] = "0001-01-01T00:00:00Z"
+    elif mutation == "missing_time":
+        observed["state"].pop("StartedAt")
+    elif mutation == "malformed_time":
+        observed["state"]["StartedAt"] = "unknown"
+    elif mutation == "naive_time":
+        observed["state"]["StartedAt"] = "2026-09-28T22:00:00"
+    elif mutation == "non_string_time":
+        observed["state"]["StartedAt"] = None
+    elif mutation == "reversed_time":
+        observed["state"]["FinishedAt"] = "2026-09-27T22:00:00Z"
+    elif mutation == "wrong_network":
+        observed["networkMode"] = "bridge"
+    elif mutation == "partial_endpoint":
+        attachment["EndpointID"] = "still-attached"
+    elif mutation == "missing_network_id":
+        attachment["NetworkID"] = ""
+    else:
+        observed["networks"]["bridge"] = {}
+
+    async def runner(args):
+        assert args[0] == "inspect"
+        return 0, json.dumps(observed).encode(), b""
+
+    with pytest.raises(RuntimeError, match="network"):
+        await attest_docker_workload_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            attestation=attestation,
+            attachment_identity="container-id",
+            expected_image_ref=observed["imageRef"],
         )

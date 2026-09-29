@@ -160,7 +160,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             )
 
     steps = expanded["steps"]
-    assert len(steps) == 27
+    assert len(steps) == 16
     assert [step["title"] for step in steps[:4]] == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
@@ -217,31 +217,34 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
     assert "make no code changes" in steps[10]["instructions"]
     assert steps[11]["skill"]["id"] == "moonspec-verify"
 
-    assert steps[12]["title"] == "Remediate verification gaps — attempt 1 of 6"
-    assert steps[12]["annotations"]["jiraOrchestrateRole"] == "moonspec-remediation"
-    assert "ADDITIONAL_WORK_NEEDED" in steps[12]["instructions"]
-    assert steps[23]["title"] == "Verify remediation attempt 6 of 6"
-    assert steps[23]["annotations"]["moonSpecFinalRemediationGate"] is True
-    assert "controlling verification gate" in steps[23]["instructions"]
+    assert steps[11]["repositoryOperation"] == "read"
 
-    assert steps[24]["title"] == "Reconcile declarative docs"
-    assert steps[24]["annotations"] == {"jiraOrchestrateRole": "doc-reconciliation"}
-    assert steps[24]["skill"]["id"] == "moonspec-doc-reconcile"
-    assert "FULLY_IMPLEMENTED" in steps[24]["instructions"]
-    assert "skip doc reconciliation" in steps[24]["instructions"]
-    assert "artifacts/github-issue-orchestrate-doc-reconcile.json" in steps[24][
+    assert steps[12]["title"] == "Remediation loop controller"
+    assert steps[12]["annotations"]["issueImplementRole"] == (
+        "moonspec-remediation-loop"
+    )
+    assert steps[12]["annotations"]["remediationLoop"]["remediationTool"]["inputs"][
+        "selectedSkill"
+    ] == "moonspec-implement"
+
+    assert steps[13]["title"] == "Reconcile declarative docs"
+    assert steps[13]["annotations"] == {"jiraOrchestrateRole": "doc-reconciliation"}
+    assert steps[13]["skill"]["id"] == "moonspec-doc-reconcile"
+    assert "FULLY_IMPLEMENTED" in steps[13]["instructions"]
+    assert "skip doc reconciliation" in steps[13]["instructions"]
+    assert "artifacts/github-issue-orchestrate-doc-reconcile.json" in steps[13][
         "instructions"
     ]
 
-    assert steps[25]["title"] == "Create pull request"
-    assert steps[25]["annotations"] == {"jiraOrchestrateRole": "pull-request-handoff"}
-    assert "post-remediation moonspec-verify" in steps[25]["instructions"]
-    assert "ADDITIONAL_WORK_NEEDED" in steps[25]["instructions"]
-    assert "artifacts/github-issue-orchestrate-pr.json" in steps[25]["instructions"]
+    assert steps[14]["title"] == "Create pull request"
+    assert steps[14]["annotations"] == {"jiraOrchestrateRole": "pull-request-handoff"}
+    assert "controlling moonspec-verify" in steps[14]["instructions"]
+    assert "ADDITIONAL_WORK_NEEDED" in steps[14]["instructions"]
+    assert "artifacts/github-issue-orchestrate-pr.json" in steps[14]["instructions"]
 
-    assert steps[26]["title"] == "Finalize GitHub issue status"
-    assert steps[26]["annotations"] == {"jiraOrchestrateRole": "code-review-handoff"}
-    assert steps[26]["tool"] == {
+    assert steps[15]["title"] == "Finalize GitHub issue status"
+    assert steps[15]["annotations"] == {"jiraOrchestrateRole": "code-review-handoff"}
+    assert steps[15]["tool"] == {
         "id": "github.update_issue_status",
         "requiredCapabilities": ["gh"],
         "inputs": {
@@ -254,4 +257,4 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             "requireVerification": True,
         },
     }
-    assert steps[26]["tool"]["inputs"]["mode"] == "finalize_after_pr_or_done"
+    assert steps[15]["tool"]["inputs"]["mode"] == "finalize_after_pr_or_done"
