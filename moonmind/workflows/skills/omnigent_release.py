@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,7 +271,8 @@ def decide_release_transition(
       migration or out-of-band container change); drive live to the record
       without advancing the revision.
     - ``"advance"``: live matches the record (or no record exists yet) but
-      upstream offers new digests; cut a new revision for the candidates.
+      upstream offers new digests, or live already runs the candidate server;
+      cut a new revision for the candidates.
     """
     candidate = {k: str(v or "").strip() for k, v in candidate_refs.items() if v}
     live = {k: str(v or "").strip() for k, v in live_refs.items() if v}
@@ -283,6 +285,14 @@ def decide_release_transition(
             if _candidate_supplies_new_refs(recorded, candidate):
                 return "advance", _preserve_recorded_hosts(recorded, candidate)
             return "noop", recorded
+        live_server = live.get("server")
+        if live_server and live_server == candidate.get("server") != recorded["server"]:
+            # The server already runs the candidate outside the release (for
+            # example a plain `docker compose up` rendering the mutable tag)
+            # and may have migrated the Omnigent database forward. Converging
+            # back would pin a server that refuses the newer schema, so adopt
+            # the candidate as the next revision.
+            return "advance", _preserve_recorded_hosts(recorded, candidate)
         if not _refs_agree(live, recorded):
             return "converge", recorded
         if not _refs_agree(recorded, candidate) or _candidate_supplies_new_refs(
@@ -925,34 +935,15 @@ def production_drivers(
     )
 
 
-async def migrate_omnigent_release(
-    *,
-    store: Any,
-    runner: Any,
-    owner: str = "system:deployment",
-    moonmind_image: str = "",
-    drivers: OmnigentReleaseDrivers | None = None,
-    actor: str = "release",
-) -> dict[str, Any]:
-    """Advance the deployment to the resolved Omnigent release, or no-op.
+@asynccontextmanager
+async def _deployment_lock() -> AsyncIterator[None]:
+    """Hold the release-wide deployment lock while the record may move.
 
-    Every step is convergent: re-running after an interruption completes the
-    pending work instead of duplicating it (record compare-and-set, idempotent
-    container up, skip-when-current policy/schedule steps). Any failure raises
-    :class:`OmnigentReleaseError` with the step name; the retained fleet owns
-    recovery and the record's ``previous`` revision supports an explicit
-    rollback through this same function.
+    A second queued release must not rewrite the desired-state files while
+    this release selects or migrates. The revision CAS in
+    :func:`_select_release` still rejects any interleaving that slips through
+    the gaps between lock owners.
     """
-    from moonmind.omnigent.settings import build_omnigent_gate, generic_host_enabled
-
-    if not build_omnigent_gate().enabled or not generic_host_enabled():
-        return {"status": "skipped", "reason": "omnigent runtime not enabled"}
-
-    # Hold the release-wide deployment lock through the migration so a second
-    # queued release cannot rewrite the desired-state files while this
-    # migration restarts Omnigent and cuts policies. The revision CAS below
-    # still rejects any interleaving that slips through the gap between the
-    # deployment update's lock release and this acquisition.
     import os
 
     lock_lease = None
@@ -976,6 +967,122 @@ async def migrate_omnigent_release(
                 f"could not acquire deployment lock for migration: {exc}",
             ) from exc
     try:
+        yield
+    finally:
+        if lock_lease is not None:
+            try:
+                await lock_lease.release()
+            except Exception:
+                pass
+
+
+async def _select_release(
+    store: Any, run: OmnigentReleaseDrivers, owner: str
+) -> tuple[str, OmnigentRelease | None, dict[str, str]]:
+    """Decide the transition and persist the record when it advances.
+
+    Returns ``(action, record, target)``; after an advance ``record`` is the
+    newly persisted revision and ``target`` its refs.
+    """
+    env_entries, record_doc = store.read()
+    record = read_omnigent_release(env_entries, record_doc)
+    inputs = await run.deployment_inputs()
+    candidates = await run.resolve_candidates(inputs)
+    if not str(candidates.get("server") or "").strip():
+        raise OmnigentReleaseError(
+            "resolve-candidates", "could not resolve an omnigent server image"
+        )
+    live = await run.read_live_refs()
+    action, target = decide_release_transition(live, record, candidates)
+    if action != "advance":
+        return action, record, target
+    new_release = OmnigentRelease(
+        revision=(record.revision if record else 0) + 1,
+        server_image_ref=str(target["server"]),
+        host_image_refs={
+            kind: str(target.get(kind) or "") for kind in OMNIGENT_RELEASE_HOST_KINDS
+        },
+        updated_at=_utc_now(),
+        updated_by=owner,
+        previous=record.to_record() if record else None,
+    )
+    # Revision compare-and-set: the file lock is released between release
+    # steps, so a second release could have advanced the record in between.
+    # Re-read and reject the write when the revision moved instead of silently
+    # losing that revision.
+    fresh_env, fresh_doc = store.read()
+    fresh_record = read_omnigent_release(fresh_env, fresh_doc)
+    fresh_revision = fresh_record.revision if fresh_record else 0
+    expected_revision = record.revision if record else 0
+    if fresh_revision != expected_revision:
+        raise OmnigentReleaseError(
+            "conflict",
+            f"release record advanced concurrently "
+            f"(expected r{expected_revision}, found r{fresh_revision}); "
+            f"retained fleet owns recovery",
+        )
+    await store.merge(
+        env_updates=new_release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: new_release.to_record()},
+    )
+    return action, new_release, dict(new_release.refs())
+
+
+async def select_omnigent_release(
+    *,
+    store: Any,
+    owner: str = "system:deployment",
+    drivers: OmnigentReleaseDrivers | None = None,
+) -> dict[str, Any]:
+    """Record the Omnigent release this update installs, before Compose runs.
+
+    The release's main ``compose up`` renders the recorded Omnigent refs from
+    ``.env.deploy``. When the record pins a server older than the one that
+    already migrated the Omnigent database, that pass fails, and the
+    post-install migration that would advance the record never runs.
+    Selecting first lets the main pass install the selected server. Nothing is
+    restarted here; :func:`migrate_omnigent_release` finishes the same target
+    after the fleet verifies. Only an advance writes: converging toward an
+    existing record stays with the post-install migration.
+    """
+    from moonmind.omnigent.settings import build_omnigent_gate, generic_host_enabled
+
+    if not build_omnigent_gate().enabled or not generic_host_enabled():
+        return {"status": "skipped", "reason": "omnigent runtime not enabled"}
+    run = drivers or _default_drivers()
+    async with _deployment_lock():
+        action, record, target = await _select_release(store, run, owner)
+    return {
+        "status": "advanced" if action == "advance" else action,
+        "revision": record.revision if record else 0,
+        "serverImageRef": target.get("server"),
+    }
+
+
+async def migrate_omnigent_release(
+    *,
+    store: Any,
+    runner: Any,
+    owner: str = "system:deployment",
+    moonmind_image: str = "",
+    drivers: OmnigentReleaseDrivers | None = None,
+    actor: str = "release",
+) -> dict[str, Any]:
+    """Advance the deployment to the resolved Omnigent release, or no-op.
+
+    Every step is convergent: re-running after an interruption completes the
+    pending work instead of duplicating it (record compare-and-set, idempotent
+    container up, skip-when-current policy/schedule steps). Any failure raises
+    :class:`OmnigentReleaseError` with the step name; the retained fleet owns
+    recovery and the record's ``previous`` revision supports an explicit
+    rollback through this same function.
+    """
+    from moonmind.omnigent.settings import build_omnigent_gate, generic_host_enabled
+
+    if not build_omnigent_gate().enabled or not generic_host_enabled():
+        return {"status": "skipped", "reason": "omnigent runtime not enabled"}
+
+    async with _deployment_lock():
         return await _migrate_omnigent_release_inner(
             store=store,
             runner=runner,
@@ -984,12 +1091,6 @@ async def migrate_omnigent_release(
             drivers=drivers,
             actor=actor,
         )
-    finally:
-        if lock_lease is not None:
-            try:
-                await lock_lease.release()
-            except Exception:
-                pass
 
 
 async def _migrate_omnigent_release_inner(
@@ -1008,16 +1109,7 @@ async def _migrate_omnigent_release_inner(
             "runner-bound drivers (restart_server, cut_policy_versions) are required",
         )
 
-    env_entries, record_doc = store.read()
-    record = read_omnigent_release(env_entries, record_doc)
-    inputs = await run.deployment_inputs()
-    candidates = await run.resolve_candidates(inputs)
-    if not str(candidates.get("server") or "").strip():
-        raise OmnigentReleaseError(
-            "resolve-candidates", "could not resolve an omnigent server image"
-        )
-    live = await run.read_live_refs()
-    action, target = decide_release_transition(live, record, candidates)
+    action, record, target = await _select_release(store, run, owner)
 
     if action == "noop":
         # A previous advance may have written the record and aligned the
@@ -1069,41 +1161,6 @@ async def _migrate_omnigent_release_inner(
             "catalogRef": catalog.get("catalogRef"),
             "resolvedRefs": resolved,
         }
-
-    if action == "advance":
-        revision = (record.revision if record else 0) + 1
-        new_release = OmnigentRelease(
-            revision=revision,
-            server_image_ref=str(target["server"]),
-            host_image_refs={
-                kind: str(target.get(kind) or "")
-                for kind in OMNIGENT_RELEASE_HOST_KINDS
-            },
-            updated_at=_utc_now(),
-            updated_by=owner,
-            previous=record.to_record() if record else None,
-        )
-        # Revision compare-and-set: the file lock is released between the
-        # deployment update and this migration, so a second release could have
-        # advanced the record in between. Re-read and reject the write when
-        # the revision moved instead of silently losing that revision.
-        fresh_env, fresh_doc = store.read()
-        fresh_record = read_omnigent_release(fresh_env, fresh_doc)
-        fresh_revision = fresh_record.revision if fresh_record else 0
-        expected_revision = record.revision if record else 0
-        if fresh_revision != expected_revision:
-            raise OmnigentReleaseError(
-                "conflict",
-                f"release record advanced concurrently "
-                f"(expected r{expected_revision}, found r{fresh_revision}); "
-                f"retained fleet owns recovery",
-            )
-        await store.merge(
-            env_updates=new_release.to_env(),
-            json_updates={OMNIGENT_RELEASE_RECORD_KEY: new_release.to_record()},
-        )
-        record = new_release
-        target = dict(new_release.refs())
 
     # From here the target is the record: converge an interrupted migration
     # and finish a fresh advance through the same steps.
@@ -1157,4 +1214,5 @@ __all__ = [
     "raise_for_release_policy_drift",
     "read_omnigent_release",
     "release_policy_drift_dispositions",
+    "select_omnigent_release",
 ]

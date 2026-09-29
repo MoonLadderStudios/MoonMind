@@ -14,6 +14,7 @@ from moonmind.workflows.skills.omnigent_release import (
     decide_release_transition,
     migrate_omnigent_release,
     read_omnigent_release,
+    select_omnigent_release,
 )
 
 OLD_SERVER = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
@@ -108,6 +109,23 @@ def test_decide_converge_when_live_disagrees_with_record():
     # no new revision.
     assert action == "converge"
     assert target["server"] == OLD_SERVER
+
+
+def test_decide_adopts_live_server_that_already_moved_to_the_candidate():
+    """A plain `docker compose up` renders the mutable tag, not the record.
+
+    That server may already have migrated the Omnigent database forward.
+    Converging back to the older record would pin a server that refuses the
+    newer schema, so the release adopts the candidate the server runs.
+    """
+    release = _release()
+    live = {k: v for k, v in _refs(server=NEW_SERVER).items() if k != "codex"}
+    action, target = decide_release_transition(
+        live, release, _refs(server=NEW_SERVER, host=NEW_HOST)
+    )
+    assert action == "advance"
+    assert target["server"] == NEW_SERVER
+    assert target["opencode"] == NEW_HOST
 
 
 def test_decide_advance_when_upstream_moves():
@@ -359,6 +377,83 @@ async def test_migrate_converge_keeps_revision(tmp_path, monkeypatch):
     assert receipt["status"] == "converged"
     assert receipt["revision"] == 4
     assert "restart" in calls
+
+
+@pytest.mark.asyncio
+async def test_select_records_the_advance_before_compose_renders_it(
+    tmp_path, monkeypatch
+):
+    """The release installs the selected Omnigent server in its main pass.
+
+    Replay of 2026-09-29: the record pinned an older server than the one that
+    had migrated the Omnigent database, and the main `up` rendered that pin
+    before the post-install migration could advance it, so `omnigent-agent-init`
+    failed on every update. Selection writes the advanced record first and
+    restarts nothing; the post-install migration then finishes the same target.
+    """
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release()
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    new_refs = _refs(server=NEW_SERVER, host=NEW_HOST)
+    calls: list[str] = []
+    selection = await select_omnigent_release(
+        store=store,
+        owner="test",
+        drivers=_drivers(calls, candidates=new_refs, live=_refs()),
+    )
+    assert selection == {"status": "advanced", "revision": 2, "serverImageRef": NEW_SERVER}
+    assert calls == ["resolve", "live"]
+    env_entries, record_doc = store.read()
+    assert env_entries["OMNIGENT_IMAGE_REF"] == NEW_SERVER
+    assert env_entries["OMNIGENT_SHARED_HOST_IMAGE_REF"] == NEW_HOST
+    stored = read_omnigent_release(env_entries, record_doc)
+    assert stored is not None and stored.revision == 2
+    assert stored.previous["serverImageRef"] == OLD_SERVER
+
+    after: list[str] = []
+    receipt = await migrate_omnigent_release(
+        store=store,
+        runner=object(),
+        owner="test",
+        drivers=_drivers(after, candidates=new_refs, live=new_refs),
+    )
+    assert receipt["status"] == "aligned"
+    assert receipt["revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_select_leaves_the_record_when_live_is_unobserved(tmp_path, monkeypatch):
+    """Selection only advances; recovery toward the record stays post-install."""
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release(revision=4)
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    selection = await select_omnigent_release(
+        store=store,
+        owner="test",
+        drivers=_drivers([], candidates=_refs(server=NEW_SERVER), live={}),
+    )
+    assert selection == {"status": "converge", "revision": 4, "serverImageRef": OLD_SERVER}
+    env_entries, _record = store.read()
+    assert env_entries["OMNIGENT_IMAGE_REF"] == OLD_SERVER
+
+
+@pytest.mark.asyncio
+async def test_select_skipped_when_runtime_disabled(tmp_path, monkeypatch):
+    _disable_omnigent(monkeypatch)
+    calls: list[str] = []
+    selection = await select_omnigent_release(
+        store=_store(tmp_path), owner="test", drivers=_drivers(calls)
+    )
+    assert selection["status"] == "skipped"
+    assert calls == []
 
 
 @pytest.mark.asyncio

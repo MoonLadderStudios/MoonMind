@@ -526,6 +526,97 @@ async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
         assert len(observed[scope]) == len(set(observed[scope]))
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection_fails", [False, True])
+async def test_release_selects_omnigent_before_the_main_compose_pass(
+    tmp_path, monkeypatch, selection_fails
+):
+    """The main `up` renders `.env.deploy`, so the Omnigent pin is chosen first.
+
+    Advancing the Omnigent record only after the fleet verified meant a stale
+    server pin that cannot open its database failed the main pass forever.
+    A selection failure is not fatal: the recorded release still installs and
+    the post-install migration reports the problem.
+    """
+    from contextlib import asynccontextmanager
+
+    from api_service.db import base as db_base
+    from moonmind import release_identity
+    from moonmind.workflows.skills.deployment_execution import (
+        DeploymentUpdateExecutor,
+        DeploymentUpdateLockManager,
+        HostDockerComposeRunner,
+        InMemoryDesiredStateStore,
+        InMemoryEvidenceWriter,
+        ToolResult,
+    )
+    from moonmind.workflows.temporal import artifacts, worker_runtime
+
+    executor = DeploymentUpdateExecutor(
+        DeploymentUpdateLockManager(),
+        InMemoryDesiredStateStore(),
+        InMemoryEvidenceWriter(),
+        HostDockerComposeRunner(project_dir=str(tmp_path)),
+    )
+    monkeypatch.setattr(
+        worker_runtime, "_build_deployment_update_executor", lambda: executor
+    )
+    monkeypatch.setattr(
+        release_identity, "installed_release", lambda: {"sourceRevision": "source"}
+    )
+    monkeypatch.setattr(release, "prepare_operator_access", AsyncMock(return_value=[]))
+
+    @asynccontextmanager
+    async def session_context():
+        yield None
+
+    monkeypatch.setattr(db_base, "get_async_session_context", session_context)
+    monkeypatch.setattr(artifacts, "TemporalArtifactRepository", lambda session: None)
+    monkeypatch.setattr(artifacts, "TemporalArtifactService", lambda repository: None)
+    order = []
+
+    async def select(runner, owner, image):
+        order.append(("select", owner, image))
+        if selection_fails:
+            raise RuntimeError("registry unavailable")
+        return {"status": "advanced", "revision": 2}
+
+    async def execute(self, inputs, context):
+        order.append(("execute",))
+        return ToolResult(status="FAILED", outputs={"failure": {"reason": "stop"}})
+
+    monkeypatch.setattr(release, "select_omnigent", select)
+    monkeypatch.setattr(DeploymentUpdateExecutor, "execute", execute)
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "authored": {
+                    "owner": "owner",
+                    "context": {},
+                    "inputs": {"sourceRevision": "source"},
+                },
+                "image": "example/image@sha256:pinned",
+            }
+        )
+    )
+    with pytest.raises(RuntimeError, match="stop"):
+        await release._run_job_body(request)
+    assert order == [
+        ("select", "owner", "example/image@sha256:pinned"),
+        ("execute",),
+    ]
+    selection = json.loads((tmp_path / "omnigent-selection.json").read_text())
+    assert selection["owner"] == "owner"
+    if selection_fails:
+        assert selection["selection"] == {
+            "status": "failed",
+            "error": "registry unavailable",
+        }
+    else:
+        assert selection["selection"] == {"status": "advanced", "revision": 2}
+
+
 @pytest.mark.parametrize(
     "headers",
     [
