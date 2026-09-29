@@ -526,6 +526,105 @@ async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
         assert len(observed[scope]) == len(set(observed[scope]))
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection_fails", [False, True])
+async def test_release_selects_omnigent_inside_the_main_compose_pass(
+    tmp_path, monkeypatch, selection_fails
+):
+    """The main `up` renders `.env.deploy`, so the Omnigent pin is chosen first.
+
+    Advancing the Omnigent record only after the fleet verified meant a stale
+    server pin that cannot open its database failed the main pass forever.
+    Selection runs through the executor's pre-Compose hook, so it holds the
+    same deployment lock as the pass that renders it. A selection failure is
+    not fatal: the recorded release still installs, and every attempt's
+    outcome is kept with credentials redacted.
+    """
+    from contextlib import asynccontextmanager
+
+    from api_service.db import base as db_base
+    from moonmind import release_identity
+    from moonmind.workflows.skills.deployment_execution import (
+        DeploymentUpdateExecutor,
+        DeploymentUpdateLockManager,
+        HostDockerComposeRunner,
+        InMemoryDesiredStateStore,
+        InMemoryEvidenceWriter,
+        ToolResult,
+    )
+    from moonmind.workflows.temporal import artifacts, worker_runtime
+
+    executor = DeploymentUpdateExecutor(
+        DeploymentUpdateLockManager(),
+        InMemoryDesiredStateStore(),
+        InMemoryEvidenceWriter(),
+        HostDockerComposeRunner(project_dir=str(tmp_path)),
+    )
+    monkeypatch.setattr(
+        worker_runtime, "_build_deployment_update_executor", lambda: executor
+    )
+    monkeypatch.setattr(
+        release_identity, "installed_release", lambda: {"sourceRevision": "source"}
+    )
+    monkeypatch.setattr(release, "prepare_operator_access", AsyncMock(return_value=[]))
+
+    @asynccontextmanager
+    async def session_context():
+        yield None
+
+    monkeypatch.setattr(db_base, "get_async_session_context", session_context)
+    monkeypatch.setattr(artifacts, "TemporalArtifactRepository", lambda session: None)
+    monkeypatch.setattr(artifacts, "TemporalArtifactService", lambda repository: None)
+    order = []
+    token = "ghp_" + "a" * 36
+
+    async def select(runner, owner, image):
+        order.append(("select", owner, image))
+        if selection_fails:
+            raise RuntimeError(f"registry refused https://x:{token}@ghcr.io")
+        return {"status": "advanced", "revision": 2}
+
+    async def execute(self, inputs, context):
+        order.append(("lock",))
+        await self.before_compose()
+        order.append(("compose",))
+        return ToolResult(status="FAILED", outputs={"failure": {"reason": "stop"}})
+
+    monkeypatch.setattr(release, "select_omnigent", select)
+    monkeypatch.setattr(DeploymentUpdateExecutor, "execute", execute)
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "authored": {
+                    "owner": "owner",
+                    "context": {},
+                    "inputs": {"sourceRevision": "source"},
+                },
+                "image": "example/image@sha256:pinned",
+            }
+        )
+    )
+    for _attempt in range(2):
+        with pytest.raises(RuntimeError, match="stop"):
+            await release._run_job_body(request)
+    assert order == [
+        ("lock",),
+        ("select", "owner", "example/image@sha256:pinned"),
+        ("compose",),
+    ] * 2
+    selection = json.loads((tmp_path / "omnigent-selection.json").read_text())
+    assert selection["owner"] == "owner"
+    assert len(selection["attempts"]) == 2
+    for attempt in selection["attempts"]:
+        if selection_fails:
+            assert attempt["status"] == "failed"
+            assert "registry refused" in attempt["error"]
+            assert token not in attempt["error"]
+        else:
+            assert attempt == {"status": "advanced", "revision": 2}
+
+
 @pytest.mark.parametrize(
     "headers",
     [
