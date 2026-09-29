@@ -1192,3 +1192,54 @@ def test_manifest_drain_gate_blocks_on_open_histories() -> None:
     assert blocked.may_deploy_removal is False
     assert blocked.outstanding == 1
     assert "open_manifest_ingest_histories" in blocked.blocking_dimensions
+
+
+# ---------------------------------------------------------------------------
+# #4111-owned installed-graph smokes: real API composition + surviving imports.
+# ---------------------------------------------------------------------------
+
+
+def test_api_composition_imports_without_vector_backend() -> None:
+    """#4111-owned real API-composition import smoke (no removed packages).
+
+    Imports the mounted production app (the same composition shipped in the
+    runtime image) and asserts its served OpenAPI contract exposes the
+    ordinary executions surface with no Manifest/vector authoring paths.
+    CLI/worker composition is covered by ``test_cli_help_*`` and
+    ``test_worker_catalog_*``; sibling #4193 mounted-route tests remain the
+    shared boundary owner and are re-cited, not duplicated, here.
+    """
+    from api_service.main import app as production_app
+
+    spec = production_app.openapi()
+    paths = set(spec.get("paths", {}).keys())
+    assert "/api/executions" in paths
+    assert "/api/manifests" not in paths
+    assert not any(str(path).startswith("/api/manifests/") for path in paths)
+    assert not any("qdrant" in str(path).lower() for path in paths)
+
+
+def test_surviving_libraries_import_on_installed_graph() -> None:
+    """Surviving provider/HTTP/YAML/source-control libraries stay importable.
+
+    MoonLadderStudios/MoonMind#4111: declaration support
+    (``test_surviving_dependency_libraries_remain_supported``) plus the
+    managed-container runs importing this graph prove install health; this
+    explicit per-library import pins the surviving set on the installed
+    graph without a warm-environment install or a new scanner.
+    """
+    import importlib
+
+    for module_name in (
+        "typer",
+        "fastapi",
+        "temporalio",
+        "httpx",
+        "requests",
+        "yaml",
+        "sqlalchemy",
+        "git",
+    ):
+        assert importlib.import_module(module_name) is not None, (
+            f"surviving library module {module_name!r} is not importable"
+        )
