@@ -111,12 +111,15 @@ def test_issue_brief_authority_preserves_source_with_history_compatibility(patch
         assert wf._assessment_context["briefArtifactRef"] == "art_next_issue"
 
 
-def test_issue_brief_does_not_introduce_unsupported_managed_session_input_refs():
+@pytest.mark.parametrize("new_history", [False, True])
+def test_issue_brief_reaches_managed_session_request_with_replay_compatibility(new_history):
     wf = MoonMindRunWorkflow()
     with (
         patch(
             "moonmind.workflows.temporal.workflows.run.workflow.patched",
-            return_value=True,
+            side_effect=lambda name: (
+                new_history if name == "run-managed-handoff-attachments-v1" else True
+            ),
         ),
         patch(
             "moonmind.workflows.temporal.workflows.run.workflow.info",
@@ -133,7 +136,7 @@ def test_issue_brief_does_not_introduce_unsupported_managed_session_input_refs()
             tool_name="codex_cli",
         )
     assert request.agent_kind == "managed"
-    assert request.input_refs == []
+    assert request.input_refs == (["artifact://art_source"] if new_history else [])
 
 
 def _task_payload() -> dict[str, object]:
