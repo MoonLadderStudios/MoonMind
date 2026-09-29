@@ -12,23 +12,35 @@ is reconciled (left alone) rather than competed with.
 """
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import os
 import re
+import socketserver
+import threading
 from typing import Any, Callable
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+from wsgiref.simple_server import WSGIServer
 
 import engine
 import lock as lock_mod
 import record as record_mod
-from redact import redact_mapping
+from redact import redact_mapping, redact_text
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _MAX_IMAGE_CHARS = 1024
+LIST_DEFAULT_LIMIT = 10
+LIST_MAX_LIMIT = 50
+
+
+class ThreadingWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
+    """Serve status, list, and duplicate submissions while an apply runs."""
+
+    daemon_threads = True
 
 
 class LegacyWriterUnknown(RuntimeError):
@@ -115,8 +127,19 @@ def _json_response(start_response, status: str, payload: Any) -> list:
     return [body]
 
 
+def _redact_public(value: Any) -> Any:
+    """Redact sensitive keys and credential-looking text in public views."""
+    if isinstance(value, dict):
+        return {key: _redact_public(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_public(item) for item in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
 def _public_operation(operation: dict) -> dict:
-    return redact_mapping(operation)
+    return _redact_public(redact_mapping(operation))
 
 
 def _compose_child_alive(state_dir: str) -> int | None:
@@ -376,6 +399,9 @@ def build_app(
     """Build the WSGI application. The secret is deployment-owned."""
     bearer = _read_secret(secret, secret_file)
     run_apply = applier or (lambda operation: production_apply(store, operation))
+    # Serializes admission (stack lock + record creation) across the
+    # threaded server so concurrent submissions cannot both create records.
+    admission = threading.Lock()
 
     def app(environ, start_response):
         if not _authorized(environ, bearer):
@@ -396,6 +422,8 @@ def build_app(
 
         if method == "POST" and path == "/v1/operations":
             return _submit(start_response, body)
+        if method == "GET" and path == "/v1/operations":
+            return _list(start_response, parse_qs(environ.get("QUERY_STRING", "")))
         if path.startswith("/v1/operations/"):
             rest = path[len("/v1/operations/") :]
             operation_id, _, action = rest.partition("/")
@@ -426,23 +454,37 @@ def build_app(
                 start_response, "400 Bad Request", {"error": rejection}
             )
         try:
-            lock_mod.ensure_no_competing_writer(store.state_dir, stack)
-            cutover_block = check_legacy_cutover(legacy_writer_probe)
-            if cutover_block is not None:
-                return _json_response(start_response, "409 Conflict", {"error": cutover_block})
-            operation = store.begin(
-                stack=stack,
-                desired_image=desired_image,
-                source_revision=source_revision,
-                reason=body.get("reason", ""),
-                target=body.get("target") if isinstance(body.get("target"), dict) else None,
-            )
-            already_installed = (operation.get("installed") or {}).get("image") == desired_image and operation.get(
-                "status"
-            ) in ("succeeded", "partially_verified")
-            if not already_installed and operation.get("status") in ("pending", "staged", "applying"):
-                candidate = lock_mod.StackLock(store.state_dir, stack)
-                with candidate.acquire():
+            with contextlib.ExitStack() as held:
+                with admission:
+                    try:
+                        held.enter_context(
+                            lock_mod.StackLock(store.state_dir, stack).acquire()
+                        )
+                    except lock_mod.LockBusyError:
+                        # A duplicate or lost-acknowledgment resubmission of
+                        # the target the current writer is applying reattaches
+                        # to that same operation; any other target is refused
+                        # without creating a record.
+                        running = _open_operation_for(stack, desired_image)
+                        if running is not None:
+                            return _json_response(
+                                start_response, "202 Accepted", _public_operation(running)
+                            )
+                        raise
+                    cutover_block = check_legacy_cutover(legacy_writer_probe)
+                    if cutover_block is not None:
+                        return _json_response(start_response, "409 Conflict", {"error": cutover_block})
+                    operation = store.begin(
+                        stack=stack,
+                        desired_image=desired_image,
+                        source_revision=source_revision,
+                        reason=body.get("reason", ""),
+                        target=body.get("target") if isinstance(body.get("target"), dict) else None,
+                    )
+                already_installed = (operation.get("installed") or {}).get("image") == desired_image and operation.get(
+                    "status"
+                ) in ("succeeded", "partially_verified")
+                if not already_installed and operation.get("status") in ("pending", "staged", "applying"):
                     operation = _apply_with_bounded_retries(
                         store, operation["operationId"], run_apply
                     )
@@ -452,6 +494,32 @@ def build_app(
         except Exception:  # noqa: BLE001 - never expose exception detail
             return _json_response(start_response, "500 Internal Server Error", {"error": "internal error"})
         return _json_response(start_response, "202 Accepted", _public_operation(operation))
+
+    def _open_operation_for(stack, desired_image):
+        for operation in store.list_open(stack=stack):
+            if (operation.get("desired") or {}).get("image") == desired_image:
+                return operation
+        return None
+
+    def _list(start_response, query):
+        stack = (query.get("stack") or [""])[0]
+        if not _SAFE_NAME_RE.match(stack):
+            return _json_response(start_response, "400 Bad Request", {"error": "a safe stack name is required"})
+        try:
+            limit = int((query.get("limit") or [LIST_DEFAULT_LIMIT])[0])
+        except ValueError:
+            limit = LIST_DEFAULT_LIMIT
+        limit = max(1, min(limit, LIST_MAX_LIMIT))
+        operations = store.list_open(stack=stack) + store.list_terminal(stack=stack)
+        operations.sort(
+            key=lambda op: (str(op.get("createdAt") or ""), str(op.get("updatedAt") or "")),
+            reverse=True,
+        )
+        return _json_response(
+            start_response,
+            "200 OK",
+            {"operations": [_public_operation(op) for op in operations[:limit]]},
+        )
 
     def _status(start_response, operation_id):
         try:
@@ -492,7 +560,7 @@ def build_app(
             "verification": operation.get("verification", []),
             "reportingFailures": operation.get("reportingFailures", []),
         }
-        return _json_response(start_response, "200 OK", redact_mapping(logs))
+        return _json_response(start_response, "200 OK", _public_operation(logs))
 
     return app
 
@@ -846,7 +914,7 @@ def main(argv=None) -> int:
     probe = None if args.no_legacy_probe else default_legacy_writer_probe
     converge_on_restart(store, lambda operation: production_apply(store, operation), legacy_writer_probe=probe)
     app = build_app(store=store, secret_file=secret_file, legacy_writer_probe=probe)
-    httpd = make_server("0.0.0.0", args.port, app)
+    httpd = make_server("0.0.0.0", args.port, app, server_class=ThreadingWSGIServer)
     print(f"moonmind-controller listening on 0.0.0.0:{args.port}", flush=True)
     httpd.serve_forever()
     return 0

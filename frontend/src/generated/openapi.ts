@@ -1609,6 +1609,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/deployment/operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Deployment Operation */
+        get: operations["get_deployment_operation_api_v1_operations_deployment_operations__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/deployment/operations/{operation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Deployment Operation
+         * @description Request the controller's fresh bounded attempt for the same target.
+         */
+        post: operations["retry_deployment_operation_api_v1_operations_deployment_operations__operation_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/deployment/image-targets": {
         parameters: {
             query?: never;
@@ -7641,6 +7678,33 @@ export interface components {
             /** Reference */
             reference: string;
         };
+        /** DeploymentOperationAttemptModel */
+        DeploymentOperationAttemptModel: {
+            /** Attempt */
+            attempt?: number | null;
+            /** Attemptgroup */
+            attemptGroup?: number | null;
+            /** Error */
+            error?: string | null;
+            /** At */
+            at?: string | null;
+        };
+        /** DeploymentOperationDetailResponse */
+        DeploymentOperationDetailResponse: {
+            operation: components["schemas"]["DeploymentRecentActionModel"];
+            logs: components["schemas"]["DeploymentOperationLogsModel"];
+        };
+        /** DeploymentOperationLogsModel */
+        DeploymentOperationLogsModel: {
+            /** Errorsummary */
+            errorSummary?: string | null;
+            /** Attempts */
+            attempts?: components["schemas"]["DeploymentOperationAttemptModel"][];
+            /** Verification */
+            verification?: components["schemas"]["DeploymentVerificationCheckModel"][];
+            /** Reportingfailures */
+            reportingFailures?: string[];
+        };
         /** DeploymentPolicyModel */
         DeploymentPolicyModel: {
             /** Repository */
@@ -7698,6 +7762,27 @@ export interface components {
             /** Afterbuildid */
             afterBuildId?: string | null;
             rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
+            /** Operationid */
+            operationId?: string | null;
+            /**
+             * Owner
+             * @default workflow
+             * @enum {string}
+             */
+            owner: "controller" | "workflow";
+            /** Installedimage */
+            installedImage?: string | null;
+            /** Originalerror */
+            originalError?: string | null;
+            /** Errorsummary */
+            errorSummary?: string | null;
+            /** Verification */
+            verification?: components["schemas"]["DeploymentVerificationCheckModel"][];
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
         };
         /** DeploymentStackStateResponse */
         DeploymentStackStateResponse: {
@@ -7711,6 +7796,11 @@ export interface components {
             latestAction?: components["schemas"]["DeploymentRecentActionModel"] | null;
             /** Recentactions */
             recentActions?: components["schemas"]["DeploymentRecentActionModel"][];
+            /**
+             * Controlleravailability
+             * @enum {string}
+             */
+            controllerAvailability: "not_installed" | "available" | "unavailable";
             policy: components["schemas"]["DeploymentPolicyModel"];
         };
         /** DeploymentUpdateRequest */
@@ -7758,19 +7848,39 @@ export interface components {
             /** Confirmation */
             confirmation?: string | null;
         };
-        /** DeploymentUpdateResponse */
+        /**
+         * DeploymentUpdateResponse
+         * @description Submission receipt: accepted by its owner, not necessarily completed.
+         */
         DeploymentUpdateResponse: {
             /** Deploymentupdaterunid */
             deploymentUpdateRunId: string;
-            /** Taskid */
-            taskId: string;
-            /** Workflowid */
-            workflowId: string;
+            /** Operationid */
+            operationId?: string | null;
             /**
-             * Status
-             * @constant
+             * Owner
+             * @enum {string}
              */
-            status: "QUEUED";
+            owner: "controller" | "workflow";
+            /** Status */
+            status: string;
+            /** Desiredimage */
+            desiredImage?: string | null;
+            /** Installedimage */
+            installedImage?: string | null;
+            /** Taskid */
+            taskId?: string | null;
+            /** Workflowid */
+            workflowId?: string | null;
+        };
+        /** DeploymentVerificationCheckModel */
+        DeploymentVerificationCheckModel: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail?: string | null;
         };
         /** EligibleProviderProfile */
         EligibleProviderProfile: {
@@ -17459,6 +17569,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentStackStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deployment_operation_api_v1_operations_deployment_operations__operation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentOperationDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_deployment_operation_api_v1_operations_deployment_operations__operation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentUpdateResponse"];
                 };
             };
             /** @description Validation Error */

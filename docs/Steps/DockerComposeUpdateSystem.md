@@ -82,11 +82,17 @@ Preserve the existing public Operations entrypoints while changing their impleme
 POST /api/v1/operations/deployment/update
 GET  /api/v1/operations/deployment/stacks/moonmind
 GET  /api/v1/operations/deployment/image-targets?stack=moonmind
+GET  /api/v1/operations/deployment/operations/{operationId}
+POST /api/v1/operations/deployment/operations/{operationId}/retry
 ```
 
 The submission identifies the stack and target image, with existing explicit maintenance options where supported. Keep current client fields usable during migration; this document does not introduce a replacement API schema or another job-status vocabulary.
 
-The API submits or observes the same controller operation the host uses. Its response identifies that operation and its actual current state. An API/workflow timeout is not permission to launch another updater or evidence that the underlying operation failed.
+The API submits or observes the same controller operation the host uses, through the controller's authenticated `/v1/operations` interface. The deployment-owned bearer secret stays server-to-controller only. The API derives the controller endpoint from the bootstrap identity (`deploy/state/controller/controller-identity.json`) unless `MOONMIND_CONTROLLER_URL` overrides it. Its response identifies the controller `operationId`, owner, status, desired image, and confirmed installed image. It never carries a manufactured workflow ID. Stack state lists controller operations from the controller's own record, so a reloaded browser or replaced API reconnects to the same operation. Each row includes the original error, verification checks, and whether it can be retried. The operation read returns redacted attempt, verification, and reporting-failure logs. Retry requests the controller's fresh bounded attempt for the same operation and keeps earlier failures. Historical workflow-backed rows stay readable as history.
+
+An API timeout is not permission to launch another updater or evidence that the underlying operation failed. A lost acknowledgment is reconciled through the controller's record. Resubmitting the same target while it runs reattaches to that operation, and a different target is refused as new intent until the running operation finishes. An installed controller that is unreachable, a refused credential, a conflict, a failed operation, and an unconfirmed outcome each produce a distinct result, and none of them falls back to a workflow. While the controller is unreachable the dashboard shows the host command instead of offering submission.
+
+Transition: only while no controller is installed for the deployment (no deployment-owned secret) does the API still queue the legacy `MoonMind.UserWorkflow` deployment update. That path, its tool registration, and the deployment-control worker are removed once the default installation includes the controller (MoonLadderStudios/MoonMind#4500) and the worker cutover (MoonLadderStudios/MoonMind#4501) gives their remaining duties an owner.
 
 The workflow's deployment observer heartbeats while reading its registry,
 pulling the updater image, and awaiting the durable result. A 60-second

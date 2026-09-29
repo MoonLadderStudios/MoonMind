@@ -699,3 +699,130 @@ def test_restart_orders_tied_timestamps_by_record_mtime(
     result = server_mod.converge_on_restart(store, applier=applier)
     assert applied == [current["operationId"]]
     assert result["superseded"] == [stale["operationId"]]
+
+
+def _threaded_server(server_mod, app):
+    httpd = make_server(
+        "127.0.0.1", 0, app, server_class=server_mod.ThreadingWSGIServer
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, thread
+
+
+def _get_json(port, path):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        method="GET",
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}")
+
+
+def test_duplicate_submission_reattaches_to_the_running_operation(
+    controller_path, tmp_path
+):
+    """Host and UI submitting the same target observe one mutation owner."""
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    started = threading.Event()
+    release = threading.Event()
+    applied = []
+
+    def slow_applier(operation):
+        applied.append(operation["operationId"])
+        store.mark_stage(operation["operationId"], stage="applying")
+        started.set()
+        assert release.wait(timeout=10)
+        store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    app = server_mod.build_app(
+        store=store, secret="test-secret", applier=slow_applier
+    )
+    httpd, thread = _threaded_server(server_mod, app)
+    port = httpd.server_address[1]
+    body = {"stack": "moonmind", "desiredImage": "img:1", "sourceRevision": "r"}
+    first = {}
+    submitter = threading.Thread(
+        target=lambda: first.update(zip(("status", "body"), _post_operation(port, body)))
+    )
+    try:
+        submitter.start()
+        assert started.wait(timeout=10)
+        status, duplicate = _post_operation(port, body)
+        assert status == 202, duplicate
+        assert duplicate["status"] == "applying"
+        changed_status, changed = _post_operation(
+            port, {**body, "desiredImage": "img:2"}
+        )
+        # A changed target is new intent: refused while another writer runs,
+        # and no competing record is created.
+        assert changed_status == 409, changed
+        release.set()
+        submitter.join(timeout=10)
+        assert first["status"] == 202
+        assert first["body"]["operationId"] == duplicate["operationId"]
+        assert applied == [duplicate["operationId"]]
+        assert len(store.list_terminal(stack="moonmind")) == 1
+        assert store.list_open(stack="moonmind") == []
+    finally:
+        release.set()
+        httpd.shutdown()
+        thread.join(timeout=10)
+
+
+def test_status_and_list_reads_are_served_while_an_apply_runs(
+    controller_path, tmp_path
+):
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    older = store.begin(stack="moonmind", desired_image="img:0", source_revision="")
+    store.confirm_installed(older["operationId"], image="img:0")
+    store.begin(stack="other", desired_image="img:x", source_revision="")
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_applier(operation):
+        store.mark_stage(operation["operationId"], stage="applying")
+        store.record_attempt_error(
+            operation["operationId"], error="pull failed password=hunter2"
+        )
+        started.set()
+        assert release.wait(timeout=10)
+        store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    app = server_mod.build_app(
+        store=store, secret="test-secret", applier=slow_applier
+    )
+    httpd, thread = _threaded_server(server_mod, app)
+    port = httpd.server_address[1]
+    submitter = threading.Thread(
+        target=_post_operation,
+        args=(port, {"stack": "moonmind", "desiredImage": "img:1"}),
+    )
+    try:
+        submitter.start()
+        assert started.wait(timeout=10)
+        status, listed = _get_json(port, "/v1/operations?stack=moonmind&limit=5")
+        assert status == 200, listed
+        operations = listed["operations"]
+        assert [op["desired"]["image"] for op in operations] == ["img:1", "img:0"]
+        assert operations[0]["status"] == "applying"
+        assert "hunter2" not in json.dumps(listed)
+        status, _ = _get_json(port, "/v1/operations?stack=../escape")
+        assert status == 400
+    finally:
+        release.set()
+        submitter.join(timeout=10)
+        httpd.shutdown()
+        thread.join(timeout=10)

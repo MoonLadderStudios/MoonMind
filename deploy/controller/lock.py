@@ -83,15 +83,4 @@ class StackLock:
         return False
 
 
-def ensure_no_competing_writer(state_dir: str | Path, stack: str) -> None:
-    """Fail fast when another controller owns the stack."""
-    candidate = StackLock(state_dir, stack)
-    if candidate.probe():
-        raise LockBusyError(
-            f"Stack {stack!r} is owned by another controller "
-            f"({candidate.owner_snapshot()}); reconcile or stop the existing "
-            "writer before launching a competing one."
-        )
-
-
-__all__ = ["LockBusyError", "StackLock", "ensure_no_competing_writer"]
+__all__ = ["LockBusyError", "StackLock"]

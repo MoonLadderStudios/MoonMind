@@ -61,7 +61,7 @@ recovery exhausts; preserve primary deployment success when only reporting remai
 
 If the caller disappears, resume the printed submission with `--resume <submission-id>`. Keep its original image and inputs. The controller reattaches to the same operation instead of launching a competing writer; inspect the durable result before retrying any side effect; preserve primary deployment success if only cleanup remains. Report the exact unfinished phase and its recorded recovery owner when bounded recovery exhausts. An explicit retry through the controller starts a fresh bounded attempt with prior diagnostics retained.
 
-The standalone controller project (`deploy/moonmind-controller`, MoonLadderStudios/MoonMind#4500) is the replacement owner that survives target-stack shutdown: install, update, or restore it while MoonMind is unhealthy with `tools/install-moonmind-controller.sh [install|update|restore|status]`. Controller update is host-owned and never self-applied.
+The entrypoint is a client of one controller interface, `deploy/controller`'s authenticated `/v1/operations` API (MoonLadderStudios/MoonMind#4500). Settings Operations submits and observes the same operation (MoonLadderStudios/MoonMind#4502). An update started from the dashboard and one started from this entrypoint for the same target reattach to one mutation owner. A different target is refused while another update runs. The controller survives target-stack shutdown. Install, update, or restore it while MoonMind is unhealthy with `python3 deploy/controller/bootstrap.py [install|start|update|restore|status]`. Controller update is host-owned and never self-applied.
 
 ## Options
 

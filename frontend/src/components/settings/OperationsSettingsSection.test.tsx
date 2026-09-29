@@ -563,6 +563,154 @@ describe('OperationsSettingsSection deployment update card', () => {
     });
     expect(await within(card).findByText(/deployment rollback queued/i)).toBeTruthy();
   });
+  it('shows a controller operation with target, installed state, original error, logs, and retry', async () => {
+    const failedOperation = {
+      id: 'ctl-op-1',
+      kind: 'update',
+      status: 'FAILED',
+      owner: 'controller',
+      operationId: 'op-1',
+      requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260507.2470',
+      installedImage: null,
+      originalError: 'pull failed: registry refused',
+      errorSummary: 'attempt 1: pull failed: registry refused (latest attempt 3: pull failed)',
+      verification: [],
+      retryable: true,
+      startedAt: '2026-05-07T18:00:00Z',
+      completedAt: '2026-05-07T18:04:00Z',
+      runDetailUrl: null,
+      logsArtifactUrl: null,
+    };
+    const historicalWorkflow = { ...recentAction, id: 'depupd_recent', owner: 'workflow' };
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...stackState,
+            controllerAvailability: 'available',
+            latestAction: failedOperation,
+            recentActions: [failedOperation, historicalWorkflow],
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/operations/op-1') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            operation: failedOperation,
+            logs: {
+              errorSummary: failedOperation.errorSummary,
+              attempts: [
+                { attempt: 1, attemptGroup: 1, error: 'pull failed: registry refused', at: '2026-05-07T18:01:00Z' },
+                { attempt: 3, attemptGroup: 1, error: 'pull failed', at: '2026-05-07T18:03:00Z' },
+              ],
+              verification: [],
+              reportingFailures: [],
+            },
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/operations/op-1/retry') {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            deploymentUpdateRunId: 'ctl-op-1',
+            operationId: 'op-1',
+            owner: 'controller',
+            status: 'RUNNING',
+            desiredImage: failedOperation.requestedImage,
+            installedImage: null,
+            taskId: null,
+            workflowId: null,
+          }),
+        } as Response);
+      }
+      return originalFetch(input, init);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(await within(card).findByText(/operation op-1/i)).toBeTruthy();
+    expect(within(card).getByText(/installed: not confirmed/i)).toBeTruthy();
+    expect(within(card).getByText(/original error: pull failed: registry refused/i)).toBeTruthy();
+    // Historical workflow-backed rows stay readable as history.
+    expect(within(card).getByRole('link', { name: /run detail/i }).getAttribute('href')).toBe(
+      '/workflows/depupd_recent',
+    );
+
+    fireEvent.click(within(card).getByRole('button', { name: /show logs/i }));
+    expect(await within(card).findByText(/attempt 3: pull failed/i)).toBeTruthy();
+
+    fireEvent.click(within(card).getByRole('button', { name: /^retry$/i }));
+    await waitFor(() => {
+      const retryCall = fetchSpy.mock.calls.find(
+        ([url]) => String(url) === '/api/v1/operations/deployment/operations/op-1/retry',
+      );
+      expect(retryCall?.[1]?.method).toBe('POST');
+    });
+    expect(await within(card).findByText(/retry accepted for operation op-1/i)).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/v1/operations/deployment/update'),
+    ).toBe(false);
+  });
+
+  it('reports the controller operation identity when an update is accepted', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/v1/operations/deployment/update') {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            deploymentUpdateRunId: 'ctl-op-2',
+            operationId: 'op-2',
+            owner: 'controller',
+            status: 'RUNNING',
+            desiredImage: 'ghcr.io/moonladderstudios/moonmind:latest',
+            installedImage: null,
+            taskId: null,
+            workflowId: null,
+          }),
+        } as Response);
+      }
+      return originalFetch(input, init);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    fireEvent.click(await within(card).findByRole('button', { name: /update moonmind/i }));
+    expect(
+      await within(card).findByText(/accepted by the deployment controller: operation op-2 \(running\)/i),
+    ).toBeTruthy();
+  });
+
+  it('does not offer dashboard submission while the installed controller is unreachable', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ...stackState, controllerAvailability: 'unavailable' }),
+        } as Response);
+      }
+      return originalFetch(input, init);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(await within(card).findByText(/\.\/tools\/update-moonmind\.sh/)).toBeTruthy();
+    expect(
+      (within(card).getByRole('button', { name: /update moonmind/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
   it.each([
     ['accepted', 'pending', 'Pause requested; confirmation pending'],
     ['unknown', 'unknown', 'Pause partially confirmed'],
