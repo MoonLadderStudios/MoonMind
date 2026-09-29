@@ -235,14 +235,14 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "1.6.0"
+version = "1.8.0"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "anthropic-1.6.0-py3-none-any.whl", hash = "sha256:049434f013d3a874acdfee696ec626e19166d58f4277e8fa34e5d0a5ec250ad0"},
-    {file = "anthropic-1.6.0.tar.gz", hash = "sha256:ce3c032f940984f67c516db896375bff36959f8dc589973e386f8e6ea81bbec3"},
+    {file = "anthropic-1.8.0-py3-none-any.whl", hash = "sha256:79a4516a21e64fd7b15be1a49ebf544bd6376c96a971a77365358823a2717bc6"},
+    {file = "anthropic-1.8.0.tar.gz", hash = "sha256:9c1783ed90f409617749a61c5ab98e20624a572626f2e0a15cea03ed8e1401e5"},
 ]
 
 [package.dependencies]
@@ -250,7 +250,7 @@ anyio = ">=4.1.0,<5"
 docstring-parser = ">=0.15,<1"
 httpx2 = ">=2.0.0,<3"
 jiter = ">=0.4.0,<1"
-pydantic = ">=1.9.0,<3"
+pydantic = ">=1.10.0,<3"
 sniffio = ">=1,<2"
 typing-extensions = ">=4.14,<5"
 
@@ -4572,4 +4572,4 @@ tests = ["aiosqlite", "pytest", "pytest-asyncio", "pytest-mock", "pytest-split",
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "5471d1d85a78b23682d5b11f980f8e7cbec693b1355127533996c58fc49903e1"
+content-hash = "1c1ddd940708d2b5e2cf1218c32f1edbe59a582109fd725e813b166a976d9293"
