@@ -313,7 +313,9 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finish_timing", ["running", "after_start", "before_retry"])
+@pytest.mark.parametrize(
+    "finish_timing", ["running", "after_start", "before_retry", "dead_before_retry"]
+)
 @pytest.mark.parametrize("exit_code", [0, 7])
 async def test_bridge_start_publishes_exact_running_attachment_authority(
     tmp_path,
@@ -327,14 +329,21 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
     lock.acquire.return_value = object()
     workload_image = "sha256:" + "a" * 64
     finished = finish_timing != "running"
+    terminal_status = "dead" if finish_timing == "dead_before_retry" else "exited"
+    completed_before_start = finish_timing in {"before_retry", "dead_before_retry"}
+    container_exists = False
 
     async def publish(_request, name, data):
         published.append((name, bytes(data)))
         return f"artifact:{name}:{len(published)}"
 
     async def runner(args):
+        nonlocal container_exists
         args = tuple(args)
         commands.append(args)
+        if args[0] == "create":
+            container_exists = True
+            return 0, b"", b""
         if args[:3] == ("inspect", "--format", "{{json .State}}"):
             return (
                 0,
@@ -349,6 +358,12 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
                 b"",
             )
         if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            if container_exists:
+                return (
+                    0,
+                    json.dumps({LABEL_OWNERSHIP: request.ownership_token}).encode(),
+                    b"",
+                )
             return 1, b"", b"no such container"
         if args[:2] == ("network", "inspect"):
             return 0, b'{"Internal":true,"EnableIPv6":false}', b""
@@ -400,7 +415,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
                     }
                 },
                 "state": {
-                    "Status": "exited" if finished else "running",
+                    "Status": terminal_status if finished else "running",
                     "Running": not finished,
                     "StartedAt": "2026-09-28T22:00:00Z",
                     "FinishedAt": "2026-09-28T22:00:01Z",
@@ -417,8 +432,8 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
             # probed from memory *and* CPU, not memory alone.
             return 0, f"{8 * 1024**3}\t8".encode(), b""
         if args[:2] == ("ps", "--all"):
-            if finish_timing == "before_retry":
-                return 0, f"{backend._name(request)}\texited\n".encode(), b""
+            if completed_before_start:
+                return 0, f"{backend._name(request)}\t{terminal_status}\n".encode(), b""
             return 0, b"", b""
         return 0, b"", b""
 
@@ -451,11 +466,14 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
     assert evidence["workloadImageRef"] == "sha256:" + "a" * 64
     assert evidence["architecture"] == "amd64"
     assert evidence["cleanupResult"] == "pending"
+    assert evidence["reconciliationResult"] == (
+        "recovered" if completed_before_start else "not_required"
+    )
     assert evidence["deniedConnectionCount"] == (None if finished else 0)
     assert started.running is (not finished)
     assert not any(cmd[0] == "rm" for cmd in commands)
     assert sum(cmd[0] == "start" for cmd in commands) == (
-        0 if finish_timing == "before_retry" else 1
+        0 if completed_before_start else 1
     )
     assert lock.release.await_count == 1
     if finished:
@@ -469,7 +487,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
         RuntimeError, match="running launch evidence could not be persisted"
     ) as raised:
         await backend.start_container(request)
-    assert ("stop", "--time", "5", created.container_ref) in commands
+    assert ("stop", "--time", "10", created.container_ref) in commands
     assert not any(cmd[0] == "rm" for cmd in commands)
     # Stop unauthorized execution, retain its logs until the workflow publishes
     # evidence, and preserve the original non-retryable launch failure.
@@ -876,6 +894,106 @@ async def test_stop_refuses_replacement_with_mismatched_ownership(tmp_path) -> N
         await backend.stop_container(_request(tmp_path))
 
     assert not any(command[0] == "stop" for command in commands)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stop_outcome",
+    [
+        "success",
+        "nonzero",
+        "exception",
+        "already_stopped",
+        "kill_failure",
+        "replacement",
+        "kill_response_lost",
+        "inspect_unavailable",
+    ],
+)
+async def test_unattested_launch_confirms_owned_shutdown(tmp_path, stop_outcome):
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalAgentRuntimeActivities,
+    )
+
+    commands = []
+    running = True
+    stop_attempted = False
+    request = _request(tmp_path, networkMode="bridge")
+    lock = AsyncMock()
+    lock.acquire.return_value = object()
+
+    async def runner(args):
+        nonlocal running, stop_attempted
+        args = tuple(args)
+        commands.append(args)
+        if args[:2] == ("ps", "--all"):
+            return 0, b"", b""
+        if args[:2] == ("info", "--format"):
+            return 0, f"{8 * 1024**3}\t8".encode(), b""
+        if args[:2] == ("network", "inspect"):
+            # Exercise an actual launch-authority rejection, not a mocked result.
+            return 0, b'{"Internal":false,"EnableIPv6":false}', b""
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            owner = (
+                "replacement"
+                if stop_attempted and stop_outcome == "replacement"
+                else request.ownership_token
+            )
+            return 0, json.dumps({LABEL_OWNERSHIP: owner}).encode(), b""
+        if args[:3] == ("inspect", "--format", "{{.State.Running}}"):
+            if stop_outcome == "inspect_unavailable":
+                return 1, b"", b"state unavailable"
+            return 0, b"true" if running else b"false", b""
+        if args[0] == "stop":
+            stop_attempted = True
+            if stop_outcome in {"success", "already_stopped"}:
+                running = False
+            if stop_outcome == "success":
+                return 0, b"", b""
+            if stop_outcome == "exception":
+                raise TimeoutError("stop response lost")
+            return 1, b"", b"stop failed"
+        if args[0] == "kill":
+            if stop_outcome == "kill_failure":
+                return 1, b"", b"kill failed"
+            running = False
+            if stop_outcome == "kill_response_lost":
+                raise TimeoutError("kill response lost")
+            return 0, b"", b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, capacity_lock=lock
+    )
+    request.container_ref = backend._name(request)
+    activities = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    with pytest.raises(ApplicationError) as raised:
+        await activities._container_job_call(
+            "start_container", request.model_dump(mode="json", by_alias=True)
+        )
+    unconfirmed = stop_outcome in {"kill_failure", "replacement"}
+    assert raised.value.non_retryable is (not unconfirmed)
+    assert raised.value.type == ("infrastructure" if unconfirmed else "launch")
+    assert running is unconfirmed
+    assert any(command[0] == "kill" for command in commands) == (
+        stop_outcome
+        in {
+            "nonzero",
+            "exception",
+            "kill_failure",
+            "kill_response_lost",
+            "inspect_unavailable",
+        }
+    )
+    assert not any(command[0] == "rm" for command in commands)
+    cause = raised.value
+    errors = []
+    while cause is not None:
+        errors.append(str(cause))
+        cause = cause.__cause__ or cause.__context__
+    assert any("network is not internal" in error for error in errors)
 
 
 @pytest.mark.asyncio

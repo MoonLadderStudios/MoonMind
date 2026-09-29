@@ -338,11 +338,12 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finished", [False, True])
+@pytest.mark.parametrize("status", ["running", "exited", "dead"])
 async def test_workload_attestation_binds_exact_sole_attachment_image_and_denials(
-    finished,
+    status,
 ):
     attestation = _attestation()
+    finished = status != "running"
     client_address = "172.31.0.7"
     denial_time = datetime(2026, 8, 12, tzinfo=UTC).timestamp()
 
@@ -353,7 +354,7 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
                 json.dumps(
                     {
                         "state": {
-                            "Status": "exited" if finished else "running",
+                            "Status": status,
                             "Running": not finished,
                             "StartedAt": "2026-08-12T00:00:00Z",
                             "FinishedAt": "2026-08-12T00:00:01Z",
@@ -903,6 +904,9 @@ def test_package_registry_policy_digest_tracks_the_enabled_setting(
         "running",
         "never_started",
         "missing_time",
+        "malformed_time",
+        "naive_time",
+        "non_string_time",
         "reversed_time",
         "wrong_network",
         "partial_endpoint",
@@ -910,7 +914,8 @@ def test_package_registry_policy_digest_tracks_the_enabled_setting(
         "secondary_network",
     ],
 )
-async def test_retired_endpoint_requires_confirmed_terminal_launch(mutation):
+@pytest.mark.parametrize("status", ["exited", "dead"])
+async def test_retired_endpoint_requires_confirmed_terminal_launch(mutation, status):
     attestation = _attestation()
     attachment = {"NetworkID": "network-id", "EndpointID": "", "IPAddress": ""}
     observed = {
@@ -924,7 +929,7 @@ async def test_retired_endpoint_requires_confirmed_terminal_launch(mutation):
         "imageRef": "image@sha256:" + "b" * 64,
         "image": "sha256:" + "c" * 64,
         "state": {
-            "Status": "exited",
+            "Status": status,
             "Running": False,
             "StartedAt": "2026-09-28T22:00:00Z",
             "FinishedAt": "2026-09-28T22:00:01Z",
@@ -936,6 +941,12 @@ async def test_retired_endpoint_requires_confirmed_terminal_launch(mutation):
         observed["state"]["StartedAt"] = "0001-01-01T00:00:00Z"
     elif mutation == "missing_time":
         observed["state"].pop("StartedAt")
+    elif mutation == "malformed_time":
+        observed["state"]["StartedAt"] = "unknown"
+    elif mutation == "naive_time":
+        observed["state"]["StartedAt"] = "2026-09-28T22:00:00"
+    elif mutation == "non_string_time":
+        observed["state"]["StartedAt"] = None
     elif mutation == "reversed_time":
         observed["state"]["FinishedAt"] = "2026-09-27T22:00:00Z"
     elif mutation == "wrong_network":
