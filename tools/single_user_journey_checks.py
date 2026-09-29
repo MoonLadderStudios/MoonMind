@@ -37,11 +37,13 @@ recreated stack, can verify what an earlier phase saved):
 ``vector_free``
     MoonLadderStudios/MoonMind#4114: prove the running candidate starts and
     stays vector-free with no vector configuration. Read live ``/healthz``
-    (no Qdrant/vector backend keys), read live ``/openapi.json`` (no
-    vector-backend path), and submit one task-envelope request carrying an
-    explicit retired vector requirement (see ``vector_free_retired_probe``).
-    That submission must be rejected with 422 naming the retirement (4105)
-    and must create no execution identity. The ordinary vector-free work
+    (no key at any depth naming a retired vector backend), read live
+    ``/openapi.json`` (no vector-backend path), and submit one uniquely
+    marked task-envelope request carrying an explicit retired vector
+    requirement (see ``vector_free_retired_probe``). That submission must be
+    rejected with 422 carrying the structured #4105 retirement diagnostic,
+    return no execution identity, and leave no new marked execution in the
+    execution list. The ordinary vector-free work
     itself is exercised by ``populate`` on the same instance; this phase
     adds only the retirement-boundary proof.
 ``conversion``
@@ -602,7 +604,18 @@ _VECTOR_SERVICE_NAME_RE = re.compile(
 )
 
 
-def vector_free_retired_probe() -> dict[str, Any]:
+#: The #4105 retirement diagnostic raised by ``reject_retired_vector_fields``
+#: for the probe's ``payload.rag`` requirement. The probe carries none of this
+#: text, so an echoed-input validation error cannot satisfy it.
+RETIRED_VECTOR_DIAGNOSTIC = (
+    "payload.rag has been retired (MoonLadderStudios/MoonMind#4105)"
+)
+EXECUTION_IDENTITY_KEYS = frozenset(
+    {"workflowId", "workflow_id", "workflowid", "runId", "run_id"}
+)
+
+
+def vector_free_retired_probe(marker: str = "") -> dict[str, Any]:
     """Task-envelope payload carrying an explicit retired vector requirement.
 
     MoonLadderStudios/MoonMind#4114: the shape mirrors the hermetic
@@ -611,14 +624,19 @@ def vector_free_retired_probe() -> dict[str, Any]:
     before scheduling. The unit suite imports this exact payload and asserts
     the production admission path raises (4105); the live phase below
     asserts the same over HTTP with no consequential execution identity.
+    ``marker`` makes the probe's instructions unique so a persisted
+    execution can be found afterwards.
     """
 
+    instructions = "vector-free journey retired probe"
+    if marker:
+        instructions = f"{instructions} {marker}"
     return {
         "type": "workflow",
         "payload": {
             "rag": {"collections": ["docs"], "required": True},
             "workflow": {
-                "instructions": "vector-free journey retired probe",
+                "instructions": instructions,
                 "steps": [
                     {
                         "id": "step-1",
@@ -636,6 +654,59 @@ def vector_free_retired_probe() -> dict[str, Any]:
     }
 
 
+def _retired_backend_keys(value: Any, path: str = "") -> list[str]:
+    """Return every mapping key, at any depth, naming a retired backend."""
+
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_path = f"{path}.{key}" if path else str(key)
+            if _VECTOR_SERVICE_NAME_RE.search(str(key)):
+                found.append(key_path)
+            found.extend(_retired_backend_keys(item, key_path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(_retired_backend_keys(item, f"{path}[{index}]"))
+    return found
+
+
+def _execution_identities(value: Any) -> list[str]:
+    """Return execution identity values at any depth of an error response."""
+
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in EXECUTION_IDENTITY_KEYS and item:
+                found.append(f"{key}={item!r}")
+            else:
+                found.extend(_execution_identities(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_execution_identities(item))
+    return found
+
+
+def list_executions(api: Api) -> dict[str, dict[str, Any]]:
+    """Return every listed execution keyed by workflow id, all pages."""
+
+    executions: dict[str, dict[str, Any]] = {}
+    token = ""
+    for _ in range(50):
+        path = "/api/executions?pageSize=200"
+        if token:
+            path += f"&nextPageToken={quote(token)}"
+        page = api.json("GET", path)
+        if not isinstance(page, dict) or not isinstance(page.get("items"), list):
+            raise JourneyFailure(f"execution list is not readable: {page!r}")
+        for item in page["items"]:
+            if isinstance(item, dict) and item.get("workflowId"):
+                executions[str(item["workflowId"])] = item
+        token = str(page.get("nextPageToken") or "")
+        if not token:
+            return executions
+    raise JourneyFailure("execution list did not finish paginating")
+
+
 def vector_free(api: Api, state: dict[str, Any]) -> None:
     """Prove the running instance is vector-free at its live boundaries."""
 
@@ -646,11 +717,14 @@ def vector_free(api: Api, state: dict[str, Any]) -> None:
         raise JourneyFailure("/healthz response is not JSON") from exc
     if not isinstance(health, dict) or health.get("status") != "ok":
         raise JourneyFailure(f"/healthz is not healthy: {health!r}")
-    if any(
+    retired_keys = _retired_backend_keys(health)
+    if retired_keys or any(
         key in json.dumps(health).lower()
         for key in ("qdrant", "vector_store", "vector-store", "vectorstore")
     ):
-        raise JourneyFailure(f"/healthz wires a retired vector backend: {health!r}")
+        raise JourneyFailure(
+            f"/healthz wires a retired vector backend {retired_keys}: {health!r}"
+        )
     log("healthz ok with no vector backend")
 
     _, raw_spec = api.request("GET", "/openapi.json", expect=(200,))
@@ -668,35 +742,52 @@ def vector_free(api: Api, state: dict[str, Any]) -> None:
         )
     log(f"openapi ok with no vector-backend path ({len(paths)} paths)")
 
-    probe = vector_free_retired_probe()
+    marker = f"vector-free-probe-{uuid.uuid4().hex}"
+    before = list_executions(api)
     _, raw_error = api.request(
-        "POST", "/api/executions", body=probe, expect=(422,)
+        "POST",
+        "/api/executions",
+        body=vector_free_retired_probe(marker),
+        expect=(422,),
     )
-    text = (raw_error or b"").decode(errors="replace")
-    if not any(
-        marker in text for marker in ("4105", "retired", "vector", "Vector")
-    ):
-        raise JourneyFailure(
-            "retired vector submission was rejected without the retirement "
-            f"diagnostic: {text[:800]!r}"
-        )
     try:
         error = json.loads(raw_error or b"null")
     except json.JSONDecodeError:
-        error = {}
-    if isinstance(error, dict):
-        for key in ("workflowId", "workflow_id", "workflowid", "runId"):
-            if error.get(key):
-                raise JourneyFailure(
-                    "retired vector submission created an execution identity "
-                    f"despite rejection: {key}={error.get(key)!r}"
-                )
+        error = None
+    detail = error.get("detail") if isinstance(error, dict) else None
+    if not (
+        isinstance(detail, dict)
+        and detail.get("code") == "invalid_execution_request"
+        and RETIRED_VECTOR_DIAGNOSTIC in str(detail.get("message") or "")
+    ):
+        raise JourneyFailure(
+            "retired vector submission was rejected without the retirement "
+            f"diagnostic: {(raw_error or b'').decode(errors='replace')[:800]!r}"
+        )
+    identities = _execution_identities(error)
+    if identities:
+        raise JourneyFailure(
+            "retired vector submission created an execution identity "
+            f"despite rejection: {identities}"
+        )
+    after = list_executions(api)
+    persisted = [
+        workflow_id
+        for workflow_id, item in after.items()
+        if workflow_id not in before
+        and marker in json.dumps(item) + json.dumps(describe(api, workflow_id))
+    ]
+    if persisted:
+        raise JourneyFailure(
+            f"retired vector submission persisted executions despite rejection: "
+            f"{persisted}"
+        )
     state["vector_free"] = {
         "healthz": "ok",
         "openapiPaths": len(paths),
         "retiredRejected": True,
     }
-    log("retired vector submission rejected with no execution identity")
+    log("retired vector submission rejected with no execution created")
 
 
 def main(argv: list[str] | None = None) -> int:
