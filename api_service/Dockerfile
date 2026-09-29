@@ -151,6 +151,8 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 
 # Install system packages required by the Python service along with the
 # Node.js runtime libraries that the bundled CLIs rely on.
+# libatomic1 provides libatomic.so.1 required by the Node 26 runtime copied
+# from the tooling-builder stage onto this Python slim base.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -158,6 +160,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         bubblewrap \
+        libatomic1 \
         libffi-dev \
         ripgrep \
         tesseract-ocr \
