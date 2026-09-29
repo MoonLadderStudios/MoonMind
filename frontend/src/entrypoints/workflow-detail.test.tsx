@@ -3462,7 +3462,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByRole('heading', { name: 'Workflow Artifacts' }).length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Report' })).toBeTruthy();
       expect(screen.getAllByText('Final report').length).toBeGreaterThan(0);
-      expect(screen.getByText('evidence.json')).toBeTruthy();
+      expect(screen.getAllByText('evidence.json').length).toBeGreaterThan(0);
       expect(screen.getByRole('link', { name: 'Evidence' }).getAttribute('aria-current')).toBe('page');
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
@@ -3828,9 +3828,12 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
       expect(screen.getByText(/Artifact Browser/)).toBeTruthy();
-      expect(screen.getByText('runtime.log')).toBeTruthy();
-      expect(screen.getByText('fix.patch')).toBeTruthy();
-      expect(screen.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
+      const artifactsRegion = document.querySelector('.td-artifacts-region');
+      expect(artifactsRegion).not.toBeNull();
+      const inArtifacts = within(artifactsRegion as HTMLElement);
+      expect(inArtifacts.getByText('runtime.log')).toBeTruthy();
+      expect(inArtifacts.getByText('fix.patch')).toBeTruthy();
+      expect(inArtifacts.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
     });
   });
 
@@ -7468,7 +7471,7 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
-      expect(screen.getByText('artifact-output')).toBeTruthy();
+      expect(screen.getAllByText('artifact-output').length).toBeGreaterThan(0);
     });
 
     const root = document.querySelector<HTMLElement>('.workflow-detail-page');
@@ -8277,10 +8280,13 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Artifact task')).toBeTruthy();
-      expect(screen.getByText('art-001')).toBeTruthy();
-      expect(screen.getByText('512')).toBeTruthy();
-      expect(screen.getByText('complete')).toBeTruthy();
-      expect(screen.getByRole('link', { name: /Download/i }).getAttribute('href')).toBe(
+      const artifactsRegion = document.querySelector('.td-artifacts-region');
+      expect(artifactsRegion).not.toBeNull();
+      const inArtifacts = within(artifactsRegion as HTMLElement);
+      expect(inArtifacts.getByText('art-001')).toBeTruthy();
+      expect(inArtifacts.getByText('512')).toBeTruthy();
+      expect(inArtifacts.getByText('complete')).toBeTruthy();
+      expect(inArtifacts.getByRole('link', { name: /Download/i }).getAttribute('href')).toBe(
         '/api/artifacts/art-001/download'
       );
     });
@@ -8397,9 +8403,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Report' })).toBeTruthy();
-      expect(screen.getByText('Final implementation report')).toBeTruthy();
-      expect(screen.getByText('Summary JSON')).toBeTruthy();
-      expect(screen.getByText('Screenshot evidence')).toBeTruthy();
+      expect(screen.getAllByText('Final implementation report').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Summary JSON').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Screenshot evidence').length).toBeGreaterThan(0);
     });
 
     const reportHeading = screen.getByRole('heading', { name: 'Report' });
@@ -8469,10 +8475,14 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Generic artifact task')).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
-      expect(screen.getByText('art-generic-output')).toBeTruthy();
+      const artifactsRegion = document.querySelector('.td-artifacts-region');
+      expect(artifactsRegion).not.toBeNull();
+      expect(within(artifactsRegion as HTMLElement).getByText('art-generic-output')).toBeTruthy();
     });
     expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
-    expect(screen.queryByText('Looks report-ish')).toBeNull();
+    // Saved Results (#4020) presents the same generic file as non-Git output;
+    // the Report section itself must stay absent.
+    expect(screen.getByRole('heading', { name: 'Saved Results' })).toBeTruthy();
   });
 
   it('renders error state on failed fetch', async () => {
@@ -9097,8 +9107,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Artifact task with download_url')).toBeTruthy();
-      expect(screen.getByText('art-with-url')).toBeTruthy();
-      expect(screen.getByRole('link', { name: /Download/i }).getAttribute('href')).toBe(
+      expect(screen.getAllByText('art-with-url').length).toBeGreaterThan(0);
+      const artifactsRegion = document.querySelector('.td-artifacts-region');
+      expect(artifactsRegion).not.toBeNull();
+      expect(within(artifactsRegion as HTMLElement).getByRole('link', { name: /Download/i }).getAttribute('href')).toBe(
         'https://external-storage.com/art-with-url'
       );
     });
