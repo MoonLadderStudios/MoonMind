@@ -375,6 +375,132 @@ def test_real_provider_failure_with_rejected_continuation_remains_retryable(
     )
 
 
+# Shape of a managed-session (codex_cli) child result whose adapter validated
+# the resolver's own terminal artifact and derived the failure from it. The
+# runtime failure is authoritative, so AgentRun never runs terminal-evidence
+# evaluation and no ``terminalContract*`` fields exist. Recorded on
+# 2026-09-29: each of four Tactics runs repeated the same blocked verdict three
+# more times, holding the single codex slot for queued runs.
+_ADAPTER_VALIDATED_BLOCKED_VERDICT: dict[str, Any] = {
+    "outputRefs": ["sess:mm:474c70be:codex_cli/stdout.log"],
+    "summary": (
+        "pr-resolver reported status 'blocked'; deferred_comments; "
+        "next_step=manual_review"
+    ),
+    "metrics": {},
+    "diagnosticsRef": "art_01M3P3FBF582VN8X6ZCBCER1W5",
+    "failureClass": "execution_error",
+    "providerErrorCode": None,
+    "retryRecommendation": None,
+    "metadata": {
+        "agentId": "codex_cli",
+        "agentKind": "managed",
+        "prResolverTerminalProvenance": "var/pr_resolver/result.json",
+        "mergeAutomationDisposition": "manual_review",
+        "prResolverFinalReason": "deferred_comments",
+        "prResolverMergeGateOwned": False,
+    },
+}
+
+
+def _adapter_verdict_result(
+    workflow: MoonMindRunWorkflow, **metadata_overrides: Any
+) -> dict[str, Any]:
+    return _mapped_step_result(
+        workflow,
+        **{
+            key: value
+            for key, value in _ADAPTER_VALIDATED_BLOCKED_VERDICT.items()
+            if key != "metadata"
+        },
+        metadata={
+            **_ADAPTER_VALIDATED_BLOCKED_VERDICT["metadata"],
+            **metadata_overrides,
+        },
+    )
+
+
+@pytest.mark.parametrize("disposition", ["manual_review", "failed"])
+def test_adapter_validated_resolver_verdict_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+
+    assert (
+        workflow._activity_result_retryable(
+            _adapter_verdict_result(
+                workflow, mergeAutomationDisposition=disposition
+            ),
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata_overrides",
+    [
+        # The artifact failed identity/freshness/shape validation.
+        {"prResolverTerminalValidationFailures": ["stale terminal artifact"]},
+        # No validated artifact backs the disposition.
+        {"prResolverTerminalProvenance": None},
+        # A continuation, not a terminal answer.
+        {"mergeAutomationDisposition": "reenter_gate"},
+    ],
+)
+def test_unvalidated_adapter_resolver_state_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_overrides: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._activity_result_retryable(
+        _adapter_verdict_result(workflow, **metadata_overrides),
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_real_provider_failure_beside_a_resolver_verdict_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = _adapter_verdict_result(workflow)
+    result["outputs"]["providerErrorCode"] = "RATE_LIMITED"
+    result["outputs"]["retryRecommendation"] = "retry"
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_pre_adapter_verdict_history_replays_the_recorded_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Histories that already retried an adapter verdict must replay unchanged."""
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: patch
+        != run_workflow_module.RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._activity_result_retryable(
+        _adapter_verdict_result(workflow),
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
 def test_existing_history_preserves_provider_retry_decision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
