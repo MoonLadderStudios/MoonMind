@@ -60,6 +60,9 @@ def test_bootstrap_update_holds_the_target_stack_lock(
         return 0
 
     monkeypatch.setattr(bootstrap, "_compose", fake_compose)
+    monkeypatch.setattr(
+        bootstrap, "ensure_target_network", lambda network, project: None
+    )
     assert bootstrap.main(["update", "--state-dir", str(tmp_path)], env={}) == 0
     # Controller replacement shares the target stack's exclusion boundary,
     # the same lock submissions hold across pull/apply.
@@ -164,3 +167,86 @@ def test_bootstrap_offline_install_records_unverified_and_start_refuses(
     assert record is not None and record["verified"] is False
     with pytest.raises(bootstrap.ImageResolutionError):
         bootstrap.main(["start", "--state-dir", str(tmp_path)], env={})
+
+
+def test_bootstrap_install_links_the_controller_to_the_api_network(
+    controller_path, tmp_path
+):
+    bootstrap = load("bootstrap")
+    repo = tmp_path / "MoonMind"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        "MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK=site_controller-link\n"
+    )
+    state = tmp_path / "state"
+    assert (
+        bootstrap.main(
+            ["install", "--state-dir", str(state), "--repo", str(repo)], env={}
+        )
+        == 0
+    )
+    rendered = (state / "controller-compose.yaml").read_text()
+    # The API reaches the controller by alias on the deployment-owned private
+    # network named by the same setting Compose interpolates for the API.
+    assert "aliases:\n          - moonmind-controller" in rendered
+    assert "name: site_controller-link\n    external: true" in rendered
+    # The controller derives UI submission targets from this read-only mount.
+    assert f'MOONMIND_CONTROLLER_TARGET_REPO: "{repo.resolve()}"' in rendered
+    identity = bootstrap.load_identity(state)
+    assert identity["targetNetwork"] == "site_controller-link"
+    assert identity["targetProject"] == "moonmind"
+
+
+def test_bootstrap_start_creates_a_missing_api_network_before_up(
+    controller_path, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    bootstrap = load("bootstrap")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    calls = []
+
+    def fake_run(args):
+        calls.append(("run", tuple(args)))
+        if args[:3] == ["docker", "network", "inspect"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="not found")
+        if args[:3] == ["docker", "network", "create"]:
+            return SimpleNamespace(returncode=0, stdout="id", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def fake_compose(state_dir, project, *args):
+        calls.append(("compose", args))
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_run_capture", fake_run)
+    monkeypatch.setattr(bootstrap, "_compose", fake_compose)
+    monkeypatch.setattr(
+        bootstrap, "require_verified_image", lambda state_dir, requested: "img@sha256:x"
+    )
+    assert bootstrap.main(
+        ["install", "--state-dir", str(state), "--repo", str(repo)], env={}
+    ) == 0
+    calls.clear()
+    assert bootstrap.main(
+        ["start", "--state-dir", str(state), "--repo", str(repo)], env={}
+    ) == 0
+    create = [
+        args for kind, args in calls if kind == "run" and args[:3] == ("docker", "network", "create")
+    ]
+    assert create == [
+        (
+            "docker",
+            "network",
+            "create",
+            "--internal",
+            "--label",
+            "com.docker.compose.project=repo",
+            "--label",
+            "com.docker.compose.network=deployment-controller-network",
+            "moonmind_deployment-controller-network",
+        )
+    ]
+    kinds = [kind for kind, _ in calls]
+    assert kinds.index("compose") > kinds.index("run")

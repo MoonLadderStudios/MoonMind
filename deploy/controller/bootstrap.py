@@ -34,6 +34,14 @@ DEFAULT_IMAGE = os.environ.get(
 # Derived identity spreads independent deployments across stable project
 # names and loopback ports instead of colliding on one shared name/port.
 DERIVED_PORT_RANGE = 100
+# The API reaches the controller over one private network owned by this
+# deployment: the MoonMind Compose file joins the API to it under the same
+# setting, and the controller joins it under a stable alias. No agent
+# service is attached, and the host keeps its loopback endpoint.
+TARGET_NETWORK_SETTING = "MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK"
+DEFAULT_TARGET_NETWORK = "moonmind_deployment-controller-network"
+TARGET_NETWORK_KEY = "deployment-controller-network"
+CONTROLLER_ALIAS = "moonmind-controller"
 
 
 class InsideControllerError(RuntimeError):
@@ -93,13 +101,91 @@ def load_identity(state_dir: Path) -> dict | None:
     return identity
 
 
-def ensure_identity(state_dir: Path, repo: Path, port: int | None) -> dict:
+def _repo_env_value(repo: Path, key: str) -> str:
+    """Read one setting from the deployment-owned ``.env`` (no interpolation)."""
+    try:
+        content = (repo / ".env").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    value = ""
+    for line in content.splitlines():
+        name, separator, raw = line.strip().partition("=")
+        if separator and name.strip() == key:
+            value = raw.strip().strip("'\"").strip()
+    return value
+
+
+def target_network_for_repo(repo: Path, env=None) -> str:
+    """Resolve the API link network the way Compose interpolates it."""
+    return (
+        str((env or {}).get(TARGET_NETWORK_SETTING) or "").strip()
+        or _repo_env_value(repo, TARGET_NETWORK_SETTING)
+        or DEFAULT_TARGET_NETWORK
+    )
+
+
+def target_project_for_repo(repo: Path, env=None) -> str:
+    """Resolve the MoonMind Compose project name the way Compose derives it."""
+    explicit = str((env or {}).get("COMPOSE_PROJECT_NAME") or "").strip() or _repo_env_value(
+        repo, "COMPOSE_PROJECT_NAME"
+    )
+    name = explicit or repo.name
+    normalized = "".join(
+        char for char in name.lower() if char.isalnum() or char in "-_"
+    )
+    return normalized or "moonmind"
+
+
+def ensure_target_network(network: str, project: str) -> None:
+    """Create the API link network when the MoonMind stack has not yet.
+
+    The network carries the Compose labels of the MoonMind project so a later
+    ``docker compose up`` adopts it instead of warning. Because the
+    controller stays attached, a target-project shutdown leaves the network
+    (and the controller endpoint) in place.
+    """
+    try:
+        inspected = _run_capture(["docker", "network", "inspect", network])
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"Cannot inspect Docker network {network!r}: {exc}") from exc
+    if inspected.returncode == 0:
+        return
+    created = _run_capture(
+        [
+            "docker",
+            "network",
+            "create",
+            "--internal",
+            "--label",
+            f"com.docker.compose.project={project}",
+            "--label",
+            f"com.docker.compose.network={TARGET_NETWORK_KEY}",
+            network,
+        ]
+    )
+    if created.returncode != 0:
+        raise RuntimeError(
+            f"Cannot create Docker network {network!r}: "
+            f"{(created.stderr or created.stdout or '').strip()[-500:]}"
+        )
+
+
+def ensure_identity(
+    state_dir: Path,
+    repo: Path,
+    port: int | None,
+    *,
+    target_network: str | None = None,
+    target_project: str | None = None,
+) -> dict:
     """Persist (or reuse) this deployment's controller project and endpoint.
 
     The first install derives and records the identity; later commands reuse
     the recorded project and port so a deployment keeps its endpoint across
     restarts instead of drifting when the checkout path changes case or
-    symlink shape. An explicit ``--port`` always wins for the endpoint.
+    symlink shape. An explicit ``--port`` always wins for the endpoint. The
+    API link network and MoonMind project are recorded too, so the API can
+    derive the endpoint and later commands keep the same link.
     """
     state_dir.mkdir(parents=True, exist_ok=True)
     existing = load_identity(state_dir)
@@ -111,6 +197,15 @@ def ensure_identity(state_dir: Path, repo: Path, port: int | None) -> dict:
         "repo": str(repo),
         "recordedAt": int(time.time()),
     }
+    network = target_network or (existing or {}).get("targetNetwork")
+    if network:
+        identity["targetNetwork"] = str(network)
+        identity["targetProject"] = str(
+            target_project
+            or (existing or {}).get("targetProject")
+            or target_project_for_repo(repo)
+        )
+        identity["alias"] = CONTROLLER_ALIAS
     _identity_path(state_dir).write_text(
         json.dumps(identity, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
@@ -293,6 +388,7 @@ def render_compose_file(
     image: str = DEFAULT_IMAGE,
     port: int = DEFAULT_PORT,
     project: str | None = None,
+    target_network: str | None = None,
 ) -> Path:
     """Render the separate controller Compose project (REQ-02).
 
@@ -308,6 +404,20 @@ def render_compose_file(
     repo_src = mounts_mod.resolve_bind_source(str(repo))
     project_name = project or project_for_repo(repo)
     path = state_dir / "controller-compose.yaml"
+    service_networks = ""
+    project_networks = ""
+    if target_network:
+        service_networks = f"""    networks:
+      default: {{}}
+      moonmind:
+        aliases:
+          - {CONTROLLER_ALIAS}
+"""
+        project_networks = f"""networks:
+  moonmind:
+    name: {target_network}
+    external: true
+"""
     content = f"""# MoonMind standalone deployment controller (issue #4500).
 # Separate Compose project: own durable state, restart policy, and direct
 # Docker socket mount. Its transport and endpoint survive target-project
@@ -323,6 +433,7 @@ services:
       MOONMIND_CONTROLLER_STATE_DIR: /var/lib/moonmind-controller
       MOONMIND_CONTROLLER_PORT: "{port}"
       MOONMIND_CONTROLLER_SECRET_FILE: /var/lib/moonmind-controller/secrets/controller-bearer
+      MOONMIND_CONTROLLER_TARGET_REPO: "{repo}"
     ports:
       - "127.0.0.1:{port}:{port}"
     volumes:
@@ -331,7 +442,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
       moonmind.controller.managed: "true"
-"""
+{service_networks}{project_networks}"""
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -356,13 +467,27 @@ def _project_for_state(state_dir: Path, repo: Path) -> str:
     return project_for_repo(repo)
 
 
+def _ensure_identity_network(identity: dict | None) -> None:
+    network = (identity or {}).get("targetNetwork")
+    if network:
+        ensure_target_network(
+            str(network), str((identity or {}).get("targetProject") or "moonmind")
+        )
+
+
 def cmd_install(args, env) -> int:
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
     repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
     ensure_secret(state_dir)
-    identity = ensure_identity(state_dir, repo, getattr(args, "port", None))
+    identity = ensure_identity(
+        state_dir,
+        repo,
+        getattr(args, "port", None),
+        target_network=args.target_network,
+        target_project=args.target_project,
+    )
     if _port_in_use(identity["port"]) and not load_controller_image(state_dir):
         raise RuntimeError(
             f"Port {identity['port']} is already in use by another endpoint; "
@@ -375,6 +500,7 @@ def cmd_install(args, env) -> int:
         image=pinned,
         port=identity["port"],
         project=identity["project"],
+        target_network=identity.get("targetNetwork"),
     )
     print(f"Controller project rendered: {compose_file}", flush=True)
     print(f"Deployment-owned secret: {_secret_path(state_dir)}", flush=True)
@@ -398,6 +524,7 @@ def cmd_start(args, env) -> int:
     project = _project_for_state(state_dir, repo)
     # The privileged container only starts from a verified digest.
     require_verified_image(state_dir, args.image)
+    _ensure_identity_network(load_identity(state_dir))
     code = _compose(state_dir, project, "up", "-d", "--wait")
     if code != 0:
         raise RuntimeError(f"Controller start failed (exit {code}).")
@@ -429,14 +556,22 @@ def cmd_update(args, env) -> int:
     with lock_candidate.acquire():
         pinned, _ = pinned_controller_image(state_dir, args.image)
         repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
-        identity = ensure_identity(state_dir, repo, getattr(args, "port", None))
+        identity = ensure_identity(
+            state_dir,
+            repo,
+            getattr(args, "port", None),
+            target_network=args.target_network,
+            target_project=args.target_project,
+        )
         render_compose_file(
             state_dir=state_dir,
             repo=repo,
             image=pinned,
             port=identity["port"],
             project=identity["project"],
+            target_network=identity.get("targetNetwork"),
         )
+        _ensure_identity_network(identity)
         code = _compose(state_dir, identity["project"], "pull", CONTROLLER_SERVICE)
         if code != 0:
             raise RuntimeError(f"Controller image pull failed (exit {code}).")
@@ -457,14 +592,22 @@ def cmd_restore(args, env) -> int:
     repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
     ensure_secret(state_dir)
     pinned, _ = pinned_controller_image(state_dir, args.image)
-    identity = ensure_identity(state_dir, repo, getattr(args, "port", None))
+    identity = ensure_identity(
+        state_dir,
+        repo,
+        getattr(args, "port", None),
+        target_network=args.target_network,
+        target_project=args.target_project,
+    )
     render_compose_file(
         state_dir=state_dir,
         repo=repo,
         image=pinned,
         port=identity["port"],
         project=identity["project"],
+        target_network=identity.get("targetNetwork"),
     )
+    _ensure_identity_network(identity)
     code = _compose(state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE)
     if code != 0:
         raise RuntimeError(f"Controller restore failed (exit {code}).")
@@ -502,6 +645,16 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument("--stack", default="moonmind", help="Target stack.")
         child.add_argument("--image", default=DEFAULT_IMAGE, help="Controller image.")
         child.add_argument("--port", type=int, default=DEFAULT_PORT)
+        child.add_argument(
+            "--target-network",
+            default=None,
+            help=f"API link network (default ${TARGET_NETWORK_SETTING} or {DEFAULT_TARGET_NETWORK}).",
+        )
+        child.add_argument(
+            "--target-project",
+            default=None,
+            help="MoonMind Compose project that owns the API link network.",
+        )
     return parser
 
 
@@ -517,6 +670,10 @@ def main(argv=None, env=None) -> int:
     if not args.repo:
         args.repo = str(repo)
     environment = dict(os.environ) if env is None else dict(env)
+    if not args.target_network:
+        args.target_network = target_network_for_repo(repo, environment)
+    if not args.target_project:
+        args.target_project = target_project_for_repo(repo, environment)
     # Only the managed marker is consulted; the rest of the host env is used.
     marker = {"MOONMIND_CONTROLLER_MANAGED": environment.get("MOONMIND_CONTROLLER_MANAGED", "")}
     commands = {

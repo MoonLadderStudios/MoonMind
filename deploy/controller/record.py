@@ -140,17 +140,27 @@ class OperationStore:
         source_revision: str,
         reason: str = "",
         target: Mapping[str, Any] | None = None,
+        operation_id: str | None = None,
     ) -> dict:
         """Start an operation, reattaching to an open one for the same target.
 
-        A lost acknowledgment must not fork a duplicate writer: when an
-        unfinished operation already targets the same concrete image, the
-        caller reattaches to it instead of launching a competing apply.
-        When no unfinished operation targets the image but a completed
-        (succeeded or partially verified) one does, the caller reattaches
-        to that recorded success so a retried submission observes the
-        terminal result instead of repeating the Compose mutation.
+        A lost acknowledgment must not fork a duplicate writer: a caller that
+        supplies its own ``operation_id`` reattaches to that record whatever
+        its status, so resubmitting after a timeout observes the original
+        operation instead of starting another. When an unfinished operation
+        already targets the same concrete image, the caller reattaches to it
+        instead of launching a competing apply. When no unfinished operation
+        targets the image but a completed (succeeded or partially verified)
+        one does, the caller reattaches to that recorded success so a
+        retried submission observes the terminal result instead of
+        repeating the Compose mutation.
         """
+        if operation_id is not None:
+            check_operation_id(operation_id)
+            try:
+                return self.load(operation_id)
+            except KeyError:
+                pass
         for operation in self.list_open(stack=stack):
             if operation.get("desired", {}).get("image") == desired_image:
                 return operation
@@ -158,7 +168,7 @@ class OperationStore:
         if completed is not None:
             return completed
         operation = {
-            "operationId": str(uuid.uuid4()),
+            "operationId": operation_id or str(uuid.uuid4()),
             "stack": stack,
             "status": "pending",
             "desired": {
@@ -177,9 +187,10 @@ class OperationStore:
             "createdAt": _utc_now(),
             "updatedAt": _utc_now(),
         }
-        # Creation is the one path that builds a filename, and its id is
-        # generated in-process (never caller-supplied), so no tainted
-        # string reaches path construction here either.
+        # Creation is the one path that builds a filename. Its id is either
+        # generated in-process or a caller id already validated against the
+        # safe alphabet above (no separators), so it cannot escape the
+        # operations directory.
         return self._save(
             self.operations_dir / f"{operation['operationId']}.json", operation
         )
