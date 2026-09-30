@@ -251,6 +251,7 @@ def _terminal_contract_from_side_effect(
     if not contract_id:
         return None
     known = {
+        "batch_pr_resolver_fanout.v1": "moonmind.batch-pr-resolver-result.v1",
         "batch_dependabot_resolver_fanout.v1": (
             "moonmind.batch-dependabot-resolver-result.v1"
         ),
