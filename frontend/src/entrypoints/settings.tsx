@@ -9,7 +9,6 @@ import { ConfigurationHealthSummary } from '../components/settings/Configuration
 import {
   GeneratedSettingsSection,
 } from '../components/settings/GeneratedSettingsSection';
-import { GithubTokenProbePanel } from '../components/settings/GithubTokenProbePanel';
 import {
   OperationsSettingsSection,
   type WorkerPauseConfig,
@@ -24,6 +23,7 @@ import {
   SettingsDraftGuardProvider,
   useSettingsDraftGuard,
 } from '../components/settings/SettingsDraftGuard';
+import { SourceControlSettings } from '../components/settings/SourceControlSettings';
 import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
@@ -159,7 +159,6 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
   const canReadProviderProfiles = permissions.has('provider_profiles.read');
   const canWriteProviderProfiles = permissions.has('provider_profiles.write');
   const canReadSecretMetadata = permissions.has('secrets.metadata.read');
-  const canRunGithubTokenProbe = permissions.has('settings.effective.read');
   const runtimeSystemConfig = settingsInitialData(payload).runtimeConfig?.system ?? {};
   const defaultTaskModelByRuntime = runtimeSystemConfig.defaultTaskModelByRuntime ?? {};
   const supportedRuntimes = runtimeSystemConfig.supportedRuntimes ?? [];
@@ -243,7 +242,6 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
           isLoading={providerProfilesQuery.isLoading || secretsQuery.isLoading}
           isError={providerProfilesQuery.isError || secretsQuery.isError}
           canWriteProviderProfiles={canWriteProviderProfiles}
-          canRunGithubTokenProbe={canRunGithubTokenProbe}
         />
       ) : (
         <RegionUnavailable>
@@ -308,7 +306,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
         </RegionUnavailable>
       )}
 
-      <GithubTokenProbePanel canRunProbe={canRunGithubTokenProbe} onNotice={setNotice} />
+      <SourceControlSettings onNotice={setNotice} />
     </SettingsPageFrame>
   );
 }
