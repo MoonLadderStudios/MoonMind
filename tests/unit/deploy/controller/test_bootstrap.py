@@ -288,3 +288,81 @@ def test_only_trusted_deployment_services_join_the_controller_link(controller_pa
             "MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller"
         ]
         assert not any("CONTROLLER_SECRET" in item for item in environment)
+
+
+def _compose_mounts(service):
+    """Yield (type, source, target, read_only) for a service's volumes.
+
+    Short-syntax entries use each ``${NAME:-default}`` default, which is what
+    a default install renders.
+    """
+    import re
+
+    for raw in service.get("volumes") or []:
+        if isinstance(raw, dict):
+            yield (
+                raw.get("type"),
+                raw.get("source"),
+                raw["target"],
+                raw.get("read_only") is True,
+            )
+            continue
+        spec = re.sub(r"\$\{[A-Z0-9_]+(?::-([^}]*))?\}", lambda m: m.group(1) or "", raw)
+        source, target, *mode = spec.split(":")
+        kind = "bind" if source.startswith((".", "/")) else "volume"
+        yield kind, source, target, "ro" in (mode[0].split(",") if mode else [])
+
+
+def test_no_service_outside_the_controller_link_can_see_controller_state(
+    controller_path,
+):
+    """Only the API (read-only) and deployment worker see the controller state.
+
+    Bootstrap keeps the controller bearer secret and the operation records
+    the controller applies on restart in the checkout's deployment state.
+    Agent-facing services mount parts of that checkout, so each view they
+    have of the controller state must be an empty read-only tmpfs.
+    """
+    from pathlib import Path, PurePosixPath
+
+    import yaml
+
+    bootstrap = load("bootstrap")
+    repo = Path(controller_path).parents[1]
+    compose = yaml.safe_load((repo / "docker-compose.yaml").read_text())
+    state = PurePosixPath(*bootstrap.default_state_dir(Path(".")).parts)
+    trusted = {
+        name
+        for name, service in compose["services"].items()
+        if bootstrap.TARGET_NETWORK_KEY in (service.get("networks") or [])
+    }
+    exposed_views = {}
+    for name, service in compose["services"].items():
+        mounts = list(_compose_mounts(service))
+        shadows = {
+            target for kind, _, target, read_only in mounts
+            if kind == "tmpfs" and read_only
+        }
+        for kind, source, target, read_only in mounts:
+            if kind != "bind" or not source.startswith("."):
+                continue
+            source = PurePosixPath(source)
+            if source != state and source not in state.parents:
+                continue
+            view = str(PurePosixPath(target) / state.relative_to(source))
+            if name == "api":
+                assert read_only, "the API reads controller state read-only"
+            if name in trusted:
+                continue
+            exposed_views.setdefault(name, []).append(view)
+            assert view in shadows, f"{name} can reach controller state at {view}"
+    # The agent runtime hosts managed Skills and mounts both the checkout and
+    # the deployment state, so both views are shadowed.
+    assert sorted(exposed_views["temporal-worker-agent-runtime"]) == [
+        "/workspace/deployment_state/controller",
+        "/workspace/host_project/deploy/state/controller",
+    ]
+    # The (otherwise ignored) state directory is part of the checkout, so
+    # Docker never creates that mountpoint as the daemon's user before
+    # bootstrap, running as the operator, writes there.
+    assert (repo / state).is_dir()
