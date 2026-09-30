@@ -20056,6 +20056,17 @@ async def _get_saved_work_artifact_service(
     return lambda: get_temporal_artifact_service(session)
 
 
+async def _get_saved_work_repository_connections(
+    session: AsyncSession = Depends(get_async_session),
+) -> Callable[[], Any]:
+    """Open the repository-connection owner only for a saved-work request."""
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
+
+    return lambda: RepositoryConnectionService(session)
+
+
 def _saved_work_publication_error(
     status_code: int, code: str, message: str
 ) -> HTTPException:
@@ -20182,6 +20193,7 @@ async def _start_saved_work_publication(
     user: User,
     adapter: TemporalClientAdapter,
     artifact_service: Any,
+    repository_connections: Any,
 ) -> PublicationRecoveryResponse:
     contract = await _admit_saved_work_publication(
         canonical=canonical,
@@ -20189,6 +20201,17 @@ async def _start_saved_work_publication(
         user=user,
         artifact_service=artifact_service(),
     )
+    # A GitHub repository declared as a Lore review projection is not a
+    # publication authority; Lore publication stays with its own owner.
+    if await repository_connections().lore_projection_owner(
+        contract.destination.repository
+    ):
+        raise _saved_work_publication_error(
+            status.HTTP_409_CONFLICT,
+            "publication_lore_authoritative",
+            "The destination is the review projection of a Lore repository; "
+            "publish through its authoritative Lore owner.",
+        )
     policy = _publication_recovery_policy()
     reason = policy.admission_reason(
         repository=contract.destination.repository,
@@ -20241,6 +20264,9 @@ async def retry_execution_publication(
     service: TemporalExecutionService = Depends(_get_service),
     adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
     artifact_service: Callable[[], Any] = Depends(_get_saved_work_artifact_service),
+    repository_connections: Callable[[], Any] = Depends(
+        _get_saved_work_repository_connections
+    ),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> PublicationRecoveryResponse:
@@ -20261,6 +20287,7 @@ async def retry_execution_publication(
             user=user,
             adapter=adapter,
             artifact_service=artifact_service,
+            repository_connections=repository_connections,
         )
     contract = _publication_recovery_contract_from_record(canonical)
     if (

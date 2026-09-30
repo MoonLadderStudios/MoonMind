@@ -178,6 +178,25 @@ def _record_to_connection(record: RepositoryConnectionRecord) -> RepositoryConne
     return RepositoryConnection.model_validate(payload)
 
 
+_GITHUB_REPOSITORY_PREFIXES = (
+    "https://github.com/",
+    "http://github.com/",
+    "ssh://git@github.com/",
+    "git@github.com:",
+)
+
+
+def _github_repository_key(value: Any) -> str:
+    """Compare ``owner/name`` and GitHub remote spellings of one repository."""
+
+    text = str(value or "").strip().lower()
+    for prefix in _GITHUB_REPOSITORY_PREFIXES:
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    return text.strip("/").removesuffix(".git")
+
+
 def _repo_key_for(identity: RepositoryIdentity) -> str:
     if (identity.provider_repo_id or "").strip():
         return f"id:{identity.provider_repo_id.strip()}"
@@ -1230,6 +1249,35 @@ class RepositoryConnectionService:
                 )
             )
         return admitted
+
+    async def lore_projection_owner(self, repository: str) -> str | None:
+        """Return the Lore connection whose review projection is this GitHub repo.
+
+        A projected repository holds derived review state, so publishing to it
+        directly would bypass the authoritative Lore owner. Every Lore
+        connection that is not deleted counts, whoever may use it.
+        """
+
+        wanted = _github_repository_key(repository)
+        if not wanted:
+            return None
+        rows = (
+            await self._session.execute(
+                select(RepositoryConnectionRecord).where(
+                    RepositoryConnectionRecord.provider == "lore"
+                )
+            )
+        ).scalars().all()
+        for record in rows:
+            projection = dict(record.projection_policy or {})
+            if (
+                not record.tombstone
+                and record.lifecycle != "deleted"
+                and projection.get("provider") == "github"
+                and _github_repository_key(projection.get("repository")) == wanted
+            ):
+                return record.connection_id
+        return None
 
     async def export_snapshot_connections(
         self,

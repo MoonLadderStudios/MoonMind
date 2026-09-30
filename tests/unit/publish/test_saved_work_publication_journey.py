@@ -276,8 +276,18 @@ class Journey:
 
 @asynccontextmanager
 async def journey(
-    tmp_path: Path, monkeypatch, *, destination_files=None, seed_baseline=False
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    destination_files=None,
+    seed_baseline=False,
+    emulate_temporal=True,
 ):
+    """Saved work, destination, and provider fixtures for one journey.
+
+    ``emulate_temporal=False`` leaves ``workflow.execute_activity`` alone so a
+    real Temporal worker can run the same Activities.
+    """
     async with _artifact_service(tmp_path) as service:
         saved = await capture_saved_work(
             tmp_path, BASE_FILES, _mutate, artifact_service=service
@@ -388,17 +398,18 @@ async def journey(
                     continue
             raise AssertionError(f"{name} exhausted retries")
 
-        monkeypatch.setattr(
-            workflow_module.workflow, "execute_activity", execute_activity
-        )
-        monkeypatch.setattr(
-            workflow_module.workflow,
-            "info",
-            lambda: SimpleNamespace(
-                workflow_id="mm:source:saved-work-publication:x",
-                run_id=state.run_id,
-            ),
-        )
+        if emulate_temporal:
+            monkeypatch.setattr(
+                workflow_module.workflow, "execute_activity", execute_activity
+            )
+            monkeypatch.setattr(
+                workflow_module.workflow,
+                "info",
+                lambda: SimpleNamespace(
+                    workflow_id="mm:source:saved-work-publication:x",
+                    run_id=state.run_id,
+                ),
+            )
         yield state
 
 
@@ -468,9 +479,14 @@ async def test_additive_pr_publishes_saved_content_with_fresh_authority_only(
         _only_publication_activities(state)
         _only_destination_remote(state)
         assert state.saved_objects_unchanged(before)
-        assert [(c.operation_kind, c.owner_principal) for c in claims_during_push] == [
-            ("publication", OPERATOR)
-        ]
+        # Every saved object publication reads is claimed for this operation.
+        assert {
+            (c.artifact_id, c.operation_kind, c.owner_principal)
+            for c in claims_during_push
+        } == {
+            (artifact_id, "publication", OPERATOR)
+            for artifact_id in await _publication_closure(state)
+        }
         assert await state.use_claims() == []
 
 
@@ -514,9 +530,19 @@ async def test_empty_destination_is_initialized_only_after_confirmed_emptiness(
             "src/app.py": "print('saved')",
             "notes/new.md": "added by the run",
         }
-        # Now non-empty: the same request is refused rather than overwriting.
+        # Resubmitting the same decision reconciles its own published candidate.
+        again = await state.run(contract)
+        assert (again["outcome"], again["push"]["status"]) == (
+            "published",
+            "reconciled",
+        )
+        # Now non-empty: a different decision is refused rather than overwriting.
+        changed = {
+            **contract,
+            "commit": {**contract["commit"], "message": "A different commit"},
+        }
         with pytest.raises(ApplicationError) as exc:
-            await state.run(contract)
+            await state.run(changed)
         assert (await _persisted_result(state))["reasonCode"] == (
             "PUBLICATION_DESTINATION_NOT_EMPTY"
         )
@@ -816,7 +842,246 @@ async def test_cancellation_keeps_the_confirmed_push_and_releases_only_owned_cla
             git(state.remote, "rev-parse", "refs/heads/saved/work")
             == persisted["push"]["remoteHeadSha"]
         )
-        assert "pullRequest" not in persisted
+        # The cancelled PR effect is recorded as unconfirmed, never omitted.
+        assert persisted["pullRequest"] == {
+            "status": "unconfirmed",
+            "reasonCode": "publication_cancelled",
+        }
+        assert state.calls[-1] == "publication_recovery.cleanup"
+        assert await state.use_claims() == []
+
+
+@pytest.mark.asyncio
+async def test_resubmitted_request_after_pr_exhaustion_reuses_the_pushed_candidate(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        contract = state.contract(
+            objective="pr", baseBranch="main", strategy="additive_import"
+        )
+        # The PR outage outlasts every retry of the first run.
+        state.provider.unavailable_reads = 5
+        with pytest.raises(ApplicationError):
+            await state.run(contract)
+        first = await _persisted_result(state)
+        assert (first["outcome"], first["push"]["status"]) == ("unavailable", "pushed")
+        assert first["pullRequest"] == {
+            "status": "unconfirmed",
+            "reasonCode": "PUBLICATION_PULL_REQUEST_UNAVAILABLE",
+        }
+        head = git(state.remote, "rev-parse", "refs/heads/saved/work")
+        _write_destination(tmp_path, state.remote, {"later.txt": "base advanced\n"})
+
+        # A plain resubmission of the same request completes only the PR.
+        result = await state.run(contract)
+
+        assert result["outcome"] == "published"
+        assert result["admission"] == first["admission"]
+        assert result["candidate"] == first["candidate"]
+        assert result["push"]["status"] == "reconciled"
+        assert result["pullRequest"]["status"] == "created"
+        assert git(state.remote, "rev-parse", "refs/heads/saved/work") == head
+        assert len(state.pushes()) == 1
+        assert len(state.provider.creates) == 1
+        assert await state.use_claims() == []
+
+
+@pytest.mark.asyncio
+async def test_a_changed_decision_is_not_reused_and_never_overwrites_the_pushed_candidate(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        contract = state.contract(
+            objective="pr", baseBranch="main", strategy="additive_import"
+        )
+        state.provider.unavailable_reads = 5
+        with pytest.raises(ApplicationError):
+            await state.run(contract)
+        head = git(state.remote, "rev-parse", "refs/heads/saved/work")
+        _write_destination(tmp_path, state.remote, {"later.txt": "base advanced\n"})
+        # The same operation with a different commit is a new decision.
+        changed = {
+            **contract,
+            "commit": {**contract["commit"], "message": "A different commit"},
+        }
+
+        with pytest.raises(ApplicationError) as exc:
+            await state.run(changed)
+
+        assert exc.value.type == "PUBLICATION_RECONCILIATION_BLOCKED"
+        second = await _persisted_result(state)
+        assert (second["outcome"], second["push"]["reasonCode"]) == (
+            "conflict",
+            "remote_head_changed",
+        )
+        assert second["candidate"]["headSha"] != head
+        assert git(state.remote, "rev-parse", "refs/heads/saved/work") == head
+        assert len(state.pushes()) == 1
+        assert state.provider.creates == []
+
+
+async def _publication_closure(state: Journey) -> set[str]:
+    """Artifact ids of every saved object publication reads."""
+    import json
+
+    from moonmind.publish.saved_work_source import saved_work_artifact_id
+
+    manifest_id = saved_work_artifact_id(state.saved.saved_work_ref)
+    _meta, payload = await state.service.read(
+        artifact_id=manifest_id, principal=OPERATOR
+    )
+    manifest = json.loads(payload)
+    (snapshot,) = [
+        output["ref"]
+        for output in manifest["outputs"]
+        if output["format"] == "full_snapshot"
+    ]
+    return {
+        manifest_id,
+        saved_work_artifact_id(snapshot),
+        saved_work_artifact_id(manifest["git"]["deltaRef"]),
+    }
+
+
+@pytest.mark.asyncio
+async def test_retention_sweep_between_prepare_and_push_keeps_the_claimed_closure(
+    tmp_path, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from api_service.db import models as db_models
+
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        closure = await _publication_closure(state)
+        claimed: list[set[str]] = []
+        sweeps: list[Any] = []
+
+        async def expire_everything_and_sweep(attempt: int) -> None:
+            claimed.append({claim.artifact_id for claim in await state.use_claims()})
+            session = state.service._repository._session
+            rows = await session.execute(select(db_models.TemporalArtifact))
+            for row in rows.scalars().all():
+                row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await session.commit()
+            sweeps.append(
+                await state.service.sweep_lifecycle(principal="service:lifecycle")
+            )
+
+        state.hooks["publication_recovery.saved_work_push"] = (
+            expire_everything_and_sweep
+        )
+        result = await state.run(
+            state.contract(
+                objective="pr", baseBranch="main", strategy="additive_import"
+            )
+        )
+
+        assert result["outcome"] == "published"
+        assert claimed == [closure]
+        assert sweeps[0].skipped_in_use_count == len(closure)
+        for artifact_id in closure:
+            row = await state.service._repository.get_artifact(artifact_id)
+            assert row.status is db_models.TemporalArtifactStatus.COMPLETE
+        assert await state.use_claims() == []
+
+
+def _pause(
+    state: Journey, name: str, *, after: bool
+) -> tuple[asyncio.Event, asyncio.Event]:
+    """Hold one Activity in flight so the workflow can be cancelled meanwhile."""
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def hold(attempt: int) -> None:
+        started.set()
+        await release.wait()
+
+    (state.after if after else state.hooks)[name] = hold
+    return started, release
+
+
+async def _cancel_while_held(
+    state: Journey,
+    contract: dict[str, Any],
+    started: asyncio.Event,
+    release: asyncio.Event,
+) -> BaseException:
+    running = asyncio.ensure_future(state.run(contract))
+    await asyncio.wait_for(started.wait(), timeout=60)
+    running.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(BaseException) as raised:
+        await running
+    return raised.value
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_push_waits_for_and_records_the_landed_push(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        # The push lands; the cancellation arrives before it is acknowledged.
+        started, release = _pause(
+            state, "publication_recovery.saved_work_push", after=True
+        )
+        raised = await _cancel_while_held(
+            state,
+            state.contract(
+                objective="pr", baseBranch="main", strategy="additive_import"
+            ),
+            started,
+            release,
+        )
+
+        assert is_cancelled_exception(raised)
+        persisted = await _persisted_result(state)
+        assert persisted["outcome"] == "cancelled"
+        assert persisted["push"]["status"] == "pushed"
+        assert persisted["push"]["remoteHeadSha"] == git(
+            state.remote, "rev-parse", "refs/heads/saved/work"
+        )
+        assert "publication_recovery.saved_work_pull_request" not in state.calls
+        assert state.calls[-2:] == [
+            "publication_recovery.persist_result",
+            "publication_recovery.cleanup",
+        ]
+        assert await state.use_claims() == []
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_result_persistence_keeps_the_record(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        started, release = _pause(
+            state, "publication_recovery.persist_result", after=False
+        )
+        raised = await _cancel_while_held(
+            state,
+            state.contract(
+                objective="pr", baseBranch="main", strategy="additive_import"
+            ),
+            started,
+            release,
+        )
+
+        assert is_cancelled_exception(raised)
+        persisted = await _persisted_result(state)
+        # Cancellation cannot undo or hide the confirmed push and PR.
+        assert persisted["outcome"] == "published"
+        assert persisted["pullRequest"]["status"] == "created"
         assert state.calls[-1] == "publication_recovery.cleanup"
         assert await state.use_claims() == []
 

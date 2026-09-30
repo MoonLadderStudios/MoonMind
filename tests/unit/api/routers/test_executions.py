@@ -18274,7 +18274,90 @@ class _SavedWorkArtifacts:
         return self.artifact, _SAVED_WORK_MANIFEST
 
 
-def _saved_work_app(monkeypatch, artifacts: _SavedWorkArtifacts):
+def _lore_connection(projected_repository: str) -> Any:
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryConnection,
+    )
+
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "repository-connection:lore",
+            "provider": "lore",
+            "displayName": "Lore",
+            "endpointRef": "lore://tactics",
+            "allowedOperations": ["read", "write"],
+            "clientPolicy": {
+                "pinnedVersion": "1.0.0",
+                "toolBundleRef": "tool-bundle:lore-1",
+                "executableSha256": "sha256:lore",
+            },
+            "projection": {
+                "provider": "github",
+                "repository": projected_repository,
+                "authority": "review_only",
+                "statusSourceRef": "status:1",
+            },
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "managed", "key": "LORE_KEY"},
+            },
+            "lifecycle": "active",
+            "ownership": {
+                "ownerRef": "owner:ops",
+                "scopeType": "system",
+                "allowedPrincipalRefs": ["owner:ops"],
+            },
+            "hostingService": "lore",
+        }
+    )
+
+
+def _repository_connections(*connections: Any):
+    """The real repository-connection owner over a fresh in-memory database."""
+    from sqlalchemy.pool import StaticPool
+
+    from api_service.db.models import (
+        Base,
+        RepositoryConnectionAuditEvent,
+        RepositoryConnectionRecord,
+    )
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
+
+    async def dependency():
+        engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                lambda sync: Base.metadata.create_all(
+                    sync,
+                    tables=[
+                        RepositoryConnectionRecord.__table__,
+                        RepositoryConnectionAuditEvent.__table__,
+                    ],
+                )
+            )
+        try:
+            sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            async with sessions() as session:
+                service = RepositoryConnectionService(session)
+                for item in connections:
+                    await service.create_connection(
+                        item,
+                        actor_ref="owner:ops",
+                        request_id=f"seed:{item.id}",
+                        principal_ref="owner:ops",
+                        principal_scope=("system", None),
+                    )
+                yield lambda: service
+        finally:
+            await engine.dispose()
+
+    return dependency
+
+
+def _saved_work_app(monkeypatch, artifacts: _SavedWorkArtifacts, *connections: Any):
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
@@ -18286,6 +18369,9 @@ def _saved_work_app(monkeypatch, artifacts: _SavedWorkArtifacts):
     app.dependency_overrides[executions_module._get_saved_work_artifact_service] = (
         lambda: lambda: artifacts
     )
+    app.dependency_overrides[
+        executions_module._get_saved_work_repository_connections
+    ] = _repository_connections(*connections)
     user = _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", True)
     return app, adapter, record, user
@@ -18394,6 +18480,47 @@ def test_saved_work_publication_rejects_foreign_or_unsupported_requests(
     assert response.status_code == status_code
     assert response.json()["detail"]["code"] == code
     adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "projected",
+    ["Dest/Repo", "https://github.com/dest/repo.git", "git@github.com:DEST/repo"],
+)
+def test_saved_work_publication_refuses_a_lore_review_projection(
+    monkeypatch: pytest.MonkeyPatch, projected: str
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(
+        monkeypatch, _SavedWorkArtifacts(), _lore_connection(projected)
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    # No workflow starts, so nothing can push or open a PR on the projection.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "publication_lore_authoritative"
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_to_an_unprojected_github_repository_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(
+        monkeypatch, _SavedWorkArtifacts(), _lore_connection("dest/other-repo")
+    )
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert response.status_code == 201, response.json()
+    adapter.start_workflow.assert_awaited_once()
 
 
 @pytest.mark.parametrize("objective", ["none", "auto"])

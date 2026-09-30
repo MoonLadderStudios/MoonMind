@@ -4453,8 +4453,14 @@ async def _saved_work_destination_authority(
     return credential.token, authority_ref
 
 
-def _persisted_saved_candidate(contract: Any, prepared: Mapping[str, Any]) -> Any:
-    """Return the persisted admission only if it is exactly this contract's."""
+def _saved_decision(
+    contract: Any, prepared: Mapping[str, Any], *, authority_ref: str | None = None
+) -> Any:
+    """Return a persisted admission only if it is exactly this contract's decision.
+
+    ``authority_ref`` compares against the currently resolved authority
+    instead of the one the record carries.
+    """
 
     from moonmind.publish.saved_candidate import SavedPublicationAdmission
 
@@ -4462,22 +4468,27 @@ def _persisted_saved_candidate(contract: Any, prepared: Mapping[str, Any]) -> An
         admission = SavedPublicationAdmission.model_validate(
             dict(prepared.get("admission") or {})
         )
-    except ValueError as exc:
-        raise temporal_exceptions.ApplicationError(
-            "persisted saved-work admission is invalid",
-            type="PUBLICATION_CANDIDATE_MISMATCH",
-            non_retryable=True,
-        ) from exc
-    expected = contract.admission(
-        expected_base_sha=admission.expected_base_sha,
-        authority_ref=admission.authority_ref,
-    )
+        expected = contract.admission(
+            expected_base_sha=admission.expected_base_sha,
+            authority_ref=authority_ref or admission.authority_ref,
+        )
+    except ValueError:
+        return None
     head = str((prepared.get("candidate") or {}).get("headSha") or "")
     if (
         expected.decision_digest() != admission.decision_digest()
         or prepared.get("decisionDigest") != admission.decision_digest()
         or not head
     ):
+        return None
+    return admission
+
+
+def _persisted_saved_candidate(contract: Any, prepared: Mapping[str, Any]) -> Any:
+    """Return the persisted admission only if it is exactly this contract's."""
+
+    admission = _saved_decision(contract, prepared)
+    if admission is None:
         raise temporal_exceptions.ApplicationError(
             "persisted saved-work candidate does not belong to this decision",
             type="PUBLICATION_CANDIDATE_MISMATCH",
@@ -6116,11 +6127,15 @@ class TemporalAgentRuntimeActivities:
         scratch: Path,
         admission: Any = None,
         persisted_head_sha: str | None = None,
+        prior: Mapping[str, Any] | None = None,
     ) -> tuple[Any, Any, str]:
         """Materialize verified saved work and build its admitted candidate.
 
-        Only saved-work artifacts are read, under a publication use claim and
-        the admitted owner scope; the original source is never looked up.
+        Only saved-work artifacts are read, each under a publication use claim
+        and the admitted owner scope; the original source is never looked up.
+        ``prior`` is an earlier run's persisted record of the same operation:
+        when it is exactly this decision under the current authority, its
+        admission and candidate are rebuilt instead of observing the base again.
         """
         from moonmind.publish.saved_candidate import SavedPublicationError
         from moonmind.publish.saved_work_source import (
@@ -6138,40 +6153,56 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 "saved-work publication requires the artifact service"
             )
+        claimed: set[str] = set()
+
+        async def claim(artifact_id: str) -> None:
+            # Every object of the closure is protected before it is read, so a
+            # lifecycle sweep cannot remove it between prepare and push.
+            if artifact_id in claimed:
+                return
+            try:
+                await self._artifact_service.acquire_saved_work_use(
+                    artifact_id=artifact_id,
+                    principal=contract.admitted_principal,
+                    request_id=contract.publication_idempotency_key,
+                    operation_kind="publication",
+                )
+            except TemporalArtifactAuthorizationError as exc:
+                raise SavedPublicationError(
+                    "PUBLICATION_SAVED_WORK_UNAUTHORIZED",
+                    "saved work is not readable by the admitted owner",
+                ) from exc
+            except (TemporalArtifactNotFoundError, TemporalArtifactStateError) as exc:
+                raise SavedPublicationError(
+                    "PUBLICATION_SAVED_WORK_UNAVAILABLE",
+                    f"saved work is not available for publication: {exc}",
+                ) from exc
+            claimed.add(artifact_id)
+
         try:
-            saved_work_id = saved_work_artifact_id(contract.saved_work_ref)
+            await claim(saved_work_artifact_id(contract.saved_work_ref))
         except SavedPublicationError as exc:
             raise _saved_publication_failure(exc) from exc
-        try:
-            await self._artifact_service.acquire_saved_work_use(
-                artifact_id=saved_work_id,
-                principal=contract.admitted_principal,
-                request_id=contract.publication_idempotency_key,
-                operation_kind="publication",
-            )
-        except TemporalArtifactAuthorizationError as exc:
-            raise temporal_exceptions.ApplicationError(
-                "saved work is not readable by the admitted owner",
-                type="PUBLICATION_SAVED_WORK_UNAUTHORIZED",
-                non_retryable=True,
-            ) from exc
-        except (TemporalArtifactNotFoundError, TemporalArtifactStateError) as exc:
-            raise temporal_exceptions.ApplicationError(
-                f"saved work is not available for publication: {exc}",
-                type="PUBLICATION_SAVED_WORK_UNAVAILABLE",
-                non_retryable=True,
-            ) from exc
         token, authority_ref = await _saved_work_destination_authority(
             contract,
             admitted_authority_ref=(
                 admission.authority_ref if admission is not None else None
             ),
         )
+        if admission is None and prior is not None:
+            reused = _saved_decision(contract, prior, authority_ref=authority_ref)
+            if reused is not None:
+                # A plain retry completes the same decision; it never admits a
+                # moved base as a second candidate for the same operation.
+                admission = reused
+                persisted_head_sha = str(prior["candidate"]["headSha"])
 
         async def read(ref: str, content_types: frozenset[str]) -> bytes:
+            artifact_id = saved_work_artifact_id(ref)
+            await claim(artifact_id)
             try:
                 artifact, body = await self._artifact_service.read(
-                    artifact_id=saved_work_artifact_id(ref),
+                    artifact_id=artifact_id,
                     principal=_SAVED_WORK_PUBLICATION_PRINCIPAL,
                     admitted_principal=contract.admitted_principal,
                 )
@@ -6234,18 +6265,35 @@ class TemporalAgentRuntimeActivities:
         """Admit the destination once and persist the exact saved candidate.
 
         The returned admission and candidate identity are recorded in workflow
-        history before any remote effect (#4018).
+        history before any remote effect (#4018). A later run of the same
+        operation reuses the decision its earlier run persisted, so a plain
+        retry completes the unfinished effect instead of building a second
+        candidate on a moved base.
         """
+        from moonmind.workflows.temporal.artifacts import (
+            find_saved_work_publication_decision,
+        )
+
         contract = _saved_work_publication_contract(payload)
+        workflow_id = str((payload or {}).get("destinationWorkflowId") or "").strip()
+        prior = None
+        if workflow_id and self._artifact_service is not None:
+            prior = await find_saved_work_publication_decision(
+                self._artifact_service,
+                workflow_id=workflow_id,
+                operation_key=contract.publication_idempotency_key,
+            )
         with self._saved_work_scratch(contract) as scratch:
             admission, candidate, _token = await _await_with_activity_heartbeats(
-                self._saved_work_candidate(contract, scratch=scratch),
+                self._saved_work_candidate(contract, scratch=scratch, prior=prior),
                 heartbeat_payload={"activity": "publication_recovery.saved_work_prepare"},
             )
         return {
             "admission": admission.model_dump(by_alias=True, mode="json"),
             "decisionDigest": candidate.decision_digest,
             "candidate": _compact_saved_candidate(candidate),
+            "decisionReused": prior is not None
+            and prior.get("decisionDigest") == candidate.decision_digest,
         }
 
     async def publication_recovery_saved_work_push(self, payload, /, **kwargs):
@@ -6308,8 +6356,9 @@ class TemporalAgentRuntimeActivities:
     async def publication_recovery_cleanup(self, payload, /, **kwargs):
         """Return bounded cleanup evidence for a remote-only recovery.
 
-        Saved-work publication releases only its own use claim; saved
-        artifacts and the source execution's records are never touched.
+        Saved-work publication releases only its own use claims, on every
+        object of the closure it read; saved artifacts and the source
+        execution's records are never touched.
         """
         from moonmind.workflows.temporal.publication_recovery import (
             SAVED_WORK_PUBLICATION_SCHEMA_VERSION,
@@ -6317,17 +6366,14 @@ class TemporalAgentRuntimeActivities:
 
         contract = (payload or {}).get("contract") or {}
         if contract.get("schemaVersion") == SAVED_WORK_PUBLICATION_SCHEMA_VERSION:
-            from moonmind.publish.saved_work_source import saved_work_artifact_id
-
             parsed = _saved_work_publication_contract(payload)
-            released = False
+            released = 0
             if self._artifact_service is not None:
-                released = await self._artifact_service.release_saved_work_use(
-                    artifact_id=saved_work_artifact_id(parsed.saved_work_ref),
+                released = await self._artifact_service.release_saved_work_operation_uses(
                     principal=parsed.admitted_principal,
                     request_id=parsed.publication_idempotency_key,
                 )
-            return {"cleaned": True, "savedWorkUseReleased": bool(released)}
+            return {"cleaned": True, "savedWorkUsesReleased": released}
         restoration = (payload or {}).get("restoration")
         return {
             "cleaned": restoration is None,

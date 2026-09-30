@@ -154,7 +154,6 @@ class SavedPublicationAdmission(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     saved_work_digest: str = Field(..., alias="savedWorkDigest")
-    destination_provider: str = Field("github", alias="destinationProvider")
     repository: str
     objective: Literal["branch", "pr"]
     base_branch: str | None = Field(None, alias="baseBranch")
@@ -166,19 +165,6 @@ class SavedPublicationAdmission(BaseModel):
     authorized_deletions: tuple[str, ...] = Field((), alias="authorizedDeletions")
     authority_ref: str = Field(..., alias="authorityRef")
     commit: SavedPublicationCommit
-
-    @field_validator("destination_provider")
-    @classmethod
-    def _provider(cls, value: str) -> str:
-        provider = str(value or "").strip().lower()
-        if provider == "lore":
-            raise ValueError(
-                "PUBLICATION_LORE_AUTHORITATIVE: Lore publication stays with its "
-                "authoritative owner; the GitHub publisher only projects to GitHub"
-            )
-        if provider != "github":
-            raise ValueError("PUBLICATION_DESTINATION_UNSUPPORTED: unsupported provider")
-        return provider
 
     @field_validator("saved_work_digest")
     @classmethod
