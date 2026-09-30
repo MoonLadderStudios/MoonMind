@@ -359,8 +359,7 @@ class GitHubService:
                 optional_permissions={},
                 label="Read contents",
                 description=(
-                    "Reads the repository and branch used to clone and inspect "
-                    "code."
+                    "Reads the repository and branch used to clone and inspect code."
                 ),
             ),
             "publish": GitHubPermissionProfile(

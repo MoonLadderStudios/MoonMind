@@ -156,7 +156,7 @@ Blank-workspace defaults resolve to no publication. Implementation and batch def
 
 ### CONTRACT-005 RepositoryConnection is the single connection domain
 
-A persistent `RepositoryConnection` owns its stable identity, display name, VCS provider, hosting service where applicable, trusted endpoint, client policy, execution-use policy, allowed operations, typed credential configuration, and lifecycle metadata. It is not mirrored by an independently writable filesystem record or a separate `SourceControlConnection` domain. **Source Control** is the Settings page name.
+A persistent `RepositoryConnection` owns its stable identity, display name, VCS provider, hosting service where applicable, trusted endpoint, client policy, execution-use policy, allowed operations, typed credential configuration, and lifecycle metadata. It is not mirrored by an independently writable filesystem record or a separate `SourceControlConnection` domain. **Source Control** is the Settings section (on Providers & Secrets) that manages them.
 
 Normalized repository assignments support many repositories per connection and several eligible connections per repository. They carry repository identity, operation policy, revision, and routing defaults. The authenticated actor is distinct from the resource owner or installation.
 

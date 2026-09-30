@@ -125,7 +125,9 @@ class GitHubAppCallbackResponse(BaseModel):
     connection_id: str = Field(alias="connectionId")
 
 
-def _error(status_code: int, *, kind: str, message: str, code: str = "") -> HTTPException:
+def _error(
+    status_code: int, *, kind: str, message: str, code: str = ""
+) -> HTTPException:
     """Structured, secret-free error: ``kind`` names the fact that failed."""
 
     return HTTPException(
@@ -143,7 +145,9 @@ def _route_error_to_http(exc: RepositoryRouteError) -> HTTPException:
         "REPOSITORY_ID_REUSE",
         "REPOSITORY_POLICY_CONFLICT",
     }:
-        return _error(status.HTTP_409_CONFLICT, kind="conflict", code=code, message=message)
+        return _error(
+            status.HTTP_409_CONFLICT, kind="conflict", code=code, message=message
+        )
     if code == "REPOSITORY_SETUP_REQUIRED":
         return _error(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -151,7 +155,9 @@ def _route_error_to_http(exc: RepositoryRouteError) -> HTTPException:
             code=code,
             message=message,
         )
-    return _error(status.HTTP_400_BAD_REQUEST, kind="validation", code=code, message=message)
+    return _error(
+        status.HTTP_400_BAD_REQUEST, kind="validation", code=code, message=message
+    )
 
 
 @router.post(
@@ -324,7 +330,9 @@ class RepositoryConnectionView(BaseModel):
 
     id: str
     display_name: str = Field(alias="displayName")
-    credential_kind: Literal["pat", "github_app", "other"] = Field(alias="credentialKind")
+    credential_kind: Literal["pat", "github_app", "other"] = Field(
+        alias="credentialKind"
+    )
     account: str | None = None
     installation: str | None = None
     endpoint: str
@@ -440,7 +448,9 @@ class ConnectionProbeResponse(BaseModel):
     repo: str
     mode: str
     repository_accessible: bool | None = Field(None, alias="repositoryAccessible")
-    default_branch_accessible: bool | None = Field(None, alias="defaultBranchAccessible")
+    default_branch_accessible: bool | None = Field(
+        None, alias="defaultBranchAccessible"
+    )
     pull_request_accessible: bool | None = Field(None, alias="pullRequestAccessible")
     resolved_branch: str | None = Field(None, alias="resolvedBranch")
     branch_source: Literal["requested", "remote_default"] | None = Field(
@@ -557,7 +567,9 @@ def _connection_view(
         )
     else:
         state = "ready"
-        summary = f"Assigned to {count} {'repository' if count == 1 else 'repositories'}."
+        summary = (
+            f"Assigned to {count} {'repository' if count == 1 else 'repositories'}."
+        )
     return RepositoryConnectionView(
         id=connection.id,
         displayName=connection.display_name,
@@ -586,7 +598,9 @@ def _connection_view(
 
 async def _administered(
     db: AsyncSession,
-) -> tuple[list[tuple[RepositoryConnection, list[RepositoryAssignment]]], dict[str, Any]]:
+) -> tuple[
+    list[tuple[RepositoryConnection, list[RepositoryAssignment]]], dict[str, Any]
+]:
     from api_service.services.repository_connections import RepositoryConnectionService
     from api_service.services.secrets import SecretsService
 
@@ -611,7 +625,9 @@ async def _selected(
     )
 
 
-async def _selected_view(db: AsyncSession, connection_id: str) -> RepositoryConnectionView:
+async def _selected_view(
+    db: AsyncSession, connection_id: str
+) -> RepositoryConnectionView:
     connection, assignments, secrets = await _selected(db, connection_id)
     return _connection_view(connection, assignments, secrets)
 
@@ -642,7 +658,7 @@ async def _connection_headers(
             repository_display=repository or connection.id,
             **_ADMISSION,
         )
-    except Exception as exc:  # noqa: BLE001 - reported as one safe fact
+    except Exception as exc:  # reported as one safe fact
         logger.warning(
             "source_control_credential_unavailable",
             connection_id=connection.id,
@@ -665,7 +681,9 @@ _FAILURE_STATUS = {
 }
 
 
-def _provider_failure(diagnostic: Mapping[str, Any] | None, *, subject: str) -> HTTPException:
+def _provider_failure(
+    diagnostic: Mapping[str, Any] | None, *, subject: str
+) -> HTTPException:
     kind = str((diagnostic or {}).get("kind") or "rejected")
     messages = {
         "authentication": f"GitHub rejected this connection's credential while reading {subject}.",
@@ -947,7 +965,9 @@ async def rotate_pat_connection(
             message="Only token connections created in Source Control rotate here.",
         )
     row = secrets.get(slug)
-    recorded_user_id = (row.details or {}).get("githubUserId") if row is not None else None
+    recorded_user_id = (
+        (row.details or {}).get("githubUserId") if row is not None else None
+    )
     recorded_login = (row.details or {}).get("githubLogin") if row is not None else None
 
     async def _same_account(candidate: str) -> bool:
@@ -1205,7 +1225,9 @@ async def remove_repository_connection(
         raise _route_error_to_http(exc) from exc
     if current is None:
         # A replay of a removal that already committed.
-        return ConnectionRemovalResponse(connectionId=connection_id, credentialRemoved=None)
+        return ConnectionRemovalResponse(
+            connectionId=connection_id, credentialRemoved=None
+        )
     removed = False
     if slug is not None:
         try:
@@ -1221,4 +1243,6 @@ async def remove_repository_connection(
                 connection_id=connection_id,
                 error_type=exc.__class__.__name__,
             )
-    return ConnectionRemovalResponse(connectionId=connection_id, credentialRemoved=removed)
+    return ConnectionRemovalResponse(
+        connectionId=connection_id, credentialRemoved=removed
+    )

@@ -324,8 +324,10 @@ This page contains:
 - Managed Secrets and secret-health surfaces;
 - SecretRef role bindings and validation;
 - OAuth-backed profile lifecycle entry points;
-- provider credential health and readiness; and
-- runtime and provider binding diagnostics.
+- provider credential health and readiness;
+- runtime and provider binding diagnostics; and
+- Source Control: named repository connections, their assigned repositories,
+  token setup and rotation, and Test Connection.
 
 The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
 
@@ -383,6 +385,10 @@ The collapsed summary distinguishes a confirmed recommendation, known custom ove
 
 Connection and readiness remain visible independently. `Using recommended settings` does not mean connected or launch ready, and custom settings are not automatically unhealthy. Summaries contain bounded safe labels, not credential references, host paths, command JSON, or secret values. Section 5.3 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) owns comparison, source, warning, and uncertainty semantics.
 
+#### 7.1.3 Source Control
+
+Source Control lists named repository connections with their actual account or App installation, assigned repositories, and state. It is separate from Provider Profiles. Token setup creates the Managed Secret internally, so no SecretRef is shown or entered. Test Connection and repository discovery use only the selected connection. Section 27.2.1 of [SettingsSystem.md](../Security/SettingsSystem.md) describes the observed setup, reconciliation, probe, rotation, and removal behavior.
+
 ### 7.2 Instance
 
 This page contains descriptor-driven settings for the single-operator instance,
@@ -421,7 +427,7 @@ The page title `Operations` is distinct from any broader dropdown group also lab
 
 | Page | Primary data |
 |---|---|
-| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, permitted runtime/provider choices, profile creation capabilities and presets |
+| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, permitted runtime/provider choices, profile creation capabilities and presets, repository connections |
 | Instance | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 
