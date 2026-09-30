@@ -479,9 +479,61 @@ describe('SourceControlSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Rotate token' }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toMatch(/did not confirm the rotation/);
+    expect(alert.textContent).toMatch(/Not confirmed: MoonMind has no record of this rotation committing/);
+    // Another request may have replaced the token, so no token is named as active.
+    expect(alert.textContent).not.toMatch(/stays active/);
     expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
     expect((screen.getByLabelText('Replacement token') as HTMLInputElement).value).toBe('');
+    assertTokenNowhere(container, queryClient);
+  });
+
+  it('reports an unknown rotation outcome and re-checks the same request', async () => {
+    const { container, queryClient, onNotice } = renderSettings();
+    const rotated = { ...ALPHA, secretRevision: 2 };
+    route('POST', '/api/v1/repository-connections/alpha/rotate', (_url, init) => {
+      const { requestId } = JSON.parse(String(init.body)) as { requestId: string };
+      route('GET', outcomeUrl('alpha', requestId, 'rotate'), () => {
+        throw new TypeError('network connection lost');
+      });
+      throw new TypeError('network connection lost');
+    });
+
+    await selectConnection('Connection alpha');
+    fireEvent.change(screen.getByLabelText('Replacement token'), { target: { value: TOKEN } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate token' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/Not confirmed: MoonMind could not confirm whether this rotation committed/);
+    expect(alert.textContent).not.toMatch(/stays active/);
+    expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
+    expect((screen.getByLabelText('Replacement token') as HTMLInputElement).value).toBe('');
+
+    // The rotation did commit; checking again asks about the same request.
+    const { requestId } = requestBody('POST', '/api/v1/repository-connections/alpha/rotate');
+    route('GET', '/api/v1/repository-connections', () => json(200, { items: [rotated, BETA], probeModes: PROBE_MODES }));
+    route('GET', outcomeUrl('alpha', String(requestId), 'rotate'), () =>
+      json(200, { requestId, connectionId: 'alpha', action: 'rotate', committed: true, connection: rotated }),
+    );
+    fireEvent.click(within(alert).getByRole('button', { name: 'Check this rotation' }));
+
+    await waitFor(() =>
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'ok',
+        text: 'Token rotated for Connection alpha; MoonMind confirmed it after the response was lost.',
+      }),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(calls('GET', outcomeUrl('alpha', String(requestId), 'rotate'))).toHaveLength(2);
+    expect(calls('POST', '/api/v1/repository-connections/alpha/rotate')).toHaveLength(1);
+
+    // The confirmed connection is applied: the next rotation is a new request at the new revision.
+    fireEvent.change(screen.getByLabelText('Replacement token'), { target: { value: TOKEN } });
+    route('POST', '/api/v1/repository-connections/alpha/rotate', () => json(200, { ...rotated, secretRevision: 3 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate token' }));
+    await waitFor(() => expect(calls('POST', '/api/v1/repository-connections/alpha/rotate')).toHaveLength(2));
+    const next = requestBody('POST', '/api/v1/repository-connections/alpha/rotate', 1);
+    expect(next.expectedSecretRevision).toBe(2);
+    expect(next.requestId).not.toBe(requestId);
     assertTokenNowhere(container, queryClient);
   });
 

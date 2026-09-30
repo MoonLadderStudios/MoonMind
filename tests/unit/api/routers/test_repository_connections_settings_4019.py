@@ -178,7 +178,10 @@ async def test_two_connections_list_actual_accounts_and_zero_assignments_grant_n
 
     first = await _create(api, connection_id="alpha", token="token-alpha-0001")
     second = await _create(
-        api, connection_id="beta", token="token-beta-0001", allowedOperations=["read", "write"]
+        api,
+        connection_id="beta",
+        token="token-beta-0001",
+        allowedOperations=["read", "write"],
     )
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
@@ -350,6 +353,88 @@ async def test_failed_candidate_validation_saves_nothing_and_allows_the_same_req
     assert accepted.status_code == 201, accepted.text
     # Only the selected candidate was ever presented to GitHub.
     assert "ambient-token-should-not-be-used" not in github.tokens_used()
+
+
+async def _secret_slugs(sessions) -> list[str]:
+    async with sessions() as db:
+        return sorted((await db.execute(select(ManagedSecret.slug))).scalars().all())
+
+
+async def test_failed_connection_write_rolls_back_the_staged_secret(
+    harness, monkeypatch
+):
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
+    from api_service.services.secrets import SecretsService
+
+    api, github, sessions = harness
+    # Another connection already owns the ID "alpha" with its own secret, so
+    # setup passes validation and stages its secret before the connection
+    # writer refuses the ID.
+    async with sessions() as db:
+        await SecretsService.create_secret(db, "shared-alpha-token", "token-alpha-0001")
+        await RepositoryConnectionService(db).create_connection(
+            router_module._pat_connection(
+                connection_id="alpha",
+                display_name="Shared alpha",
+                operations=["read"],
+                slug="shared-alpha-token",
+            ),
+            actor_ref="operator",
+            request_id="req-seed-alpha",
+            principal_ref="operator",
+            principal_scope=("system", None),
+        )
+
+    staged: list[list[str]] = []
+    real_create_connection = RepositoryConnectionService.create_connection
+
+    async def _observe_staging(self, connection, **kwargs):
+        # Observes the session only; the real writer still refuses the ID.
+        slugs = (await self._session.execute(select(ManagedSecret.slug))).scalars()
+        staged.append(sorted(slugs.all()))
+        return await real_create_connection(self, connection, **kwargs)
+
+    monkeypatch.setattr(
+        RepositoryConnectionService, "create_connection", _observe_staging
+    )
+
+    failed = await _create(
+        api,
+        connection_id="alpha",
+        token="token-alpha-0001",
+        requestId="req-partial-setup",
+    )
+    assert failed.status_code == 409, failed.text
+    assert failed.json()["detail"]["kind"] == "conflict"
+    _assert_no_token(failed.text)
+    assert github.paths().count("/user") == 1
+    assert staged == [["repository-connection-alpha", "shared-alpha-token"]]
+    # Neither half of the partial setup survived, and nothing needs sweeping.
+    assert await _secret_slugs(sessions) == ["shared-alpha-token"]
+    async with sessions() as db:
+        records = (await db.execute(select(RepositoryConnectionRecord))).scalars().all()
+    assert [(row.connection_id, row.display_name) for row in records] == [
+        ("alpha", "Shared alpha")
+    ]
+
+    # The rollback left no request receipt either: the same request succeeds
+    # once the operator chooses another ID, with exactly one of each.
+    retried = await _create(
+        api,
+        connection_id="alpha-work",
+        token="token-alpha-0001",
+        requestId="req-partial-setup",
+    )
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["id"] == "alpha-work"
+    _assert_no_token(retried.text)
+    assert await _secret_slugs(sessions) == [
+        "repository-connection-alpha-work",
+        "shared-alpha-token",
+    ]
+    assert await _count(sessions, RepositoryConnectionRecord) == 2
 
 
 def _rate_limited(request: httpx.Request) -> httpx.Response:
@@ -527,7 +612,11 @@ async def test_probe_distinguishes_throttling_and_stops_probing(harness):
     github.requests.clear()
     response = await api.post(
         "/api/v1/repository-connections/alpha/probe",
-        json={"repo": "acme/app", "mode": "full_pr_automation", "baseBranch": "release"},
+        json={
+            "repo": "acme/app",
+            "mode": "full_pr_automation",
+            "baseBranch": "release",
+        },
     )
     assert response.status_code == 200, response.text
     result = response.json()
