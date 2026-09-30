@@ -5379,6 +5379,7 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
     workflow._publish_reason = "Earlier issue update required no PR output."
     create_pr_payload: dict[str, object] | None = None
     created_artifacts: dict[str, dict[str, object]] = {}
+    remote_head_observations: list[dict[str, object]] = []
 
     async def fake_write_json_artifact(
         *,
@@ -5398,6 +5399,14 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
         **_kwargs: object,
     ) -> object:
         nonlocal create_pr_payload
+        if activity_type == "publication_recovery.observe":
+            remote_head_observations.append(dict(payload or {}))
+            return {
+                "authoritative": True,
+                "authorityAvailable": True,
+                "remoteBranchExists": True,
+                "remoteHeadSha": "abc123",
+            }
         if activity_type == "repo.create_pr":
             create_pr_payload = dict(payload or {})
             return {
@@ -5576,6 +5585,18 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
     )
 
     if terminal_handoff_enabled:
+        assert remote_head_observations == [
+            {
+                "contract": {
+                    "intent": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "headRef": "partial-work",
+                        "baseRef": "main",
+                    },
+                    "continuation": {"expectedHeadSha": "abc123"},
+                }
+            }
+        ]
         control_stop = workflow._workflow_control_stop
         assert control_stop is not None
         head_ref = control_stop["workspaceHeadRef"]
@@ -5589,6 +5610,7 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
             "headSha": "abc123",
             "baseBranch": "main",
             "authority": "accepted_repository_evidence",
+            "remoteVerified": True,
         }
         remaining_work = created_artifacts[
             control_stop["remainingWorkRef"].removeprefix("artifact://")
