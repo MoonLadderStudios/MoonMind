@@ -59,6 +59,10 @@ _GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 #: plane is wired", which must stay runnable in unit harnesses.
 _CLEANUP_NOT_OWNED = object()
 
+#: Bound for the save attempted after consumers stop on failure/cancellation.
+#: Retaining files needs neither a live agent nor an occupied provider slot.
+_CLEANUP_SAVE_TIMEOUT_SECONDS = 600.0
+
 
 def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
     """Return the bounded cleanup outcome for one terminal execution.
@@ -1111,6 +1115,29 @@ class GenericOmnigentHostRealizer:
             await sink.record_phase("saved", checkpoint)
             return sink.binding
 
+    async def _save_before_release(self, request, binding):
+        """Attempt one bounded save after the session's consumers have stopped.
+
+        A failure keeps the existing pending decision -- a ``workspace`` receipt
+        without ``saved`` -- which the next finalization delivery resumes from
+        the retained workspace. It never holds credentials or the provider slot:
+        the drained session no longer uses them, and host cleanup never removes
+        the caller-owned workspace.
+        """
+        try:
+            async with asyncio.timeout(_CLEANUP_SAVE_TIMEOUT_SECONDS):
+                return await self._ensure_saved(request, binding), None
+        except Exception as exc:  # noqa: BLE001 - recorded; release still proceeds
+            logger.warning(
+                "Generic Omnigent save before cleanup remains pending for %s",
+                binding.bindingId,
+                exc_info=True,
+            )
+            failure = {"errorType": type(exc).__name__}
+            if getattr(exc, "code", None):
+                failure["code"] = str(exc.code)
+            return binding, failure
+
     async def _cleanup(
         self,
         *,
@@ -1171,7 +1198,9 @@ class GenericOmnigentHostRealizer:
             cleanup_evidence["session"] = await self._session_cleanup.drain(
                 binding.omnigentSessionId
             )
-        binding = await self._ensure_saved(request, binding)
+        binding, save_failure = await self._save_before_release(request, binding)
+        if save_failure is not None:
+            cleanup_evidence["saved"] = {"status": "pending", **save_failure}
         if host_lease is not None and host_lease.status != "cleaned":
             host_lease = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
@@ -1203,18 +1232,32 @@ class GenericOmnigentHostRealizer:
         settlement = await self._complete_canonical_cleanup(cleanup_claim)
         cleanup_evidence["canonicalCleanup"] = settlement
         evidence_ref: str | None = None
+        phase_updates: dict[str, Any] = {"cleanupSettlement": settlement}
+        if save_failure is not None:
+            phase_updates["saveFailure"] = save_failure
         if self._artifacts is not None:
-            evidence_ref = await self._artifacts.write_json(
-                request=request,
-                name="generic-host-cleanup.json",
-                payload={
-                    "bindingId": binding.bindingId,
-                    "executionPlanRef": binding.executionPlanRef,
-                    "results": cleanup_evidence,
-                    "providerCapacityReleaseOrder": "last",
-                },
-                link_type="evidence.cleanup",
-            )
+            try:
+                evidence_ref = await self._artifacts.write_json(
+                    request=request,
+                    name="generic-host-cleanup.json",
+                    payload={
+                        "bindingId": binding.bindingId,
+                        "executionPlanRef": binding.executionPlanRef,
+                        "results": cleanup_evidence,
+                        "providerCapacityReleaseOrder": "last",
+                    },
+                    link_type="evidence.cleanup",
+                )
+            except Exception as exc:  # noqa: BLE001 - optional report cannot hold capacity
+                logger.warning(
+                    "Could not publish generic Omnigent cleanup report for %s",
+                    binding.bindingId,
+                    exc_info=True,
+                )
+                phase_updates["cleanupReport"] = {
+                    "status": "failed",
+                    "errorType": type(exc).__name__,
+                }
         # Provider capacity releases after all credential-consuming state.
         await self._provider_leases.release_all(acquired)
         attestation_refs = dict(binding.attestationRefs)
@@ -1225,10 +1268,7 @@ class GenericOmnigentHostRealizer:
             state=RuntimeBindingState.cleaned,
             updates={
                 "attestationRefs": attestation_refs,
-                "phaseResults": {
-                    **(binding.phaseResults or {}),
-                    "cleanupSettlement": settlement,
-                },
+                "phaseResults": {**(binding.phaseResults or {}), **phase_updates},
             },
         )
         return binding, host_lease
@@ -1618,9 +1658,16 @@ class GenericOmnigentHostRealizer:
         cleanup_handles = await self._credentials.load_cleanup_handles(
             binding.providerLeases, binding.credentialRuntimeHandles
         )
-        cleanup_claim = await self._claim_canonical_cleanup(
-            await self._recovered_session_id(binding)
-        )
+        recorded_claim = (binding.phaseResults or {}).get("cleanupClaim")
+        if recorded_claim:
+            # A settled session grants no fresh claim. Reuse this binding's own
+            # persisted claim, exactly as in-band cleanup does; complete()
+            # still rejects it if newer authority fenced it out.
+            cleanup_claim = CanonicalCleanupClaim(**recorded_claim)
+        else:
+            cleanup_claim = await self._claim_canonical_cleanup(
+                await self._recovered_session_id(binding)
+            )
         if cleanup_claim is _CLEANUP_NOT_OWNED:
             # Recovery must not release a host or credentials that a live
             # cleanup owner -- or a newly admitted turn -- now owns.
@@ -1628,6 +1675,17 @@ class GenericOmnigentHostRealizer:
                 "canonical cleanup authority is owned by another janitor",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
+        if cleanup_claim is not None and not recorded_claim:
+            binding = await self._update_binding(
+                binding,
+                updates={
+                    "phaseResults": {
+                        **(binding.phaseResults or {}),
+                        "cleanupClaim": asdict(cleanup_claim),
+                    },
+                },
+            )
+        save_failure = None
         if host_lease is not None and host_lease.status != "cleaned":
             if binding.omnigentSessionId:
                 await self._session_cleanup.drain(binding.omnigentSessionId)
@@ -1647,7 +1705,9 @@ class GenericOmnigentHostRealizer:
                     )
                 if step_plan and "omnigentExecutionPlan" not in saved_request:
                     saved_request["omnigentExecutionPlan"] = step_plan
-                binding = await self._ensure_saved(AgentExecutionRequest.model_validate(saved_request), binding)
+                binding, save_failure = await self._save_before_release(
+                    AgentExecutionRequest.model_validate(saved_request), binding
+                )
             claimed = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
             )
@@ -1673,6 +1733,16 @@ class GenericOmnigentHostRealizer:
             expected_revision=binding.revision,
             expected_fencing_generation=binding.fencingGeneration,
             state=RuntimeBindingState.cleaned,
+            updates=(
+                {
+                    "phaseResults": {
+                        **(binding.phaseResults or {}),
+                        "saveFailure": save_failure,
+                    }
+                }
+                if save_failure is not None
+                else None
+            ),
         )
 
 
