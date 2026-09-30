@@ -1064,3 +1064,66 @@ def test_reattaching_submission_does_not_rederive_the_target(controller_path, tm
     finally:
         httpd.shutdown()
         thread.join(timeout=10)
+
+
+def test_retry_never_rewrites_an_operation_that_is_still_applying(
+    controller_path, tmp_path
+):
+    release = threading.Event()
+    holder = {}
+
+    def slow(operation):
+        holder["store"].mark_stage(operation["operationId"], stage="applying")
+        assert release.wait(timeout=30)
+        holder["store"].confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    harness = _ThreadedHarness(tmp_path, slow)
+    holder["store"] = harness.store
+    body = {"stack": "moonmind", "desiredImage": "img", "operationId": "op-run"}
+    submitter = threading.Thread(
+        target=lambda: harness.call("POST", "/v1/operations", body, timeout=30),
+        daemon=True,
+    )
+    try:
+        submitter.start()
+        for _ in range(100):
+            if harness.call("GET", "/v1/operations/op-run")[1].get("status") == "applying":
+                break
+            threading.Event().wait(0.05)
+        status, _ = harness.call("POST", "/v1/operations/op-run/retry")
+        assert status == 409
+        record = harness.store.load("op-run")
+        assert (record["status"], record["attemptGroup"]) == ("applying", 1)
+    finally:
+        release.set()
+        submitter.join(timeout=30)
+        harness.close()
+
+
+def test_resubmitting_an_orphaned_open_operation_resumes_it(controller_path, tmp_path):
+    applied = []
+    holder = {}
+
+    def applier(operation):
+        applied.append(operation["operationId"])
+        holder["store"].confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    harness = _ThreadedHarness(tmp_path, applier)
+    holder["store"] = harness.store
+    try:
+        # Recorded before an interruption that left nobody applying it.
+        harness.store.begin(
+            stack="moonmind", desired_image="img", source_revision="", operation_id="op-orphan"
+        )
+        status, resumed = harness.call(
+            "POST",
+            "/v1/operations",
+            {"stack": "moonmind", "desiredImage": "img", "operationId": "op-orphan"},
+        )
+        assert (status, resumed["status"], applied) == (202, "succeeded", ["op-orphan"])
+    finally:
+        harness.close()

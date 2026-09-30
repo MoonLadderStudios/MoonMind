@@ -16,6 +16,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -402,7 +403,7 @@ def list_controller_operations(
     status, parsed = _controller_request(
         endpoint,
         method="GET",
-        path=f"/v1/operations?stack={stack}&limit={int(limit)}",
+        path=f"/v1/operations?{urlencode({'stack': stack, 'limit': int(limit)})}",
         timeout=CONTROLLER_STATUS_TIMEOUT_SECONDS,
     )
     if status != 200:

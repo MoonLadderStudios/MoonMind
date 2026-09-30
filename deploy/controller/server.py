@@ -660,9 +660,11 @@ def build_app(
                     existing.get("desired") or {}
                 ).get("image") != desired_image:
                     return "409 Conflict", {"error": "operation id names a different request"}
-                return "202 Accepted", _public_operation(existing)
+                if existing.get("status") not in record_mod.OPEN_STATUSES:
+                    return "202 Accepted", _public_operation(existing)
         busy = lock_mod.StackLock(store.state_dir, stack).probe()
         if not busy:
+            # Nobody is applying: a recorded open operation resumes.
             return None
         opens = store.list_open(stack=stack)
         for operation in opens:
@@ -708,15 +710,22 @@ def build_app(
 
     def _retry(start_response, operation_id):
         try:
-            operation = store.begin_retry(operation_id)
-        except KeyError:
-            return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
-        except RuntimeError:
-            # Constant body: retry-budget internals never reach the response.
-            return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
-        try:
-            candidate = lock_mod.StackLock(store.state_dir, operation["stack"])
-            with candidate.acquire():
+            with contextlib.ExitStack() as held:
+                with submission_guard:
+                    try:
+                        operation = store.load(operation_id)
+                    except KeyError:
+                        return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
+                    # Hold the stack before touching the record, so a Retry
+                    # can never rewrite an operation another writer applies.
+                    held.enter_context(
+                        lock_mod.StackLock(store.state_dir, operation["stack"]).acquire()
+                    )
+                    try:
+                        operation = store.begin_retry(operation_id)
+                    except RuntimeError:
+                        # Constant body: retry-budget internals never reach the response.
+                        return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
                 operation = _apply_recording_failure(
                     store, operation_id, run_apply
                 )
