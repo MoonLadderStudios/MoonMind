@@ -23,9 +23,11 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   startup remains a protected deployment check (see
   ``test_topology_matrix_gaps_are_explicit``).
 - Real startup: hermetic sentinel logic
-  (``test_startup_sentinel_*``) plus real production import and readiness
-  wiring (``test_vector_free_startup_*``, ``test_vector_free_api_health_*``)
-  under sanitized env with no vector configuration. Fresh Compose startup,
+  (``test_startup_sentinel_*``) plus real settings init under clean-default
+  and upgraded stale env (``test_vector_free_settings_init_*``) and real
+  production import and readiness wiring (``test_vector_free_startup_*``,
+  ``test_vector_free_api_health_*``) under sanitized env with no vector
+  configuration. Fresh Compose startup,
   init-db/Alembic runs, live API/worker readiness probes, dashboard
   bootstrap, and repeated startup stay protected checks owned with the
   cutover child, not claimed here.
@@ -831,6 +833,60 @@ def test_settings_model_declares_no_vector_backend_fields() -> None:
         text,
         re.IGNORECASE,
     )
+
+
+_VECTOR_ENV_KEYS_4114 = (
+    "QDRANT_URL",
+    "QDRANT_HOST",
+    "QDRANT_PORT",
+    "QDRANT_ENABLED",
+    "QDRANT_API_KEY",
+    "VECTOR_STORE_PROVIDER",
+    "VECTOR_STORE_COLLECTION_NAME",
+    "RAG_ENABLED",
+    "RAG_SIMILARITY_TOP_K",
+    "DEFAULT_EMBEDDING_PROVIDER",
+    "GOOGLE_EMBEDDING_MODEL",
+    "OPENAI_EMBEDDING_MODEL",
+)
+
+
+@pytest.mark.parametrize(
+    "stale_env",
+    [
+        pytest.param({}, id="clean-default"),
+        pytest.param(
+            {
+                "QDRANT_URL": "http://qdrant:6333",
+                "QDRANT_HOST": "qdrant",
+                "QDRANT_PORT": "6333",
+                "QDRANT_ENABLED": "true",
+                "VECTOR_STORE_PROVIDER": "qdrant",
+                "RAG_ENABLED": "true",
+            },
+            id="upgraded-stale-env",
+        ),
+    ],
+)
+def test_vector_free_settings_init_exposes_no_vector_surface(
+    monkeypatch: pytest.MonkeyPatch, stale_env: dict[str, str]
+) -> None:
+    """Real settings init stays vector-free on clean and upgraded envs."""
+    from moonmind.config.settings import AppSettings
+
+    for key in _VECTOR_ENV_KEYS_4114:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in stale_env.items():
+        monkeypatch.setenv(key, value)
+    settings = AppSettings(_env_file=None)
+    for field in (
+        "qdrant",
+        "rag",
+        "vector_store_provider",
+        "vector_store_collection_name",
+        "default_embedding_provider",
+    ):
+        assert not hasattr(settings, field), field
 
 
 def test_init_entrypoints_do_not_require_vector_env() -> None:

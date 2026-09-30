@@ -100,6 +100,13 @@ class Api:
     def __init__(self, base: str, *, timeout: float = 30.0) -> None:
         self.base = base.rstrip("/")
         self.timeout = timeout
+        # The disposable journey always targets the local Compose stack
+        # derived from its published binding. Container-job and CI hosts
+        # export an egress proxy; routing loopback journey traffic through
+        # it can only fail, so this helper never honors proxy variables.
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({})
+        )
 
     def request(
         self,
@@ -120,7 +127,7 @@ class Api:
             self.base + path, data=data, method=method, headers=all_headers
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with self._opener.open(request, timeout=self.timeout) as response:
                 status, payload = response.status, response.read()
         except urllib.error.HTTPError as exc:
             status, payload = exc.code, exc.read()
