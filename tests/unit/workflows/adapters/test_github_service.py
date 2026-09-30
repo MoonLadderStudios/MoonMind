@@ -1556,3 +1556,26 @@ def test_github_primary_rate_limit_preserves_reset_time():
     event = GitHubService._github_rate_limit_event(response)
     assert event is not None
     assert event.reset_at == datetime.fromtimestamp(1800000000, timezone.utc).isoformat()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status_code,headers,message,reason_code', [
+    (403, {'x-ratelimit-remaining': '0'}, 'API rate limit exceeded', 'provider_rate_limited'),
+    (403, {'retry-after': '60'}, 'Request temporarily forbidden', 'provider_rate_limited'),
+    (403, {}, 'You have exceeded a secondary rate limit.', 'provider_rate_limited'),
+    (429, {}, 'Too Many Requests', 'provider_rate_limited'),
+    (403, {'x-ratelimit-remaining': '4999'}, 'Resource not accessible by personal access token', 'identity_auth_failure'),
+    (401, {}, 'Bad credentials', 'identity_auth_failure'),
+])
+async def test_authenticated_user_distinguishes_403_rate_limits_from_rejected_tokens(
+    status_code, headers, message, reason_code
+):
+    def respond(request):
+        return httpx.Response(status_code, headers=headers, json={'message': message})
+    client_class = httpx.AsyncClient
+    with patch('moonmind.workflows.adapters.github_service.httpx.AsyncClient',
+               side_effect=lambda **kwargs: client_class(transport=httpx.MockTransport(respond), **kwargs)):
+        identity, failure = await GitHubService().get_authenticated_user(token='candidate-token')
+    assert identity is None
+    assert failure['reasonCode'] == reason_code
+    assert failure['httpStatus'] == status_code

@@ -555,6 +555,14 @@ class GitHubService:
                 payload = response.json()
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
+                # A throttled 403 says nothing about the token; decide the
+                # documented limit contract before treating 403 as rejection.
+                if self._github_rate_limit_event(exc.response) is not None:
+                    return None, {
+                        "reasonCode": "provider_rate_limited",
+                        "httpStatus": status,
+                        "summary": "GitHub rate limit reached while resolving the search account.",
+                    }
                 if status in {401, 403}:
                     return None, {
                         "reasonCode": "identity_auth_failure",
@@ -564,12 +572,6 @@ class GitHubService:
                             'for this search. Use a user-associated GitHub credential, '
                             'or explicitly enable "Include issues created by other users".'
                         ),
-                    }
-                if status == 429:
-                    return None, {
-                        "reasonCode": "provider_rate_limited",
-                        "httpStatus": status,
-                        "summary": "GitHub rate limit reached while resolving the search account.",
                     }
                 if status >= 500:
                     return None, {

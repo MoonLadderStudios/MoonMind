@@ -1856,10 +1856,13 @@ separately from Provider Profiles.
    connection in one transaction. The user never enters a SecretRef.
 4. UI clears the token as soon as it submits it, on Cancel, and when admission
    is lost. Name, ID, and write choice survive a failed submission.
-5. When the save response is lost, UI reloads the saved list and shows the
-   committed connection instead of offering another create. Resubmitting the
-   same draft reuses its request ID, which the backend replays instead of
-   creating a duplicate. An ID in use is a conflict, never an auto-suffixed ID.
+5. When the save response is lost, UI asks whether that request committed
+   (`GET /{id}/requests/{requestId}?action=create`, answered from MoonMind's
+   records without contacting GitHub). It shows the committed connection instead
+   of offering another create, and never treats an already-listed connection as
+   this request's save. Resubmitting the same draft reuses its request ID, which
+   the backend replays instead of creating a duplicate. An ID in use is a
+   conflict, never an auto-suffixed ID.
 6. The list shows name, the GitHub account observed at validation (or App
    account and installation), assigned repositories, and state. Zero
    assignments means the connection reaches no repositories. IDs and revisions
@@ -1878,7 +1881,11 @@ separately from Provider Profiles.
    result historical, and late responses for superseded inputs are dropped.
 9. Rotate token requires the current token revision and a token for the same
    GitHub account. A stale revision or different account is refused and the
-   current token stays active.
+   current token stays active. A throttled validation is reported as rate
+   limited, not as a rejected token. When the rotation response is lost, UI
+   confirms it only through that request's Secrets receipt
+   (`action=rotate`); a revision advanced by another request is reported as
+   unconfirmed.
 10. Remove is available once no repositories are assigned. It tombstones the
     connection (its ID cannot be reused) and deletes its Managed Secret when the
     Secrets System finds no other consumer.

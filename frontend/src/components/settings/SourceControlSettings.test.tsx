@@ -108,6 +108,10 @@ function requestBody(method: string, url: string, index = 0): Record<string, unk
   return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
 }
 
+function outcomeUrl(connectionId: string, requestId: string, action: 'create' | 'rotate') {
+  return `/api/v1/repository-connections/${connectionId}/requests/${requestId}?action=${action}`;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -287,10 +291,15 @@ describe('SourceControlSettings', () => {
 
   it('reconciles a lost save acknowledgment instead of retrying the create', async () => {
     const { container, queryClient, onNotice } = renderSettings({ items: [], probeModes: PROBE_MODES });
-    route('POST', '/api/v1/repository-connections/pat', () => {
+    const committed = connection('gamma-team', { displayName: 'Gamma Team' });
+    route('POST', '/api/v1/repository-connections/pat', (_url, init) => {
       // The server committed, but the response never arrived.
+      const { requestId } = JSON.parse(String(init.body)) as { requestId: string };
       route('GET', '/api/v1/repository-connections', () =>
-        json(200, { items: [connection('gamma-team', { displayName: 'Gamma Team' })], probeModes: PROBE_MODES }),
+        json(200, { items: [committed], probeModes: PROBE_MODES }),
+      );
+      route('GET', outcomeUrl('gamma-team', requestId, 'create'), () =>
+        json(200, { requestId, connectionId: 'gamma-team', action: 'create', committed: true, connection: committed }),
       );
       throw new TypeError('network connection lost');
     });
@@ -305,20 +314,51 @@ describe('SourceControlSettings', () => {
       }),
     );
     expect(calls('POST', '/api/v1/repository-connections/pat')).toHaveLength(1);
+    const { requestId } = requestBody('POST', '/api/v1/repository-connections/pat');
+    expect(calls('GET', outcomeUrl('gamma-team', String(requestId), 'create'))).toHaveLength(1);
     expect(screen.getByRole('region', { name: 'Connection Gamma Team' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Save connection' })).toBeNull();
     assertTokenNowhere(container, queryClient);
   });
 
+  it('does not claim a listed connection as a lost create that never reached MoonMind', async () => {
+    const existing = connection('gamma-team', { displayName: 'Gamma Team' });
+    const { onNotice } = renderSettings({ items: [ALPHA, existing], probeModes: PROBE_MODES });
+    route('POST', '/api/v1/repository-connections/pat', (_url, init) => {
+      const { requestId } = JSON.parse(String(init.body)) as { requestId: string };
+      route('GET', outcomeUrl('gamma-team', requestId, 'create'), () =>
+        json(200, { requestId, connectionId: 'gamma-team', action: 'create', committed: false, connection: null }),
+      );
+      throw new TypeError('network connection lost');
+    });
+
+    await screen.findByRole('list', { name: 'Repository connections' });
+    await openSetup();
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/Not confirmed: MoonMind has no record of this save/);
+    expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
+    expect(screen.queryByRole('region', { name: 'Connection Gamma Team' })).toBeNull();
+    expect((screen.getByLabelText('Connection name') as HTMLInputElement).value).toBe('Gamma Team');
+    expect(calls('POST', '/api/v1/repository-connections/pat')).toHaveLength(1);
+  });
+
   it('keeps the draft and request identity when a save is unconfirmed', async () => {
     renderSettings({ items: [], probeModes: PROBE_MODES });
-    route('POST', '/api/v1/repository-connections/pat', () => json(504, '<html>gateway timeout</html>'));
+    route('POST', '/api/v1/repository-connections/pat', (_url, init) => {
+      const { requestId } = JSON.parse(String(init.body)) as { requestId: string };
+      route('GET', outcomeUrl('gamma-team', requestId, 'create'), () =>
+        json(200, { requestId, connectionId: 'gamma-team', action: 'create', committed: false, connection: null }),
+      );
+      return json(504, '<html>gateway timeout</html>');
+    });
 
     await openSetup();
     fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toMatch(/did not confirm the save/);
+    expect(alert.textContent).toMatch(/no record of this save/);
     expect((screen.getByLabelText('Connection name') as HTMLInputElement).value).toBe('Gamma Team');
     expect((screen.getByLabelText('Personal access token') as HTMLInputElement).value).toBe('');
     expect(calls('POST', '/api/v1/repository-connections/pat')).toHaveLength(1);
@@ -389,6 +429,84 @@ describe('SourceControlSettings', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/Conflict: The stored token changed/);
     expect(requestBody('POST', '/api/v1/repository-connections/alpha/rotate').expectedSecretRevision).toBe(1);
     expect((screen.getByLabelText('Replacement token') as HTMLInputElement).value).toBe('');
+    assertTokenNowhere(container, queryClient);
+  });
+
+  it('confirms a rotation with a lost response only through its own request', async () => {
+    const { container, queryClient, onNotice } = renderSettings();
+    const rotated = { ...ALPHA, secretRevision: 2 };
+    route('POST', '/api/v1/repository-connections/alpha/rotate', (_url, init) => {
+      const { requestId } = JSON.parse(String(init.body)) as { requestId: string };
+      route('GET', outcomeUrl('alpha', requestId, 'rotate'), () =>
+        json(200, { requestId, connectionId: 'alpha', action: 'rotate', committed: true, connection: rotated }),
+      );
+      throw new TypeError('network connection lost');
+    });
+
+    await selectConnection('Connection alpha');
+    fireEvent.change(screen.getByLabelText('Replacement token'), { target: { value: TOKEN } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate token' }));
+
+    await waitFor(() =>
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'ok',
+        text: 'Token rotated for Connection alpha; MoonMind confirmed it after the response was lost.',
+      }),
+    );
+    expect(calls('POST', '/api/v1/repository-connections/alpha/rotate')).toHaveLength(1);
+    const { requestId } = requestBody('POST', '/api/v1/repository-connections/alpha/rotate');
+    expect(calls('GET', outcomeUrl('alpha', String(requestId), 'rotate'))).toHaveLength(1);
+    assertTokenNowhere(container, queryClient);
+  });
+
+  it('does not report a revision advanced by another request as this rotation', async () => {
+    const { container, queryClient, onNotice } = renderSettings();
+    // Another request rotated the token meanwhile; this one never committed.
+    const elsewhere = { ...ALPHA, secretRevision: 2 };
+    route('POST', '/api/v1/repository-connections/alpha/rotate', (_url, init) => {
+      const { requestId } = JSON.parse(String(init.body)) as { requestId: string };
+      route('GET', '/api/v1/repository-connections', () =>
+        json(200, { items: [elsewhere, BETA], probeModes: PROBE_MODES }),
+      );
+      route('GET', outcomeUrl('alpha', requestId, 'rotate'), () =>
+        json(200, { requestId, connectionId: 'alpha', action: 'rotate', committed: false, connection: elsewhere }),
+      );
+      throw new TypeError('network connection lost');
+    });
+
+    await selectConnection('Connection alpha');
+    fireEvent.change(screen.getByLabelText('Replacement token'), { target: { value: TOKEN } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate token' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/did not confirm the rotation/);
+    expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
+    expect((screen.getByLabelText('Replacement token') as HTMLInputElement).value).toBe('');
+    assertTokenNowhere(container, queryClient);
+  });
+
+  it('clears typed tokens in setup and rotation when admission is lost, keeping the draft', async () => {
+    const { container, queryClient } = renderSettings();
+    await selectConnection('Connection alpha');
+    fireEvent.change(screen.getByLabelText('Replacement token'), { target: { value: TOKEN } });
+    await openSetup();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow publishing/ }));
+    expect((screen.getByLabelText('Personal access token') as HTMLInputElement).value).toBe(TOKEN);
+    expect((screen.getByLabelText('Replacement token') as HTMLInputElement).value).toBe(TOKEN);
+
+    route('GET', '/api/v1/repository-connections', () => json(401, { detail: 'Not authenticated' }));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: REPOSITORY_CONNECTIONS_QUERY_KEY }).catch(() => undefined);
+    });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Personal access token') as HTMLInputElement).value).toBe(''),
+    );
+    expect((screen.getByLabelText('Replacement token') as HTMLInputElement).value).toBe('');
+    expect((await screen.findByRole('status')).textContent).toMatch(/Your session ended/);
+    expect((screen.getByLabelText('Connection name') as HTMLInputElement).value).toBe('Gamma Team');
+    expect((screen.getByRole('checkbox', { name: /Allow publishing/ }) as HTMLInputElement).checked).toBe(true);
+    expect(calls('POST', '/api/v1/repository-connections')).toHaveLength(0);
     assertTokenNowhere(container, queryClient);
   });
 

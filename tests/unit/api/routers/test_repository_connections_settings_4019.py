@@ -236,6 +236,84 @@ async def test_lost_save_acknowledgment_replays_the_committed_connection(harness
     assert await _count(sessions, ManagedSecret) == 1
 
 
+async def _outcome(api: AsyncClient, connection_id: str, request_id: str, action: str):
+    return await api.get(
+        f"/api/v1/repository-connections/{connection_id}/requests/{request_id}",
+        params={"action": action},
+    )
+
+
+async def test_create_outcome_is_bound_to_the_submitted_request_not_the_id(harness):
+    api, github, sessions = harness
+    created = await _create(
+        api, connection_id="gamma-team", token="token-alpha-0001", requestId="req-gamma"
+    )
+    assert created.status_code == 201, created.text
+    github.requests.clear()
+
+    # A lost create for an ID that already existed never reached MoonMind:
+    # the listed connection is not this request's commit.
+    other = await _outcome(api, "gamma-team", "req-lost-create", "create")
+    assert other.status_code == 200, other.text
+    assert other.json()["committed"] is False
+    assert other.json()["connection"] is None
+
+    mine = await _outcome(api, "gamma-team", "req-gamma", "create")
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["committed"] is True
+    assert mine.json()["connection"]["id"] == "gamma-team"
+    assert mine.json()["connection"]["account"] == "alpha-bot"
+    _assert_no_token(mine.text)
+
+    absent = await _outcome(api, "delta", "req-never-sent", "create")
+    assert absent.status_code == 200, absent.text
+    assert absent.json()["committed"] is False
+
+    # One request identity names one connection.
+    mismatched = await _outcome(api, "delta", "req-gamma", "create")
+    assert mismatched.status_code == 409, mismatched.text
+    assert mismatched.json()["detail"]["kind"] == "conflict"
+
+    # Reconciliation reads MoonMind's records only; it never contacts GitHub.
+    assert github.requests == []
+    assert await _count(sessions, RepositoryConnectionRecord) == 1
+
+
+async def test_rotation_outcome_is_bound_to_the_submitted_request_not_the_revision(
+    harness,
+):
+    api, github, _sessions = harness
+    created = await _create(api, connection_id="alpha", token="token-alpha-0001")
+    await _create(api, connection_id="beta", token="token-beta-0001")
+    revision = created.json()["secretRevision"]
+    rotated = await api.post(
+        "/api/v1/repository-connections/alpha/rotate",
+        json={
+            "requestId": "req-rotate-elsewhere",
+            "token": "token-alpha-0002",
+            "expectedSecretRevision": revision,
+        },
+    )
+    assert rotated.status_code == 200, rotated.text
+    github.requests.clear()
+
+    # The revision advanced, but not for this (lost) request.
+    lost = await _outcome(api, "alpha", "req-rotate-lost", "rotate")
+    assert lost.status_code == 200, lost.text
+    assert lost.json()["committed"] is False
+    assert lost.json()["connection"]["secretRevision"] == revision + 1
+
+    confirmed = await _outcome(api, "alpha", "req-rotate-elsewhere", "rotate")
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["committed"] is True
+    _assert_no_token(confirmed.text)
+
+    mismatched = await _outcome(api, "beta", "req-rotate-elsewhere", "rotate")
+    assert mismatched.status_code == 409, mismatched.text
+    assert mismatched.json()["detail"]["kind"] == "conflict"
+    assert github.requests == []
+
+
 async def test_failed_candidate_validation_saves_nothing_and_allows_the_same_request(
     harness,
 ):
@@ -272,6 +350,75 @@ async def test_failed_candidate_validation_saves_nothing_and_allows_the_same_req
     assert accepted.status_code == 201, accepted.text
     # Only the selected candidate was ever presented to GitHub.
     assert "ambient-token-should-not-be-used" not in github.tokens_used()
+
+
+def _rate_limited(request: httpx.Request) -> httpx.Response:
+    # GitHub's documented primary limit: 403 with no remaining requests.
+    return httpx.Response(
+        403,
+        headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000000"},
+        json={"message": "API rate limit exceeded"},
+    )
+
+
+async def test_throttled_setup_validation_is_not_reported_as_a_rejected_token(harness):
+    api, github, sessions = harness
+
+    github.overrides["/user"] = _rate_limited
+    throttled = await _create(
+        api, connection_id="alpha", token="token-alpha-0001", requestId="req-throttled"
+    )
+    assert throttled.status_code == 503, throttled.text
+    detail = throttled.json()["detail"]
+    assert detail["kind"] == "rate_limited"
+    assert "rejected" not in detail["message"].lower()
+    _assert_no_token(throttled.text)
+    assert await _count(sessions, RepositoryConnectionRecord) == 0
+    assert await _count(sessions, ManagedSecret) == 0
+
+    # The same request succeeds once the limit resets; nothing was half-saved.
+    github.overrides.clear()
+    accepted = await _create(
+        api, connection_id="alpha", token="token-alpha-0001", requestId="req-throttled"
+    )
+    assert accepted.status_code == 201, accepted.text
+    assert await _count(sessions, RepositoryConnectionRecord) == 1
+    assert await _count(sessions, ManagedSecret) == 1
+
+
+async def test_throttled_rotation_validation_keeps_the_existing_token(harness):
+    api, github, sessions = harness
+    created = await _create(api, connection_id="alpha", token="token-alpha-0001")
+    assert created.status_code == 201, created.text
+    revision = created.json()["secretRevision"]
+
+    github.overrides["/user"] = _rate_limited
+    throttled = await api.post(
+        "/api/v1/repository-connections/alpha/rotate",
+        json={
+            "requestId": "req-rotate-throttled",
+            "token": "token-alpha-0002",
+            "expectedSecretRevision": revision,
+        },
+    )
+    assert throttled.status_code == 503, throttled.text
+    assert throttled.json()["detail"]["kind"] == "rate_limited"
+    _assert_no_token(throttled.text)
+    github.overrides.clear()
+
+    async with sessions() as db:
+        rows = (await db.execute(select(ManagedSecret))).scalars().all()
+    assert [row.credential_revision for row in rows] == [revision]
+    listing = await api.get("/api/v1/repository-connections")
+    assert listing.json()["items"][0]["secretRevision"] == revision
+
+    github.requests.clear()
+    probe = await api.post(
+        "/api/v1/repository-connections/alpha/probe",
+        json={"repo": "acme/app", "mode": "indexing"},
+    )
+    assert probe.status_code == 200, probe.text
+    assert set(github.tokens_used()) == {"token-alpha-0001"}
 
 
 async def test_rotation_is_revision_fenced_and_never_switches_accounts(harness):
