@@ -50,6 +50,7 @@ dependency direction.
 | `moonmind/omnigent/harness_platform/stores.py` | Execution-plan, plan-usage, and runtime-binding persistence | Persistence |
 | `moonmind/omnigent/execution_adapters.py` | Provider Profile authority, execution policy snapshot, and Temporal attempt adapters | Persistence |
 | `moonmind/omnigent/host_services/` | Docker/Compose launcher, workspace, skills, mounted tools, GitHub credentials, egress, registration, attestation, cleanup, legacy host container inventory | Adapter |
+| `moonmind/omnigent/mounted_tool_preflight.py` | Shared GitHub credential visibility and repository-access checks for generic and retained profile-bound hosts | Adapter |
 | `moonmind/omnigent/host_auth_profile.py`, `host_auth_store.py` | Embedded host-auth SecretRef resolution, readiness projection, durable profile row | Adapter |
 | `moonmind/omnigent/harness_platform/materializers.py`, `credential_materializers.py` | Credential materializer descriptors and provisioning | Adapter |
 | `moonmind/omnigent/bridge_*.py`, `execute.py`, `oauth_host_runtime.py`, `profile_bound_execution.py` | Replay-visible legacy Codex transport, session driver, host lifecycle, and coordinator | Adapter (legacy) |
@@ -63,6 +64,24 @@ dependency direction.
 | `api_service/api/routers/omnigent_bridge_composition.py` | Which concrete store, transport, facade, and credential profile backs a bridge route | Composition |
 | `moonmind/omnigent/conformance.py`, `exact_artifact_conformance.py`, `workflow_chat_acceptance.py`, `control_plane/timeline.py` | Conformance, acceptance, and timeline evidence | Evidence |
 | `tools/omnigent_faultlab/` | Fault-injection corpus, reference model, and invariants for the reconciler | Evidence (test-facing) |
+
+GitHub projection readiness separates local credential delivery from remote
+repository access. Both host paths use the same preflight owner: token lookup
+discards the token inside the host, and one repository query per execution
+environment checks the requested identity and, when required, write permission.
+Generic hosts check the host, runner, and OpenCode shell when applicable.
+Account-status and duplicate permission queries are not launch prerequisites.
+Repository-free tool projections attest only local credential availability.
+
+Transient transport failures and HTTP 5xx responses receive up to four attempts
+on the same host and credential, with bounded backoff. Authentication,
+authorization, identity, and permission failures fail closed; rate-limit
+responses are surfaced without a tight retry loop. Cancellation propagates.
+Generic-host failures preserve redacted attempt evidence and the original
+diagnostic even if artifact storage is unavailable, and report a host capability
+failure instead of directing credential rematerialization. Hermetic coverage
+lives in `test_mounted_tool_preflight.py` and the full handoff regression in
+`test_generic_platform_production_services.py`.
 | `moonmind/omnigent/legacy_retirement.py`, `session_migration_inventory.py`, `session_supervisor_rollback.py` | #3712 retirement inventory, migration inventory, rollback authority | Governance |
 
 ## 3. Allowed dependency direction
