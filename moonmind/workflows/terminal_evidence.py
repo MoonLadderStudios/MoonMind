@@ -199,7 +199,7 @@ def resolve_terminal_evidence_source(
     )
 
 
-def _evaluate_batch_dependabot_resolver_evidence(
+def _evaluate_batch_pr_fanout_evidence(
     payload: Mapping[str, Any],
     *,
     contract_id: str,
@@ -210,7 +210,9 @@ def _evaluate_batch_dependabot_resolver_evidence(
     requested = payload.get("requested")
     created = payload.get("created")
     queued = payload.get("queued")
-    would_queue = payload.get("wouldQueue")
+    would_queue = (
+        [] if contract_id == "batch_pr_resolver_fanout.v1" else payload.get("wouldQueue")
+    )
     skipped = payload.get("skipped")
     errors = payload.get("errors")
     metadata = {
@@ -284,6 +286,7 @@ def evaluate_terminal_evidence(
     contract_id = str(contract.get("contractId") or contract.get("contract_id") or "")
     if contract_id not in {
         "auto_publish_terminal.v1",
+        "batch_pr_resolver_fanout.v1",
         "batch_dependabot_resolver_fanout.v1",
         "batch_workflows_fanout.v1",
         "pr_resolver_terminal.v1",
@@ -562,8 +565,8 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
     if not expected_execution or payload.get("executionRef") != expected_execution:
         return TerminalEvidenceEvaluation(False, "STALE_TERMINAL_EVIDENCE")
-    if contract_id == "batch_dependabot_resolver_fanout.v1":
-        return _evaluate_batch_dependabot_resolver_evidence(
+    if contract_id in {"batch_pr_resolver_fanout.v1", "batch_dependabot_resolver_fanout.v1"}:
+        return _evaluate_batch_pr_fanout_evidence(
             payload,
             contract_id=contract_id,
             relative_path=relative,
