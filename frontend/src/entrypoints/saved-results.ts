@@ -70,6 +70,13 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function digestValue(value: unknown): string {
+  // The `absent` sentinel is never a real content identity, wherever it is
+  // stored.
+  const normalized = text(value);
+  return normalized.toLowerCase() === 'absent' ? '' : normalized;
+}
+
 function artifactDigest(artifact: SavedResultArtifactLike): string {
   const direct = [
     (artifact as Record<string, unknown>).sha256,
@@ -82,14 +89,14 @@ function artifactDigest(artifact: SavedResultArtifactLike): string {
     artifact.content_digest,
   ];
   for (const candidate of direct) {
-    const normalized = text(candidate);
-    if (normalized && normalized.toLowerCase() !== 'absent') {
+    const normalized = digestValue(candidate);
+    if (normalized) {
       return normalized;
     }
   }
   const metadata = (artifact.metadata ?? {}) as Record<string, unknown>;
   for (const key of ['sha256', 'digest', 'contentDigest', 'content_digest']) {
-    const normalized = text(metadata[key]);
+    const normalized = digestValue(metadata[key]);
     if (normalized) {
       return normalized;
     }
@@ -117,6 +124,27 @@ function linkTypes(artifact: SavedResultArtifactLike): string[] {
     .filter(Boolean);
 }
 
+const REPOSITORY_LINK_PREFIXES = [
+  'repository.',
+  'git.',
+  'patch.',
+  'diff.',
+  'checkpoint.',
+  'capture.',
+];
+
+// The execution artifact list also carries inputs, runtime logs, debug traces,
+// and other evidence. Only artifacts linked as a result output are saved work.
+function isSavedOutputArtifact(artifact: SavedResultArtifactLike): boolean {
+  return linkTypes(artifact).some(
+    (type) =>
+      type === 'result' ||
+      type.startsWith('report.') ||
+      (type.startsWith('output.') && type !== 'output.logs') ||
+      REPOSITORY_LINK_PREFIXES.some((prefix) => type.startsWith(prefix)),
+  );
+}
+
 function contentType(artifact: SavedResultArtifactLike): string {
   return text(artifact.contentType ?? artifact.content_type).toLowerCase();
 }
@@ -133,9 +161,7 @@ export function classifySavedResultArtifact(artifact: SavedResultArtifactLike): 
     kind = 'report';
   } else if (
     types.some((type) =>
-      ['repository.', 'git.', 'patch.', 'diff.', 'checkpoint.', 'capture.'].some(
-        (prefix) => type.startsWith(prefix),
-      ),
+      REPOSITORY_LINK_PREFIXES.some((prefix) => type.startsWith(prefix)),
     ) ||
     content.includes('x-diff') ||
     content.includes('x-patch')
@@ -161,8 +187,22 @@ export function classifySavedResultArtifact(artifact: SavedResultArtifactLike): 
   return { kind, complete: true, reason: 'complete' };
 }
 
-function isExpiredArtifact(artifact: SavedResultArtifactLike): boolean {
-  return artifactStatus(artifact) === 'EXPIRED';
+function isExpiredArtifact(
+  artifact: SavedResultArtifactLike,
+  now: number,
+): boolean {
+  // Artifacts have no EXPIRED status: expiry is the server's `expires_at`
+  // until the lifecycle sweep marks the artifact DELETED.
+  if (artifactStatus(artifact) === 'DELETED') {
+    return true;
+  }
+  const expiresAt = Date.parse(
+    text(
+      (artifact as Record<string, unknown>).expiresAt ??
+        (artifact as Record<string, unknown>).expires_at,
+    ),
+  );
+  return Number.isFinite(expiresAt) && expiresAt <= now;
 }
 
 export function canDownloadSavedResultRaw(
@@ -269,15 +309,16 @@ export function resolveUncertainSavedResultSubmission(input: {
     'publication_idempotency_key_conflict',
     'publication_recovery_already_started',
   ]);
+  // A conflict is a reusable success only when it carries the confirmed
+  // operation; a conflict code alone (for example a changed request digest
+  // under the same key) means the request failed.
   if (
     response.status === 409 &&
-    ((response.code && conflictCodes.has(response.code)) ||
-      text(response.operationId))
+    response.code &&
+    conflictCodes.has(response.code) &&
+    text(response.operationId)
   ) {
-    return {
-      reused: true,
-      operationId: text(response.operationId) || pendingOperationId,
-    };
+    return { reused: true, operationId: text(response.operationId) };
   }
   if (text(response.operationId) === pendingOperationId) {
     return { reused: true, operationId: pendingOperationId };
@@ -286,6 +327,29 @@ export function resolveUncertainSavedResultSubmission(input: {
     reused: false,
     operationId: text(response.operationId) || pendingOperationId,
   };
+}
+
+export function savedResultErrorMessage(payload: unknown): string {
+  // FastAPI rejections carry either a string `detail` or an object `detail`
+  // with a `message`.
+  if (typeof payload === 'string') {
+    return payload;
+  }
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+  const record = payload as Record<string, unknown>;
+  const detail = record.detail;
+  if (typeof detail === 'string') {
+    return detail;
+  }
+  if (detail && typeof detail === 'object') {
+    const message = text((detail as Record<string, unknown>).message);
+    if (message) {
+      return message;
+    }
+  }
+  return text(record.message);
 }
 
 export function buildContinueInNewWorkflowBody(input: {
@@ -386,7 +450,10 @@ function entryExclusions(artifact: SavedResultArtifactLike): number | null {
   return null;
 }
 
-function toEntry(artifact: SavedResultArtifactLike): SavedResultEntry {
+function toEntry(
+  artifact: SavedResultArtifactLike,
+  now: number,
+): SavedResultEntry {
   const classified = classifySavedResultArtifact(artifact);
   return {
     artifactId: artifact.artifactId,
@@ -395,7 +462,7 @@ function toEntry(artifact: SavedResultArtifactLike): SavedResultEntry {
     complete: classified.complete,
     completenessReason: classified.reason,
     restricted: !canDownloadSavedResultRaw(artifact),
-    expired: isExpiredArtifact(artifact),
+    expired: isExpiredArtifact(artifact, now),
     retention: entryRetention(artifact),
     exclusions: entryExclusions(artifact),
   };
@@ -410,6 +477,9 @@ function computeOutcome(execution: SavedResultExecutionLike): string {
   }
   if (['canceled', 'cancelled'].includes(state)) {
     return 'canceled';
+  }
+  if (state === 'no_commit') {
+    return 'no_commit';
   }
   if (['completed', 'succeeded', 'success', 'closed'].includes(state)) {
     return 'completed';
@@ -432,13 +502,34 @@ function computeOutcome(execution: SavedResultExecutionLike): string {
   return state || 'unknown';
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function finishSummaryOf(
+  execution: SavedResultExecutionLike,
+): Record<string, unknown> {
+  return record(execution.finishSummary ?? execution.finish_summary);
+}
+
+function auxiliaryOutcomes(
+  execution: SavedResultExecutionLike,
+): Record<string, unknown> {
+  return record(record(finishSummaryOf(execution).controlStop).auxiliaryOutcomes);
+}
+
 function publicationOutcome(execution: SavedResultExecutionLike): string {
-  const summary =
-    (execution.finishSummary ?? execution.finish_summary ?? {}) as Record<
-      string,
-      unknown
-    >;
-  const publish = (summary.publish ?? {}) as Record<string, unknown>;
+  // The control-stop Git publication outcome is authoritative: the retry
+  // endpoint and the action capability read the same value.
+  const recovery = text(
+    record(auxiliaryOutcomes(execution).gitPublication).status,
+  ).toLowerCase();
+  if (recovery) {
+    return recovery;
+  }
+  const publish = record(finishSummaryOf(execution).publish);
   const status = text(publish.status).toLowerCase();
   if (status) {
     return status;
@@ -455,9 +546,31 @@ function publicationOutcome(execution: SavedResultExecutionLike): string {
   return 'none';
 }
 
+function cleanupOutcome(execution: SavedResultExecutionLike): string {
+  // Report recorded cleanup evidence; without it the outcome is unknown,
+  // never an assumed success.
+  const auxiliary = auxiliaryOutcomes(execution);
+  const statuses = ['hostCleanup', 'providerProfileRelease']
+    .map((key) => text(record(auxiliary[key]).status).toLowerCase())
+    .filter(Boolean);
+  if (statuses.includes('failed')) {
+    return 'failed';
+  }
+  if (auxiliary.janitorRequired === true) {
+    return 'janitor_required';
+  }
+  if (statuses.includes('pending')) {
+    return 'pending';
+  }
+  if (statuses.length > 0 && statuses.every((status) => status === 'completed')) {
+    return 'completed';
+  }
+  return statuses[0] ?? 'unknown';
+}
+
 function isTerminalExecution(execution: SavedResultExecutionLike): boolean {
   const outcome = computeOutcome(execution);
-  return ['failed', 'canceled', 'completed'].includes(outcome);
+  return ['failed', 'canceled', 'completed', 'no_commit'].includes(outcome);
 }
 
 export function projectSavedResults(input: {
@@ -467,67 +580,66 @@ export function projectSavedResults(input: {
   artifacts: SavedResultArtifactLike[];
   artifactsStale: boolean;
   artifactsError: Error | null;
+  /** Source evidence refs the `/continue` endpoint authorizes. */
+  authorizedContinuationRefs?: string[] | null;
+  now?: number;
 }): {
   selectedKey: string;
   state: SavedResultState;
   entries: SavedResultEntry[];
+  continuationRefs: string[];
+  terminalSource: boolean;
   computeOutcome: string;
   saveOutcome: string;
   publicationOutcome: string;
-  cleanupPreserved: boolean;
+  cleanupOutcome: string;
 } {
   const selectedKey = savedResultSelectionKey(input.workflowId, input.runId);
-  const computed = computeOutcome(input.execution);
-  const publication = publicationOutcome(input.execution);
+  const terminalSource = isTerminalExecution(input.execution);
+  const base = {
+    selectedKey,
+    continuationRefs: [] as string[],
+    terminalSource,
+    computeOutcome: computeOutcome(input.execution),
+    publicationOutcome: publicationOutcome(input.execution),
+    cleanupOutcome: cleanupOutcome(input.execution),
+  };
 
   if (input.artifactsError) {
     return {
-      selectedKey,
+      ...base,
       state: 'unavailable',
       entries: [],
-      computeOutcome: computed,
       saveOutcome: 'unavailable',
-      publicationOutcome: publication,
-      cleanupPreserved: true,
     };
   }
   if (input.artifactsStale) {
     return {
-      selectedKey,
+      ...base,
       state: 'stale',
       entries: [],
-      computeOutcome: computed,
       saveOutcome: 'stale',
-      publicationOutcome: publication,
-      cleanupPreserved: true,
     };
   }
-  const entries = (input.artifacts ?? []).map(toEntry);
+  const now = input.now ?? Date.now();
+  const entries = (input.artifacts ?? [])
+    .filter(isSavedOutputArtifact)
+    .map((artifact) => toEntry(artifact, now));
   if (entries.length === 0) {
-    return {
-      selectedKey,
-      state: isTerminalExecution(input.execution)
-        ? 'unavailable'
-        : 'pending',
-      entries: [],
-      computeOutcome: computed,
-      saveOutcome: isTerminalExecution(input.execution)
-        ? 'unavailable'
-        : 'pending',
-      publicationOutcome: publication,
-      cleanupPreserved: true,
-    };
+    const state = terminalSource ? 'unavailable' : 'pending';
+    return { ...base, state, entries: [], saveOutcome: state };
   }
   const saveOutcome = entries.some((entry) => entry.complete)
     ? 'committed'
     : 'incomplete';
+  const authorized = new Set(input.authorizedContinuationRefs ?? []);
   return {
-    selectedKey,
+    ...base,
     state: 'ready',
     entries,
-    computeOutcome: computed,
+    continuationRefs: entries
+      .filter((entry) => entry.complete && authorized.has(entry.artifactId))
+      .map((entry) => entry.artifactId),
     saveOutcome,
-    publicationOutcome: publication,
-    cleanupPreserved: true,
   };
 }

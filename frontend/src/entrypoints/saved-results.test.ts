@@ -7,6 +7,7 @@ import {
   classifySavedResultArtifact,
   projectSavedResults,
   resolveUncertainSavedResultSubmission,
+  savedResultErrorMessage,
   savedResultIdempotencyKey,
   savedResultSelectionKey,
   shouldApplySavedResultResponse,
@@ -62,6 +63,14 @@ describe('saved-result classification never invents a complete save', () => {
     expect(
       classifySavedResultArtifact(artifact({ status: 'PENDING' })).complete,
     ).toBe(false);
+  });
+
+  it('rejects the absent digest sentinel stored in metadata', () => {
+    const classified = classifySavedResultArtifact(
+      artifact({ sha256: null, metadata: { digest: 'absent' } }),
+    );
+    expect(classified.complete).toBe(false);
+    expect(classified.reason).toBe('absent-digest');
   });
 
   it('does not treat permissive generic metadata as proof of completeness', () => {
@@ -207,5 +216,143 @@ describe('denied and raw access honors preview-versus-raw policy', () => {
     const href = buildSavedResultDownloadHref('/api', ref);
     expect(href.startsWith('/api/artifacts/')).toBe(true);
     expect(href).not.toContain('art_01TESTSAVEDRESULT01://');
+  });
+});
+
+function project(overrides: Partial<Parameters<typeof projectSavedResults>[0]> = {}) {
+  return projectSavedResults({
+    workflowId: 'wf-4020',
+    runId: 'run-selected-1',
+    execution: execution(),
+    artifacts: [artifact()],
+    artifactsStale: false,
+    artifactsError: null,
+    ...overrides,
+  });
+}
+
+describe('saved outputs come only from canonical result artifacts', () => {
+  it('excludes inputs, runtime logs, and debug evidence from saved outputs', () => {
+    const projection = project({
+      artifacts: [
+        artifact({ artifactId: 'art-report' }),
+        artifact({ artifactId: 'art-input', links: [{ linkType: 'input.instructions' }] }),
+        artifact({ artifactId: 'art-stdout', links: [{ linkType: 'runtime.stdout' }] }),
+        artifact({ artifactId: 'art-logs', links: [{ linkType: 'output.logs' }] }),
+        artifact({ artifactId: 'art-debug', links: [{ linkType: 'debug.trace' }] }),
+        artifact({ artifactId: 'art-unlinked', links: [] }),
+        artifact({ artifactId: 'art-output', links: [{ linkType: 'output.primary' }] }),
+      ],
+    });
+    expect(projection.entries.map((entry) => entry.artifactId)).toEqual([
+      'art-report',
+      'art-output',
+    ]);
+  });
+
+  it('submits only complete entries the server authorizes for continuation', () => {
+    const projection = project({
+      artifacts: [
+        artifact({ artifactId: 'art-report' }),
+        artifact({ artifactId: 'art-output', links: [{ linkType: 'output.primary' }] }),
+        artifact({ artifactId: 'art-partial', status: 'PENDING_UPLOAD' }),
+      ],
+      authorizedContinuationRefs: ['art-output', 'art-partial', 'art-final-snapshot'],
+    });
+    expect(projection.continuationRefs).toEqual(['art-output']);
+    expect(project().continuationRefs).toEqual([]);
+  });
+});
+
+describe('terminal source and outcome evidence', () => {
+  it('treats no-commit executions as terminal', () => {
+    const projection = project({ execution: execution({ state: 'no_commit' }) });
+    expect(projection.computeOutcome).toBe('no_commit');
+    expect(projection.terminalSource).toBe(true);
+    expect(project({ execution: execution({ state: 'executing' }) }).terminalSource).toBe(false);
+  });
+
+  it('reads the authoritative publication recovery outcome', () => {
+    const projection = project({
+      execution: execution({
+        finishSummary: {
+          controlStop: { auxiliaryOutcomes: { gitPublication: { status: 'failed' } } },
+        },
+        outputBranch: { status: 'pushed' },
+      }),
+    });
+    expect(projection.publicationOutcome).toBe('failed');
+  });
+
+  it('reports the recorded cleanup outcome instead of assuming preservation', () => {
+    const cleanup = (auxiliaryOutcomes: Record<string, unknown>) =>
+      project({
+        execution: execution({ finishSummary: { controlStop: { auxiliaryOutcomes } } }),
+      }).cleanupOutcome;
+    expect(project().cleanupOutcome).toBe('unknown');
+    expect(
+      cleanup({
+        hostCleanup: { status: 'failed' },
+        providerProfileRelease: { status: 'completed' },
+        janitorRequired: true,
+      }),
+    ).toBe('failed');
+    expect(
+      cleanup({
+        hostCleanup: { status: 'pending' },
+        providerProfileRelease: { status: 'pending' },
+        janitorRequired: false,
+      }),
+    ).toBe('pending');
+    expect(
+      cleanup({
+        hostCleanup: { status: 'completed' },
+        providerProfileRelease: { status: 'completed' },
+        janitorRequired: false,
+      }),
+    ).toBe('completed');
+    expect(
+      project({ execution: execution(), artifactsError: new Error('x') }).cleanupOutcome,
+    ).toBe('unknown');
+  });
+});
+
+describe('expired saved outputs', () => {
+  it('derives expiration from the server expiry timestamp', () => {
+    const now = Date.parse('2026-09-30T00:00:00Z');
+    const projection = project({
+      now,
+      artifacts: [
+        artifact({ artifactId: 'art-old', expiresAt: '2026-09-29T00:00:00Z' }),
+        artifact({ artifactId: 'art-new', expires_at: '2026-10-01T00:00:00Z' }),
+        artifact({ artifactId: 'art-forever' }),
+      ],
+    });
+    expect(projection.entries.map((entry) => [entry.artifactId, entry.expired])).toEqual([
+      ['art-old', true],
+      ['art-new', false],
+      ['art-forever', false],
+    ]);
+  });
+});
+
+describe('continuation responses', () => {
+  it('treats an idempotency conflict without a destination as a failure', () => {
+    const resolved = resolveUncertainSavedResultSubmission({
+      pendingOperationId: 'op-continue-1',
+      response: { status: 409, code: 'continuation_idempotency_conflict', operationId: null },
+    });
+    expect(resolved.reused).toBe(false);
+  });
+
+  it('preserves structured FastAPI error messages', () => {
+    expect(
+      savedResultErrorMessage({
+        detail: { code: 'continuation_source_not_terminal', message: 'Source is not terminal.' },
+      }),
+    ).toBe('Source is not terminal.');
+    expect(savedResultErrorMessage({ detail: 'plain detail' })).toBe('plain detail');
+    expect(savedResultErrorMessage({ message: 'top-level' })).toBe('top-level');
+    expect(savedResultErrorMessage(null)).toBe('');
   });
 });
