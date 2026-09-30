@@ -328,11 +328,13 @@ def test_submit_reaches_terminal_failed_after_the_retry_budget(
             method="POST",
             headers={"Authorization": "Bearer test-secret"},
         )
-        try:
-            with urllib.request.urlopen(request, timeout=10):
-                raise AssertionError("expected a 500 after the retry budget")
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 500
+        # A recorded terminal failure is the operation's result, not an
+        # internal error: the caller receives it and can request a Retry.
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 202
+            created = json.loads(response.read().decode() or "{}")
+        assert created["status"] == "failed"
+        assert created["errorSummary"].startswith("attempt 1: still failing")
         operations = store.list_terminal(stack="moonmind")
         assert len(operations) == 1
         assert operations[0]["status"] == "failed"

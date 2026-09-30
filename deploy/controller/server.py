@@ -490,6 +490,27 @@ def _apply_with_bounded_retries(
                 raise
 
 
+def _apply_recording_failure(
+    store: record_mod.OperationStore,
+    operation_id: str,
+    run_apply: Callable[[dict], Any],
+) -> dict:
+    """Apply within the bounded budget; a recorded failure is a result.
+
+    Exhausted staging/apply attempts leave a terminal ``failed`` record with
+    every attempt error, so the caller receives that operation (not an
+    internal error) and can offer an explicit Retry. Unexpected exceptions
+    still propagate.
+    """
+    try:
+        return _apply_with_bounded_retries(store, operation_id, run_apply)
+    except (engine.StageError, engine.ApplyError):
+        operation = store.load(operation_id)
+        if operation.get("status") != "failed":
+            raise
+        return operation
+
+
 def build_app(
     *,
     store: record_mod.OperationStore,
@@ -597,7 +618,7 @@ def build_app(
                             lock_mod.StackLock(store.state_dir, stack).acquire()
                         )
                 if needs_apply:
-                    operation = _apply_with_bounded_retries(
+                    operation = _apply_recording_failure(
                         store, operation["operationId"], run_apply
                     )
         except lock_mod.LockBusyError:
@@ -684,7 +705,7 @@ def build_app(
         try:
             candidate = lock_mod.StackLock(store.state_dir, operation["stack"])
             with candidate.acquire():
-                operation = _apply_with_bounded_retries(
+                operation = _apply_recording_failure(
                     store, operation_id, run_apply
                 )
         except lock_mod.LockBusyError:
