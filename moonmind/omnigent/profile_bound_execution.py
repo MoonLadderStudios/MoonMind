@@ -401,8 +401,11 @@ class OmnigentProfileBoundExecutionCoordinator:
         if requested_target:
             profile = PROFILES.get(requested_target)
             # The target's default is a selection fallback, not a restriction
-            # on admitted policies. The selected policy is checked above and
-            # its immutable launch snapshots are verified before any leases.
+            # on admitted policies: bootstrap republishes policy versions when
+            # deployment state such as the host image changes, and an admitted
+            # plan may select another policy bound to this target. The selected
+            # policy is checked above and its immutable launch snapshots are
+            # verified before any leases.
             if profile is None or profile.harness != plan.payload.harnessId:
                 raise HarnessPlatformError(
                     "Codex execution target conflicts with the admitted plan",
