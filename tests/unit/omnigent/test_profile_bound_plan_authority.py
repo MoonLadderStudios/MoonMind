@@ -129,6 +129,52 @@ async def test_dispatch_rejects_conflicting_selection_before_effects(
     assert error.value.code == "OMNIGENT_EXECUTION_PLAN_CONFLICT"
 
 
+class _PolicySelected(Exception):
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("admitted_codex_plan", "omitted"),
+    [
+        ("codex-on-demand@16", ("launchPolicyRef",)),
+        ("operator-codex@2", ("launchPolicyRef",)),
+        ("codex-on-demand@16", ("launchPolicyRef", "executionTargetRef")),
+    ],
+    indirect=["admitted_codex_plan"],
+)
+async def test_dispatch_selects_admitted_policy_when_request_omits_it(
+    admitted_codex_plan, omitted
+):
+    coordinator, request, plan, _snapshot, _launch = admitted_codex_plan
+    for field in omitted:
+        request.parameters["omnigent"].pop(field)
+    selected: list[str] = []
+
+    async def resolve_runtime_snapshot(policy_ref: str):
+        selected.append(policy_ref)
+        raise _PolicySelected
+
+    coordinator._run_store = AsyncMock()
+    coordinator._hosts = SimpleNamespace(
+        get_binding_for_profile=AsyncMock(return_value=None)
+    )
+    coordinator._profile_authority = SimpleNamespace(
+        resolve=AsyncMock(
+            return_value=SimpleNamespace(runtime_id="codex_cli", launch_ready=True)
+        )
+    )
+    coordinator._policy_authority = SimpleNamespace(
+        resolve_runtime_snapshot=resolve_runtime_snapshot
+    )
+
+    # Stop at the first policy lookup: selection precedes every lease and host
+    # effect, and the admitted policy is the one the plan's snapshots record.
+    with pytest.raises(_PolicySelected):
+        await coordinator.execute(request)
+    assert selected == [plan.payload.launchPolicyRef]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changed_snapshot", ["policy", "launch"])
 async def test_dispatch_still_rejects_changed_admitted_launch(
