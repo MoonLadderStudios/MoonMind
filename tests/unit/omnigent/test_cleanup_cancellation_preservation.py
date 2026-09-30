@@ -16,7 +16,9 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.attempt_completion import complete_skill_turns
+from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupClaim
 from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
+from moonmind.omnigent.realizers import generic_host
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.runtime_bindings import (
     InMemoryStableRuntimeBindingStore,
@@ -67,7 +69,7 @@ async def test_cancelled_provider_turn_records_no_receipt_and_is_never_retried()
     assert "publication" not in phases
 
 
-def _cleanup_realizer(store, *, order, calls):
+def _cleanup_realizer(store, *, order, calls, save=None):
     realizer = object.__new__(GenericOmnigentHostRealizer)
     realizer._runtime_bindings = store
     realizer._turn_commands = None
@@ -102,17 +104,69 @@ def _cleanup_realizer(store, *, order, calls):
         order.append("provider")
         calls.setdefault("released", []).append(tuple(acquired))
 
+    async def load_cleanup_handles(provider_leases, runtime_handles):
+        return ("credential-handle-1",)
+
+    async def release_from_binding(provider_leases):
+        calls["provider"] += 1
+        order.append("provider")
+
+    async def host_cleanup(**kwargs):
+        calls["host"] = calls.get("host", 0) + 1
+        order.append("host")
+        return {"removed": True}
+
     realizer._session_cleanup = SimpleNamespace(drain=drain)
     realizer._workspace_publisher = SimpleNamespace(
-        save_request_workspace=save_request_workspace
+        save_request_workspace=save or save_request_workspace
     )
     realizer._host_runtime = SimpleNamespace(
-        cleanup_prepared=cleanup_prepared, cleanup_authorities=cleanup_authorities
+        cleanup=host_cleanup,
+        cleanup_prepared=cleanup_prepared,
+        cleanup_authorities=cleanup_authorities,
     )
-    realizer._credentials = SimpleNamespace(cleanup_all=cleanup_all)
-    realizer._provider_leases = SimpleNamespace(release_all=release_all)
+    realizer._credentials = SimpleNamespace(
+        cleanup_all=cleanup_all, load_cleanup_handles=load_cleanup_handles
+    )
+    realizer._provider_leases = SimpleNamespace(
+        release_all=release_all, release_from_binding=release_from_binding
+    )
     realizer._host_leases = SimpleNamespace()
     return realizer
+
+
+def _counters():
+    return {
+        "session_drain": 0,
+        "save": 0,
+        "prepared": 0,
+        "authorities": 0,
+        "credentials": 0,
+        "provider": 0,
+    }
+
+
+async def _pending_save_binding(store, request, *, session_id="sess-1"):
+    """A drained attempt whose authoritative workspace has no verified save."""
+
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "4" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    # The same receipt shape ``_drive_session`` records before the first turn.
+    await sink.record_phase(
+        "workspace",
+        request.model_dump(by_alias=True, mode="json", exclude_none=True)
+        | {"workspaceSpec": {"workspaceLocator": {"workspaceId": "ws-1"}}},
+    )
+    return await store.update(
+        sink.binding.bindingId,
+        expected_revision=sink.binding.revision,
+        expected_fencing_generation=sink.binding.fencingGeneration,
+        updates={"omnigentSessionId": session_id},
+    )
 
 
 @pytest.mark.asyncio
@@ -273,3 +327,221 @@ async def test_janitor_skips_live_owner_and_reconciles_closed_binding_once():
     assert summary["reconciled"] == 1
     assert summary["conflicts"] == 1
     assert summary["failures"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fault", "error_type"),
+    [("error", "ConnectionError"), ("hang", "TimeoutError")],
+)
+async def test_save_failure_after_drain_releases_capacity_and_keeps_save_pending(
+    monkeypatch, fault, error_type
+):
+    """MoonLadderStudios/MoonMind#4016: retaining files never holds a provider slot.
+
+    Once the session is drained, nothing consumes the credentials or the model
+    slot. A failed or hung capture leaves the caller-owned workspace pending its
+    save for the finalization owner, and releases everything else.
+    """
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key=f"save-fails-{fault}")
+    binding = await _pending_save_binding(store, request)
+    order: list[str] = []
+    calls = _counters()
+
+    async def failing_save(request):
+        calls["save"] += 1
+        order.append("save")
+        if fault == "hang":
+            await asyncio.Event().wait()
+        raise ConnectionError("artifact storage unavailable")
+
+    monkeypatch.setattr(generic_host, "_CLEANUP_SAVE_TIMEOUT_SECONDS", 0.05)
+    realizer = _cleanup_realizer(store, order=order, calls=calls, save=failing_save)
+    cleaned, _ = await realizer._cleanup(
+        request=request,
+        binding=binding,
+        host_lease=None,
+        host_context=None,
+        prepared=None,
+        credential_handles=("credential-handle-1",),
+        acquired=("lease-a",),
+    )
+
+    assert cleaned.state is RuntimeBindingState.cleaned
+    stored = (await store.get(binding.bindingId)).phaseResults or {}
+    # The pending decision is the existing one: a workspace receipt without a
+    # verified save, which the next finalization delivery resumes.
+    assert "workspace" in stored
+    assert "saved" not in stored
+    assert stored["saveFailure"]["errorType"] == error_type
+    assert calls["save"] == 1
+    assert calls["credentials"] == 1
+    assert calls["released"] == [("lease-a",)]
+    assert order.index("session") < order.index("save")
+    assert order.index("save") < order.index("credentials") < order.index("provider")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_report_failure_does_not_block_release():
+    """An optional cleanup report cannot hold capacity or strand the binding."""
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key="cleanup-report-fails")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "5" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    order: list[str] = []
+    calls = _counters()
+    realizer = _cleanup_realizer(store, order=order, calls=calls)
+
+    async def write_json(**kwargs):
+        raise ConnectionError("artifact service unavailable")
+
+    realizer._artifacts = SimpleNamespace(write_json=write_json)
+    cleaned, _ = await realizer._cleanup(
+        request=request,
+        binding=binding,
+        host_lease=None,
+        host_context=None,
+        prepared=None,
+        credential_handles=(),
+        acquired=("lease-a",),
+    )
+
+    assert cleaned.state is RuntimeBindingState.cleaned
+    assert calls["released"] == [("lease-a",)]
+    assert "cleanupAttestationRef" not in cleaned.attestationRefs
+    stored = (await store.get(binding.bindingId)).phaseResults or {}
+    assert stored["cleanupSettlement"] == {"status": "not_required"}
+    assert stored["cleanupReport"] == {"status": "failed", "errorType": "ConnectionError"}
+
+
+class _SettledCleanupAuthority:
+    """Canonical cleanup already settled by this binding's recorded claim."""
+
+    def __init__(self):
+        self.claims = 0
+        self.completed = []
+
+    async def resolve_session_id(self, session_id):
+        return "canonical-" + session_id
+
+    async def claim(self, session_id, *, owner_class):
+        # A settled session has no claim left to grant.
+        self.claims += 1
+        return None
+
+    async def complete(self, claim):
+        self.completed.append(claim)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_janitor_converges_on_its_own_already_settled_cleanup_claim():
+    """A lost acknowledgement after settlement must not become a conflict loop."""
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key="settled-claim")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "6" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    claim = CanonicalCleanupClaim(
+        session_id="canonical-sess-1",
+        owner_class="omnigent_generic_host",
+        claim_token="ocl_settled",
+        generation=3,
+    )
+    binding = await store.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        state=RuntimeBindingState.cleanup_pending,
+        updates={
+            "omnigentSessionId": "sess-1",
+            "phaseResults": {"cleanupClaim": {
+                "session_id": claim.session_id,
+                "owner_class": claim.owner_class,
+                "claim_token": claim.claim_token,
+                "generation": claim.generation,
+            }},
+        },
+    )
+    order: list[str] = []
+    calls = _counters()
+    realizer = _cleanup_realizer(store, order=order, calls=calls)
+    authority = _SettledCleanupAuthority()
+    realizer._cleanup_authority = authority
+
+    await realizer.reconcile(binding.executionPlanRef, binding.bindingId)
+
+    assert (await store.get(binding.bindingId)).state is RuntimeBindingState.cleaned
+    assert authority.completed == [claim]
+    assert calls["credentials"] == 1
+    assert calls["provider"] == 1
+
+
+@pytest.mark.asyncio
+async def test_janitor_save_failure_still_releases_host_credentials_and_capacity(
+    monkeypatch,
+):
+    """Recovery keeps the workspace pending its save and releases the rest."""
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key="janitor-save-fails")
+    binding = await _pending_save_binding(store, request)
+    binding = await store.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        updates={"hostLeaseRef": "host-lease-1"},
+    )
+    order: list[str] = []
+    calls = _counters()
+
+    async def failing_save(request):
+        calls["save"] += 1
+        order.append("save")
+        raise ConnectionError("artifact storage unavailable")
+
+    monkeypatch.setattr(generic_host, "_CLEANUP_SAVE_TIMEOUT_SECONDS", 0.05)
+    realizer = _cleanup_realizer(store, order=order, calls=calls, save=failing_save)
+    lease = SimpleNamespace(
+        leaseRef="host-lease-1",
+        status="ready",
+        generation=1,
+        launchGeneration=1,
+        cleanupHandle={"kind": "host", "containerName": "host-1"},
+    )
+
+    async def get_lease(ref):
+        return lease
+
+    async def claim_cleanup(ref, *, expected_generation):
+        return lease
+
+    async def mark_cleaned(ref, *, expected_generation):
+        order.append("host_lease_cleaned")
+        return SimpleNamespace(**{**vars(lease), "status": "cleaned"})
+
+    realizer._host_leases = SimpleNamespace(
+        get=get_lease, claim_cleanup=claim_cleanup, mark_cleaned=mark_cleaned
+    )
+
+    await realizer.reconcile(binding.executionPlanRef, binding.bindingId)
+
+    stored = await store.get(binding.bindingId)
+    assert stored.state is RuntimeBindingState.cleaned
+    assert "saved" not in (stored.phaseResults or {})
+    assert stored.phaseResults["saveFailure"]["errorType"] == "ConnectionError"
+    assert calls["save"] == 1
+    assert calls["host"] == 1
+    assert calls["credentials"] == 1
+    assert calls["provider"] == 1
+    assert order.index("session") < order.index("save") < order.index("host")
+    assert order.index("credentials") < order.index("provider")
