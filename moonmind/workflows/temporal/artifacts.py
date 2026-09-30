@@ -4266,30 +4266,129 @@ class TemporalArtifactService:
 
 
 SAVED_WORK_PUBLICATION_RESULT_NAME = "saved-work-publication-result.json"
+SAVED_WORK_PUBLICATION_DECISION_NAME = "saved-work-publication-decision.json"
+SAVED_WORK_PUBLICATION_DECISION_SCHEMA_VERSION = "saved-work-publication-decision-v1"
+# Not a ``result`` link: a decision is pre-effect evidence, not saved output.
+_SAVED_WORK_PUBLICATION_DECISION_LINK = "publication.decision"
 
 
 def _publication_key_hash(operation_key: str) -> str:
     return hashlib.sha256(operation_key.encode()).hexdigest()
 
 
-async def find_saved_work_publication_decision(
-    service: TemporalArtifactService, *, workflow_id: str, operation_key: str
-) -> dict[str, Any] | None:
-    """Return the newest persisted record of one operation that holds a candidate.
+async def _persist_publication_record(
+    service: TemporalArtifactService,
+    *,
+    name: str,
+    link_type: str,
+    payload: dict[str, Any],
+    workflow_id: str,
+    run_id: str,
+    operation_key: str,
+    producer: str,
+    labels: list[str],
+    identity: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Write one publication record per run and identity, idempotently."""
+    principal = f"workflow:{workflow_id}"
+    match = {
+        "name": name,
+        "idempotencyKeyHash": _publication_key_hash(operation_key),
+        **(identity or {}),
+    }
+    for artifact in await service.list_for_execution(
+        namespace=service._default_namespace,
+        workflow_id=workflow_id,
+        run_id=run_id,
+        principal=principal,
+        link_type=link_type,
+    ):
+        metadata = dict(artifact.metadata_json or {})
+        if artifact.status is db_models.TemporalArtifactStatus.COMPLETE and all(
+            metadata.get(key) == value for key, value in match.items()
+        ):
+            return {
+                **payload,
+                "resultArtifactRef": asdict(build_artifact_ref(artifact)),
+            }
+    encoded = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode()
+    artifact, _upload = await service.create(
+        principal=principal,
+        content_type="application/json",
+        size_bytes=len(encoded),
+        link=ExecutionRef(
+            namespace=service._default_namespace,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            link_type=link_type,
+        ),
+        metadata_json={**match, "producer": producer, "labels": labels},
+    )
+    completed = await service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=encoded,
+        content_type="application/json",
+    )
+    return {
+        **payload,
+        "resultArtifactRef": asdict(build_artifact_ref(completed)),
+    }
 
-    Results are linked per run, so a later run of the same workflow id reads
-    the earlier runs' records to reuse their admitted candidate (#4018).
+
+async def persist_saved_work_publication_decision(
+    service: TemporalArtifactService,
+    *,
+    workflow_id: str,
+    run_id: str,
+    operation_key: str,
+    decision: Mapping[str, Any],
+) -> None:
+    """Durably record one run's admitted decision and candidate before any effect.
+
+    A later run of the same operation reuses it even when this run ends before
+    its terminal result, for example when terminated after its push (#4018).
+    """
+    await _persist_publication_record(
+        service,
+        name=SAVED_WORK_PUBLICATION_DECISION_NAME,
+        link_type=_SAVED_WORK_PUBLICATION_DECISION_LINK,
+        payload={
+            **decision,
+            "schemaVersion": SAVED_WORK_PUBLICATION_DECISION_SCHEMA_VERSION,
+            "destinationWorkflowId": workflow_id,
+            "destinationRunId": run_id,
+            "publicationIdempotencyKey": operation_key,
+        },
+        workflow_id=workflow_id,
+        run_id=run_id,
+        operation_key=operation_key,
+        producer="activity:publication_recovery.saved_work_prepare",
+        labels=["publication-recovery", "decision"],
+        identity={"decisionDigest": str(decision.get("decisionDigest") or "")},
+    )
+
+
+async def find_saved_work_publication_decisions(
+    service: TemporalArtifactService, *, workflow_id: str, operation_key: str
+) -> list[dict[str, Any]]:
+    """Return every persisted decision of one operation, newest first.
+
+    Decisions are linked per run, so a later run of the same workflow id reads
+    the earlier runs' decisions; the caller reuses the newest one that is
+    exactly its own request under the current authority (#4018).
     """
     principal = f"workflow:{workflow_id}"
     key_hash = _publication_key_hash(operation_key)
+    decisions: list[dict[str, Any]] = []
     for artifact in await service._repository.list_for_workflow(
         namespace=service._default_namespace,
         workflow_id=workflow_id,
-        link_type="result",
+        link_type=_SAVED_WORK_PUBLICATION_DECISION_LINK,
     ):
         metadata = dict(artifact.metadata_json or {})
         if (
-            metadata.get("name") != SAVED_WORK_PUBLICATION_RESULT_NAME
+            metadata.get("name") != SAVED_WORK_PUBLICATION_DECISION_NAME
             or metadata.get("idempotencyKeyHash") != key_hash
             or artifact.status is not db_models.TemporalArtifactStatus.COMPLETE
         ):
@@ -4310,12 +4409,14 @@ async def find_saved_work_publication_decision(
             continue
         if (
             isinstance(record, dict)
+            and record.get("schemaVersion")
+            == SAVED_WORK_PUBLICATION_DECISION_SCHEMA_VERSION
             and record.get("publicationIdempotencyKey") == operation_key
             and record.get("admission")
             and (record.get("candidate") or {}).get("headSha")
         ):
-            return record
-    return None
+            decisions.append(record)
+    return decisions
 
 
 class TemporalArtifactActivities:
@@ -4445,54 +4546,17 @@ class TemporalArtifactActivities:
         run_id: str,
         operation_key: str,
     ) -> dict[str, Any]:
-        principal = f"workflow:{workflow_id}"
-        key_hash = _publication_key_hash(operation_key)
-        existing = await self._service.list_for_execution(
-            namespace=self._service._default_namespace,
+        return await _persist_publication_record(
+            self._service,
+            name=name,
+            link_type="result",
+            payload=payload,
             workflow_id=workflow_id,
             run_id=run_id,
-            principal=principal,
-            link_type="result",
+            operation_key=operation_key,
+            producer="activity:publication_recovery.persist_result",
+            labels=["publication-recovery", "terminal"],
         )
-        for artifact in existing:
-            metadata = dict(artifact.metadata_json or {})
-            if (
-                metadata.get("name") == name
-                and metadata.get("idempotencyKeyHash") == key_hash
-                and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
-            ):
-                return {
-                    **payload,
-                    "resultArtifactRef": asdict(build_artifact_ref(artifact)),
-                }
-        encoded = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode()
-        artifact, _upload = await self._service.create(
-            principal=principal,
-            content_type="application/json",
-            size_bytes=len(encoded),
-            link=ExecutionRef(
-                namespace=self._service._default_namespace,
-                workflow_id=workflow_id,
-                run_id=run_id,
-                link_type="result",
-            ),
-            metadata_json={
-                "name": name,
-                "producer": "activity:publication_recovery.persist_result",
-                "labels": ["publication-recovery", "terminal"],
-                "idempotencyKeyHash": key_hash,
-            },
-        )
-        completed = await self._service.write_complete(
-            artifact_id=artifact.artifact_id,
-            principal=principal,
-            payload=encoded,
-            content_type="application/json",
-        )
-        return {
-            **payload,
-            "resultArtifactRef": asdict(build_artifact_ref(completed)),
-        }
 
     async def pr_resolver_write_terminal_result(
         self, request: Mapping[str, Any] | None = None

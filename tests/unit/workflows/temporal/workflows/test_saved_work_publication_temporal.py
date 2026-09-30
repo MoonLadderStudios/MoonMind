@@ -50,6 +50,7 @@ from tests.support.saved_work_capture import git
 from tests.unit.publish.test_saved_work_publication_journey import (  # noqa: F401
     Journey,
     _enforced_access,
+    _write_destination,
     journey,
 )
 
@@ -59,17 +60,34 @@ Hook = Callable[[int], Awaitable[None]]
 _SCHEDULED = EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
 
 
-def _with_after(name: str, handler: Any, hook: Hook) -> Any:
+def _with_hooks(
+    name: str, handler: Any, *, before: Hook | None, after: Hook | None
+) -> Any:
+    """Wrap one binding; hooks see its attempt number across every retry."""
+
+    attempts = 0
+
     @activity.defn(name=name)
     async def wrapped(payload: Any = None) -> Any:
+        nonlocal attempts
+        attempts += 1
+        attempt = attempts
+        if before is not None:
+            await before(attempt)
         result = await handler(payload)
-        await hook(activity.info().attempt)
+        if after is not None:
+            await after(attempt)
         return result
 
     return wrapped
 
 
-def _queues(state: Journey, after: dict[str, Hook] | None = None) -> dict[str, list]:
+def _queues(
+    state: Journey,
+    after: dict[str, Hook] | None = None,
+    *,
+    before: dict[str, Hook] | None = None,
+) -> dict[str, list]:
     """Production ``publication_recovery`` bindings grouped by task queue."""
 
     catalog = build_default_activity_catalog()
@@ -90,9 +108,13 @@ def _queues(state: Journey, after: dict[str, Hook] | None = None) -> dict[str, l
     queues: dict[str, list] = {}
     for binding in bindings:
         handler = binding.handler
-        if binding.activity_type in (after or {}):
-            handler = _with_after(
-                binding.activity_type, handler, after[binding.activity_type]
+        name = binding.activity_type
+        if name in (after or {}) or name in (before or {}):
+            handler = _with_hooks(
+                name,
+                handler,
+                before=(before or {}).get(name),
+                after=(after or {}).get(name),
             )
         queues.setdefault(binding.task_queue, []).append(handler)
     return queues
@@ -222,8 +244,11 @@ async def test_worker_restart_between_push_and_pull_request_recovers_only_the_pr
         assert git(state.remote, "rev-parse", "refs/heads/saved/work") == head
         assert len(state.pushes()) == 1
         assert len(state.provider.creates) == 1
+        # The workflow schedules each push attempt; the retry after the lost
+        # acknowledgment reconciled instead of pushing again.
         assert scheduled == [
             "publication_recovery.saved_work_prepare",
+            "publication_recovery.saved_work_push",
             "publication_recovery.saved_work_push",
             "publication_recovery.saved_work_pull_request",
             "publication_recovery.persist_result",
@@ -285,5 +310,126 @@ async def test_cancellation_during_push_records_the_landed_push_and_stops(
             "publication_recovery.persist_result",
             "publication_recovery.cleanup",
         ]
+        assert state.provider.creates == []
+        assert await state.use_claims() == []
+
+
+async def test_a_terminated_run_after_its_push_is_completed_by_a_resubmission(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path,
+        monkeypatch,
+        destination_files={"README.md": "x\n"},
+        emulate_temporal=False,
+    ) as state:
+        before = state.saved_bytes()
+        contract, workflow_id = _contract(state)
+
+        async with await WorkflowEnvironment.start_time_skipping(
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+        ) as env:
+            # The push lands; the operator terminates the run while its PR
+            # waits, so the run never writes a terminal record.
+            async with _workers(
+                env.client, _queues(state), without={INTEGRATIONS_TASK_QUEUE}
+            ):
+                first = await env.client.start_workflow(
+                    MoonMindPublicationRecoveryWorkflow.run,
+                    contract,
+                    id=workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                )
+                await _wait_until_scheduled(
+                    first, "publication_recovery.saved_work_pull_request"
+                )
+                await first.terminate("operator stopped the publication")
+            head = git(state.remote, "rev-parse", "refs/heads/saved/work")
+            _write_destination(
+                tmp_path, state.remote, {"later.txt": "base advanced\n"}
+            )
+
+            # The same request under the same workflow id completes only the PR.
+            async with _workers(env.client, _queues(state)):
+                second = await env.client.start_workflow(
+                    MoonMindPublicationRecoveryWorkflow.run,
+                    contract,
+                    id=workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                )
+                result = await second.result()
+
+        assert second.result_run_id != first.result_run_id
+        assert result["outcome"] == "published"
+        assert result["push"]["status"] == "reconciled"
+        assert result["candidate"]["headSha"] == head
+        assert result["pullRequest"]["status"] == "created"
+        assert git(state.remote, "rev-parse", "refs/heads/saved/work") == head
+        assert len(state.pushes()) == 1
+        assert len(state.provider.creates) == 1
+        assert state.saved_objects_unchanged(before)
+        assert await state.use_claims() == []
+
+
+async def test_cancellation_after_a_failed_push_attempt_starts_no_new_attempt(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path,
+        monkeypatch,
+        destination_files={"README.md": "x\n"},
+        emulate_temporal=False,
+    ) as state:
+        contract, workflow_id = _contract(state)
+        failing, release = asyncio.Event(), asyncio.Event()
+
+        async def fail_first_attempt_before_pushing(attempt: int) -> None:
+            if attempt == 1:
+                failing.set()
+                await release.wait()
+                raise RuntimeError("push attempt failed before pushing")
+
+        async with await WorkflowEnvironment.start_time_skipping(
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+        ) as env:
+            async with _workers(
+                env.client,
+                _queues(
+                    state,
+                    before={
+                        "publication_recovery.saved_work_push": (
+                            fail_first_attempt_before_pushing
+                        )
+                    },
+                ),
+            ):
+                handle = await env.client.start_workflow(
+                    MoonMindPublicationRecoveryWorkflow.run,
+                    contract,
+                    id=workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                )
+                await asyncio.wait_for(failing.wait(), timeout=60)
+                await handle.cancel()
+                # Let the workflow observe the cancellation before the attempt fails.
+                await asyncio.sleep(1)
+                release.set()
+                with pytest.raises(WorkflowFailureError) as failure:
+                    await handle.result()
+            persisted = await _persisted(state, handle)
+            scheduled = await _scheduled(handle)
+
+        assert isinstance(failure.value.cause, TemporalCancelledError)
+        assert persisted["outcome"] == "cancelled"
+        # The failed attempt stays diagnosable; no retry replaced it.
+        assert persisted["push"] == {
+            "status": "unconfirmed",
+            "reasonCode": "publication_cancelled",
+            "lastAttemptReasonCode": "RuntimeError",
+        }
+        assert scheduled.count("publication_recovery.saved_work_push") == 1
+        assert "publication_recovery.saved_work_pull_request" not in scheduled
+        assert state.pushes() == []
+        assert "refs/heads/saved/work" not in git(state.remote, "for-each-ref")
         assert state.provider.creates == []
         assert await state.use_claims() == []
