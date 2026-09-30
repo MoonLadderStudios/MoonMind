@@ -72,6 +72,7 @@ class MoonMindPublicationRecoveryWorkflow:
     def __init__(self) -> None:
         self._phase = "contract_validation"
         self._result: dict[str, Any] | None = None
+        self._cancellation: BaseException | None = None
 
     @workflow.query(name="publication_recovery.state")
     def state(self) -> dict[str, Any]:
@@ -89,6 +90,28 @@ class MoonMindPublicationRecoveryWorkflow:
             retry_policy=_RETRY_POLICY,
         )
         return _payload(result)
+
+    async def _to_completion(
+        self, name: str, payload: Mapping[str, Any], *, task_queue: str
+    ) -> dict[str, Any]:
+        """Run one saved-work Activity to its real outcome despite cancellation.
+
+        A workflow cancellation arriving meanwhile is remembered and applied
+        after the Activity stops, so a landed push or PR is recorded instead of
+        hidden, results persist, and use claims are released after their last
+        reader.
+        """
+
+        step = asyncio.ensure_future(
+            self._activity(name, payload, task_queue=task_queue)
+        )
+        while True:
+            try:
+                return await asyncio.shield(step)
+            except asyncio.CancelledError as exc:
+                if step.cancelled():
+                    raise
+                self._cancellation = self._cancellation or exc
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -215,9 +238,11 @@ class MoonMindPublicationRecoveryWorkflow:
         """Publish one immutable saved result through the existing publisher.
 
         The prepare Activity admits the destination once and persists the exact
-        candidate before any effect. Push and pull request are separate
-        Activities, so a PR retry never repeats a confirmed push. No agent,
-        verifier, or model Activity is reachable from this path.
+        candidate before any effect; a later run of the same operation reuses
+        that decision. Push and pull request are separate Activities, so a PR
+        retry never repeats a confirmed push. Cancellation stops further
+        effects but never abandons one in flight or its durable record. No
+        agent, verifier, or model Activity is reachable from this path.
         """
 
         try:
@@ -231,37 +256,43 @@ class MoonMindPublicationRecoveryWorkflow:
             "contract": frozen,
             "idempotencyKey": contract.publication_idempotency_key,
         }
+        info = workflow.info()
         prepared: dict[str, Any] = {}
         push: dict[str, Any] | None = None
         pull_request: dict[str, Any] | None = None
-        outcome, reason = "unavailable", None
-        interrupted: BaseException | None = None
+        outcome: str | None = None
+        reason: str | None = None
+        in_flight: str | None = None
         try:
             self._phase = "optional_workspace_restoration"
-            prepared = await self._activity(
+            prepared = await self._to_completion(
                 "publication_recovery.saved_work_prepare",
-                request,
+                {**request, "destinationWorkflowId": info.workflow_id},
                 task_queue=AGENT_RUNTIME_TASK_QUEUE,
             )
             if (prepared.get("candidate") or {}).get("noChange"):
                 outcome, reason = "no_change", "saved_content_matches_destination"
-            else:
+            elif self._cancellation is None:
                 self._phase = "publication_operation"
-                push = await self._activity(
+                in_flight = "push"
+                push = await self._to_completion(
                     "publication_recovery.saved_work_push",
                     {**request, "prepared": prepared},
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 )
+                in_flight = None
                 if push.get("status") not in {"pushed", "reconciled"}:
                     outcome, reason = "conflict", str(push.get("reasonCode") or "")
                 elif contract.destination.objective == "branch":
                     outcome, reason = "published", str(push.get("reasonCode") or "")
-                else:
-                    pull_request = await self._activity(
+                elif self._cancellation is None:
+                    in_flight = "pullRequest"
+                    pull_request = await self._to_completion(
                         "publication_recovery.saved_work_pull_request",
                         {**request, "prepared": prepared, "push": push},
                         task_queue=INTEGRATIONS_TASK_QUEUE,
                     )
+                    in_flight = None
                     status = str(pull_request.get("status") or "")
                     if status in {"created", "adopted"}:
                         outcome, reason = "published", f"pull_request_{status}"
@@ -271,13 +302,21 @@ class MoonMindPublicationRecoveryWorkflow:
                         outcome, reason = "conflict", f"pull_request_{status}"
         except (ActivityError, asyncio.CancelledError) as exc:
             if is_cancelled_exception(exc):
-                # Cancellation cannot undo a confirmed effect; record it as is.
-                outcome, reason = "cancelled", "publication_cancelled"
+                self._cancellation = self._cancellation or exc
+                code = "publication_cancelled"
             else:
                 outcome, reason = _activity_failure(exc)
-            interrupted = exc
+                code = reason
+            # An effect Activity that returned no result is unconfirmed: the
+            # next attempt reconciles the remote before acting again.
+            if in_flight == "push":
+                push = {"status": "unconfirmed", "reasonCode": code}
+            elif in_flight == "pullRequest":
+                pull_request = {"status": "unconfirmed", "reasonCode": code}
+        if outcome is None:
+            # Only a cancellation stops the publication before a decision.
+            outcome, reason = "cancelled", "publication_cancelled"
 
-        info = workflow.info()
         result = {
             "schemaVersion": SAVED_WORK_PUBLICATION_RESULT_SCHEMA_VERSION,
             "sourceWorkflowId": contract.source_workflow_id,
@@ -297,7 +336,7 @@ class MoonMindPublicationRecoveryWorkflow:
         }
         try:
             self._phase = "artifact_summary_persistence"
-            self._result = await self._activity(
+            self._result = await self._to_completion(
                 "publication_recovery.persist_result",
                 {
                     **request,
@@ -310,17 +349,19 @@ class MoonMindPublicationRecoveryWorkflow:
         finally:
             self._phase = "cleanup"
             try:
-                await self._activity(
+                await self._to_completion(
                     "publication_recovery.cleanup",
                     request,
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 )
             except Exception:
-                # Releasing the saved-work use claim is auxiliary; its TTL bounds
-                # a missed release and it never overwrites persisted evidence.
+                # Releasing the saved-work use claims is auxiliary; their TTL
+                # bounds a missed release and never overwrites persisted evidence.
                 pass
-        if outcome == "cancelled" and interrupted is not None:
-            raise interrupted
+        if self._cancellation is not None:
+            # The record keeps every confirmed effect; the run honors the
+            # cancellation request.
+            raise self._cancellation
         if outcome not in {"published", "no_change"}:
             raise ApplicationError(
                 f"saved-work publication {outcome}: {reason}",

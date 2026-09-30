@@ -1161,6 +1161,35 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())
 
+    async def list_for_workflow(
+        self,
+        *,
+        namespace: str,
+        workflow_id: str,
+        link_type: str,
+    ) -> list[db_models.TemporalArtifact]:
+        """Artifacts linked to any run of one workflow id, newest first."""
+        stmt: Select[tuple[db_models.TemporalArtifact]] = (
+            select(db_models.TemporalArtifact)
+            .join(
+                db_models.TemporalArtifactLink,
+                db_models.TemporalArtifactLink.artifact_id
+                == db_models.TemporalArtifact.artifact_id,
+            )
+            .where(
+                db_models.TemporalArtifactLink.namespace == namespace,
+                db_models.TemporalArtifactLink.workflow_id == workflow_id,
+                db_models.TemporalArtifactLink.link_type == link_type,
+            )
+            .order_by(
+                db_models.TemporalArtifactLink.created_at.desc(),
+                db_models.TemporalArtifact.created_at.desc(),
+                db_models.TemporalArtifact.artifact_id.desc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().unique().all())
+
     async def list_collection_candidates(
         self, *, offset: int, limit: int
     ) -> list[db_models.TemporalArtifact]:
@@ -1347,6 +1376,14 @@ class TemporalArtifactRepository:
         )
         existing = (await self._session.execute(existing_stmt)).scalars().first()
         if existing is not None:
+            # Re-admitting the same operation extends, never shortens, its
+            # protection so a long or resumed operation outlives the first TTL.
+            current = existing.expires_at
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=UTC)
+            if current < expires_at:
+                existing.expires_at = expires_at
+                await self._session.flush()
             return existing
         claim = db_models.TemporalArtifactUseClaim(
             id=uuid4(),
@@ -1375,6 +1412,20 @@ class TemporalArtifactRepository:
         )
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0
+
+    async def release_use_claims_for_request(
+        self,
+        *,
+        owner_principal: str,
+        request_id: str,
+    ) -> int:
+        """Release one operation's claims on every artifact it protected."""
+        stmt = delete(db_models.TemporalArtifactUseClaim).where(
+            db_models.TemporalArtifactUseClaim.owner_principal == owner_principal,
+            db_models.TemporalArtifactUseClaim.request_id == request_id,
+        )
+        result = await self._session.execute(stmt)
+        return int(result.rowcount or 0)
 
     async def list_use_claims(
         self, artifact_id: str
@@ -2180,6 +2231,16 @@ class TemporalArtifactService:
         )
         reference_now = datetime.now(UTC)
         availability = self.saved_work_availability_of(artifact, now=reference_now)
+        if availability == "expired" and any(
+            claim.owner_principal == principal.strip()
+            and claim.request_id == request_id.strip()
+            for claim in await self._repository.list_live_use_claims(
+                artifact_id, now=reference_now
+            )
+        ):
+            # The operation's own live claim kept this content past its
+            # expiry; re-admitting that operation refreshes its protection.
+            availability = "available"
         if availability != "available":
             raise TemporalArtifactStateError(
                 f"SAVED_WORK_USE_{availability.upper()}: artifact {artifact_id} "
@@ -2212,6 +2273,20 @@ class TemporalArtifactService:
         """Release exactly one operation's protection (#4017 impl-03)."""
         released = await self._repository.release_use_claim(
             artifact_id=artifact_id,
+            owner_principal=principal,
+            request_id=request_id,
+        )
+        await self._repository.commit()
+        return released
+
+    async def release_saved_work_operation_uses(
+        self,
+        *,
+        principal: str,
+        request_id: str,
+    ) -> int:
+        """Release every claim one operation holds across its dependency closure."""
+        released = await self._repository.release_use_claims_for_request(
             owner_principal=principal,
             request_id=request_id,
         )
@@ -4189,6 +4264,60 @@ class TemporalArtifactService:
         ref = build_artifact_ref(completed)
         return {"artifact_ref_v": ref.artifact_ref_v, "artifact_id": ref.artifact_id}
 
+
+SAVED_WORK_PUBLICATION_RESULT_NAME = "saved-work-publication-result.json"
+
+
+def _publication_key_hash(operation_key: str) -> str:
+    return hashlib.sha256(operation_key.encode()).hexdigest()
+
+
+async def find_saved_work_publication_decision(
+    service: TemporalArtifactService, *, workflow_id: str, operation_key: str
+) -> dict[str, Any] | None:
+    """Return the newest persisted record of one operation that holds a candidate.
+
+    Results are linked per run, so a later run of the same workflow id reads
+    the earlier runs' records to reuse their admitted candidate (#4018).
+    """
+    principal = f"workflow:{workflow_id}"
+    key_hash = _publication_key_hash(operation_key)
+    for artifact in await service._repository.list_for_workflow(
+        namespace=service._default_namespace,
+        workflow_id=workflow_id,
+        link_type="result",
+    ):
+        metadata = dict(artifact.metadata_json or {})
+        if (
+            metadata.get("name") != SAVED_WORK_PUBLICATION_RESULT_NAME
+            or metadata.get("idempotencyKeyHash") != key_hash
+            or artifact.status is not db_models.TemporalArtifactStatus.COMPLETE
+        ):
+            continue
+        try:
+            _artifact, payload = await service.read(
+                artifact_id=artifact.artifact_id, principal=principal
+            )
+            record = json.loads(payload)
+        except (TemporalArtifactError, ValueError) as exc:
+            # An unreadable record proves no decision; a fresh admission is
+            # still guarded by the push lease against overwriting its effect.
+            logger.warning(
+                "saved_work_publication_record_unreadable artifact_id=%s error=%s",
+                artifact.artifact_id,
+                type(exc).__name__,
+            )
+            continue
+        if (
+            isinstance(record, dict)
+            and record.get("publicationIdempotencyKey") == operation_key
+            and record.get("admission")
+            and (record.get("candidate") or {}).get("headSha")
+        ):
+            return record
+    return None
+
+
 class TemporalArtifactActivities:
     """Activity-friendly facade used by Temporal workflow/activity code."""
 
@@ -4300,7 +4429,7 @@ class TemporalArtifactActivities:
                 "saved-work publication result lineage does not match persistence request"
             )
         return await self._persist_publication_result_artifact(
-            name="saved-work-publication-result.json",
+            name=SAVED_WORK_PUBLICATION_RESULT_NAME,
             payload=result.model_dump(by_alias=True, mode="json", exclude_none=True),
             workflow_id=workflow_id,
             run_id=run_id,
@@ -4317,7 +4446,7 @@ class TemporalArtifactActivities:
         operation_key: str,
     ) -> dict[str, Any]:
         principal = f"workflow:{workflow_id}"
-        key_hash = hashlib.sha256(operation_key.encode()).hexdigest()
+        key_hash = _publication_key_hash(operation_key)
         existing = await self._service.list_for_execution(
             namespace=self._service._default_namespace,
             workflow_id=workflow_id,

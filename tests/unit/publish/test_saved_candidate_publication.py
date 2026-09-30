@@ -557,7 +557,6 @@ async def test_failed_emptiness_read_is_unavailable_not_empty(tmp_path):
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"destinationProvider": "lore"},
         {"strategy": "empty_initialization", "objective": "pr", "baseBranch": None},
         {"strategy": "baseline_delta", "pathPrefix": "mapped", "expectedBaseSha": "a" * 40},
         {"expectedBaseSha": None},
@@ -567,10 +566,8 @@ async def test_failed_emptiness_read_is_unavailable_not_empty(tmp_path):
     ],
 )
 async def test_unsupported_admissions_fail_closed(overrides):
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError):
         _admission(**overrides)
-    if overrides.get("destinationProvider") == "lore":
-        assert "PUBLICATION_LORE_AUTHORITATIVE" in str(exc.value)
 
 
 async def test_changed_content_base_mapping_or_authority_invalidates_the_decision():

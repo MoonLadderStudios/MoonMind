@@ -336,7 +336,7 @@ Saved work (a committed `saved-work-manifest/v1`) can be published later without
 
 The saved-work path runs only publication Activities on the existing publisher (`moonmind/publish`):
 
-1. **Prepare** claims a `publication` use of the saved work, verifies the manifest, snapshot archive, file manifest, and recorded delta against their digests, and materializes them into a fresh owned directory. It observes the destination base once if no expectation was supplied, then builds a deterministic candidate commit. The admission and candidate identity are stored in workflow history before any effect.
+1. **Prepare** claims a `publication` use of each saved object before reading it (manifest, snapshot archive, and recorded delta), so a retention sweep cannot remove the closure mid-publication. It verifies those objects and the file manifest against their digests, and materializes them into a fresh owned directory. It observes the destination base once if no expectation was supplied, then builds a deterministic candidate commit. The admission and candidate identity are stored in workflow history before any effect. When an earlier run of the same operation persisted a candidate for this exact decision under the current authority, prepare rebuilds that candidate on its admitted base instead of observing the base again, so a resubmitted request completes only the unfinished effect.
 2. **Push** rebuilds the candidate on the admitted base, requires the persisted SHA, and pushes with the admitted head expectation as the only lease. It verifies the exact remote head. A lost acknowledgment reconciles instead of pushing again.
 3. **Pull request** (PR objectives only) reconciles the same head and base before creating anything. It adopts an open PR only when that PR's head is the candidate, and never edits the PR's metadata. A closed, merged, or mismatched PR blocks publication instead of creating another one. PR retries never repeat the push.
 
@@ -346,9 +346,9 @@ Application strategies:
 - `additive_import` keeps destination-only files and surfaces conflicts instead of overwriting.
 - `empty_initialization` requires a confirmed-empty destination.
 
-Lore destinations stay with their authoritative owner. Destination authority comes from the deployment's GitHub credential resolution for the destination repository. Its redaction-safe source is part of the admission, so a changed connection invalidates the persisted decision.
+Lore destinations stay with their authoritative owner. Admission refuses (`409 publication_lore_authoritative`) a GitHub repository that a non-deleted Lore repository connection declares as its review projection, before any workflow starts. Destination authority comes from the deployment's GitHub credential resolution for the destination repository. Its redaction-safe source is part of the admission, so a changed connection, commit, destination, or mapping is a new decision rather than a reuse of the persisted one.
 
-The terminal `saved-work-publication-result.json` records the push and PR outcomes separately with the saved-work digest. Conflict, cancellation, and failure leave the saved artifacts and the source execution untouched. Cleanup releases only the publication's own use claim and temporary directories.
+The terminal `saved-work-publication-result.json` records the push and PR outcomes separately with the saved-work digest. An effect Activity that ended without a result is recorded as `unconfirmed` with its reason, never omitted. Cancellation stops further effects but lets an in-flight Activity finish, records its real outcome, and still persists the result before the run ends as cancelled. Conflict, cancellation, and failure leave the saved artifacts and the source execution untouched. Cleanup runs after the last Activity stops and releases only the publication's own use claims and temporary directories.
 
 ## 8. Pull Request Creation and Metadata
 
