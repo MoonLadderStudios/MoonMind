@@ -77,6 +77,7 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
         "_sync_preset_seed_catalog",
         "_auto_seed_provider_profiles",
         "_sync_env_managed_secrets",
+        "_migrate_legacy_github_connection",
         "ensure_provider_profile_managers_started",
         "ensure_managed_session_reconcile_schedule_started",
         "ensure_managed_runtime_workspace_cleanup_schedule_started",

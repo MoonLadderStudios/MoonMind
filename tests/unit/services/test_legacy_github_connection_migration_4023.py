@@ -81,7 +81,7 @@ async def _migrate(maker, environ, *, settings_ref=None):
             session,
             environ=environ,
             settings_ref=settings_ref,
-            client_policy=_client_policy(),
+            client_policy_factory=_client_policy,
         )
 
 
@@ -179,9 +179,19 @@ async def test_rerun_converges_without_duplicate_or_reading_legacy_sources(
         monkeypatch.setattr(
             migration_module, "classify_legacy_github_credential", _census_forbidden
         )
+
+        def _host_inspection_forbidden():
+            raise AssertionError("post-migration startup must not inspect the host")
+
         # Different or removed legacy configuration after migration never
         # remaps the recorded identity.
-        second = await _migrate(maker, {"GITHUB_TOKEN": _TOKEN_B})
+        async with maker() as session:
+            second = await migrate_legacy_github_connection(
+                session,
+                environ={"GITHUB_TOKEN": _TOKEN_B},
+                settings_ref=None,
+                client_policy_factory=_host_inspection_forbidden,
+            )
 
         assert second.outcome is LegacyGitHubMigrationOutcome.ALREADY_PRESENT
         assert second.credential_ref == "db://github-pat-main"

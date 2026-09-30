@@ -29,7 +29,7 @@ connection directly and supported deployments no longer bootstrap it from
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -199,9 +199,13 @@ async def migrate_legacy_github_connection(
     *,
     environ: Mapping[str, str],
     settings_ref: str | None,
-    client_policy: RepositoryClientPolicy,
+    client_policy_factory: Callable[[], RepositoryClientPolicy],
 ) -> LegacyGitHubMigrationResult:
-    """Map the proven legacy GitHub identity once; idempotent and fenced."""
+    """Map the proven legacy GitHub identity once; idempotent and fenced.
+
+    ``client_policy_factory`` is only called when a mapping is written, so a
+    post-migration startup inspects neither legacy sources nor the host.
+    """
 
     existing = await _recorded_default_connection(session)
     if existing is not None:
@@ -220,7 +224,9 @@ async def migrate_legacy_github_connection(
             correction=identity.correction,
         )
     proposed_ref = identity.credential_ref
-    connection = _default_connection_for(identity, client_policy=client_policy)
+    connection = _default_connection_for(
+        identity, client_policy=client_policy_factory()
+    )
 
     if await _operator_setting_fence(session, lock=True) != fence:
         await session.rollback()
