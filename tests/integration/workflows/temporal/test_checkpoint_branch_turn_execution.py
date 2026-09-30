@@ -2188,6 +2188,113 @@ async def test_checkpoint_branch_turn_worker_failure_matrix_terminalizes_durably
     await engine.dispose()
 
 
+async def test_branch_child_result_and_finalization_save_survive_failed_capture(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4016: a failed branch capture keeps the child's work.
+
+    The child's compute succeeded and its finalization owner verified a save.
+    Exhausting the branch consumer's own capture must not launch a second
+    child or drop that candidate. The turn is not reported as success, but the
+    retained agent result stays successful, and the verified saved checkpoint
+    is pinned and handed to verification for recovery.
+    """
+
+    global WORKFLOW_FAILURE_BOUNDARY
+    global DURABLE_CHECKPOINT_REF
+
+    engine, sessions, refs = await _terminal_activity_database(
+        tmp_path, monkeypatch
+    )
+    DURABLE_CHECKPOINT_REF = refs["checkpoint"]
+    CALLS.clear()
+    WORKFLOW_FAILURE_BOUNDARY = ("checkpoint_capture", "before")
+
+    async def artifact_writer(kind: str, _key: str, _body: bytes) -> str:
+        return {
+            "output": refs["output"],
+            "diagnostics": refs["diagnostics"],
+            "external-state": refs["external"],
+        }[kind]
+
+    ledger = CheckpointBranchRuntimeLedger(artifact_writer=artifact_writer)
+    saved = {
+        "kind": "worktree_archive",
+        "baseCommit": "a" * 40,
+        "headCommit": "b" * 40,
+        "archiveRef": refs["workspace"],
+        "archiveDigest": "sha256:" + "0" * 64,
+        "checkpointRef": refs["checkpoint"],
+        "recoveryEvidence": {"reasonCode": "saved_work_requires_recovery"},
+    }
+    launches: list[str] = []
+
+    async def execute_saved_child(request: AgentExecutionRequest) -> AgentRunResult:
+        launches.append(request.idempotency_key)
+        result = await execute_checkpoint_branch_request(request, ledger=ledger)
+        # The generic host finalization owner reports its verified save here.
+        return result.model_copy(
+            update={
+                "metadata": {
+                    **dict(result.metadata or {}),
+                    "savedWorkspaceCheckpoint": saved,
+                    "workPreserved": True,
+                }
+            }
+        )
+
+    monkeypatch.setattr(
+        omnigent_activities, "_omnigent_execute_activity", execute_saved_child
+    )
+    try:
+        result, _history = await _run(
+            "capture-fails-after-saved-child",
+            durable_terminal=True,
+            publish_mode="branch",
+            real_agent_run=True,
+        )
+    finally:
+        WORKFLOW_FAILURE_BOUNDARY = None
+        DURABLE_CHECKPOINT_REF = None
+
+    expected = {
+        key: saved[key]
+        for key in ("kind", "baseCommit", "headCommit", "archiveRef",
+                    "archiveDigest", "checkpointRef")
+    }
+    assert len(launches) == 1
+    assert result["verificationPending"] is False
+    assert result["saveCommit"]["status"] == "incomplete"
+    assert result["saveCommit"]["orphanAction"] == (
+        "reconcile-with-finalization-owner"
+    )
+    assert result["saveCommit"]["finalizationCheckpoint"] == expected
+    candidate = result["verificationHandoff"]["candidate"]
+    assert candidate["savedWorkspaceCheckpoint"] == expected
+    async with sessions() as session:
+        turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+        assert turn is not None
+        assert turn.diagnostics["saveCommit"] == result["saveCommit"]
+        repository = get_temporal_artifact_repository(session)
+        for ref in (saved["checkpointRef"], saved["archiveRef"]):
+            assert await repository.get_pin(ref.removeprefix("artifact://"))
+        artifacts = TemporalArtifactService(
+            repository,
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        _artifact, body = await artifacts.read(
+            artifact_id=result["agentResultRef"].removeprefix("artifact://"),
+            principal="service:checkpoint-branch-turn",
+            allow_restricted_raw=True,
+        )
+        retained = json.loads(body)
+        assert "failureClass" not in retained
+        assert retained["metadata"]["workPreserved"] is True
+        assert retained["metadata"]["savedWorkspaceCheckpoint"] == expected
+    await engine.dispose()
+
+
 async def test_preclaim_artifact_retry_reuses_exact_owned_ref(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

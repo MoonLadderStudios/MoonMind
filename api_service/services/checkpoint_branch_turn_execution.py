@@ -1229,8 +1229,10 @@ class CheckpointBranchTurnExecutionOwner:
             logical_step_id=logical_step_id,
             ordinal=max(count, 1),
         )
+        # The same owner identity the host workspace, save, and restore
+        # boundaries resolve for this child's (workflow, step execution).
         locator_id = hashlib.sha256(
-            identity.step_execution_id.encode()
+            f"{identity.workflow_id}:{identity.step_execution_id}".encode()
         ).hexdigest()[:24]
         runtime_selection = dict(
             (branch.diagnostics or {}).get("runtimeSelection") or {}

@@ -310,6 +310,39 @@ def _safe_capture_evidence(capture: Mapping[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def _safe_saved_workspace_checkpoint(saved: Any) -> dict[str, Any]:
+    """Project the child finalization owner's verified save to its identity.
+
+    Only the checkpoint's durable refs, digests, and commits cross into branch
+    evidence; recovery observations and local detail stay with their owner.
+    Without a durable ``checkpointRef`` there is no verified saved result.
+    """
+
+    if not isinstance(saved, Mapping) or not saved.get("checkpointRef"):
+        return {}
+    try:
+        safe: dict[str, Any] = {
+            key: _require_durable_artifact_ref(
+                saved[key], path=f"savedWorkspaceCheckpoint.{key}"
+            )
+            for key in ("checkpointRef", "archiveRef", "manifestRef")
+            if saved.get(key)
+        }
+    except CheckpointBranchRetainedEvidenceError:
+        return {}
+    for key, pattern in (
+        ("kind", r"[a-z][a-z0-9_]{0,63}"),
+        ("baseCommit", r"[0-9a-f]{7,64}"),
+        ("headCommit", r"[0-9a-f]{7,64}"),
+        ("archiveDigest", r"sha256:[0-9a-f]{64}"),
+        ("manifestDigest", r"sha256:[0-9a-f]{64}"),
+    ):
+        value = saved.get(key)
+        if isinstance(value, str) and re.fullmatch(pattern, value):
+            safe[key] = value
+    return safe
+
+
 def _artifact_refs_in(value: Any) -> list[str]:
     refs: list[str] = []
     if isinstance(value, Mapping):
@@ -491,6 +524,7 @@ def build_branch_turn_verification_handoff(
     source_workflow_id: str,
     source_run_id: str,
     verification_pending: bool,
+    saved_workspace_checkpoint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pass the exact resulting candidate plus the original objective onward.
 
@@ -500,21 +534,26 @@ def build_branch_turn_verification_handoff(
     not graph success and never permits rerunning the branch.
     """
 
+    candidate = {
+        "branchId": branch_id,
+        "branchTurnId": branch_turn_id,
+        "agentResultRef": agent_result_ref,
+        "diagnosticsRef": diagnostics_ref,
+        "checkpointRef": checkpoint_ref,
+        "checkpointDigest": checkpoint_digest,
+        "terminalDisposition": terminal_disposition,
+        "deliveryOutcome": delivery_outcome,
+    }
+    if saved_workspace_checkpoint:
+        # The child finalization owner's verified save: the recoverable
+        # candidate when the branch's own terminal checkpoint is missing.
+        candidate["savedWorkspaceCheckpoint"] = dict(saved_workspace_checkpoint)
     return {
         "schemaVersion": _BRANCH_TURN_VERIFICATION_HANDOFF_SCHEMA_VERSION,
         "actionKind": _BRANCH_TURN_VERIFICATION_ACTION_KIND,
         "verifier": _BRANCH_TURN_VERIFICATION_VERIFIER,
         "verificationPending": verification_pending,
-        "candidate": {
-            "branchId": branch_id,
-            "branchTurnId": branch_turn_id,
-            "agentResultRef": agent_result_ref,
-            "diagnosticsRef": diagnostics_ref,
-            "checkpointRef": checkpoint_ref,
-            "checkpointDigest": checkpoint_digest,
-            "terminalDisposition": terminal_disposition,
-            "deliveryOutcome": delivery_outcome,
-        },
+        "candidate": candidate,
         "objective": {
             "sourceNamespace": source_namespace,
             "sourceWorkflowId": source_workflow_id,
@@ -1056,6 +1095,30 @@ async def persist_checkpoint_branch_turn_terminal(
         safe_authority = _mapping(
             _replace_artifact_refs(safe_authority, replacements)
         )
+        saved_checkpoint = _safe_saved_workspace_checkpoint(
+            result.metadata.get("savedWorkspaceCheckpoint")
+        )
+        try:
+            for key in ("checkpointRef", "archiveRef", "manifestRef"):
+                if key in saved_checkpoint:
+                    saved_checkpoint[key], _data = await _retain_artifact(
+                        ref=saved_checkpoint[key],
+                        path=f"savedWorkspaceCheckpoint.{key}",
+                        source_namespace=source_namespace,
+                        source_workflow_id=workflow_id,
+                        source_run_id=source_run_id,
+                        branch_turn_id=branch_turn_id,
+                    )
+        except CheckpointBranchRetainedEvidenceError:
+            # The finalization owner keeps its own receipt. An unretainable
+            # projection cannot erase this turn's confirmed terminal record.
+            logger.warning(
+                "Checkpoint Branch turn %s could not retain its child's saved "
+                "workspace checkpoint",
+                branch_turn_id,
+                exc_info=True,
+            )
+            saved_checkpoint = {}
         terminal_ref = safe_capture.get("terminalRef")
         if checkpoint_model is not None and checkpoint_bytes is not None:
             checkpoint_payload = checkpoint_model.model_dump(
@@ -1115,6 +1178,14 @@ async def persist_checkpoint_branch_turn_terminal(
             "metadata": {
                 "omnigentCheckpointCapture": safe_capture,
                 "authorityEvidence": safe_authority,
+                **(
+                    {
+                        "savedWorkspaceCheckpoint": saved_checkpoint,
+                        "workPreserved": True,
+                    }
+                    if saved_checkpoint
+                    else {}
+                ),
             },
         }
         result_payload = {
@@ -1192,6 +1263,12 @@ async def persist_checkpoint_branch_turn_terminal(
         )
         upstream_save_claim = _mapping(payload.get("saveCommit"))
         save_commit = attach_upstream_save_claim(save_commit, upstream_save_claim)
+        if saved_checkpoint and save_commit.get("orphanAction") == (
+            "reconcile-with-finalization-owner"
+        ):
+            # Resolve the orphan action to the owner's verified save rather
+            # than leaving the only recoverable copy unnamed.
+            save_commit["finalizationCheckpoint"] = dict(saved_checkpoint)
         verification_handoff = build_branch_turn_verification_handoff(
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
@@ -1205,6 +1282,7 @@ async def persist_checkpoint_branch_turn_terminal(
             source_workflow_id=workflow_id,
             source_run_id=source_run_id,
             verification_pending=outcome == "succeeded",
+            saved_workspace_checkpoint=saved_checkpoint or None,
         )
         turn = await service.finalize_turn_execution(
             workflow_id=workflow_id,

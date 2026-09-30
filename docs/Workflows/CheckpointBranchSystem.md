@@ -324,6 +324,17 @@ awaited rather than fire-and-forget when eligible. Save failure retains the sole
 workspace under bounded recovery. None never becomes an implicit remote-push
 exception.
 
+A branch turn whose child succeeded but whose own capture or terminal checkpoint
+failed is not a success, and the child is not launched again. The retained agent
+result keeps the child's successful compute. If the child's finalization owner
+verified a save, the retained agent result and the verification handoff also
+carry that saved checkpoint's durable refs, digests, and commits. The
+`saveCommit` stays `incomplete` with `orphanAction:
+reconcile-with-finalization-owner` and names that checkpoint as
+`finalizationCheckpoint`. The checkpoint's artifacts are pinned like other
+retained branch evidence. The branch child's sandbox locator uses the same
+`(workflow, step execution)` owner identity that host, save, and restore resolve.
+
 ---
 
 ## 7. Data model
