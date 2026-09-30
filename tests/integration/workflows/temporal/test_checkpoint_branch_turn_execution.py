@@ -21,6 +21,7 @@ from sqlalchemy.orm import sessionmaker
 from temporalio import activity, workflow
 from temporalio.client import WorkflowFailureError
 from temporalio.common import RetryPolicy
+from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
@@ -61,7 +62,10 @@ from api_service.services.checkpoint_branch_turn_execution import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
-from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+from moonmind.schemas.temporal_models import (
+    StepCheckpointCreateInput,
+    StepExecutionCheckpointModel,
+)
 from moonmind.workflows import get_temporal_artifact_repository
 from moonmind.workflows.temporal.activities import omnigent_activities
 from moonmind.workflows.temporal.activities.omnigent_activities import (
@@ -80,6 +84,7 @@ from moonmind.workflows.temporal.activity_catalog import (
 )
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+    CHECKPOINT_BRANCH_FINALIZATION_SAVE_PATCH,
     CheckpointBranchRetainedEvidenceError,
     MoonMindCheckpointBranchTurnWorkflow,
     mark_checkpoint_branch_turn_running,
@@ -2188,18 +2193,29 @@ async def test_checkpoint_branch_turn_worker_failure_matrix_terminalizes_durably
     await engine.dispose()
 
 
-async def test_branch_child_result_and_finalization_save_survive_failed_capture(
+def _finalization_saved_checkpoint(refs: dict[str, str]) -> dict:
+    """The generic host finalization owner's verified save for one child."""
+
+    return {
+        "kind": "worktree_archive",
+        "baseCommit": "a" * 40,
+        "headCommit": "b" * 40,
+        "archiveRef": refs["workspace"],
+        "archiveDigest": "sha256:" + "0" * 64,
+        "manifestRef": refs["capture"],
+        "manifestDigest": "sha256:" + "1" * 64,
+        "checkpointRef": refs["checkpoint"],
+        "recoveryEvidence": {"reasonCode": "saved_work_requires_recovery"},
+    }
+
+
+async def _run_saved_child_with_failed_capture(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """MoonLadderStudios/MoonMind#4016: a failed branch capture keeps the child's work.
-
-    The child's compute succeeded and its finalization owner verified a save.
-    Exhausting the branch consumer's own capture must not launch a second
-    child or drop that candidate. The turn is not reported as success, but the
-    retained agent result stays successful, and the verified saved checkpoint
-    is pinned and handed to verification for recovery.
-    """
+    *,
+    transient_failures: dict[str, int] | None = None,
+):
+    """Run a real AgentRun child whose finalization owner saved, then fail capture."""
 
     global WORKFLOW_FAILURE_BOUNDARY
     global DURABLE_CHECKPOINT_REF
@@ -2219,15 +2235,7 @@ async def test_branch_child_result_and_finalization_save_survive_failed_capture(
         }[kind]
 
     ledger = CheckpointBranchRuntimeLedger(artifact_writer=artifact_writer)
-    saved = {
-        "kind": "worktree_archive",
-        "baseCommit": "a" * 40,
-        "headCommit": "b" * 40,
-        "archiveRef": refs["workspace"],
-        "archiveDigest": "sha256:" + "0" * 64,
-        "checkpointRef": refs["checkpoint"],
-        "recoveryEvidence": {"reasonCode": "saved_work_requires_recovery"},
-    }
+    saved = _finalization_saved_checkpoint(refs)
     launches: list[str] = []
 
     async def execute_saved_child(request: AgentExecutionRequest) -> AgentRunResult:
@@ -2248,22 +2256,114 @@ async def test_branch_child_result_and_finalization_save_survive_failed_capture(
         omnigent_activities, "_omnigent_execute_activity", execute_saved_child
     )
     try:
-        result, _history = await _run(
+        result, history = await _run(
             "capture-fails-after-saved-child",
             durable_terminal=True,
             publish_mode="branch",
             real_agent_run=True,
+            transient_failures=transient_failures,
         )
     finally:
         WORKFLOW_FAILURE_BOUNDARY = None
         DURABLE_CHECKPOINT_REF = None
+    return engine, sessions, refs, saved, launches, result, history
+
+
+async def test_branch_resumes_checkpoint_phase_from_child_finalization_save(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4016: recovery resumes the phase, not the model.
+
+    The child's compute succeeded and its finalization owner verified a save.
+    When the branch consumer's own capture is exhausted, the unfinished branch
+    checkpoint phase resumes from that save through the existing checkpoint
+    Activity. No second child launches, and the turn reaches the same
+    verification handoff as a normal checkpointed success.
+    """
+
+    engine, sessions, refs, saved, launches, result, history = (
+        await _run_saved_child_with_failed_capture(tmp_path, monkeypatch)
+    )
+
+    workspace = {
+        key: value
+        for key, value in saved.items()
+        if key not in {"checkpointRef", "recoveryEvidence"}
+    }
+    assert len(launches) == 1
+    assert len(CHECKPOINT_PAYLOADS) == 1
+    checkpoint_input = CHECKPOINT_PAYLOADS[0]
+    # The production checkpoint contract accepts the adopted evidence as-is.
+    StepCheckpointCreateInput.model_validate(checkpoint_input)
+    assert {
+        key: checkpoint_input["workspace"][key] for key in workspace
+    } == workspace
+    assert checkpoint_input["idempotencyKey"].endswith(":checkpoint:after_execution")
+    assert saved["manifestRef"] in checkpoint_input["diagnosticRefs"]
+    assert result["status"] == "checking"
+    assert result["verificationPending"] is True
+    assert result["checkpointRef"] == refs["checkpoint"]
+    assert result["saveCommit"]["status"] != "incomplete"
+    assert "finalizationCheckpoint" not in result["saveCommit"]
+    async with sessions() as session:
+        turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+        assert turn is not None
+        assert turn.status == "checking"
+        assert turn.diagnostics["verificationPending"] is True
+    patch_ids = [
+        (
+            await DataConverter.default.decode(
+                event.marker_recorded_event_attributes.details[
+                    "patch-data"
+                ].payloads
+            )
+        )[0]["id"]
+        for event in history.events
+        if event.HasField("marker_recorded_event_attributes")
+        and event.marker_recorded_event_attributes.marker_name == "core_patch"
+    ]
+    assert CHECKPOINT_BRANCH_FINALIZATION_SAVE_PATCH in patch_ids
+    await Replayer(
+        workflows=[MoonMindCheckpointBranchTurnWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+    await engine.dispose()
+
+
+async def test_branch_child_result_and_finalization_save_survive_failed_capture(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4016: a failed branch capture keeps the child's work.
+
+    The child's compute succeeded and its finalization owner verified a save.
+    When neither the branch capture nor the checkpoint resumed from that save
+    can complete, the turn is not reported as success and no second child
+    launches. The retained agent result stays successful, and the verified
+    saved checkpoint is pinned and handed to verification for recovery.
+    """
+
+    engine, sessions, _refs, saved, launches, result, _history = (
+        await _run_saved_child_with_failed_capture(
+            tmp_path,
+            monkeypatch,
+            transient_failures={"before:checkpoint": 3},
+        )
+    )
 
     expected = {
         key: saved[key]
         for key in ("kind", "baseCommit", "headCommit", "archiveRef",
-                    "archiveDigest", "checkpointRef")
+                    "archiveDigest", "manifestRef", "manifestDigest",
+                    "checkpointRef")
     }
     assert len(launches) == 1
+    assert CHECKPOINT_PAYLOADS
+    assert all(
+        payload["workspace"]["archiveRef"] == saved["archiveRef"]
+        for payload in CHECKPOINT_PAYLOADS
+    )
     assert result["verificationPending"] is False
     assert result["saveCommit"]["status"] == "incomplete"
     assert result["saveCommit"]["orphanAction"] == (
