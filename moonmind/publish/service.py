@@ -615,13 +615,15 @@ class PublishService:
         github_token: str | None = None,
         bound_credential: Any | None = None,
         remote_url: str | None = None,
+        persisted_head_sha: str | None = None,
     ) -> SavedCandidate:
         """Build one admitted saved-work candidate without original-source lookup.
 
         Only the admitted destination authority (explicit token or bound
         credential) is used; process-environment tokens, host Git config, and
         hooks never reach the contained workspace. ``remote_url`` defaults to
-        the GitHub remote of ``admission.repository``.
+        the GitHub remote of ``admission.repository``. ``persisted_head_sha``
+        rebuilds an already persisted candidate and rejects any difference.
         """
 
         token = saved_candidate.admitted_token(
@@ -635,6 +637,34 @@ class PublishService:
             token=token,
             remote_url=remote_url
             or saved_candidate.github_remote_url(admission.repository),
+            persisted_head_sha=persisted_head_sha,
+        )
+
+    async def observe_destination_branch(
+        self,
+        *,
+        workspace: Path,
+        repository: str,
+        branch: str,
+        github_token: str | None = None,
+        bound_credential: Any | None = None,
+        remote_url: str | None = None,
+    ) -> str | None:
+        """Read the destination branch tip once so it can be admitted.
+
+        ``None`` is confirmed absence; an unreadable remote raises a retryable
+        ``PUBLICATION_DESTINATION_UNAVAILABLE`` instead of reporting absence.
+        """
+
+        token = saved_candidate.admitted_token(
+            github_token=github_token, bound_credential=bound_credential
+        )
+        return await saved_candidate.observe_branch(
+            git_binary=self._git_binary,
+            workspace=Path(workspace),
+            branch=branch,
+            token=token,
+            remote_url=remote_url or saved_candidate.github_remote_url(repository),
         )
 
     async def push_candidate(

@@ -17,6 +17,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.publish.saved_candidate import (
+    SavedPublicationAdmission,
+    SavedPublicationCommit,
+)
+
 PublicationSemanticContext = Literal["accepted", "incomplete_draft_handoff"]
 PublicationReconciliation = Literal[
     "already_completed", "safe_to_retry", "conflict", "ambiguous"
@@ -390,8 +395,8 @@ class PublicationRecoveryRolloutPolicy(BaseModel):
         default=(), alias="canaryRepositories"
     )
     canary_owner_ids: tuple[str, ...] = Field(default=(), alias="canaryOwnerIds")
-    allowed_modes: tuple[Literal["pr", "draft_pr"], ...] = Field(
-        default=("pr", "draft_pr"), alias="allowedModes"
+    allowed_modes: tuple[Literal["pr", "draft_pr", "branch"], ...] = Field(
+        default=("pr", "draft_pr", "branch"), alias="allowedModes"
     )
     generation: str = "disabled"
 
@@ -518,8 +523,201 @@ def publication_action_eligibility(
     return True, None
 
 
+SAVED_WORK_PUBLICATION_SCHEMA_VERSION = "saved-work-publication-v1"
+SAVED_WORK_PUBLICATION_RESULT_SCHEMA_VERSION = "saved-work-publication-result-v1"
+# Placeholder that lets admission validation run before the destination base
+# is observed; it never becomes a remote expectation.
+_UNOBSERVED_BASE_SHA = "0" * 40
+
+
+class SavedWorkPublicationDestination(BaseModel):
+    """The destination, objective, and application policy one request admits."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    repository: str
+    objective: Literal["branch", "pr", "draft_pr"]
+    base_branch: str | None = Field(None, alias="baseBranch")
+    head_branch: str = Field(..., alias="headBranch")
+    strategy: Literal["baseline_delta", "additive_import", "empty_initialization"]
+    path_prefix: str | None = Field(None, alias="pathPrefix")
+    authorized_deletions: tuple[str, ...] = Field((), alias="authorizedDeletions")
+    expected_base_sha: str | None = Field(None, alias="expectedBaseSha")
+    expected_head_sha: str | None = Field(None, alias="expectedHeadSha")
+
+
+def saved_work_publication_operation_key(
+    *,
+    saved_work_digest: str,
+    destination: SavedWorkPublicationDestination,
+    github_authority_ref: str,
+) -> str:
+    """Identity for one saved result, admitted destination, strategy, and branch."""
+
+    identity = {
+        "authority": _required_text(github_authority_ref, "githubAuthorityRef"),
+        "destination": {
+            **destination.model_dump(by_alias=True, mode="json"),
+            "repository": destination.repository.lower(),
+        },
+        "savedWork": _required_text(saved_work_digest, "savedWorkDigest"),
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"saved-publication:{digest}"
+
+
+class SavedWorkPublicationContract(BaseModel):
+    """Frozen input for publishing one immutable saved result (#4018).
+
+    It carries references and policy only: no credential, model Profile, or
+    source workspace. The destination base is observed once by the prepare
+    Activity when ``expectedBaseSha`` is omitted, then persisted with the
+    candidate before any effect.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_version: Literal["saved-work-publication-v1"] = Field(
+        SAVED_WORK_PUBLICATION_SCHEMA_VERSION, alias="schemaVersion"
+    )
+    source_workflow_id: str = Field(..., alias="sourceWorkflowId")
+    source_run_id: str = Field(..., alias="sourceRunId")
+    saved_work_ref: str = Field(..., alias="savedWorkRef")
+    saved_work_digest: str = Field(..., alias="savedWorkDigest")
+    admitted_principal: str = Field(..., alias="admittedPrincipal")
+    destination: SavedWorkPublicationDestination
+    github_authority_ref: str = Field(..., alias="githubAuthorityRef")
+    commit: SavedPublicationCommit
+    pull_request_title: str | None = Field(None, alias="pullRequestTitle")
+    pull_request_body: str | None = Field(None, alias="pullRequestBody")
+    publication_idempotency_key: str = Field(..., alias="publicationIdempotencyKey")
+
+    @field_validator(
+        "source_workflow_id",
+        "source_run_id",
+        "saved_work_ref",
+        "saved_work_digest",
+        "admitted_principal",
+        "github_authority_ref",
+        "publication_idempotency_key",
+    )
+    @classmethod
+    def _compact(cls, value: str, info: Any) -> str:
+        return _required_text(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _admissible(self) -> "SavedWorkPublicationContract":
+        # One validation owner: the publisher's admission rejects unsupported
+        # objectives, strategies, branches, mappings, and deletions.
+        self.admission(
+            expected_base_sha=self.destination.expected_base_sha
+            or (
+                None
+                if self.destination.strategy == "empty_initialization"
+                else _UNOBSERVED_BASE_SHA
+            ),
+            authority_ref=self.github_authority_ref,
+        )
+        if self.destination.objective != "branch" and not (
+            self.pull_request_title or ""
+        ).strip():
+            raise ValueError("a pull request objective requires pullRequestTitle")
+        expected_key = saved_work_publication_operation_key(
+            saved_work_digest=self.saved_work_digest,
+            destination=self.destination,
+            github_authority_ref=self.github_authority_ref,
+        )
+        if self.publication_idempotency_key != expected_key:
+            raise PublicationRecoveryError(
+                "PUBLICATION_IDEMPOTENCY_MISMATCH",
+                "publication idempotency key contradicts the admitted decision",
+            )
+        return self
+
+    @property
+    def draft(self) -> bool:
+        return self.destination.objective == "draft_pr"
+
+    def admission(
+        self, *, expected_base_sha: str | None, authority_ref: str
+    ) -> SavedPublicationAdmission:
+        """Bind the observed base and resolved authority into one admission."""
+
+        destination = self.destination
+        return SavedPublicationAdmission(
+            savedWorkDigest=self.saved_work_digest,
+            repository=destination.repository,
+            objective="branch" if destination.objective == "branch" else "pr",
+            baseBranch=destination.base_branch,
+            headBranch=destination.head_branch,
+            strategy=destination.strategy,
+            expectedBaseSha=expected_base_sha,
+            expectedHeadSha=destination.expected_head_sha,
+            pathPrefix=destination.path_prefix,
+            authorizedDeletions=destination.authorized_deletions,
+            authorityRef=authority_ref,
+            commit=self.commit,
+        )
+
+
+def saved_work_publication_workflow_id(
+    contract: SavedWorkPublicationContract,
+) -> str:
+    """Map duplicate submissions of one decision to one linked workflow."""
+
+    digest = contract.publication_idempotency_key.removeprefix("saved-publication:")
+    return f"{contract.source_workflow_id}:saved-work-publication:{digest[:24]}"[:300]
+
+
+class SavedWorkPublicationResult(BaseModel):
+    """Durable terminal record with separate push and pull-request outcomes."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_version: Literal["saved-work-publication-result-v1"] = Field(
+        SAVED_WORK_PUBLICATION_RESULT_SCHEMA_VERSION, alias="schemaVersion"
+    )
+    source_workflow_id: str = Field(..., alias="sourceWorkflowId")
+    source_run_id: str = Field(..., alias="sourceRunId")
+    destination_workflow_id: str = Field(..., alias="destinationWorkflowId")
+    destination_run_id: str = Field(..., alias="destinationRunId")
+    publication_idempotency_key: str = Field(..., alias="publicationIdempotencyKey")
+    saved_work_ref: str = Field(..., alias="savedWorkRef")
+    saved_work_digest: str = Field(..., alias="savedWorkDigest")
+    outcome: Literal[
+        "published", "no_change", "conflict", "unavailable", "rejected", "cancelled"
+    ]
+    reason_code: str | None = Field(None, alias="reasonCode")
+    admission: dict[str, Any] | None = None
+    decision_digest: str | None = Field(None, alias="decisionDigest")
+    candidate: dict[str, Any] | None = None
+    push: dict[str, Any] | None = None
+    pull_request: dict[str, Any] | None = Field(None, alias="pullRequest")
+    implementation_rerun: Literal[False] = Field(False, alias="implementationRerun")
+    verification_rerun: Literal[False] = Field(False, alias="verificationRerun")
+
+    @model_validator(mode="after")
+    def _confirmed_effects(self) -> "SavedWorkPublicationResult":
+        if self.outcome == "published":
+            push_status = (self.push or {}).get("status")
+            if push_status not in {"pushed", "reconciled"} or not (self.push or {}).get(
+                "remoteVerified"
+            ):
+                raise ValueError("a published outcome requires a verified push")
+        return self
+
+
 __all__ = [
     "PUBLICATION_ONLY_PHASES",
+    "SAVED_WORK_PUBLICATION_RESULT_SCHEMA_VERSION",
+    "SAVED_WORK_PUBLICATION_SCHEMA_VERSION",
+    "SavedWorkPublicationContract",
+    "SavedWorkPublicationDestination",
+    "SavedWorkPublicationResult",
+    "saved_work_publication_operation_key",
+    "saved_work_publication_workflow_id",
     "PublicationContinuation",
     "PublicationIntent",
     "PublicationObservation",

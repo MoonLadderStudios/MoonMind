@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import tarfile
+import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -67,6 +68,7 @@ from moonmind.schemas.saved_work_models import (
     scan_saved_work_export_stream,
     snapshot_capture_generation,
     verify_captured_artifact_evidence,
+    workspace_content_digest as _workspace_content_digest,
 )
 from moonmind.schemas.saved_work_retention import (
     validate_saved_work_dependency_entries as _validate_saved_work_dependency_entries,
@@ -324,18 +326,6 @@ def _sha256_file(path: Path) -> str:
 def _workspace_identity_digest(workspace: Path) -> str:
     canonical_path = str(workspace.resolve())
     payload = ("moonmind-workspace-identity/v1\0" + canonical_path).encode("utf-8")
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
-def _workspace_content_digest(entries: Sequence[Mapping[str, Any]]) -> str:
-    payload = json.dumps(
-        {
-            "schemaVersion": "moonmind-workspace-content/v1",
-            "entries": list(entries),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
@@ -1066,6 +1056,18 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "publication_recovery.publish_candidate": (
         "agent_runtime",
         "publication_recovery_publish_candidate",
+    ),
+    "publication_recovery.saved_work_prepare": (
+        "agent_runtime",
+        "publication_recovery_saved_work_prepare",
+    ),
+    "publication_recovery.saved_work_push": (
+        "agent_runtime",
+        "publication_recovery_saved_work_push",
+    ),
+    "publication_recovery.saved_work_pull_request": (
+        "integrations",
+        "publication_recovery_saved_work_pull_request",
     ),
     "publication_recovery.cleanup": (
         "agent_runtime",
@@ -4385,6 +4387,118 @@ class TemporalSandboxActivities:
             },
         )
 
+_SAVED_WORK_PUBLICATION_PRINCIPAL = "service:saved_work_publication"
+_SAVED_CANDIDATE_PATH_SAMPLE = 50
+
+
+def _saved_work_publication_contract(payload: Any) -> Any:
+    from moonmind.workflows.temporal.publication_recovery import (
+        SavedWorkPublicationContract,
+    )
+
+    try:
+        return SavedWorkPublicationContract.model_validate(
+            dict((payload or {}).get("contract") or {})
+        )
+    except ValueError as exc:
+        raise temporal_exceptions.ApplicationError(
+            f"saved-work publication contract is invalid: {exc}",
+            type="PUBLICATION_CONTRACT_INVALID",
+            non_retryable=True,
+        ) from exc
+
+
+def _saved_publication_failure(exc: Exception) -> temporal_exceptions.ApplicationError:
+    """Carry the publisher's stable code; only retryable reads are retried."""
+
+    return temporal_exceptions.ApplicationError(
+        str(exc),
+        {"details": list(getattr(exc, "details", ()) or ())[:50]},
+        type=str(getattr(exc, "code", "") or "PUBLICATION_FAILED"),
+        non_retryable=not getattr(exc, "retryable", False),
+    )
+
+
+async def _saved_work_destination_authority(
+    contract: Any, *, admitted_authority_ref: str | None = None
+) -> tuple[str, str]:
+    """Resolve the destination's admitted GitHub authority and its safe identity.
+
+    The authority reference records only the redaction-safe credential source,
+    so a changed connection invalidates the persisted decision while a token
+    value never enters workflow history.
+    """
+
+    from moonmind.auth.github_credentials import resolve_github_credential
+
+    credential = await resolve_github_credential(
+        repo=contract.destination.repository
+    )
+    if not credential.token:
+        raise temporal_exceptions.ApplicationError(
+            f"destination authority is unavailable: {credential.safe_summary}",
+            type="PUBLICATION_AUTHORITY_UNAVAILABLE",
+            non_retryable=True,
+        )
+    authority_ref = (
+        f"{contract.github_authority_ref}#{credential.source.value}:"
+        f"{credential.source_name or 'default'}"
+    )
+    if admitted_authority_ref is not None and authority_ref != admitted_authority_ref:
+        raise temporal_exceptions.ApplicationError(
+            "destination authority changed since the decision was admitted",
+            type="PUBLICATION_AUTHORITY_CHANGED",
+            non_retryable=True,
+        )
+    return credential.token, authority_ref
+
+
+def _persisted_saved_candidate(contract: Any, prepared: Mapping[str, Any]) -> Any:
+    """Return the persisted admission only if it is exactly this contract's."""
+
+    from moonmind.publish.saved_candidate import SavedPublicationAdmission
+
+    try:
+        admission = SavedPublicationAdmission.model_validate(
+            dict(prepared.get("admission") or {})
+        )
+    except ValueError as exc:
+        raise temporal_exceptions.ApplicationError(
+            "persisted saved-work admission is invalid",
+            type="PUBLICATION_CANDIDATE_MISMATCH",
+            non_retryable=True,
+        ) from exc
+    expected = contract.admission(
+        expected_base_sha=admission.expected_base_sha,
+        authority_ref=admission.authority_ref,
+    )
+    head = str((prepared.get("candidate") or {}).get("headSha") or "")
+    if (
+        expected.decision_digest() != admission.decision_digest()
+        or prepared.get("decisionDigest") != admission.decision_digest()
+        or not head
+    ):
+        raise temporal_exceptions.ApplicationError(
+            "persisted saved-work candidate does not belong to this decision",
+            type="PUBLICATION_CANDIDATE_MISMATCH",
+            non_retryable=True,
+        )
+    return admission
+
+
+def _compact_saved_candidate(candidate: Any) -> dict[str, Any]:
+    return {
+        "headSha": candidate.head_sha,
+        "baseSha": candidate.base_sha,
+        "treeSha": candidate.tree_sha,
+        "noChange": candidate.no_change,
+        "changedPathCount": len(candidate.changed_paths),
+        "deletedPathCount": len(candidate.deleted_paths),
+        "changedPaths": list(candidate.changed_paths[:_SAVED_CANDIDATE_PATH_SAMPLE]),
+        "deletedPaths": list(candidate.deleted_paths[:_SAVED_CANDIDATE_PATH_SAMPLE]),
+    }
+
+
 class TemporalIntegrationActivities:
     """Implementation helpers for ``integration.jules.*``."""
 
@@ -4550,6 +4664,57 @@ class TemporalIntegrationActivities:
             "reconciliationOutcome": (
                 "new" if outcome.status == "created" else "reconciled"
             ),
+        }
+
+    async def publication_recovery_saved_work_pull_request(self, payload, /, **kwargs):
+        """Record the saved-work PR effect separately from its verified push.
+
+        The existing publisher reconciles the same head/base (including closed
+        and merged results) before any create, adopts only the persisted
+        candidate head, and never rewrites another actor's PR (#4018).
+        """
+        from moonmind.publish.service import PublishService
+
+        contract = _saved_work_publication_contract(payload)
+        prepared = dict((payload or {}).get("prepared") or {})
+        push = dict((payload or {}).get("push") or {})
+        admission = _persisted_saved_candidate(contract, prepared)
+        head = str(prepared["candidate"]["headSha"])
+        if (
+            push.get("status") not in {"pushed", "reconciled"}
+            or push.get("remoteHeadSha") != head
+            or not push.get("remoteVerified")
+        ):
+            raise temporal_exceptions.ApplicationError(
+                "a saved-work pull request requires the verified candidate push",
+                type="PUBLICATION_CANDIDATE_MISMATCH",
+                non_retryable=True,
+            )
+        token, _authority = await _saved_work_destination_authority(
+            contract, admitted_authority_ref=admission.authority_ref
+        )
+        outcome = await PublishService().publish_pull_request(
+            repository=admission.repository,
+            head_branch=admission.head_branch,
+            base_branch=str(admission.base_branch or ""),
+            candidate_sha=head,
+            draft=contract.draft,
+            title=str(contract.pull_request_title or ""),
+            body=str(contract.pull_request_body or ""),
+            github_token=token,
+        )
+        if outcome.status == "unavailable" and outcome.retryable:
+            # The retry reconciles this same head/base before any create.
+            raise temporal_exceptions.ApplicationError(
+                f"saved-work pull request outcome is unavailable: {outcome.summary}",
+                type="PUBLICATION_PULL_REQUEST_UNAVAILABLE",
+                non_retryable=False,
+            )
+        return {
+            "status": outcome.status,
+            "url": outcome.url,
+            "headSha": outcome.head_sha,
+            "summary": outcome.summary,
         }
 
     async def publication_recovery_verify(self, payload, /, **kwargs):
@@ -5927,8 +6092,242 @@ class TemporalAgentRuntimeActivities:
             )
         return {**restoration, "publicationPush": result}
 
+    @contextlib.contextmanager
+    def _saved_work_scratch(self, contract: Any):
+        """One owned temporary directory per attempt, always released."""
+        key_hash = hashlib.sha256(
+            contract.publication_idempotency_key.encode()
+        ).hexdigest()[:32]
+        scratch = (
+            self._workspace_root
+            / "saved_publications"
+            / f"{key_hash}-{uuid.uuid4().hex[:12]}"
+        )
+        scratch.mkdir(parents=True)
+        try:
+            yield scratch
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    async def _saved_work_candidate(
+        self,
+        contract: Any,
+        *,
+        scratch: Path,
+        admission: Any = None,
+        persisted_head_sha: str | None = None,
+    ) -> tuple[Any, Any, str]:
+        """Materialize verified saved work and build its admitted candidate.
+
+        Only saved-work artifacts are read, under a publication use claim and
+        the admitted owner scope; the original source is never looked up.
+        """
+        from moonmind.publish.saved_candidate import SavedPublicationError
+        from moonmind.publish.saved_work_source import (
+            materialize_saved_work,
+            saved_work_artifact_id,
+        )
+        from moonmind.publish.service import PublishService
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactNotFoundError,
+            TemporalArtifactStateError,
+        )
+
+        if self._artifact_service is None:
+            raise TemporalActivityRuntimeError(
+                "saved-work publication requires the artifact service"
+            )
+        try:
+            saved_work_id = saved_work_artifact_id(contract.saved_work_ref)
+        except SavedPublicationError as exc:
+            raise _saved_publication_failure(exc) from exc
+        try:
+            await self._artifact_service.acquire_saved_work_use(
+                artifact_id=saved_work_id,
+                principal=contract.admitted_principal,
+                request_id=contract.publication_idempotency_key,
+                operation_kind="publication",
+            )
+        except TemporalArtifactAuthorizationError as exc:
+            raise temporal_exceptions.ApplicationError(
+                "saved work is not readable by the admitted owner",
+                type="PUBLICATION_SAVED_WORK_UNAUTHORIZED",
+                non_retryable=True,
+            ) from exc
+        except (TemporalArtifactNotFoundError, TemporalArtifactStateError) as exc:
+            raise temporal_exceptions.ApplicationError(
+                f"saved work is not available for publication: {exc}",
+                type="PUBLICATION_SAVED_WORK_UNAVAILABLE",
+                non_retryable=True,
+            ) from exc
+        token, authority_ref = await _saved_work_destination_authority(
+            contract,
+            admitted_authority_ref=(
+                admission.authority_ref if admission is not None else None
+            ),
+        )
+
+        async def read(ref: str, content_types: frozenset[str]) -> bytes:
+            try:
+                artifact, body = await self._artifact_service.read(
+                    artifact_id=saved_work_artifact_id(ref),
+                    principal=_SAVED_WORK_PUBLICATION_PRINCIPAL,
+                    admitted_principal=contract.admitted_principal,
+                )
+            except TemporalArtifactAuthorizationError as exc:
+                raise SavedPublicationError(
+                    "PUBLICATION_SAVED_WORK_UNAUTHORIZED",
+                    "saved-work object is not readable by the admitted owner",
+                ) from exc
+            except (TemporalArtifactNotFoundError, TemporalArtifactStateError) as exc:
+                raise SavedPublicationError(
+                    "PUBLICATION_SAVED_WORK_UNAVAILABLE",
+                    "saved-work object is missing or unavailable",
+                ) from exc
+            if str(getattr(artifact, "content_type", "")) not in content_types:
+                raise SavedPublicationError(
+                    "PUBLICATION_CONTENT_INVALID",
+                    "saved-work object has an unexpected content type",
+                )
+            return body
+
+        publisher = PublishService()
+        try:
+            content = await materialize_saved_work(
+                read=read,
+                saved_work_ref=contract.saved_work_ref,
+                saved_work_digest=contract.saved_work_digest,
+                root=scratch / "content",
+            )
+            if admission is None:
+                destination = contract.destination
+                expected_base = destination.expected_base_sha
+                if expected_base is None and destination.base_branch:
+                    # The one admission read; later steps use this expectation.
+                    expected_base = await publisher.observe_destination_branch(
+                        workspace=scratch,
+                        repository=destination.repository,
+                        branch=destination.base_branch,
+                        github_token=token,
+                    )
+                    if expected_base is None:
+                        raise SavedPublicationError(
+                            "PUBLICATION_BASE_MISSING",
+                            "destination base branch does not exist",
+                        )
+                admission = contract.admission(
+                    expected_base_sha=expected_base, authority_ref=authority_ref
+                )
+            candidate = await publisher.prepare_saved_candidate(
+                admission=admission,
+                content=content,
+                workspace=scratch / "candidate",
+                github_token=token,
+                persisted_head_sha=persisted_head_sha,
+            )
+        except SavedPublicationError as exc:
+            raise _saved_publication_failure(exc) from exc
+        return admission, candidate, token
+
+    async def publication_recovery_saved_work_prepare(self, payload, /, **kwargs):
+        """Admit the destination once and persist the exact saved candidate.
+
+        The returned admission and candidate identity are recorded in workflow
+        history before any remote effect (#4018).
+        """
+        contract = _saved_work_publication_contract(payload)
+        with self._saved_work_scratch(contract) as scratch:
+            admission, candidate, _token = await _await_with_activity_heartbeats(
+                self._saved_work_candidate(contract, scratch=scratch),
+                heartbeat_payload={"activity": "publication_recovery.saved_work_prepare"},
+            )
+        return {
+            "admission": admission.model_dump(by_alias=True, mode="json"),
+            "decisionDigest": candidate.decision_digest,
+            "candidate": _compact_saved_candidate(candidate),
+        }
+
+    async def publication_recovery_saved_work_push(self, payload, /, **kwargs):
+        """Push the persisted candidate under its admitted remote expectation.
+
+        Every attempt rebuilds the candidate from immutable saved content on
+        the admitted base and requires the persisted SHA, then reconciles the
+        remote head before and after pushing, so a lost acknowledgment never
+        causes a second push or a different commit.
+        """
+        from moonmind.publish.saved_candidate import SavedPublicationError
+        from moonmind.publish.service import PublishService
+
+        contract = _saved_work_publication_contract(payload)
+        prepared = dict((payload or {}).get("prepared") or {})
+        admission = _persisted_saved_candidate(contract, prepared)
+        persisted_head = str(prepared["candidate"]["headSha"])
+
+        async def rebuild_and_push() -> Any:
+            with self._saved_work_scratch(contract) as scratch:
+                _admission, candidate, token = await self._saved_work_candidate(
+                    contract,
+                    scratch=scratch,
+                    admission=admission,
+                    persisted_head_sha=persisted_head,
+                )
+                try:
+                    return await PublishService().push_candidate(
+                        repo_dir=scratch / "candidate",
+                        repository=admission.repository,
+                        head_branch=admission.head_branch,
+                        candidate_sha=persisted_head,
+                        base_sha=candidate.base_sha,
+                        expected_remote_sha=admission.expected_head_sha,
+                        github_token=token,
+                    )
+                except SavedPublicationError as exc:
+                    raise _saved_publication_failure(exc) from exc
+
+        outcome = await _await_with_activity_heartbeats(
+            rebuild_and_push(),
+            heartbeat_payload={"activity": "publication_recovery.saved_work_push"},
+        )
+        if outcome.status == "unavailable" and outcome.retryable:
+            # The retry reconciles the remote head before any second push.
+            raise temporal_exceptions.ApplicationError(
+                f"saved-work push outcome is unavailable: {outcome.reason_code}",
+                type="PUBLICATION_PUSH_UNAVAILABLE",
+                non_retryable=False,
+            )
+        return {
+            "status": outcome.status,
+            "reasonCode": outcome.reason_code,
+            "headSha": outcome.head_sha,
+            "remoteHeadSha": outcome.remote_head_sha,
+            "remoteVerified": outcome.remote_verified,
+            "summary": outcome.summary,
+        }
+
     async def publication_recovery_cleanup(self, payload, /, **kwargs):
-        """Return bounded cleanup evidence for a remote-only recovery."""
+        """Return bounded cleanup evidence for a remote-only recovery.
+
+        Saved-work publication releases only its own use claim; saved
+        artifacts and the source execution's records are never touched.
+        """
+        from moonmind.workflows.temporal.publication_recovery import (
+            SAVED_WORK_PUBLICATION_SCHEMA_VERSION,
+        )
+
+        contract = (payload or {}).get("contract") or {}
+        if contract.get("schemaVersion") == SAVED_WORK_PUBLICATION_SCHEMA_VERSION:
+            from moonmind.publish.saved_work_source import saved_work_artifact_id
+
+            parsed = _saved_work_publication_contract(payload)
+            released = False
+            if self._artifact_service is not None:
+                released = await self._artifact_service.release_saved_work_use(
+                    artifact_id=saved_work_artifact_id(parsed.saved_work_ref),
+                    principal=parsed.admitted_principal,
+                    request_id=parsed.publication_idempotency_key,
+                )
+            return {"cleaned": True, "savedWorkUseReleased": bool(released)}
         restoration = (payload or {}).get("restoration")
         return {
             "cleaned": restoration is None,

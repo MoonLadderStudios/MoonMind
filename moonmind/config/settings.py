@@ -1903,7 +1903,7 @@ class FeatureFlagsSettings(BaseSettings):
         ),
     )
     publication_recovery_allowed_modes: str = Field(
-        "pr,draft_pr",
+        "pr,draft_pr,branch",
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__PUBLICATION_RECOVERY_ALLOWED_MODES",
             "PUBLICATION_RECOVERY_ALLOWED_MODES",
