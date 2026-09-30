@@ -648,7 +648,6 @@ async def test_finalization_fault_resumes_only_the_unfinished_phase(
     """
 
     import asyncio
-
     from types import SimpleNamespace
 
     from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
