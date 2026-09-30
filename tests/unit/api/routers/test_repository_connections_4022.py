@@ -8,12 +8,15 @@ from fastapi.testclient import TestClient
 from api_service.api.routers import repository_connections as router_module
 from api_service.auth_providers import get_current_user
 
+# Mounted exactly as api_service.main mounts it.
+_PREFIX = "/api/v1/repository-connections"
+
 
 def _client(monkeypatch) -> TestClient:
     monkeypatch.setenv("MOONMIND_GITHUB_APP_SETUP_SECRET", "router-test-secret")
     router_module._setup_service = None
     app = FastAPI()
-    app.include_router(router_module.router)
+    app.include_router(router_module.router, prefix=_PREFIX)
 
     async def _user():
         return {"ref": "principal:alice"}
@@ -25,7 +28,7 @@ def _client(monkeypatch) -> TestClient:
 def test_begin_returns_setup_url_and_state(monkeypatch) -> None:
     client = _client(monkeypatch)
     response = client.post(
-        "/github-app/begin",
+        f"{_PREFIX}/github-app/begin",
         json={
             "appSlug": "moonmind-test",
             "expectedAppRef": "github-app:moonmind-test",
@@ -53,7 +56,7 @@ def test_begin_rejects_anonymous_enrollment(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_GITHUB_APP_SETUP_SECRET", "router-test-secret")
     router_module._setup_service = None
     app = FastAPI()
-    app.include_router(router_module.router)
+    app.include_router(router_module.router, prefix=_PREFIX)
 
     async def _deny():
         raise HTTPException(status_code=401, detail="unauthenticated")
@@ -61,7 +64,7 @@ def test_begin_rejects_anonymous_enrollment(monkeypatch) -> None:
     app.dependency_overrides[get_current_user()] = _deny
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
-        "/github-app/begin",
+        f"{_PREFIX}/github-app/begin",
         json={
             "appSlug": "moonmind-test",
             "expectedAppRef": "github-app:moonmind-test",
@@ -78,7 +81,7 @@ def test_callback_rejects_forged_state_before_touching_writer(monkeypatch) -> No
         return object()
 
     app = FastAPI()
-    app.include_router(router_module.router)
+    app.include_router(router_module.router, prefix=_PREFIX)
 
     async def _user():
         return {"ref": "principal:alice"}
@@ -114,7 +117,7 @@ def test_callback_rejects_forged_state_before_touching_writer(monkeypatch) -> No
     router_module._setup_service = None
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
-        "/github-app/callback",
+        f"{_PREFIX}/github-app/callback",
         json={
             "state": "forged-state",
             "installationId": "123",

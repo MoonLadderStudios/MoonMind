@@ -165,6 +165,11 @@ def issuer_for_connection(
         key = str(getattr(ref, "key", "") or "").strip()
         if not provider or not key:
             raise BoundAccessError(BOUND_DENIED, "PAT connection has no SecretRef")
+        # ``managed`` is the canonical typed reference to a Managed Secret
+        # (the form Secrets deletion protection matches); it resolves
+        # through the Secrets System's ``db://`` backend.
+        if provider == "managed":
+            provider = "db"
 
         async def _resolve_backend(_ref: str) -> str:
             value = resolve_secret(_ref)

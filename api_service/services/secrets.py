@@ -1449,13 +1449,16 @@ class SecretsService:
             )
         try:
             broad = f"%{cls._like_escape(slug)}%"
+            # A deleted (tombstoned) connection admits nothing and no longer
+            # consumes its credential; its row survives only to block ID reuse.
             connection_stmt = select(
                 RepositoryConnectionRecord.connection_id,
                 RepositoryConnectionRecord.credential_config,
             ).where(
                 func.cast(
                     RepositoryConnectionRecord.credential_config, Text
-                ).like(broad, escape="\\")
+                ).like(broad, escape="\\"),
+                RepositoryConnectionRecord.tombstone.is_(False),
             )
             if for_update:
                 connection_stmt = connection_stmt.with_for_update()

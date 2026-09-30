@@ -126,6 +126,8 @@ class GitHubPermissionProfile:
     profile_id: str
     required_permissions: dict[str, str]
     optional_permissions: dict[str, str]
+    label: str = ""
+    description: str = ""
 
 # ---------------------------------------------------------------------------
 # Service
@@ -355,6 +357,11 @@ class GitHubService:
                 profile_id="indexing",
                 required_permissions={"Contents": "read"},
                 optional_permissions={},
+                label="Read contents",
+                description=(
+                    "Reads the repository and branch used to clone and inspect "
+                    "code."
+                ),
             ),
             "publish": GitHubPermissionProfile(
                 profile_id="publish",
@@ -368,6 +375,12 @@ class GitHubService:
                     "Checks": "read",
                     "Issues": "read",
                 },
+                label="Publish (contents + pull requests)",
+                description=(
+                    "Publishing needs write access to contents and pull "
+                    "requests. The test only reads those endpoints, so write "
+                    "access stays unverified until a real publish."
+                ),
             ),
             "readiness": GitHubPermissionProfile(
                 profile_id="readiness",
@@ -378,6 +391,11 @@ class GitHubService:
                     "Issues": "read",
                 },
                 optional_permissions={},
+                label="PR readiness (statuses + checks)",
+                description=(
+                    "Reads pull requests, commit statuses, check runs, and "
+                    "issues used to decide whether a pull request is ready."
+                ),
             ),
             "full_pr_automation": GitHubPermissionProfile(
                 profile_id="full_pr_automation",
@@ -389,8 +407,29 @@ class GitHubService:
                     "Issues": "read",
                 },
                 optional_permissions={"Workflows": "write"},
+                label="Full PR automation",
+                description=(
+                    "Publishing plus readiness reads. The test only reads, so "
+                    "contents, pull request, and workflow write access stay "
+                    "unverified until a real publish."
+                ),
             ),
         }
+
+    @classmethod
+    def probe_mode_catalog(cls) -> list[dict[str, Any]]:
+        """Describe each probe mode from the same profiles the probe runs."""
+
+        return [
+            {
+                "mode": profile.profile_id,
+                "label": profile.label or profile.profile_id,
+                "description": profile.description,
+                "requiredPermissions": dict(profile.required_permissions),
+                "optionalPermissions": dict(profile.optional_permissions),
+            }
+            for profile in cls.github_permission_profiles().values()
+        ]
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
@@ -771,10 +810,7 @@ class GitHubService:
 
     @staticmethod
     def _profile_checklist(mode: str) -> list[dict[str, Any]]:
-        profile = GitHubService.github_permission_profiles().get(
-            mode,
-            GitHubService.github_permission_profiles()["publish"],
-        )
+        profile = GitHubService.github_permission_profiles()[mode]
         items = [
             {
                 "permission": permission,
@@ -800,13 +836,17 @@ class GitHubService:
         checklist: list[dict[str, Any]],
         *,
         permission: str,
-        success: bool,
+        success: bool | None,
         verified_level: str = "read",
     ) -> None:
+        """Record what one read check proved; ``None`` means no evidence."""
+
         for item in checklist:
             if item["permission"] != permission or not item["required"]:
                 continue
-            if not success:
+            if success is None:
+                item["status"] = "unavailable"
+            elif not success:
                 item["status"] = "failed"
             elif item["level"] == verified_level:
                 item["status"] = "passed"
@@ -814,32 +854,87 @@ class GitHubService:
                 item["status"] = f"verified_{verified_level}_access"
 
     @classmethod
+    def classify_github_failure(cls, response: httpx.Response) -> str:
+        """Name the fact a failed GitHub response established.
+
+        Authentication, permission, missing/hidden resources, throttling, and
+        provider unavailability are different facts; a throttle or outage is
+        never reported as denied permission.
+        """
+
+        if cls._github_rate_limit_event(response) is not None:
+            return "rate_limited"
+        status = response.status_code
+        if status == 401:
+            return "authentication"
+        if status == 403:
+            return "permission"
+        if status == 404:
+            return "not_found"
+        if status >= 500:
+            return "unavailable"
+        return "rejected"
+
+    async def _probe_get(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        url: str,
+        headers: Mapping[str, str],
+        operation: str,
+    ) -> tuple[bool | None, Any, dict[str, Any] | None]:
+        """GET one probe endpoint: (proved, payload, diagnostic)."""
+
+        try:
+            response = await client.get(url, headers=dict(headers))
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            kind = self.classify_github_failure(exc.response)
+            return (
+                None if kind in {"rate_limited", "unavailable"} else False,
+                None,
+                {
+                    "operation": operation,
+                    "kind": kind,
+                    "httpStatus": exc.response.status_code,
+                    "message": self._github_permission_summary(exc.response),
+                    "retryable": kind in {"rate_limited", "unavailable"},
+                },
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return (
+                None,
+                None,
+                {
+                    "operation": operation,
+                    "kind": "unavailable",
+                    "message": exc.__class__.__name__,
+                    "retryable": True,
+                },
+            )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        return True, payload, None
+
+    @classmethod
     def _probe_checks_for_mode(
         cls,
         *,
         repo: str,
         mode: str,
-        base_branch: str | None,
+        branch: str | None,
     ) -> list[dict[str, str | None]]:
-        profile = cls.github_permission_profiles().get(
-            mode,
-            cls.github_permission_profiles()["publish"],
-        )
-        required = profile.required_permissions
-        ref = base_branch or "main"
-        checks: list[dict[str, str | None]] = [
-            {
-                "field": "repositoryAccessible",
-                "url": f"https://api.github.com/repos/{repo}",
-                "operation": "repository",
-                "permission": None,
-            }
-        ]
-        if "Contents" in required:
+        """Checks after the repository read; branch checks need a known ref."""
+
+        required = cls.github_permission_profiles()[mode].required_permissions
+        checks: list[dict[str, str | None]] = []
+        if "Contents" in required and branch:
             checks.append(
                 {
                     "field": "defaultBranchAccessible",
-                    "url": f"https://api.github.com/repos/{repo}/branches/{ref}",
+                    "url": f"https://api.github.com/repos/{repo}/branches/{branch}",
                     "operation": "branch",
                     "permission": "Contents",
                 }
@@ -853,21 +948,21 @@ class GitHubService:
                     "permission": "Pull requests",
                 }
             )
-        if "Commit statuses" in required:
+        if "Commit statuses" in required and branch:
             checks.append(
                 {
                     "field": None,
-                    "url": f"https://api.github.com/repos/{repo}/commits/{ref}/status",
+                    "url": f"https://api.github.com/repos/{repo}/commits/{branch}/status",
                     "operation": "commit_statuses",
                     "permission": "Commit statuses",
                 }
             )
-        if "Checks" in required:
+        if "Checks" in required and branch:
             checks.append(
                 {
                     "field": None,
                     "url": (
-                        f"https://api.github.com/repos/{repo}/commits/{ref}/check-runs"
+                        f"https://api.github.com/repos/{repo}/commits/{branch}/check-runs"
                     ),
                     "operation": "checks",
                     "permission": "Checks",
@@ -891,21 +986,38 @@ class GitHubService:
         mode: str = "publish",
         base_branch: str | None = None,
         github_token: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        credential_source: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        from moonmind.auth.github_credentials import resolve_github_credential
+        """Run the read-only permission probe for one repository and mode.
 
-        resolved = await resolve_github_credential(github_token, repo=repo)
+        ``headers`` carries a credential the caller already acquired for one
+        selected connection; the ambient credential chain is then never
+        consulted. Without an explicit branch the probe uses the repository's
+        actual default branch. Probing stops after a known throttle, and no
+        check ever writes, so write-level permissions stay unverified.
+        """
+
+        if mode not in self.github_permission_profiles():
+            raise ValueError(f"unknown GitHub probe mode: {mode!r}")
         checklist = self._profile_checklist(mode)
         result: dict[str, Any] = {
             "repo": repo,
             "mode": mode,
-            "credentialSource": resolved.safe_source_dict(),
+            "credentialSource": dict(credential_source or {}),
             "repositoryAccessible": None,
             "defaultBranchAccessible": None,
             "pullRequestAccessible": None,
+            "resolvedBranch": None,
+            "branchSource": None,
+            "writeVerified": False,
             "permissionChecklist": checklist,
             "diagnostics": [],
             "limitations": [
+                (
+                    "The test only reads. Write permissions are not proven until "
+                    "a real publish succeeds."
+                ),
                 (
                     "Fine-grained personal access tokens must target the repository "
                     "resource owner and include the selected repository."
@@ -917,73 +1029,206 @@ class GitHubService:
                 ),
             ],
         }
-        if not resolved.token:
-            result["diagnostics"].append(
+        if headers is None:
+            from moonmind.auth.github_credentials import resolve_github_credential
+
+            resolved = await resolve_github_credential(github_token, repo=repo)
+            result["credentialSource"] = resolved.safe_source_dict()
+            if not resolved.token:
+                result["diagnostics"].append(
+                    {
+                        "operation": "resolve_github_credential",
+                        "kind": "credential_unavailable",
+                        "message": resolved.safe_summary,
+                        "retryable": False,
+                    }
+                )
+                return result
+            headers = self._github_headers(resolved.token)
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            proved, payload, diagnostic = await self._probe_get(
+                client,
+                url=f"https://api.github.com/repos/{repo}",
+                headers=headers,
+                operation="repository",
+            )
+            result["repositoryAccessible"] = proved
+            if diagnostic is not None:
+                result["diagnostics"].append(diagnostic)
+                if diagnostic["kind"] == "rate_limited":
+                    return result
+            branch = (base_branch or "").strip() or None
+            if branch is not None:
+                result["branchSource"] = "requested"
+            elif isinstance(payload, Mapping):
+                remote_default = str(payload.get("default_branch") or "").strip()
+                if remote_default:
+                    branch = remote_default
+                    result["branchSource"] = "remote_default"
+            result["resolvedBranch"] = branch
+            if branch is None and proved:
+                result["diagnostics"].append(
+                    {
+                        "operation": "branch",
+                        "kind": "not_checked",
+                        "message": (
+                            "The repository has no default branch (it may be "
+                            "empty), so branch checks did not run."
+                        ),
+                        "retryable": False,
+                    }
+                )
+            for check in self._probe_checks_for_mode(
+                repo=repo, mode=mode, branch=branch
+            ):
+                field = check["field"]
+                permission = check["permission"]
+                proved, _payload, diagnostic = await self._probe_get(
+                    client,
+                    url=str(check["url"]),
+                    headers=headers,
+                    operation=str(check["operation"]),
+                )
+                if field:
+                    result[field] = proved
+                if permission:
+                    self._mark_probe_permission(
+                        result["permissionChecklist"],
+                        permission=str(permission),
+                        success=proved,
+                    )
+                if diagnostic is not None:
+                    result["diagnostics"].append(diagnostic)
+                    if diagnostic["kind"] == "rate_limited":
+                        break
+        return result
+
+    async def read_repository_identity(
+        self,
+        *,
+        repo: str,
+        headers: Mapping[str, str],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Read one repository's provider identity with the given credential."""
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            proved, payload, diagnostic = await self._probe_get(
+                client,
+                url=f"https://api.github.com/repos/{repo}",
+                headers=headers,
+                operation="repository",
+            )
+        if not proved or not isinstance(payload, Mapping):
+            return None, diagnostic or {
+                "operation": "repository",
+                "kind": "rejected",
+                "message": "GitHub returned no repository identity.",
+                "retryable": False,
+            }
+        identity = self._repository_summary(payload)
+        if identity is None:
+            return None, {
+                "operation": "repository",
+                "kind": "rejected",
+                "message": "GitHub returned an incomplete repository identity.",
+                "retryable": False,
+            }
+        return identity, None
+
+    @staticmethod
+    def _repository_summary(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+        repo_id = payload.get("id")
+        full_name = str(payload.get("full_name") or "").strip()
+        if type(repo_id) is not int or repo_id <= 0 or not full_name:
+            return None
+        return {
+            "providerRepoId": str(repo_id),
+            "fullName": full_name,
+            "defaultBranch": str(payload.get("default_branch") or "").strip() or None,
+            "private": bool(payload.get("private")),
+        }
+
+    async def discover_repositories(
+        self,
+        *,
+        headers: Mapping[str, str],
+        installation: bool = False,
+        max_pages: int = 3,
+        per_page: int = 100,
+    ) -> dict[str, Any]:
+        """List repositories the given credential can see, in bounded pages.
+
+        A failed or throttled page ends discovery with the pages already read
+        and ``complete=False``; it never implies the remaining repositories
+        are inaccessible.
+        """
+
+        path = "installation/repositories" if installation else "user/repos"
+        repositories: list[dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
+        complete = False
+        pages_read = 0
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            for page in range(1, max(1, max_pages) + 1):
+                proved, payload, diagnostic = await self._probe_get(
+                    client,
+                    url=(
+                        f"https://api.github.com/{path}"
+                        f"?per_page={per_page}&page={page}"
+                    ),
+                    headers=headers,
+                    operation="discovery",
+                )
+                if not proved:
+                    if diagnostic is not None:
+                        diagnostics.append(diagnostic)
+                    break
+                pages_read += 1
+                items = (
+                    payload.get("repositories")
+                    if installation and isinstance(payload, Mapping)
+                    else payload
+                )
+                if not isinstance(items, list):
+                    diagnostics.append(
+                        {
+                            "operation": "discovery",
+                            "kind": "rejected",
+                            "message": "GitHub returned an unexpected repository page.",
+                            "retryable": False,
+                        }
+                    )
+                    break
+                for item in items:
+                    summary = (
+                        self._repository_summary(item)
+                        if isinstance(item, Mapping)
+                        else None
+                    )
+                    if summary is not None:
+                        repositories.append(summary)
+                if len(items) < per_page:
+                    complete = True
+                    break
+        if not complete and not diagnostics:
+            diagnostics.append(
                 {
-                    "operation": "resolve_github_credential",
-                    "message": resolved.safe_summary,
+                    "operation": "discovery",
+                    "kind": "truncated",
+                    "message": (
+                        f"Stopped after {pages_read} pages; more repositories "
+                        "may be available."
+                    ),
                     "retryable": False,
                 }
             )
-            return result
-
-        headers = self._github_headers(resolved.token)
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            checks = self._probe_checks_for_mode(
-                repo=repo,
-                mode=mode,
-                base_branch=base_branch,
-            )
-            for check in checks:
-                field = check["field"]
-                url = str(check["url"])
-                operation = str(check["operation"])
-                permission = check["permission"]
-                try:
-                    response = await client.get(url, headers=headers)
-                    response.raise_for_status()
-                    if field:
-                        result[field] = True
-                    if permission:
-                        self._mark_probe_permission(
-                            result["permissionChecklist"],
-                            permission=str(permission),
-                            success=True,
-                        )
-                except httpx.HTTPStatusError as exc:
-                    if field:
-                        result[field] = False
-                    if permission:
-                        self._mark_probe_permission(
-                            result["permissionChecklist"],
-                            permission=str(permission),
-                            success=False,
-                        )
-                    result["diagnostics"].append(
-                        {
-                            "operation": operation,
-                            "httpStatus": exc.response.status_code,
-                            "message": self._github_permission_summary(exc.response),
-                            "retryable": exc.response.status_code >= 500,
-                        }
-                    )
-                except (httpx.TransportError, httpx.TimeoutException) as exc:
-                    if field:
-                        result[field] = False
-                    if permission:
-                        self._mark_probe_permission(
-                            result["permissionChecklist"],
-                            permission=str(permission),
-                            success=False,
-                        )
-                    result["diagnostics"].append(
-                        {
-                            "operation": operation,
-                            "message": exc.__class__.__name__,
-                            "retryable": True,
-                        }
-                    )
-        return result
+        return {
+            "repositories": repositories,
+            "complete": complete,
+            "pagesRead": pages_read,
+            "diagnostics": diagnostics,
+        }
 
     # -- PR operations ----------------------------------------------------
 
