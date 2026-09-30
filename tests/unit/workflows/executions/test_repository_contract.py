@@ -12,6 +12,7 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryClientPolicy,
     RepositoryConnection,
     RepositoryContractError,
+    bind_deployment_client_policy,
     compile_repository_target,
     decode_legacy_repository_history_v1,
     derive_repository_capabilities,
@@ -20,10 +21,8 @@ from moonmind.workflows.executions.repository_contract import (
     load_repository_connection,
     materialize_resolved_repository_target,
     persist_repository_connection,
-    reconcile_default_git_connection,
     repository_branch_from_value,
     repository_name_from_value,
-    resolve_default_git_credential,
     validate_connection_and_client,
 )
 
@@ -33,6 +32,30 @@ def _policy() -> RepositoryClientPolicy:
         pinnedVersion="2.46.0",
         toolBundleRef="tool-bundle:git-2.46",
         executableSha256="sha256:git",
+    )
+
+
+def _default_connection(
+    credential: dict | None = None,
+) -> RepositoryConnection:
+    """The migrated default connection (#4023) bound to a worker policy."""
+
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": DEFAULT_GIT_CONNECTION_REF,
+            "provider": "git",
+            "displayName": "Default GitHub connection",
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "clientPolicy": _policy().model_dump(by_alias=True),
+            "credential": credential
+            or {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "GITHUB_TOKEN"},
+            },
+            "hostingService": "github",
+        }
     )
 
 
@@ -171,7 +194,7 @@ def test_policy_and_observed_client_must_match_before_mutation() -> None:
             "branch": {"name": "main"},
         }
     )
-    connection = reconcile_default_git_connection(client_policy=_policy())
+    connection = _default_connection()
     evidence = RepositoryClientEvidence(
         toolBundleRef="tool-bundle:git-2.46",
         clientVersion="wrong",
@@ -192,13 +215,96 @@ async def test_unknown_capability_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_git_connection_invokes_existing_github_resolver() -> None:
-    resolver = AsyncMock(return_value=object())
-    with patch(
-        "moonmind.auth.github_credentials.resolve_github_credential", resolver
+async def test_retired_resolver_connection_fails_closed_without_ambient_lookup(
+    monkeypatch,
+) -> None:
+    """A historical ambient-resolver record never searches credentials (#4023)."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+        }
+    )
+    historical = _default_connection({"source": "github_resolver"})
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git-2.46",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    registry = CapabilityReadinessRegistry()
+    for token in ("git", "repo.read"):
+        registry.register(token, lambda _context: True)
+    ambient = AsyncMock()
+    selected = AsyncMock()
+
+    with patch("moonmind.auth.github_credentials.resolve_github_credential", ambient):
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+        ):
+            await ensure_repository_ready(
+                target,
+                publish_mode="none",
+                operation="read",
+                connection_resolver=lambda _target: historical,
+                evidence_resolver=lambda _connection: evidence,
+                readiness_registry=registry,
+                credential_resolver=selected,
+            )
+    ambient.assert_not_awaited()
+    selected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_git_readiness_without_selected_credential_resolver_fails_closed() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+        }
+    )
+    registry = CapabilityReadinessRegistry()
+    for token in ("git", "repo.read"):
+        registry.register(token, lambda _context: True)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
     ):
-        await resolve_default_git_credential("MoonLadderStudios/MoonMind")
-    resolver.assert_awaited_once_with(repo="MoonLadderStudios/MoonMind")
+        await ensure_repository_ready(
+            target,
+            publish_mode="none",
+            operation="read",
+            connection_resolver=lambda _target: _default_connection(),
+            evidence_resolver=lambda _connection: RepositoryClientEvidence(
+                toolBundleRef="tool-bundle:git-2.46",
+                clientVersion="2.46.0",
+                executableSha256="sha256:git",
+            ),
+            readiness_registry=registry,
+        )
+
+
+def test_default_connection_binds_worker_client_policy_only() -> None:
+    worker_policy = RepositoryClientPolicy(
+        pinnedVersion="2.47.1",
+        toolBundleRef="repository-client:git-system",
+        executableSha256="sha256:worker",
+    )
+    recorded = _default_connection()
+
+    bound = bind_deployment_client_policy(recorded, client_policy=worker_policy)
+
+    assert bound.client_policy == worker_policy
+    assert bound.credential == recorded.credential
+    assert bound.allowed_operations == recorded.allowed_operations
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CONNECTION_MISMATCH"):
+        bind_deployment_client_policy(
+            recorded.model_copy(update={"id": "repository-connection:other"}),
+            client_policy=worker_policy,
+        )
 
 
 def test_frozen_legacy_decoder_is_explicitly_history_only() -> None:
@@ -209,7 +315,7 @@ def test_frozen_legacy_decoder_is_explicitly_history_only() -> None:
 
 def test_reconciled_connection_is_persisted_and_resolved(tmp_path) -> None:
     path = tmp_path / "connections" / "git-default.json"
-    connection = reconcile_default_git_connection(client_policy=_policy())
+    connection = _default_connection()
     persist_repository_connection(connection, path)
     assert load_repository_connection(path, DEFAULT_GIT_CONNECTION_REF) == connection
 
@@ -430,7 +536,7 @@ async def test_coherent_readiness_boundary_completes_before_mutation() -> None:
             "branch": {"name": "main"},
         }
     )
-    connection = reconcile_default_git_connection(client_policy=_policy())
+    connection = _default_connection()
     evidence = RepositoryClientEvidence(
         toolBundleRef="tool-bundle:git-2.46",
         clientVersion="2.46.0",
@@ -467,7 +573,7 @@ async def test_readiness_boundary_fails_before_resolver_for_unknown_token() -> N
             "branch": {"name": "main"},
         }
     )
-    connection = reconcile_default_git_connection(client_policy=_policy())
+    connection = _default_connection()
     evidence = RepositoryClientEvidence(
         toolBundleRef="tool-bundle:git-2.46",
         clientVersion="2.46.0",
@@ -500,7 +606,7 @@ async def test_readiness_boundary_rejects_unresolved_github_credential() -> None
             "branch": {"name": "main"},
         }
     )
-    connection = reconcile_default_git_connection(client_policy=_policy())
+    connection = _default_connection()
     evidence = RepositoryClientEvidence(
         toolBundleRef="tool-bundle:git-2.46",
         clientVersion="2.46.0",

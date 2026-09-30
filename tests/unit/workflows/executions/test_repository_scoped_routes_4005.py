@@ -48,7 +48,6 @@ from moonmind.workflows.executions.repository_contract import (
     normalize_endpoint,
     persist_repository_connection,
     publish_connection_snapshot,
-    reconcile_default_git_connection,
     reconcile_verified_rename,
     route_diagnostic,
     route_key_for,
@@ -101,6 +100,23 @@ def _pat_connection(
             "credentialRevision": 1,
             "ownership": ownership,
             "hostingService": "github",
+        }
+    )
+
+
+def _historical_resolver_connection() -> RepositoryConnection:
+    """A recorded pre-#4023 default connection (ambient resolver, no scope)."""
+
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "repository-connection:git-default",
+            "provider": "git",
+            "displayName": "Default GitHub connection",
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "clientPolicy": _policy(),
+            "credential": {"source": "github_resolver"},
         }
     )
 
@@ -227,20 +243,7 @@ def test_zero_assignments_grant_nothing_and_legacy_is_refused() -> None:
         admit_legacy_free_connection()
     # Historical semantic is preserved but classified: empty allowlist is
     # unrestricted at the legacy boundary only.
-    legacy = reconcile_default_git_connection(
-        client_policy=RepositoryConnection.model_validate(
-            {
-                "schemaVersion": "moonmind.repository-connection.v1",
-                "id": "x",
-                "provider": "git",
-                "displayName": "x",
-                "endpointRef": "https://github.com",
-                "allowedOperations": ["read"],
-                "clientPolicy": _policy(),
-                "credential": {"source": "github_resolver"},
-            }
-        ).client_policy
-    )
+    legacy = _historical_resolver_connection()
     assert is_legacy_unrestricted_connection(legacy) is True
 
 
@@ -636,9 +639,7 @@ def test_existing_legacy_persist_load_and_client_checks_still_hold(tmp_path: Pat
             "branch": {"name": "main"},
         }
     )
-    connection = reconcile_default_git_connection(
-        client_policy=_pat_connection("x").client_policy
-    )
+    connection = _historical_resolver_connection()
     path = tmp_path / "legacy.json"
     persist_repository_connection(connection, path)
     assert load_repository_connection(path, connection.id) == connection

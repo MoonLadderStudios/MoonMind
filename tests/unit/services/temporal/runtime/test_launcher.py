@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import resolve_execution_budget
@@ -205,7 +204,9 @@ async def test_prepare_workspace_trusts_reused_runtime_owned_repository(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
+async def test_repository_readiness_blocks_before_workspace_mutation(
+    tmp_path, monkeypatch
+):
     store = ManagedRunStore(tmp_path / "managed_runs")
     readiness = AsyncMock(
         side_effect=RepositoryContractError(
@@ -213,9 +214,16 @@ async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
             "observed client does not match deployment policy",
         )
     )
+    monkeypatch.setenv(_DEFAULT_PAT_ENV, "selected-token")
     launcher = ManagedRuntimeLauncher(
         store,
         repository_readiness_boundary=readiness,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion="2.46.0",
+            toolBundleRef="repository-client:git-system",
+            executableSha256="sha256:git",
+        ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     request = _make_request(
         workspace_spec={
@@ -239,6 +247,39 @@ async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
 
     readiness.assert_awaited_once()
     assert not (tmp_path / "workspaces").exists()
+
+
+_DEFAULT_PAT_ENV = "LAUNCHER_TEST_GITHUB_PAT"
+
+
+def _recorded_default_connection() -> RepositoryConnection:
+    """The migrated default connection (#4023) as its database owner records it."""
+
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "repository-connection:git-default",
+            "provider": "git",
+            "displayName": "Default GitHub connection",
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "clientPolicy": {
+                "pinnedVersion": "2.39.5",
+                "toolBundleRef": "repository-client:git-system",
+                "executableSha256": "sha256:migration-host",
+            },
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": _DEFAULT_PAT_ENV},
+            },
+            "ownership": {"ownerRef": "owner:operator", "scopeType": "system"},
+            "hostingService": "github",
+        }
+    )
+
+
+def _default_connection_loader() -> AsyncMock:
+    return AsyncMock(return_value=_recorded_default_connection())
 
 
 def _repository_readiness_request(
@@ -286,6 +327,7 @@ async def test_default_repository_readiness_rejects_observed_client_policy_misma
             toolBundleRef="repository-client:git-system",
             executableSha256="sha256:expected",
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(
         return_value=RepositoryClientEvidence(
@@ -316,6 +358,7 @@ async def test_default_repository_readiness_rejects_unknown_skill_capability(tmp
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
 
@@ -342,13 +385,11 @@ async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
-    with patch(
-        "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
-    ):
+    with patch.dict(os.environ, {_DEFAULT_PAT_ENV: "test-token"}):
         resolved = await launcher._ensure_repository_ready_for_launch(
             _repository_readiness_request(publish_mode="none"), None
         )
@@ -373,14 +414,12 @@ async def test_default_repository_readiness_allows_gh_for_read_only_skill(tmp_pa
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
 
-    with patch(
-        "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
-    ):
+    with patch.dict(os.environ, {_DEFAULT_PAT_ENV: "test-token"}):
         resolved = await launcher._ensure_repository_ready_for_launch(
             _repository_readiness_request(
                 publish_mode="none",
@@ -412,14 +451,12 @@ async def test_default_repository_readiness_defers_execution_fanout_to_runtime(
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
 
-    with patch(
-        "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
-    ):
+    with patch.dict(os.environ, {_DEFAULT_PAT_ENV: "test-token"}):
         resolved = await launcher._ensure_repository_ready_for_launch(
             _repository_readiness_request(
                 publish_mode="none",
@@ -448,18 +485,15 @@ async def test_default_repository_readiness_rejects_unresolved_gh_credential(
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
 
-    with patch(
-        "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(
-            return_value=ResolvedGitHubCredential(
-                diagnostic="GitHub auth is unavailable for the repository."
-            )
-        ),
-    ):
+    # The selected connection's SecretRef is unset while an ambient token
+    # exists: readiness fails closed instead of using the ambient token.
+    with patch.dict(os.environ, {"GITHUB_TOKEN": "ambient-token"}):
+        os.environ.pop(_DEFAULT_PAT_ENV, None)
         with pytest.raises(
             RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
         ):
@@ -642,6 +676,7 @@ async def test_default_repository_readiness_rejects_unready_known_capability(tmp
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
 
@@ -672,14 +707,12 @@ async def test_default_repository_readiness_rejects_missing_or_changed_remote_ti
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(side_effect=tips)
 
-    with patch(
-        "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
-    ):
+    with patch.dict(os.environ, {_DEFAULT_PAT_ENV: "test-token"}):
         with pytest.raises(
             RepositoryContractError, match="REPOSITORY_REMOTE_TIP_MISMATCH"
         ):
@@ -704,6 +737,7 @@ async def test_default_repository_readiness_rejects_changed_pinned_branch_tip(
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=_default_connection_loader(),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(
