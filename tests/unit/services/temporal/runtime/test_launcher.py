@@ -5389,6 +5389,13 @@ async def test_launch_env_keeps_ambient_gh_selectors_from_outranking_admitted_to
     for name in ("GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
         monkeypatch.setenv(name, _AMBIENT_A)
     monkeypatch.setenv("GH_HOST", "ambient.invalid")
+    # A parent ``git -c`` and askpass programs would be asked for, or handed,
+    # the brokered credential ahead of or instead of the admitted helper.
+    monkeypatch.setenv(
+        "GIT_CONFIG_PARAMETERS", f"'credential.helper'='!echo password={_AMBIENT_A}'"
+    )
+    monkeypatch.setenv("GIT_ASKPASS", "/ambient/askpass")
+    monkeypatch.setenv("SSH_ASKPASS", "/ambient/askpass")
 
     launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "store"))
     profile = _make_profile(command_template=["echo", "hello"], passthrough_env_keys=[])
@@ -5424,6 +5431,9 @@ async def test_launch_env_keeps_ambient_gh_selectors_from_outranking_admitted_to
         "GH_ENTERPRISE_TOKEN",
         "GITHUB_ENTERPRISE_TOKEN",
         "GH_HOST",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
     ):
         assert name not in captured_env
     assert _AMBIENT_A not in json.dumps(captured_env)
@@ -5459,7 +5469,9 @@ async def test_managed_git_config_asks_only_the_admitted_broker(tmp_path):
         encoding="utf-8",
     )
     (tmp_path / "system.gitconfig").write_text(
-        f"[credential]\n\thelper = {_ambient_git_helper(_AMBIENT_A)}\n",
+        f"[credential]\n\thelper = {_ambient_git_helper(_AMBIENT_A)}\n"
+        f"[http]\n\textraHeader = Authorization: Basic {_AMBIENT_A}\n"
+        "[core]\n\taskPass = /ambient/askpass\n",
         encoding="utf-8",
     )
     manager = GitHubAuthBrokerManager()
@@ -5483,9 +5495,37 @@ async def test_managed_git_config_asks_only_the_admitted_broker(tmp_path):
             check=False,
             cwd=workspace,
         )
+        header = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "git",
+                "config",
+                "--get-urlmatch",
+                "http.extraHeader",
+                "https://github.com/owner/repo.git",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=workspace,
+        )
+        askpass = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "config", "--get", "core.askPass"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=workspace,
+        )
     finally:
         await manager.stop("run-1")
 
     assert filled.returncode == 0, filled.stderr
     assert f"password={_ADMITTED_B}\n" in filled.stdout
     assert _AMBIENT_A not in filled.stdout
+    # The inherited Authorization header and askpass program are reset for
+    # the brokered host, so neither rides along with or replaces the helper.
+    assert header.stdout.strip() == ""
+    assert askpass.stdout.strip() == ""

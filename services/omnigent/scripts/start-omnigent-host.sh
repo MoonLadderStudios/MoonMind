@@ -134,7 +134,9 @@ fi
 # a restart without a new GH_TOKEN preserves the previously persisted
 # hosts.yml untouched (no deletion path exists below); unsetting the
 # environment selectors after the write removes them from this process only
-# and does not revoke cached credential authority.
+# and does not revoke cached credential authority. On-demand hosts never
+# receive GH_TOKEN: init-oauth-host.sh writes their hosts.yml from stdin
+# (#4011), so only the version marker below applies to them.
 github_token=${GH_TOKEN:-}
 github_config_home=${XDG_CONFIG_HOME:-/home/app/.cache/moonmind-xdg}
 case "$github_config_home" in

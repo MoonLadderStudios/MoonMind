@@ -254,6 +254,76 @@ def test_existing_publish_paths_consume_bound_app_credential() -> None:
     assert "ghs_opaque_publish_xyz" in gh_redact
 
 
+def test_bound_publish_push_env_asks_only_the_admitted_helper(tmp_path) -> None:
+    """The bound helper layer is complete and outranks inherited Git state.
+
+    MoonLadderStudios/MoonMind#4011: real ``git`` reads every per-process
+    config entry the shared builder declares; an inherited ``git -c`` helper
+    must be neither asked for nor handed the admitted credential.
+    """
+
+    import shutil
+    import subprocess
+
+    import pytest
+
+    import moonmind.publish.service as publish_service
+
+    if shutil.which("git") is None:
+        pytest.skip("requires the real git client")
+    log = tmp_path / "ambient-helper.log"
+    ambient_helper = tmp_path / "ambient-helper.sh"
+    ambient_helper.write_text(
+        f'#!/bin/sh\n{{ echo "action=$1"; cat; }} >> "{log}"\n'
+        'test "$1" = get && { echo username=ambient; echo password=ghp_ambientA; }\n'
+        "exit 0\n"
+    )
+    ambient_helper.chmod(0o700)
+
+    class _FakeCredential:
+        def use_now(self, fn):
+            return fn(b"ghs_admittedPublishB")
+
+    class _FakeAcquired:
+        credential = _FakeCredential()
+
+    push_env, _redact = publish_service.push_env_from_bound_credential(
+        _FakeAcquired(),
+        base_env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_PARAMETERS": f"'credential.helper'='!{ambient_helper}'",
+        },
+        repository="acme/repo",
+    )
+    request = "protocol=https\nhost=github.com\npath=acme/repo\n\n"
+
+    filled = subprocess.run(
+        ["git", "credential", "fill"],
+        input=request,
+        env=push_env,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+    )
+    assert filled.returncode == 0, filled.stderr
+    assert "password=ghs_admittedPublishB\n" in filled.stdout
+    approved = subprocess.run(
+        ["git", "credential", "approve"],
+        input=f"{request.rstrip()}\nusername=x-access-token\n"
+        "password=ghs_admittedPublishB\n\n",
+        env=push_env,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+    )
+    assert approved.returncode == 0, approved.stderr
+    assert not log.exists()
+
+
 def test_setup_save_mounts_existing_connection_writer() -> None:
     import asyncio
     import inspect

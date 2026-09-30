@@ -2251,6 +2251,183 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
     assert not any(value.startswith("CODEX_") for value in configured_env)
 
 
+_OAUTH_HOST_ADMITTED_GITHUB_B = "ghs_admittedOAuthHostCredentialB0000000"
+_INIT_OAUTH_HOST_SCRIPT = (
+    Path(__file__).resolve().parents[3]
+    / "services/omnigent/scripts/init-oauth-host.sh"
+)
+
+
+@pytest.mark.asyncio
+async def test_on_demand_host_receives_github_credential_on_stdin_only(
+    tmp_path, monkeypatch
+) -> None:
+    """The admitted GitHub credential never enters container configuration.
+
+    MoonLadderStudios/MoonMind#4011: ``docker run --env`` values persist in
+    the container's metadata and every ``docker exec`` inherits them, so the
+    networkless init container receives the credential on stdin and writes
+    the projected ``hosts.yml`` the host reads through ``XDG_CONFIG_HOME``.
+    """
+
+    monkeypatch.setenv("GH_TOKEN", "ghp_ambientWorkerCredentialA00000000")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
+    runtime._run = AsyncMock(
+        side_effect=[(1, "", "no such container"), (0, "", ""), (0, "", "")]
+    )
+
+    await runtime._launch_on_demand(
+        binding=_binding(),
+        host_lease=_host_lease().model_copy(
+            update={"container_name": "mm-host-lease-gh"}
+        ),
+        container_name="mm-host-lease-gh",
+        workspace_source=tmp_path,
+        skill_projection=tmp_path / "skills",
+        runtime_scripts=tmp_path,
+        current_step_execution_id="workflow:run:node-1:execution:1",
+        github_token=_OAUTH_HOST_ADMITTED_GITHUB_B,
+        effective_launch=compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex",
+        ),
+        egress_attestation=_egress_attestation(),
+    )
+
+    init_call, launch_call = runtime._run.await_args_list[1:]
+    assert "/opt/moonmind/init-oauth-host.sh" in init_call.args
+    assert "-i" in init_call.args
+    assert "--network" in init_call.args and "none" in init_call.args
+    assert "MOONMIND_GITHUB_CREDENTIAL_STDIN=1" in init_call.args
+    assert init_call.kwargs["input_bytes"] == _OAUTH_HOST_ADMITTED_GITHUB_B.encode()
+    assert not any(
+        _OAUTH_HOST_ADMITTED_GITHUB_B in part
+        for part in (*init_call.args, *launch_call.args)
+    )
+    assert "GH_TOKEN" not in launch_call.args
+    assert _OAUTH_HOST_ADMITTED_GITHUB_B not in json.dumps(
+        dict(launch_call.kwargs.get("env") or {})
+    )
+    # The host still reads the projection through the non-secret selectors.
+    assert "XDG_CONFIG_HOME=/home/app/.cache/moonmind-xdg" in launch_call.args
+    assert "GH_PROMPT_DISABLED=1" in launch_call.args
+
+
+@pytest.mark.asyncio
+async def test_on_demand_host_without_github_authority_writes_no_projection(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
+    runtime._run = AsyncMock(
+        side_effect=[(1, "", "no such container"), (0, "", ""), (0, "", "")]
+    )
+
+    await runtime._launch_on_demand(
+        binding=_binding(),
+        host_lease=_host_lease().model_copy(
+            update={"container_name": "mm-host-lease-scratch"}
+        ),
+        container_name="mm-host-lease-scratch",
+        workspace_source=tmp_path,
+        skill_projection=tmp_path / "skills",
+        runtime_scripts=tmp_path,
+        current_step_execution_id="workflow:run:node-1:execution:1",
+        effective_launch=compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex",
+        ),
+        egress_attestation=_egress_attestation(),
+    )
+
+    init_call, launch_call = runtime._run.await_args_list[1:]
+    assert "-i" not in init_call.args
+    assert "MOONMIND_GITHUB_CREDENTIAL_STDIN=1" not in init_call.args
+    assert init_call.kwargs.get("input_bytes") is None
+    assert not any(part.startswith("XDG_CONFIG_HOME=") for part in launch_call.args)
+
+
+def _init_oauth_host_github_block() -> str:
+    lines = _INIT_OAUTH_HOST_SCRIPT.read_text().splitlines()
+    start = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith('if [ "${MOONMIND_GITHUB_CREDENTIAL_STDIN:-}" = 1 ]')
+    )
+    end = next(index for index in range(start, len(lines)) if lines[index] == "fi")
+    return "set -eu\n" + "\n".join(lines[start : end + 1]) + "\n"
+
+
+def test_init_writer_replaces_the_projected_hosts_file_completely(tmp_path) -> None:
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    hosts = cache_root / "moonmind-xdg/gh/hosts.yml"
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "cache_root": str(cache_root),
+        "MOONMIND_GITHUB_CREDENTIAL_STDIN": "1",
+    }
+    script = "cache_root=$cache_root\n" + _init_oauth_host_github_block()
+
+    for token in ("ghs_firstIssuance1", _OAUTH_HOST_ADMITTED_GITHUB_B):
+        completed = subprocess.run(
+            ["/bin/sh", "-c", script],
+            input=token,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+    assert hosts.read_text() == (
+        "github.com:\n"
+        f"    oauth_token: {_OAUTH_HOST_ADMITTED_GITHUB_B}\n"
+        "    git_protocol: https\n"
+    )
+    assert hosts.stat().st_mode & 0o777 == 0o600
+    assert sorted(path.name for path in hosts.parent.iterdir()) == ["hosts.yml"]
+
+
+def test_interrupted_init_writer_keeps_the_previous_hosts_file(tmp_path) -> None:
+    cache_root = tmp_path / "cache"
+    hosts = cache_root / "moonmind-xdg/gh/hosts.yml"
+    hosts.parent.mkdir(parents=True)
+    previous = "github.com:\n    oauth_token: ghs_live\n    git_protocol: https\n"
+    hosts.write_text(previous)
+    script = "cache_root=$cache_root\n" + _init_oauth_host_github_block()
+
+    writer = subprocess.Popen(
+        ["/bin/sh", "-c", script],
+        stdin=subprocess.PIPE,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "cache_root": str(cache_root),
+            "MOONMIND_GITHUB_CREDENTIAL_STDIN": "1",
+        },
+    )
+    assert writer.stdin is not None
+    writer.stdin.write(b"ghs_partial")
+    writer.stdin.flush()
+    writer.kill()
+    writer.wait(timeout=10)
+
+    assert hosts.read_text() == previous
+
+
 @pytest.mark.asyncio
 async def test_profile_bound_execution_heartbeats_host_lease_until_runner_finishes(
 ) -> None:

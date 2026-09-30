@@ -68,7 +68,10 @@ from .github_auth_broker import (
     render_gh_wrapper_script,
     render_git_credential_helper_script,
 )
-from .git_auth import build_github_token_git_environment
+from .git_auth import (
+    AMBIENT_GIT_CREDENTIAL_ENV_NAMES,
+    build_github_token_git_environment,
+)
 from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
 from .managed_api_key_resolve import resolve_github_token_for_launch
@@ -699,14 +702,16 @@ class ManagedRuntimeLauncher:
         Atlassian configuration stays on the trusted MoonMind side and must not
         leak into managed agent subprocesses, even when it is configured on the
         worker via direct values or secret refs. GitHub CLI selectors that
-        outrank the launch-resolved credential are not inherited either; a
-        profile can still admit one explicitly through its passthrough keys.
+        outrank the launch-resolved credential, and Git selectors that would be
+        asked for or handed it, are not inherited either; a profile can still
+        admit one explicitly through its passthrough keys.
         """
 
         return {
             key: value
             for key, value in os.environ.items()
             if key not in AMBIENT_GH_CREDENTIAL_ENV_NAMES
+            and key not in AMBIENT_GIT_CREDENTIAL_ENV_NAMES
             and not any(
                 key.startswith(prefix)
                 for prefix in _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST
@@ -1742,13 +1747,18 @@ class ManagedRuntimeLauncher:
         ]
         if git_helper_path is not None:
             git_helper_command = shlex.quote(str(git_helper_path))
-            # The empty helper resets any helper a system or checkout layer
-            # supplies, so Git asks only the admitted broker.
+            # The empty entries reset any helper, Authorization header, or
+            # askpass program a system or checkout layer supplies, so Git asks
+            # only the admitted broker.
             git_config_lines.extend(
                 [
                     "[credential]\n",
                     "\thelper =\n",
                     f"\thelper = !{git_helper_command}\n",
+                    '[http "https://github.com/"]\n',
+                    "\textraHeader =\n",
+                    "[core]\n",
+                    "\taskPass =\n",
                 ]
             )
         if git_name or git_email:
