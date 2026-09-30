@@ -400,10 +400,15 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
         if requested_target:
             profile = PROFILES.get(requested_target)
+            # The policy registry publishes a new version when deployment
+            # state such as the host image changes; a version bump alone is
+            # not a different target. The persisted policy's own execution
+            # profile binding is verified before any lease or host mutation.
             if (
                 profile is None
                 or profile.harness != plan.payload.harnessId
-                or profile.default_policy_ref != plan.payload.launchPolicyRef
+                or profile.default_policy_ref.rsplit("@", 1)[0]
+                != plan.payload.launchPolicyRef.rsplit("@", 1)[0]
             ):
                 raise HarnessPlatformError(
                     "Codex execution target conflicts with the admitted plan",
