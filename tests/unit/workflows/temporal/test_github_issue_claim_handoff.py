@@ -351,7 +351,10 @@ async def test_owned_label_never_bypasses_live_ownership_evidence(journey, damag
         if damage == "foreign":
             handoff["workflowId"] = "another-workflow"
         elif damage == "competing":
+            # A competitor that has started work owns the issue. (A later
+            # claim still preparing yields to the earlier announcement.)
             handoff["attemptId"] = "att-another-attempt"
+            handoff["activity"] = "active"
         elif damage == "stopped":
             handoff["writersStopped"] = True
         elif damage == "held":

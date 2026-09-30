@@ -13,14 +13,16 @@
 # Fresh: tools/single_user_journey_checks.py reads the settings/preset
 # catalogs, submits one task with the dashboard's default repository as a
 # deferred start (and redelivers it), attaches an artifact, dispatches a
-# recurring definition, and saves a preset; the vector-free phase (#4114)
-# proves readiness with no pending migration, a catalog with no retired
-# retrieval backend, and rejection of retired retrieval before any effect;
-# the browser opens the built dashboard on that work; the workflow worker
-# restarts; the browser cancels the deferred task from its workflow page and
-# the API must report it canceled; a synthetic credential is bound through
-# an instance setting; everything saved is read back; the binding is
-# released.
+# recurring definition, and saves a preset; the vector_free phase then
+# proves the running candidate is vector-free at its live boundaries
+# (MoonLadderStudios/MoonMind#4114: live /healthz and /openapi.json carry
+# no vector backend, and one task-envelope request with an explicit
+# retired vector requirement is rejected with 422 and creates no
+# execution); the browser opens the built
+# dashboard on that work; the workflow worker restarts; the browser cancels
+# the deferred task from its workflow page and the API must report it
+# canceled; a synthetic credential is bound through an instance setting;
+# everything saved is read back; the binding is released.
 #
 # Upgrade: an account-era release from before the guarded single-user
 # conversion (FIRST_RUN_3938_UPGRADE_FROM_REVISION, its published image and
@@ -31,8 +33,7 @@
 # volumes and state directories. The API startup log must show the guarded
 # conversion classifying the retained data as one eligible operator. The
 # saved work, settings, credential binding, and preset version must be
-# readable through the API and dashboard, the vector-free phase (#4114)
-# re-proves the upgraded candidate instance, and a new journey runs on the
+# readable through the API and dashboard, and a new journey runs on the
 # upgraded instance.
 #
 # Any failed, missing, or unobserved step exits non-zero. There is no smoke
@@ -303,10 +304,10 @@ restart_workflow_worker() {
 fresh_journey() {
   local label="$1"
   checks populate "$label"
-  # Candidate instance only (#4114): the pre-upgrade old release may predate
-  # retired-retrieval rejection, so the upgrade path calls this after the
-  # in-place update, never on the old release itself.
-  checks vector-free "$label"
+  # MoonLadderStudios/MoonMind#4114: vector-free boundary proof on the
+  # candidate instance (fresh installs and the post-upgrade candidate;
+  # never on the pre-upgrade old release, which predates retirement).
+  checks vector_free "$label"
   browser "$label"
   restart_workflow_worker
   cancel_from_dashboard "$label"
@@ -339,7 +340,6 @@ else
   bring_up
   require_conversion_outcome before-upgrade
   checks verify before-upgrade
-  checks vector-free before-upgrade
   browser before-upgrade
   checks release before-upgrade
   fresh_journey after-upgrade

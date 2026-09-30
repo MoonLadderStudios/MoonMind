@@ -740,6 +740,7 @@ def test_idempotency_key_includes_target_kind_and_slug():
         ref="THOR-123",
         target_kind="skill",
         target_slug="jira-verify",
+        inputs_digest="sha256:inputs",
     )
     preset_key = module["_child_idempotency_key"](
         batch_scope="run-1",
@@ -747,6 +748,7 @@ def test_idempotency_key_includes_target_kind_and_slug():
         ref="THOR-123",
         target_kind="preset",
         target_slug="jira-implement",
+        inputs_digest="sha256:inputs",
     )
 
     assert skill_key != preset_key
@@ -1413,3 +1415,304 @@ def test_batch_skill_recipes_resolve_from_active_snapshot():
             f"${{MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}}/{skill_id}/bin/{helper}"
             in skill_doc
         )
+
+
+def _run_issue_fanout_over_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    describe: Any,
+    targets: list[dict[str, Any]] | None = None,
+    extra_args: tuple[str, ...] = (),
+    post: Any = None,
+) -> tuple[int, dict[str, Any], list[str]]:
+    """Drive ``main`` through the real POST/GET transport with a fake urlopen."""
+
+    module = _load_module()
+    methods: list[str] = []
+
+    class _Response:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def _urlopen(request: Any, **_kwargs: Any) -> _Response:
+        methods.append(request.get_method())
+        if request.get_method() == "POST":
+            if post is not None:
+                return _Response(post(json.loads(request.data.decode("utf-8"))))
+            return _Response({"workflowId": "mm:child-0"})
+        return _Response(describe())
+
+    monkeypatch.setattr(
+        module["_submit_issue_jobs_gated"].__globals__["urllib"].request,
+        "urlopen",
+        _urlopen,
+    )
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir(exist_ok=True)
+    targets_path = artifacts / "batch-workflows-targets.json"
+    targets_path.write_text(
+        json.dumps(
+            targets
+            if targets is not None
+            else [
+                {
+                    "provider": "jira",
+                    "ref": "THOR-1",
+                    "jiraIssue": {"key": "THOR-1"},
+                    "repository": "acme/widgets",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-read-back")
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    return_code = module["main"](
+        [
+            "--targets",
+            str(targets_path),
+            "--run-ref",
+            "skill:jira-verify",
+            "--publish-mode",
+            "none",
+            "--capacity-poll-interval",
+            "0",
+            "--artifacts-dir",
+            str(artifacts),
+            *extra_args,
+        ]
+    )
+    evidence = json.loads(
+        (artifacts / "batch-workflows-result.json").read_text(encoding="utf-8")
+    )
+    return return_code, evidence, methods
+
+
+def test_issue_fanout_keeps_accepted_receipt_when_read_back_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    """A temporary read-back outage does not turn an accepted child into a failure."""
+
+    def describe() -> dict[str, Any]:
+        raise urllib.error.URLError("temporary read-back outage")
+
+    return_code, evidence, methods = _run_issue_fanout_over_transport(
+        tmp_path, monkeypatch, describe=describe
+    )
+
+    assert methods.count("POST") == 1
+    assert evidence["errors"] == []
+    assert evidence["created"] == 1
+    assert [(item["workflowId"], item["status"]) for item in evidence["queued"]] == [
+        ("mm:child-0", "unknown")
+    ]
+    assert evidence["status"] == "queued"
+    assert return_code == 0
+
+
+def test_issue_fanout_rerun_does_not_report_existing_failed_child_as_queued(
+    tmp_path, monkeypatch
+) -> None:
+    """A rerun resolving to an already-failed child reports that observed failure."""
+
+    return_code, evidence, _methods = _run_issue_fanout_over_transport(
+        tmp_path,
+        monkeypatch,
+        describe=lambda: {"workflowId": "mm:child-0", "status": "failed"},
+    )
+
+    assert [(item["workflowId"], item["status"]) for item in evidence["queued"]] == [
+        ("mm:child-0", "failed")
+    ]
+    assert evidence["status"] == "failed"
+    assert evidence["failure"]["code"] == "BATCH_FANOUT_FAILED"
+    assert return_code == 1
+
+
+def test_issue_fanout_duplicate_targets_report_one_child_once(
+    tmp_path, monkeypatch
+) -> None:
+    """Two targets resolving to one child submit once and count that child once."""
+
+    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+    target = {
+        "provider": "jira",
+        "ref": "MM-2",
+        "jiraIssue": {"key": "MM-2"},
+        "repository": "acme/widgets",
+    }
+    return_code, evidence, methods = _run_issue_fanout_over_transport(
+        tmp_path,
+        monkeypatch,
+        describe=lambda: {"workflowId": "mm:child-0", "status": "queued"},
+        targets=[target, dict(target)],
+    )
+
+    assert methods.count("POST") == 1
+    assert [item["workflowId"] for item in evidence["queued"]] == ["mm:child-0"]
+    assert evidence["created"] == 1
+    assert evidence["requested"] == 1
+    assert evidence["duplicates"] == [{"ref": "MM-2", "reason": "duplicate_target"}]
+    assert evidence["skipped"] == []
+    assert evidence["status"] == "queued"
+    assert return_code == 0
+    # The existing terminal-evidence consumer accepts the truthful result.
+    verdict = evaluate_terminal_evidence(
+        {
+            "contractId": "batch_workflows_fanout.v1",
+            "relativePath": "artifacts/batch-workflows-result.json",
+            "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+            "executionRef": "step-read-back",
+        },
+        workspace_path=str(tmp_path),
+    )
+    assert verdict.satisfied is True, verdict.failure_code
+    assert verdict.metadata["queuedChildCount"] == 1
+
+
+def test_issue_fanout_changed_inputs_in_same_scope_do_not_reuse_earlier_child(
+    tmp_path, monkeypatch
+) -> None:
+    """A same-scope rerun with changed constraints is new work, not the old child.
+
+    The fake execution API dedupes by idempotency key, as the real one does. An
+    unchanged rerun still resolves to the accepted child (lost acknowledgment).
+    """
+
+    accepted: dict[str, str] = {}
+    posted: list[dict[str, Any]] = []
+
+    def post(body: dict[str, Any]) -> dict[str, Any]:
+        posted.append(body)
+        key = body["payload"]["idempotencyKey"]
+        workflow_id = accepted.setdefault(key, f"mm:child-{len(accepted)}")
+        return {"workflowId": workflow_id}
+
+    def run(constraints: str) -> dict[str, Any]:
+        _code, evidence, _methods = _run_issue_fanout_over_transport(
+            tmp_path,
+            monkeypatch,
+            describe=lambda: {"status": "queued"},
+            extra_args=("--constraints", constraints),
+            post=post,
+        )
+        return evidence
+
+    first = run("Only touch the parser.")
+    repeated = run("Only touch the parser.")
+    changed = run("Only touch the renderer.")
+
+    assert [item["workflowId"] for item in first["queued"]] == ["mm:child-0"]
+    assert [item["workflowId"] for item in repeated["queued"]] == ["mm:child-0"]
+    assert [item["workflowId"] for item in changed["queued"]] == ["mm:child-1"]
+    assert posted[-1]["payload"]["task"]["inputs"]["constraints"] == (
+        "Only touch the renderer."
+    )
+
+
+@pytest.mark.parametrize(
+    ("run_ref", "before", "after"),
+    [
+        (
+            "preset:github-issue-orchestrate",
+            {
+                "provider": "github",
+                "ref": "acme/widgets#7",
+                "repository": "acme/widgets",
+                "githubIssue": {
+                    "repository": "acme/widgets",
+                    "number": 7,
+                    "title": "Fix the parser",
+                    "body": "Original body.",
+                    "state": "open",
+                    "labels": [],
+                },
+            },
+            {
+                "provider": "github",
+                "ref": "acme/widgets#7",
+                "repository": "acme/widgets",
+                "githubIssue": {
+                    "repository": "acme/widgets",
+                    "number": 7,
+                    "title": "Fix the parser (edited)",
+                    "body": "Edited body.",
+                    "state": "open",
+                    "labels": ["status: in-progress"],
+                },
+            },
+        ),
+        (
+            "preset:jira-orchestrate",
+            {
+                "provider": "jira",
+                "ref": "MM-3",
+                "repository": "acme/widgets",
+                "jiraIssue": {"key": "MM-3", "summary": "Fix", "status": "To Do"},
+            },
+            {
+                "provider": "jira",
+                "ref": "MM-3",
+                "repository": "acme/widgets",
+                "jiraIssue": {
+                    "key": "MM-3",
+                    "summary": "Fix (edited)",
+                    "status": "In Progress",
+                },
+            },
+        ),
+    ],
+)
+def test_issue_fanout_rerun_after_issue_snapshot_changes_reuses_existing_child(
+    tmp_path, monkeypatch, run_ref, before, after
+) -> None:
+    """A re-invoked fan-out in the same scope must not duplicate an issue's child.
+
+    The provider re-resolves the issue on every invocation, and the child itself
+    changes labels or status. That observed snapshot is not child intent, so the
+    rerun reconciles to the accepted child through the same idempotency key.
+    """
+
+    accepted: dict[str, str] = {}
+    posted: list[dict[str, Any]] = []
+
+    def post(body: dict[str, Any]) -> dict[str, Any]:
+        posted.append(body)
+        key = body["payload"]["idempotencyKey"]
+        workflow_id = accepted.setdefault(key, f"mm:child-{len(accepted)}")
+        return {"workflowId": workflow_id}
+
+    def run(target: dict[str, Any]) -> dict[str, Any]:
+        _code, evidence, _methods = _run_issue_fanout_over_transport(
+            tmp_path,
+            monkeypatch,
+            describe=lambda: {"status": "queued"},
+            targets=[target],
+            extra_args=("--run-ref", run_ref),
+            post=post,
+        )
+        return evidence
+
+    first = run(before)
+    rerun = run(after)
+
+    assert [item["workflowId"] for item in first["queued"]] == ["mm:child-0"]
+    assert [item["workflowId"] for item in rerun["queued"]] == ["mm:child-0"]
+    assert len(accepted) == 1
+    assert len(posted) == 2
+    # The child still receives the freshly observed snapshot as its input.
+    inputs = posted[-1]["payload"]["task"]["inputs"]
+    snapshot = inputs.get("github_issue") or inputs.get("jira_issue")
+    assert snapshot == (after.get("githubIssue") or after.get("jiraIssue"))

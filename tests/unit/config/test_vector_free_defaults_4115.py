@@ -31,6 +31,8 @@ REMOVED_MODULES = (
     "moonmind.rag.context_injection",
     "moonmind.rag.qdrant_client",
     "moonmind.rag.embedding",
+    "moonmind.vector_store",
+    "moonmind.vector_store.qdrant_vector_store",
     "moonmind.manifest",
     "moonmind.schemas.manifest_models",
     "moonmind.schemas.manifest_v0_models",

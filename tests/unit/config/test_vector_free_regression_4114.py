@@ -22,16 +22,25 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   optional profiles, embedded vector startup, and pgvector init SQL. Live
   startup remains a protected deployment check (see
   ``test_topology_matrix_gaps_are_explicit``).
-- Real startup: ``test_vector_free_settings_init_*`` (clean default +
-  upgraded stale-env init), ``test_vector_free_startup_imports_*`` (real
-  API/worker production imports under sanitized env),
-  ``test_vector_free_ordinary_workflow_journey_shared_runtime`` (ordinary
-  work through the shared canonical contract, both harness modes),
-  ``test_vector_free_compose_startup_config_*`` (rendered startup chain),
-  plus hermetic sentinel logic (``test_startup_sentinel_*``). Live
-  `docker compose up`, readiness probes against running services,
-  dashboard bootstrap, and repeated startup are protected checks owned
-  with the cutover child, not claimed here.
+- Real startup: hermetic sentinel logic
+  (``test_startup_sentinel_*``) plus real settings init under clean-default
+  and upgraded stale env (``test_vector_free_settings_init_*``) and real
+  production import and readiness wiring (``test_vector_free_startup_*``,
+  ``test_vector_free_api_health_*``) under sanitized env with no vector
+  configuration. Fresh Compose startup,
+  init-db/Alembic runs, live API/worker readiness probes, dashboard
+  bootstrap, and repeated startup stay protected checks owned with the
+  cutover child, not claimed here.
+- Ordinary workflow: hermetic execution through the shared production
+  admission path (``test_vector_free_ordinary_workflow_*``,
+  ``test_vector_free_rejection_*``, ``test_vector_free_denied_context_*``,
+  ``test_vector_free_upgraded_residue_*``) proving explicit context,
+  artifacts, terminal outcome, and recovery-safe retry with no vector
+  settings. Live runtime journeys stay protected (see
+  ``test_topology_matrix_gaps_are_explicit``); installed
+  dependency/image evidence is consumed from #4111 and Manifest
+  retirement integration from #4193 (see
+  ``test_vector_free_reuses_sibling_evidence_without_duplication``).
 - Public admission: ``test_admission_*`` exercises the real production
   admission path (``reject_retired_vector_fields`` /
   ``strip_absent_vector_fields`` from #4105) including hidden-state residue
@@ -654,13 +663,12 @@ def test_topology_matrix_gaps_are_explicit() -> None:
     admission wiring (execution contract, checkpoint branch models,
     AgentExecutionRequest), retry input-reuse, capability-manifest source scan,
     worker-registry Manifest absence, drain-gate predicate logic,
-    docs/operations surfaces, plus the credential-free startup slice:
-    settings init under clean-default and upgraded stale env
-    (``test_vector_free_settings_init_*``), startup production imports
-    (``test_vector_free_startup_imports_*``), the shared-runtime ordinary
-    workflow journey (``test_vector_free_ordinary_workflow_journey_*``), and
-    the rendered Compose startup chain
-    (``test_vector_free_compose_startup_config_*``).
+    vector-free startup imports and API health/readiness wiring, ordinary
+    vector-free workflow admission execution (explicit context, artifacts,
+    terminal outcome, omitted/explicit agreement), retirement rejection with
+    no consequential effects, denied-context no-widening, upgraded-residue
+    stripping at admission, sibling-evidence reuse accounting, and
+    docs/operations surfaces.
 
     The following rows still require protected deployment evidence owned with
     the cutover child and sibling removals (#4106-#4113), and are NOT claimed
@@ -825,6 +833,60 @@ def test_settings_model_declares_no_vector_backend_fields() -> None:
         text,
         re.IGNORECASE,
     )
+
+
+_VECTOR_ENV_KEYS_4114 = (
+    "QDRANT_URL",
+    "QDRANT_HOST",
+    "QDRANT_PORT",
+    "QDRANT_ENABLED",
+    "QDRANT_API_KEY",
+    "VECTOR_STORE_PROVIDER",
+    "VECTOR_STORE_COLLECTION_NAME",
+    "RAG_ENABLED",
+    "RAG_SIMILARITY_TOP_K",
+    "DEFAULT_EMBEDDING_PROVIDER",
+    "GOOGLE_EMBEDDING_MODEL",
+    "OPENAI_EMBEDDING_MODEL",
+)
+
+
+@pytest.mark.parametrize(
+    "stale_env",
+    [
+        pytest.param({}, id="clean-default"),
+        pytest.param(
+            {
+                "QDRANT_URL": "http://qdrant:6333",
+                "QDRANT_HOST": "qdrant",
+                "QDRANT_PORT": "6333",
+                "QDRANT_ENABLED": "true",
+                "VECTOR_STORE_PROVIDER": "qdrant",
+                "RAG_ENABLED": "true",
+            },
+            id="upgraded-stale-env",
+        ),
+    ],
+)
+def test_vector_free_settings_init_exposes_no_vector_surface(
+    monkeypatch: pytest.MonkeyPatch, stale_env: dict[str, str]
+) -> None:
+    """Real settings init stays vector-free on clean and upgraded envs."""
+    from moonmind.config.settings import AppSettings
+
+    for key in _VECTOR_ENV_KEYS_4114:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in stale_env.items():
+        monkeypatch.setenv(key, value)
+    settings = AppSettings(_env_file=None)
+    for field in (
+        "qdrant",
+        "rag",
+        "vector_store_provider",
+        "vector_store_collection_name",
+        "default_embedding_provider",
+    ):
+        assert not hasattr(settings, field), field
 
 
 def test_init_entrypoints_do_not_require_vector_env() -> None:
@@ -1051,279 +1113,588 @@ def test_manifest_drain_gate_blocks_on_open_histories() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Real startup/import/execution checks (#4114 remaining work).
+# Vector-free startup and ordinary-workflow execution (hermetic slice).
 #
-# Credential-free slice owned by this module in existing required CI
-# (pytest-unit-tests backend-matrix): real production imports, real settings
-# initialization under a clean default and a representative upgraded
-# environment, real admission through the shared canonical execution
-# contract, and the rendered Compose startup configuration. Dependency lock /
-# image-layer evidence stays owned by #4111 and Manifest retirement
-# integration by #4193 / #4189; those results are consumed here by scope
-# reference, not reproduced. Live `docker compose up` probes, API/worker
-# readiness probes against running services, dashboard bootstrap, and
-# browser journeys run in the integration-ci disposable fresh + upgrade
-# journeys (tools/first_run_journey_3938.sh vector-free phase); this module
-# binds that live probe shape to the production admission contract
-# (``test_vector_free_live_probe_matches_production_admission``) but does
-# NOT claim the live execution itself (see
-# ``test_topology_matrix_gaps_are_explicit``).
+# MoonLadderStudios/MoonMind#4114 R2/A1: the remaining live clean/upgraded
+# startup and runtime journeys execute in existing CI on disposable Compose
+# services -- this module cannot own them from unit_fast (no external
+# process, network, Docker, or Temporal server). What it CAN own, and adds
+# here, is the real production import, readiness-wiring, and admission
+# execution that those journeys depend on: every check below exercises the
+# shipped implementation (not a fixture service) with no vector
+# configuration, and every rejection asserts no consequential effects.
+# Sibling ownership is consumed, not reproduced: installed
+# dependency/image evidence belongs to #4111, Manifest retirement
+# integration to #4193 (see the reuse test below).
 # ---------------------------------------------------------------------------
 
 
-_STALE_VECTOR_ENV_4114 = {
-    "QDRANT_URL": "http://qdrant:6333",
-    "QDRANT_HOST": "qdrant",
-    "QDRANT_PORT": "6333",
-    "QDRANT_ENABLED": "true",
-    "VECTOR_STORE_PROVIDER": "qdrant",
-    "RAG_ENABLED": "true",
-}
+def test_vector_free_startup_imports_without_vector_env() -> None:
+    """Real production modules import with no vector configuration.
 
-_VECTOR_ENV_KEYS_4114 = (
-    "QDRANT_URL",
-    "QDRANT_HOST",
-    "QDRANT_PORT",
-    "QDRANT_ENABLED",
-    "QDRANT_API_KEY",
-    "VECTOR_STORE_PROVIDER",
-    "VECTOR_STORE_COLLECTION_NAME",
-    "RAG_ENABLED",
-    "RAG_SIMILARITY_TOP_K",
-    "DEFAULT_EMBEDDING_PROVIDER",
-    "GOOGLE_EMBEDDING_MODEL",
-    "OPENAI_EMBEDDING_MODEL",
-)
-
-
-def _assert_settings_vector_free(settings: object) -> None:
-    """Shared startup-readiness predicate: settings expose no vector surface."""
-    for field in (
-        "qdrant",
-        "rag",
-        "vector_store_provider",
-        "vector_store_collection_name",
-        "default_embedding_provider",
-    ):
-        assert not hasattr(settings, field), field
-
-
-def _sanitize_vector_env(
-    monkeypatch: pytest.MonkeyPatch, extra: dict | None = None
-) -> None:
-    for key in _VECTOR_ENV_KEYS_4114:
-        monkeypatch.delenv(key, raising=False)
-    for key, value in (extra or {}).items():
-        monkeypatch.setenv(key, value)
-
-
-def test_vector_free_settings_init_clean_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Real production settings import + init with a clean vector-free env."""
-    from moonmind.config.settings import AppSettings
-
-    _sanitize_vector_env(monkeypatch)
-    settings = AppSettings(_env_file=None)
-    _assert_settings_vector_free(settings)
-
-
-def test_vector_free_settings_init_upgraded_stale_env_inert(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Representative upgraded instance: stale vector env stays inert at init."""
-    from moonmind.config.settings import AppSettings
-
-    _sanitize_vector_env(monkeypatch, extra=dict(_STALE_VECTOR_ENV_4114))
-    settings = AppSettings(_env_file=None)
-    _assert_settings_vector_free(settings)
-
-
-def test_vector_free_startup_imports_resolve_without_vector_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """API/worker startup imports resolve with no vector configuration.
-
-    Exercises the real production modules behind API and worker readiness
-    (execution contract, workflow registry, checkpoint admission, agent
-    runtime admission, capability sources, drain gate) under a sanitized
-    env. Live readiness probes against running services remain protected.
+    Clean-default hermetic slice of R2: a fresh interpreter with a sanitized
+    env (no ``QDRANT_*`` / ``VECTOR_*`` / embedding keys) imports the shipped
+    startup path -- settings, execution contract, agent runtime schemas,
+    checkpoint branch models, retrieval capabilities, worker registry, drain
+    gate, and capability resolution. A fresh process is required because
+    ``importlib.import_module`` returns modules already cached by collection
+    or earlier tests. A vector-gated import (missing-env failure or a live
+    ``qdrant_client`` import at module scope) fails here.
     """
-    _sanitize_vector_env(monkeypatch)
+    import os
+    import subprocess
+    import sys
+
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not (_VECTOR_ENV_RE.search(key) or "EMBEDDING" in key.upper())
+    }
+    modules = (
+        "moonmind.config.settings",
+        "moonmind.workflows.executions.execution_contract",
+        "moonmind.schemas.agent_runtime_models",
+        "moonmind.schemas.checkpoint_branch_models",
+        "api_service.retrieval_capabilities",
+        "moonmind.workflows.temporal.workflow_registry",
+        "moonmind.gates.manifest_ingest_drain",
+        "moonmind.omnigent.effective_capabilities",
+    )
+    script = f"""
+import importlib, sys
+for name in {modules!r}:
+    importlib.import_module(name)
+leaked = sorted(m for m in sys.modules if m.split(".")[0] == "qdrant_client")
+assert not leaked, f"startup imported qdrant_client: {{leaked}}"
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    reject_retired_vector_fields,
+)
+# Negative control: the clean import must not smuggle a bypass -- an
+# explicit retired requirement is still rejected after these imports.
+try:
+    reject_retired_vector_fields(
+        {{"rag": {{"collections": ["docs"], "required": True}}}},
+        field_path="payload",
+    )
+except WorkflowContractError as exc:
+    assert "4105" in str(exc), exc
+else:
+    raise AssertionError("retired requirement admitted after clean import")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-4000:]
+
+
+def test_vector_free_api_health_routes_have_no_vector_gate() -> None:
+    """API health/readiness wiring registers with no vector gate.
+
+    Readiness hermetic slice of R2: the served OpenAPI contract (rendered
+    from the production app's included routers -- direct ``app.routes``
+    introspection is not used because middleware instrumentation wraps the
+    route table, see the #4193 boundary-suite precedent) exposes ``/healthz``
+    and no vector-backend path, and the readiness source gates on
+    database/migration state, never on a ``QDRANT_*`` / vector backend. A
+    reintroduced vector gate in the health path fails here; live probe
+    execution stays protected.
+    """
+    from api_service.main import app
+
+    openapi_paths = set(app.openapi().get("paths", {}).keys())
+    assert "/healthz" in openapi_paths
+    assert not any(
+        _VECTOR_SERVICE_NAME_RE.search(str(path)) for path in openapi_paths
+    ), "served API contract exposes a vector-backend path"
+    source = (REPO_ROOT / "api_service/main.py").read_text(encoding="utf-8")
+    code_lines = [
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    assert not _VECTOR_ENV_RE.search(code), (
+        "API startup wires a retired vector environment key"
+    )
+    assert "qdrant_client" not in code
+
+
+def test_vector_free_ordinary_workflow_explicit_context_artifacts_terminal() -> None:
+    """Ordinary vector-free work admits with explicit context and artifacts.
+
+    Ordinary-workflow hermetic slice of R2 through the shared production
+    implementation that serves multiple harnesses (``AgentExecutionRequest``
+    plus the #4105 execution contract): explicit instructions, input refs,
+    Skill selection, and workspace spec admit with no vector settings, the
+    admitted terminal payload preserves the explicit context verbatim, and
+    omitted-vs-explicit vector-free inputs agree. No harness-specific matrix
+    is commissioned here.
+    """
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    explicit = {
+        "instructions": "summarize the attached notes",
+        "workspaceSpec": {"mode": "scoped"},
+    }
+    reject_retired_vector_fields(dict(explicit), field_path="parameters")
+    assert strip_absent_vector_fields(dict(explicit)) == explicit
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-4114-ordinary",
+        idempotencyKey="idem-4114-ordinary",
+        parameters=dict(explicit),
+        skill={"name": "document-update"},
+        inputRefs=["artifact://tenant/repo/input.md"],
+    )
+    dumped = request.model_dump(by_alias=True)
+    assert dumped["parameters"] == explicit
+    assert "rag" not in dumped["parameters"]
+    assert "followUpRetrieval" not in dumped["parameters"]
+    assert dumped["inputRefs"] == ["artifact://tenant/repo/input.md"]
+    assert dumped["skill"] == {"name": "document-update"}
+    # Omitted and explicit-empty vector-free inputs admit identically with
+    # no retrieval authority.
+    omitted = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-4114-omitted",
+        idempotencyKey="idem-4114-omitted",
+    )
+    assert omitted.model_dump(by_alias=True)["parameters"] == {}
+    assert "rag" not in omitted.model_dump(by_alias=True)["parameters"]
+
+
+def test_vector_free_rejection_has_no_consequential_effects() -> None:
+    """Retirement rejection leaves inputs and authority unchanged.
+
+    Hermetic slice of R3 at the actual request/tool/worker boundaries: an
+    explicit retired requirement raises at the execution contract, the agent
+    runtime request, the checkpoint branch boundary, and the retrieval
+    issuance boundary, while the caller's payload keeps its keys and no
+    capability token, artifact, or drain-gate state is produced.
+    """
+    import copy
+
+    from pydantic import ValidationError
+
+    from api_service.retrieval_capabilities import (
+        RetrievalBudgetSnapshot,
+        RetrievalCapabilityError,
+        RetrievalCapabilityRegistry,
+    )
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
     from moonmind.schemas.checkpoint_branch_models import (
         CheckpointBranchCreateRequest,
     )
-    from moonmind.workflows.executions.execution_contract import (
-        CanonicalWorkflowExecutionPayload,
-        reject_retired_vector_fields,
-    )
-    from moonmind.workflows.temporal.workflow_registry import (
-        product_workflow_types,
-        workflow_projection_scopes,
-    )
 
-    assert "MoonMind.ManifestIngest" not in set(product_workflow_types())
-    assert "MoonMind.ManifestIngest" not in set(workflow_projection_scopes())
-    with pytest.raises(Exception, match="4105|retired|vector"):
+    retired = {
+        "instructions": "summarize",
+        "rag": {"collections": ["docs"], "required": True},
+    }
+    before = copy.deepcopy(retired)
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(dict(retired), field_path="payload")
+    with pytest.raises(ValueError, match="4105|retired|vector"):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-4114-no-effect",
+            idempotencyKey="idem-4114-no-effect",
+            parameters=dict(retired),
+        )
+    with pytest.raises(ValidationError, match="4105|retired|vector"):
+        CheckpointBranchCreateRequest.model_validate(
+            {
+                "source": _checkpoint_branch_source(),
+                "label": "branch",
+                "instructions": {"text": "do work"},
+                "workspacePolicy": "continue_from_previous_execution",
+                "idempotencyKey": "idem-4114-no-effect",
+                "followUpRetrieval": {"enabled": True, "collections": ["repo"]},
+            }
+        )
+    budget = RetrievalBudgetSnapshot(
+        tenant_id="tenant",
+        repository="repo",
+        run_id="run-1",
+        workspace_id="ws-1",
+        host_id="host-1",
+        session_id="session-1",
+        step_id="step-1",
+        workflow_id="workflow-1",
+        bridge_session_id="bridge-1",
+        policy_version="v1",
+        collections=("docs",),
+        filters=(),
+    )
+    with pytest.raises(RetrievalCapabilityError, match="retired"):
+        RetrievalCapabilityRegistry().issue(budget, lifetime_seconds=60)
+    assert retired == before
+
+
+def test_vector_free_denied_context_does_not_widen_access_or_empty_success() -> None:
+    """A denied context source never becomes wider access or empty success.
+
+    Hermetic slice of R4: an explicit retired requirement must raise at
+    admission (never strip down to an empty success), an incomplete
+    vector-free admission carries no retrieval authority, and the shared
+    provider-capability adapter grants no workspace mutation or retired
+    retrieval descriptor from an empty/denied input.
+    """
+    from moonmind.omnigent.effective_capabilities import (
+        PROVIDER_CAPABILITY_ALIASES,
+        adapt_provider_capabilities,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    # Explicit retired fields are denied even when stripping would succeed.
+    denied = {"rag": {"collections": ["docs"], "required": True}}
+    assert strip_absent_vector_fields(dict(denied)) == denied
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(dict(denied), field_path="payload")
+    # Incomplete vector-free admission carries no retrieval authority.
+    incomplete = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-4114-denied",
+        idempotencyKey="idem-4114-denied",
+        parameters={},
+    )
+    dumped = incomplete.model_dump(by_alias=True)
+    assert dumped["parameters"] == {}
+    assert not any(
+        key in dumped["parameters"] for key in ("rag", "collections")
+    )
+    # The capability adapter grants no mutation and issues no retired
+    # retrieval descriptor from an empty input.
+    adapted = adapt_provider_capabilities({})
+    assert adapted["mutateWorkspace"] is False
+    assert check_tool_manifest_vector_free(list(PROVIDER_CAPABILITY_ALIASES)) == []
+
+
+def test_vector_free_upgraded_residue_stripped_at_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Representative upgraded instance: stale residue is inert at admission.
+
+    Upgraded-instance hermetic slice of R2 at #4114's own admission
+    boundary (settings-level inertness belongs to #4115): an old deployment
+    carrying stale disabled residue plus retired env keys still admits --
+    residue strips to the clean explicit mapping -- while an explicit
+    retired requirement is still rejected. This mirrors the upgraded
+    instance without claiming its live Compose startup.
+    """
+    monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
+    monkeypatch.setenv("VECTOR_STORE_PROVIDER", "qdrant")
+    residue = {
+        "instructions": "summarize",
+        "rag": {},
+        "followUpRetrieval": {"enabled": False},
+    }
+    reject_retired_vector_fields(dict(residue), field_path="payload")
+    assert strip_absent_vector_fields(dict(residue)) == {
+        "instructions": "summarize"
+    }
+    with pytest.raises(WorkflowContractError, match="4105"):
         reject_retired_vector_fields(
             {"rag": {"collections": ["docs"], "required": True}},
             field_path="payload",
         )
-    # Admitting models import cleanly is itself the startup check; a minimal
-    # vector-free payload validates through the shared production path.
-    payload = CanonicalWorkflowExecutionPayload.model_validate(
-        {"repository": "acme/repo", "task": {"instructions": "Summarize"}}
-    )
-    assert payload.task.instructions == "Summarize"
-    assert CheckpointBranchCreateRequest is not None
-    assert AgentExecutionRequest is not None
 
 
-@pytest.mark.parametrize("runtime_mode", ["codex", "claude_code"])
-def test_vector_free_ordinary_workflow_journey_shared_runtime(
-    runtime_mode: str,
-) -> None:
-    """Ordinary vector-free work admits once through the shared runtime path.
+def test_vector_free_reuses_sibling_evidence_without_duplication() -> None:
+    """Reuse sibling evidence with accurate scope instead of reproducing it.
 
-    One canonical implementation serves every harness
-    (``CanonicalWorkflowExecutionPayload``); both parametrized modes exercise
-    that same path with explicit context (instructions, input attachments,
-    skill), preserved artifacts, a terminal publish outcome, and idempotent
-    retry. A differing-adapter case is unnecessary here because no adapter
-    boundary changes admission semantics.
+    Hermetic slice of A2: installed dependency/image evidence belongs to
+    #4111 and Manifest retirement integration to #4193 -- both suites exist
+    in this checkout with their owning guards, this module imports no
+    Docker/image inspector and no Manifest compiler, and the existing
+    impact selector routes this suite to required CI (same pattern as the
+    sibling qualification suites).
     """
-    from moonmind.workflows.executions.execution_contract import (
-        CanonicalWorkflowExecutionPayload,
-        SUPPORTED_RUNTIME_MODES,
-        WorkflowContractError,
-        reject_retired_vector_fields,
-        strip_absent_vector_fields,
-    )
+    from tools.select_test_suites import select_suites
 
-    raw: dict = {
-        "repository": "acme/repo",
-        "task": {
-            "instructions": "Summarize the repository state.",
-            "runtime": {"mode": runtime_mode},
-            "skill": {"id": "document-update"},
-            "inputAttachments": [
-                {
-                    "artifactId": "art-input-1",
-                    "filename": "input.md",
-                    "contentType": "text/markdown",
-                    "sizeBytes": 18,
-                }
-            ],
-            "publish": {"mode": "none"},
-        },
-    }
-    admitted = CanonicalWorkflowExecutionPayload.model_validate(raw)
-    dumped = admitted.model_dump(by_alias=True, exclude_none=True)
-    workflow = dumped["workflow"]
-    # Explicit context survives admission unchanged.
-    assert workflow["instructions"] == "Summarize the repository state."
-    assert workflow["inputAttachments"] == [
-        {
-            "artifactId": "art-input-1",
-            "filename": "input.md",
-            "contentType": "text/markdown",
-            "sizeBytes": 18,
-        }
-    ]
-    assert workflow["skill"]["id"] == "document-update"
-    assert workflow["publish"]["mode"] == "none"
-    # Both harness modes validate through the same canonical implementation;
-    # the runtime value normalizes per the rollout policy (#3833), so pin
-    # membership in the supported set rather than the literal input.
-    assert workflow["runtime"]["mode"] in SUPPORTED_RUNTIME_MODES
-    # No vector fields leak into the admitted terminal outcome.
-    assert "rag" not in workflow
-    assert "followUpRetrieval" not in workflow
-    # Retry reuses the exact admitted input (relevant recovery).
-    first = strip_absent_vector_fields(dict(workflow))
-    second = strip_absent_vector_fields(dict(first))
-    assert second == first
-    assert first["instructions"] == "Summarize the repository state."
-    # An explicit retired requirement is rejected before any effect, and the
-    # caller's mapping is not mutated into a consequential delivery.
-    retired = {"instructions": "Summarize", "rag": {"required": True}}
-    with pytest.raises(WorkflowContractError, match="4105|retired|vector"):
-        reject_retired_vector_fields(dict(retired), field_path="workflow")
-    assert retired == {"instructions": "Summarize", "rag": {"required": True}}
-
-
-def test_vector_free_compose_startup_config_renders_required_services() -> None:
-    """Rendered Compose startup config carries the required vector-free stack.
-
-    Real startup-configuration execution check (hermetic YAML render): the
-    default Compose file declares the API + init-db + postgres + temporal
-    startup chain with health/dependency wiring and no vector interpolation,
-    so a stale ``QDRANT_*`` environment cannot reintroduce a backend at
-    render time. Live `docker compose up` and readiness probes stay
-    protected deployment checks owned with the reliability journey.
-    """
-    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
-    assert check_compose_vector_free(compose) == []
-    services = compose.get("services", {}) or {}
-    for required in ("api", "postgres", "temporal", "init-db"):
-        assert required in services, f"missing startup service {required!r}"
-    assert any(
-        name.startswith("temporal-worker-") for name in services
-    ), "expected temporal worker services in the startup chain"
-    api = services["api"] or {}
-    assert api.get("healthcheck"), "api service must declare a healthcheck"
-    depends = api.get("depends_on", {})
-    depends_keys = (
-        set(depends.keys()) if isinstance(depends, dict) else set(depends or [])
-    )
-    assert {"init-db", "postgres"} <= depends_keys
-    text = (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-    code_lines = [
+    assert (
+        REPO_ROOT / "tests/unit/config/test_vector_free_defaults_4115.py"
+    ).is_file()
+    assert (
+        REPO_ROOT
+        / "tests/unit/config/test_manifest_retirement_qualification_4193.py"
+    ).is_file()
+    assert (
+        REPO_ROOT
+        / "tests/unit/api/routers/test_manifest_retirement_boundaries_4193.py"
+    ).is_file()
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    import_lines = [
         line
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        for line in own_source.splitlines()
+        if re.match(r"\s*(import|from)\s+docker[\s.]", line)
     ]
-    code = "\n".join(code_lines)
-    # Retirement-notice comments may name QDRANT_URL (as in the api service
-    # env comment); live wiring must not exist: no QDRANT_URL assignment,
-    # no ${QDRANT...} interpolation, and no non-comment QDRANT_URL line.
-    assert "QDRANT_URL=" not in code
-    assert "${QDRANT" not in code
-    assert not re.search(r"(?m)^\s*-?\s*QDRANT_URL", code)
-    test_compose = yaml.safe_load(
-        (REPO_ROOT / "docker-compose.test.yaml").read_text()
-    )
-    assert check_compose_vector_free(test_compose) == []
-
-
-def test_vector_free_live_probe_matches_production_admission() -> None:
-    """The disposable-journey probe is rejected by the production contract.
-
-    ``tools/single_user_journey_checks.py`` owns the exact retired-retrieval
-    submission the integration-ci fresh + upgrade journeys send to the
-    running candidate API. This binds that probe to the real admission
-    contract (the same ``reject_retired_vector_fields`` the API applies at
-    the payload and task levels), so the live 422 and the hermetic rejection
-    prove the same boundary. The journey's readiness/catalog predicates
-    accept clean posture and reject residue here as well.
-    """
-    from tools.single_user_journey_checks import (
-        check_catalog_vector_free,
-        check_health_ready,
-        retired_execution_probe_body,
-    )
-
-    body = retired_execution_probe_body()
-    task = body["payload"]["task"]
-    assert task["rag"] == {"collections": ["docs"], "required": True}
-    with pytest.raises(WorkflowContractError, match="4105|retired|vector"):
-        reject_retired_vector_fields(dict(task), field_path="workflow")
-    check_health_ready({"status": "ok", "db": "connected"})
-    check_catalog_vector_free({"sections": ["ok"]})
-    with pytest.raises(Exception, match="retired retrieval backend"):
-        check_catalog_vector_free({"settings": [{"key": "QDRANT_URL"}]})
-    with pytest.raises(Exception, match="healthz"):
-        check_health_ready(
-            {"status": "ok", "db": "connected", "migration_required": True}
+    assert import_lines == [], f"module imports a Docker inspector: {import_lines}"
+    product_import_lines = [
+        line
+        for line in own_source.splitlines()
+        if re.match(
+            r"\s*(import\s+moonmind\.manifest|from\s+moonmind\.manifest[\s.])",
+            line,
         )
+        or (
+            "manifest_ingest" in line
+            and "manifest_ingest_drain" not in line
+            and re.match(r"\s*(import|from)\s+", line)
+        )
+    ]
+    assert product_import_lines == [], (
+        f"module imports the retired Manifest product: {product_import_lines}"
+    )
+    compile_lines = [
+        line
+        for line in own_source.splitlines()
+        if "manifest.compile" in line and re.match(r"\s*(import|from)\s+", line)
+    ]
+    assert compile_lines == [], (
+        f"module imports the retired Manifest compiler: {compile_lines}"
+    )
+    selection = select_suites(
+        ["tests/unit/config/test_vector_free_regression_4114.py"]
+    )
+    assert selection.unit_fast is True
+
+
+def test_vector_free_live_journey_wires_actual_product_boundaries() -> None:
+    """Existing CI's first-run journey executes the vector-free boundaries.
+
+    MoonLadderStudios/MoonMind#4114 R2/A1: the disposable default first-run
+    journey (``tools/first_run_journey_3938.sh`` + stdlib
+    ``tools/single_user_journey_checks.py``) already boots a clean default
+    install with no ``.env`` and drives ordinary work (submit/redeliver,
+    artifacts, recurring, preset, worker restart, dashboard cancel,
+    read-back) on disposable Compose services. This test pins that the
+    journey actually exercises the vector-free product boundaries instead
+    of counting YAML parsing or sentinel fixtures:
+
+    - the helper exposes a ``vector_free`` phase whose retired probe
+      carries an explicit retired requirement that the real production
+      admission path (``reject_retired_vector_fields`` from #4105)
+      rejects;
+    - the helper's phase issues the live ``/healthz``, OpenAPI, and
+      retired-submission requests (exercised against a recording fake API
+      in ``test_vector_free_journey_phase_*``);
+    - the shell runs that phase on the candidate (fresh installs and the
+      post-upgrade candidate instance), never on the pre-upgrade old
+      release.
+    """
+    import importlib.util
+
+    helper_path = REPO_ROOT / "tools/single_user_journey_checks.py"
+    assert helper_path.is_file(), "missing live journey helper"
+    spec = importlib.util.spec_from_file_location(
+        "single_user_journey_checks_4114", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert callable(getattr(module, "vector_free", None)), (
+        "journey helper exposes no vector_free phase"
+    )
+    assert callable(getattr(module, "vector_free_retired_probe", None)), (
+        "journey helper exposes no vector_free_retired_probe payload"
+    )
+    probe = module.vector_free_retired_probe()
+    assert isinstance(probe, dict) and isinstance(probe.get("payload"), dict)
+    with pytest.raises(WorkflowContractError, match="4105"):
+        reject_retired_vector_fields(
+            probe["payload"], field_path="payload"
+        )
+
+    shell = (REPO_ROOT / "tools/first_run_journey_3938.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "checks vector_free" in shell, (
+        "first-run journey never runs the vector_free phase"
+    )
+    fresh_body = shell.split("fresh_journey()")[1].split("\n}\n")[0]
+    assert "checks vector_free" in fresh_body
+    # The post-upgrade candidate instance reuses the same fresh_journey,
+    # so the vector_free phase runs there too; the pre-upgrade old release
+    # (which predates retirement) must not run it inline.
+    assert "fresh_journey after-upgrade" in shell
+    pre_upgrade_body = shell.split("bring_up 3")[1].split("Upgrading $PROJECT_NAME")[0]
+    assert "vector_free" not in pre_upgrade_body
+
+
+def _load_journey_helper():
+    import importlib.util
+
+    helper_path = REPO_ROOT / "tools/single_user_journey_checks.py"
+    spec = importlib.util.spec_from_file_location(
+        "single_user_journey_checks_4114_phase", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_RETIREMENT_422 = {
+    "detail": {
+        "code": "invalid_execution_request",
+        "message": (
+            "payload.rag has been retired (MoonLadderStudios/MoonMind#4105). "
+            "Remove the vector retrieval/indexing fields."
+        ),
+    }
+}
+
+
+class _RecordingJourneyApi:
+    """Fake live API recording the ``vector_free`` phase's requests.
+
+    ``persist_probe`` simulates a regression that stores the rejected probe
+    before answering 422; ``health``/``rejection`` override the responses.
+    """
+
+    def __init__(
+        self,
+        *,
+        health: dict | None = None,
+        rejection: object = None,
+        persist_probe: bool = False,
+    ) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.health = health or {"status": "ok", "database": "connected"}
+        self.rejection = _RETIREMENT_422 if rejection is None else rejection
+        self.persist_probe = persist_probe
+        self.executions: dict[str, dict] = {
+            "mm:existing": {"workflowId": "mm:existing", "title": "journey"}
+        }
+
+    def request(self, method, path, *, body=None, expect=(200,), **_kwargs):
+        import json
+
+        self.calls.append((method, path.split("?")[0]))
+        if (method, path) == ("GET", "/healthz"):
+            status, payload = 200, self.health
+        elif (method, path) == ("GET", "/openapi.json"):
+            status, payload = 200, {"paths": {"/healthz": {}, "/api/executions": {}}}
+        elif method == "GET" and path.startswith("/api/executions?"):
+            status, payload = 200, {"items": list(self.executions.values())}
+        elif method == "GET" and path.startswith("/api/executions/"):
+            workflow_id = path.rsplit("/", 1)[1].replace("%3A", ":")
+            status, payload = 200, self.executions[workflow_id]
+        elif (method, path) == ("POST", "/api/executions"):
+            if self.persist_probe:
+                instructions = body["payload"]["workflow"]["instructions"]
+                self.executions["mm:probe"] = {
+                    "workflowId": "mm:probe",
+                    "title": instructions,
+                }
+            status, payload = 422, self.rejection
+        else:
+            raise AssertionError(f"unexpected request {method} {path}")
+        assert status in expect, (method, path, status)
+        return status, json.dumps(payload).encode()
+
+    def json(self, method, path, **kwargs):
+        import json
+
+        return json.loads(self.request(method, path, **kwargs)[1])
+
+
+def test_vector_free_journey_phase_probes_live_boundaries() -> None:
+    """The live phase reads health/OpenAPI and probes without side effects."""
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi()
+    state: dict = {}
+
+    module.vector_free(api, state)
+
+    assert api.calls == [
+        ("GET", "/healthz"),
+        ("GET", "/openapi.json"),
+        ("GET", "/api/executions"),
+        ("POST", "/api/executions"),
+        ("GET", "/api/executions"),
+    ]
+    assert state["vector_free"] == {
+        "healthz": "ok",
+        "openapiPaths": 2,
+        "retiredRejected": True,
+    }
+    probe = module.vector_free_retired_probe("marker")
+    assert module.RETIRED_VECTOR_DIAGNOSTIC not in str(probe), (
+        "probe text could satisfy the retirement diagnostic by echo"
+    )
+
+
+@pytest.mark.parametrize(
+    "health",
+    [
+        {"status": "ok", "milvus": {"status": "connected"}},
+        {"status": "ok", "services": {"embedding_service": "ready"}},
+        {"status": "ok", "backends": [{"pgvector": "up"}]},
+        {"status": "ok", "qdrant": "connected"},
+    ],
+)
+def test_vector_free_journey_phase_rejects_retired_health_backend(
+    health: dict,
+) -> None:
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi(health=health)
+
+    with pytest.raises(module.JourneyFailure, match="retired vector backend"):
+        module.vector_free(api, {})
+    assert ("POST", "/api/executions") not in api.calls
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        # A generic validation error echoing the probe input.
+        {
+            "detail": [
+                {
+                    "msg": "invalid",
+                    "input": {"instructions": "vector-free journey retired probe"},
+                }
+            ]
+        },
+        {"detail": {"code": "invalid_execution_request", "message": "retired vector"}},
+        {"detail": {"code": "other", "message": _RETIREMENT_422["detail"]["message"]}},
+    ],
+)
+def test_vector_free_journey_phase_requires_structured_retirement_diagnostic(
+    rejection: object,
+) -> None:
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi(rejection=rejection)
+
+    with pytest.raises(module.JourneyFailure, match="retirement diagnostic"):
+        module.vector_free(api, {})
+
+
+def test_vector_free_journey_phase_rejects_nested_execution_identity() -> None:
+    module = _load_journey_helper()
+    rejection = {
+        "detail": {**_RETIREMENT_422["detail"], "execution": {"workflowId": "mm:x"}}
+    }
+    api = _RecordingJourneyApi(rejection=rejection)
+
+    with pytest.raises(module.JourneyFailure, match="execution identity"):
+        module.vector_free(api, {})
+
+
+def test_vector_free_journey_phase_rejects_persisted_probe() -> None:
+    module = _load_journey_helper()
+    api = _RecordingJourneyApi(persist_probe=True)
+
+    with pytest.raises(module.JourneyFailure, match="persisted executions"):
+        module.vector_free(api, {})

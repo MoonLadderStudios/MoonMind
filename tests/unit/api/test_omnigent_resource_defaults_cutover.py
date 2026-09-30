@@ -1,6 +1,7 @@
 """Bootstrap migrates retired shared-CPU defaults to fixed successors."""
 
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,21 @@ from tests.unit.api.test_omnigent_policy_service import policy_db
 async def _image(image_ref):
     kind = "host" if "host" in image_ref else "server"
     return f"images/{kind}@sha256:" + ("1" if kind == "host" else "2") * 64
+
+
+def _resolved_shared_host(monkeypatch):
+    """Persist the shared host digest the deployment image leg resolves first.
+
+    Generic Claude is admitted by default, so a default deployment seeds
+    ``claude-on-demand`` from this digest alongside the other stock policies.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(
+            shared_host_image_ref="images/shared@sha256:" + "3" * 64
+        ),
+    )
 
 
 def _no_daemon(monkeypatch):
@@ -159,6 +175,7 @@ async def test_startup_seeds_fixed_defaults_without_any_docker_probe(
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     _no_daemon(monkeypatch)
+    _resolved_shared_host(monkeypatch)
     assert not hasattr(policies, "bootstrap_shared_cpu_supported")
     async with policy_db(tmp_path) as sessions, sessions() as session:
         await policies.seed_bootstrap_policies(session, image_resolver=_image)
@@ -169,6 +186,7 @@ async def test_startup_seeds_fixed_defaults_without_any_docker_probe(
             "omnigent-codex",
             "codex-static",
             "codex-on-demand",
+            "claude-on-demand",
             "omnigent-on-demand",
             "opencode-on-demand",
         ):

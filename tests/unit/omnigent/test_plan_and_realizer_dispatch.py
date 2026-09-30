@@ -624,7 +624,13 @@ def test_select_execution_realizer_codex_gate(monkeypatch):
         select_execution_realizer(harness_id="codex-native", is_codex=True)
         == "codex-profile-bound@1"
     )
-    # Claude Code is fail-closed until qualified: no legacy lane to fall back to.
+    # Claude Code has no legacy lane, so it is admitted on the generic realizer
+    # by default and an explicit stop fails closed rather than falling back.
+    assert (
+        select_execution_realizer(harness_id="claude-native", is_codex=False)
+        == "generic-omnigent-host@1"
+    )
+    monkeypatch.setenv(_CLAUDE_GATE_ENV, "false")
     with pytest.raises(Exception) as exc:
         select_execution_realizer(harness_id="claude-native", is_codex=False)
     assert "execution realizer" in str(exc.value).lower()
@@ -690,11 +696,17 @@ def test_claude_plans_record_generic_realizer(monkeypatch):
     assert envelope.payload.hostClassRef == "omnigent-claude@1"
 
 
-def test_claude_generic_plan_fails_closed_until_qualified(monkeypatch):
+def test_claude_generic_plan_is_admitted_without_configuration(monkeypatch):
     from moonmind.omnigent.settings import generic_claude_qualified
 
     monkeypatch.delenv(_CLAUDE_GATE_ENV, raising=False)
-    assert generic_claude_qualified() is False
+    assert generic_claude_qualified() is True
+    envelope = _compile_claude_plan()
+    assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
+
+
+def test_claude_generic_plan_fails_closed_when_explicitly_disabled(monkeypatch):
+    monkeypatch.setenv(_CLAUDE_GATE_ENV, "false")
     with pytest.raises(Exception) as exc:
         _compile_claude_plan()
     assert "execution realizer" in str(exc.value).lower()
