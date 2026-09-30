@@ -331,6 +331,7 @@ async def test_profile_bound_coordinator_rejects_unenforceable_usd_budget_before
 @pytest.mark.asyncio
 async def test_owner_allocates_and_claims_canonical_omnigent_request_before_start(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     session = _Session()
     client = SimpleNamespace()
@@ -447,6 +448,20 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
     context = json.loads(written["runtime.branch_turn.context_bundle.json"])
     assert context["remediationContextRef"] == "artifact://remediation/context"
     assert request["workspaceSpec"]["targetBranch"] == "mm/source/branch-1"
+    # MoonLadderStudios/MoonMind#4016: the child's sandbox is owned by the same
+    # identity the host, save, and restore boundaries resolve; a branch-only
+    # derivation would fail host preparation before any compute.
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+
+    child = AgentExecutionRequest.model_validate(request)
+    resolved = OmnigentWorkspacePublicationService(
+        tmp_path
+    ).resolve_request_workspace(child, must_exist=False)
+    assert resolved.parent.name == request["workspaceSpec"]["workspaceLocator"][
+        "workspaceId"
+    ]
 
     await owner.launch(
         workflow_id="source-workflow",
