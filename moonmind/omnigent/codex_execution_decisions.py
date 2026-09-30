@@ -303,13 +303,7 @@ def _coerce_positive_int(value: Any) -> int | None:
     return None
 
 
-def compile_follow_up_retrieval_policy(
-    policy_snapshot: Mapping[str, Any],
-    parameters: Mapping[str, Any] | None,
-    *,
-    repository: str,
-    tenant_id: str,
-) -> dict[str, Any]:
+def compile_follow_up_retrieval_policy() -> dict[str, Any]:
     """Compile the runtime ``followUpRetrieval`` block carried by the launch snapshot.
 
     Built-in vector retrieval is retired (MoonLadderStudios/MoonMind#4105):

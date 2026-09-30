@@ -3350,16 +3350,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             if isinstance(parameters.get("followUpRetrieval"), Mapping)
             else {}
         )
-        follow_up = compile_follow_up_retrieval_policy(
-            policy_snapshot,
-            parameters,
-            repository=str(parameters.get("repository") or "").strip(),
-            tenant_id=str(
-                authored_follow_up.get("tenantId")
-                or parameters.get("tenantId")
-                or "default"
-            ).strip(),
-        )
+        follow_up = compile_follow_up_retrieval_policy()
         enforce_required_follow_up_retrieval(authored_follow_up, follow_up)
         effective_launch = _compile_persisted_effective_launch(
             policy_snapshot,

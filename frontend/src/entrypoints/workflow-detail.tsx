@@ -25,13 +25,6 @@ import { AttachmentImagePreview } from '../components/AttachmentImagePreview';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
-import { ContextRetrievalControls } from '../components/ContextRetrievalControls';
-import {
-  type ContextRetrievalAuthoring,
-  compileContextRetrievalParameters,
-  defaultContextRetrievalAuthoring,
-  hasAuthoredContextRetrieval,
-} from '../lib/contextRetrievalAuthoring';
 import {
   DashboardToastProvider,
   useDashboardToast,
@@ -4886,30 +4879,13 @@ type BranchCreateDraft = {
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
 
 type BranchMutationRequest =
-  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
-  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
-  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
+  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string }
+  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
+  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
   | { kind: 'promote'; branch: CheckpointBranch; competingBranches: CheckpointBranch[]; idempotencyKey: string }
   | { kind: 'publish'; branch: CheckpointBranch; idempotencyKey: string }
   | { kind: 'archive'; branch: CheckpointBranch; idempotencyKey: string }
   | { kind: 'compare'; branch: CheckpointBranch; againstBranchId: string };
-
-// Attach an authored follow-up retrieval override to a branch-turn request body
-// (MoonMind#3514). The checkpoint-branch API accepts (and records) the override;
-// launch inherits the parent run's compiled policy unless a narrower override is
-// authored here. Compiled values are always bounded by deployment ceilings.
-function applyBranchRetrievalOverride(
-  body: Record<string, unknown>,
-  contextRetrieval: ContextRetrievalAuthoring | undefined,
-): void {
-  if (!contextRetrieval) {
-    return;
-  }
-  const compiled = compileContextRetrievalParameters(contextRetrieval);
-  if (compiled.followUpRetrieval) {
-    body.followUpRetrieval = compiled.followUpRetrieval;
-  }
-}
 
 const BRANCH_MUTATING_STATES = new Set(['created', 'active', 'blocked', 'failed', 'succeeded', 'promotable']);
 const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
@@ -5158,11 +5134,6 @@ function BranchExplorerPanel({
   const [draft, setDraft] = useState<BranchCreateDraft>(() => DEFAULT_BRANCH_CREATE_DRAFT);
   const [branchInstructions, setBranchInstructions] = useState('Continue this branch with bounded instructions.');
   const [againstBranchId, setAgainstBranchId] = useState('');
-  const [branchContextRetrieval, setBranchContextRetrieval] =
-    useState<ContextRetrievalAuthoring>(defaultContextRetrievalAuthoring);
-  const branchRetrievalOverride = hasAuthoredContextRetrieval(branchContextRetrieval)
-    ? branchContextRetrieval
-    : undefined;
 
   useEffect(() => {
     const firstCheckpointRow = checkpointRows[0];
@@ -5412,7 +5383,6 @@ function BranchExplorerPanel({
             draft,
             source: selectedSource,
             idempotencyKey: branchIdempotencyKey('create', workflowId, stepBranchKey(selectedSource)),
-            contextRetrieval: branchRetrievalOverride,
           })}
         >
           Create branch from checkpoint
@@ -5461,16 +5431,6 @@ function BranchExplorerPanel({
             Branch action instructions
             <textarea value={branchInstructions} disabled={busy} rows={2} onChange={(event) => setBranchInstructions(event.target.value)} />
           </label>
-          <details className="branch-context-retrieval">
-            <summary>Context retrieval (RAG) for this turn</summary>
-            <ContextRetrievalControls
-              value={branchContextRetrieval}
-              onChange={setBranchContextRetrieval}
-              showInitialControls={false}
-              disabled={busy}
-              description="Continue/fork turns inherit the parent run's retrieval policy. Set an override here to narrow in-session follow-up retrieval for the new turn within deployment ceilings."
-            />
-          </details>
           <label>
             Compare against
             <select value={againstBranchId} disabled={busy || branches.length < 2} onChange={(event) => setAgainstBranchId(event.target.value)}>
@@ -5481,8 +5441,8 @@ function BranchExplorerPanel({
             </select>
           </label>
           <div className="button-row">
-            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId), contextRetrieval: branchRetrievalOverride })}>Continue branch</button>
-            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId), contextRetrieval: branchRetrievalOverride })}>Fork from this branch</button>
+            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
+            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
             <button type="button" className="secondary" disabled={compareDisabled} title={compareBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
             <button type="button" className="secondary" disabled={promoteDisabled} title={promoteBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
             <button type="button" className="secondary" disabled={publishDisabled} title={publishBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
@@ -10145,7 +10105,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           model: request.draft.model.trim() || null,
           effort: request.draft.effort || null,
         };
-        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'continue') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/continue`;
         body = {
@@ -10156,7 +10115,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
-        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'fork') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/fork`;
         body = {
@@ -10167,7 +10125,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
-        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'promote') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/promote`;
         body = {

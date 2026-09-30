@@ -906,39 +906,12 @@ class OmnigentProfileBoundExecutionCoordinator:
             launch_parameters = (
                 request.parameters if isinstance(request.parameters, dict) else {}
             )
-            launch_workspace_spec = (
-                request.workspace_spec
-                if isinstance(request.workspace_spec, dict)
-                else {}
-            )
             authored_follow_up = (
                 launch_parameters.get("followUpRetrieval")
                 if isinstance(launch_parameters.get("followUpRetrieval"), dict)
                 else {}
             )
-            follow_up_repository = str(
-                authored_follow_up.get("repository")
-                or launch_parameters.get("repository")
-                or launch_workspace_spec.get("repository")
-                or ""
-            ).strip()
-            # MoonMind has no separate tenancy authority today (single-tenant by
-            # default), so fall back to a deployment-configurable tenant rather
-            # than leaving follow-up retrieval permanently unavailable once an
-            # operator opts in. Multi-tenant deployments author an explicit
-            # tenantId, which always takes precedence.
-            follow_up_tenant = str(
-                authored_follow_up.get("tenantId")
-                or launch_parameters.get("tenant")
-                or launch_parameters.get("tenantId")
-                or os.getenv("MOONMIND_FOLLOWUP_RETRIEVAL_DEFAULT_TENANT", "default")
-            ).strip()
-            follow_up_block = compile_follow_up_retrieval_policy(
-                policy_snapshot,
-                launch_parameters,
-                repository=follow_up_repository,
-                tenant_id=follow_up_tenant,
-            )
+            follow_up_block = compile_follow_up_retrieval_policy()
             enforce_required_follow_up_retrieval(authored_follow_up, follow_up_block)
             with control_plane_spans.omnigent_span(
                 control_plane_spans.COMPATIBILITY_VERIFY,

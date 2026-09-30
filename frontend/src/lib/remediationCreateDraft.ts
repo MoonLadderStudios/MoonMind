@@ -1,4 +1,3 @@
-import type { ContextRetrievalAuthoring } from './contextRetrievalAuthoring';
 import {
   buildRemediationRuntimeRequestFields,
   DEFAULT_REMEDIATION_ACTION_POLICY,
@@ -41,7 +40,6 @@ export type RemediationCreateDraft = {
   publishMode?: string;
   executionProfileRef?: string;
   launchPolicyRef?: string;
-  contextRetrieval?: ContextRetrievalAuthoring;
   runtime?: {
     mode?: string;
     model?: string;
@@ -460,7 +458,6 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
       (isNonEmptyText(agentProfile.profileId) &&
         isNonEmptyText(agentProfile.providerProfileRef))
     ) &&
-    optionalRecordIsValid(draft.contextRetrieval) &&
     optionalRecordIsValid(remediation.evidencePolicy) &&
     optionalRecordIsValid(remediation.approvalPolicy) &&
     optionalRecordIsValid(remediation.lockPolicy) &&

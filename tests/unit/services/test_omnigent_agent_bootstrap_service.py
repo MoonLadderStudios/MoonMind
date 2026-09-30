@@ -15,7 +15,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.api.routers.omnigent_agent_profiles import AgentProfileDocument
+from api_service.api.routers.omnigent_agent_profiles import (
+    AgentProfileDocument,
+    VersionCreate,
+)
 from api_service.api.routers.omnigent_agent_profiles import _digest as router_digest
 from api_service.api.routers.omnigent_agent_profiles import _normalized
 from api_service.db.models import (
@@ -114,6 +117,11 @@ async def test_bootstrap_document_matches_router_normalized_form():
     normalized = _normalized(AgentProfileDocument.model_validate(document))
     assert normalized == document
     assert router_digest(document) == router_digest(normalized)
+    # An equivalent operator-authored version persists the same document, which
+    # carries no retired retrieval section (#4103).
+    authored = _normalized(VersionCreate.model_validate({"document": document}).document)
+    assert authored == document
+    assert "rag" not in document
 
 
 async def test_resolves_env_fallback_and_records_use(session):

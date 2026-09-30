@@ -3,12 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { ContextRetrievalControls } from '../components/ContextRetrievalControls';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import {
-  type ContextRetrievalAuthoring,
-  defaultContextRetrievalAuthoring,
-} from '../lib/contextRetrievalAuthoring';
 
 type InventoryKind = 'agents' | 'policies';
 type InventoryRow = {
@@ -95,7 +90,7 @@ function codexProfileDocument(draft: AgentProfileEditor): Record<string, unknown
     tools: (draft.toolsText || '').split(',').map((item) => item.trim()).filter(Boolean),
     capture: { stream: draft.captureStream !== false, evidence: draft.captureEvidence !== false },
     continuations: { checkpoint: draft.continuationCheckpoint !== false, branch: draft.continuationBranch !== false, remediation: true },
-    rag: {}, publish: { mode: draft.publicationMode === 'required' ? 'auto' : draft.publicationMode || 'none' },
+    publish: { mode: draft.publicationMode === 'required' ? 'auto' : draft.publicationMode || 'none' },
     policyRef: 'default@1',
   };
 }
@@ -115,65 +110,17 @@ function normalizedDocumentDiff(from: Record<string, unknown>, to: Record<string
 }
 
 /**
- * Assisted RAG editor for a policy document (MoonMind#3514). The policy `rag`
- * block (RagPolicy) is the deployment authority that feeds the per-run
- * follow-up retrieval budget: `collectionRefs` is the allowed collection set and
- * `tokenBudget` / `latencyBudgetMs` become the compiled budget ceilings. This
- * maps only the RagPolicy-valid fields so the edited document stays valid; the
- * remaining controls preview the per-run authoring experience.
+ * Seed the policy editor from a recorded version. Native retrieval is retired
+ * (MoonLadderStudios/MoonMind#4103), so a historical `rag` section stays
+ * readable in the version detail but is not carried into a new version.
  */
-function readPolicyContextRetrieval(
-  documentJson: string,
-): { value: ContextRetrievalAuthoring; parsed: Record<string, unknown> } | null {
-  try {
-    const parsed = JSON.parse(documentJson);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const document = parsed as Record<string, unknown>;
-    const rag =
-      document.rag && typeof document.rag === 'object' && !Array.isArray(document.rag)
-        ? (document.rag as Record<string, unknown>)
-        : null;
-    if (!rag) return null;
-    const collections = Array.isArray(rag.collectionRefs)
-      ? rag.collectionRefs.map((item) => String(item)).filter(Boolean)
-      : [];
-    const value = defaultContextRetrievalAuthoring();
-    value.initial.collections = collections;
-    value.followUp.enabled = true;
-    value.followUp.collections = collections;
-    value.followUp.budgetPreset = 'custom';
-    if (typeof rag.tokenBudget === 'number') {
-      value.followUp.maxContextTokens = rag.tokenBudget;
-    }
-    if (typeof rag.latencyBudgetMs === 'number') {
-      value.followUp.latencyMs = rag.latencyBudgetMs;
-    }
-    value.followUp.fallbackAllowed = rag.fallback === 'empty';
-    return { value, parsed: document };
-  } catch {
-    return null;
+function policyEditorDocument(document: unknown): string {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) {
+    return JSON.stringify(document ?? {}, null, 2);
   }
-}
-
-function writePolicyContextRetrieval(
-  document: Record<string, unknown>,
-  value: ContextRetrievalAuthoring,
-): string {
-  const rag: Record<string, unknown> = {
-    ...(document.rag && typeof document.rag === 'object' && !Array.isArray(document.rag)
-      ? (document.rag as Record<string, unknown>)
-      : {}),
-  };
-  const collections = Array.from(
-    new Set([...value.followUp.collections, ...value.initial.collections]),
-  );
-  if (collections.length > 0) {
-    rag.collectionRefs = collections;
-  }
-  rag.tokenBudget = value.followUp.maxContextTokens;
-  rag.latencyBudgetMs = value.followUp.latencyMs;
-  rag.fallback = value.followUp.fallbackAllowed ? 'empty' : 'deny';
-  return JSON.stringify({ ...document, rag }, null, 2);
+  const current = { ...(document as Record<string, unknown>) };
+  delete current.rag;
+  return JSON.stringify(current, null, 2);
 }
 
 function text(record: Record<string, unknown>, ...keys: string[]): string {
@@ -507,7 +454,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             onClick={() => setSelectedVersion(version)}>{version.ref} · {version.state}</button>)}</div> : <p role="status">Loading immutable history…</p>}
         <p>Validation: {(visibleVersion?.validation ?? selected.validation)?.valid ? 'Valid' : 'Needs attention'}</p>
         {(visibleVersion?.validation ?? selected.validation)?.diagnostics?.map((diagnostic) => <p role="alert" key={`${diagnostic.code}-${diagnostic.path}`}>{diagnostic.path ? `${diagnostic.path}: ` : ''}{diagnostic.code}: {diagnostic.message}</p>)}
-        <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, RAG, approvals, and retention</h3>
+        <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, approvals, and retention</h3>
         <pre>{JSON.stringify(visibleVersion?.document ?? selected.document, null, 2)}</pre>
         {visibleVersion ? <button type="button" onClick={() => validate.mutate(visibleVersion)}>Validate against deployment</button> : null}
         {usage.isError ? <p role="alert">{usage.error.message}</p> : null}
@@ -528,8 +475,8 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         {visibleVersion && visibleVersion.version !== selected.version ? <button type="button" onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'active', makeDefault: true })}>Roll back default to {visibleVersion.ref}</button> : null}
         {visibleVersion && visibleVersion.state === 'active' ? <button type="button" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'disabled' })}>Disable {visibleVersion.ref}</button> : null}
         {visibleVersion && visibleVersion.state === 'active' ? <button type="button" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'deprecated' })}>Deprecate {visibleVersion.ref}</button> : null}
-        <button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: JSON.stringify(visibleVersion?.document ?? selected.document, null, 2) })}>Edit as new version</button>
-        <button type="button" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: JSON.stringify(visibleVersion?.document ?? selected.document, null, 2) })}>Clone</button>
+        <button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: policyEditorDocument(visibleVersion?.document ?? selected.document) })}>Edit as new version</button>
+        <button type="button" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: policyEditorDocument(visibleVersion?.document ?? selected.document) })}>Clone</button>
         {versionDiff.data ? <><h3>Normalized diff to current default</h3><pre>{versionDiff.data.diff || 'No document differences.'}</pre></> : null}
         <h3>Audit history</h3>
         {audit.data?.length ? <ol>{audit.data.map((event) => <li key={event.eventId}>{event.type} · version {event.version ?? 'identity'} · {event.actor}</li>)}</ol> : <p>No lifecycle events recorded.</p>}
@@ -540,32 +487,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <label><span>Policy id</span><input value={editor.id} disabled={editor.mode === 'version'} onChange={(event) => setEditor({ ...editor, id: event.target.value })} required /></label>
         <label><span>Name</span><input value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} required /></label>
         <label><span>Complete policy document (JSON)</span><textarea rows={18} value={editor.document} onChange={(event) => setEditor({ ...editor, document: event.target.value })} required /></label>
-        {(() => {
-          const retrieval = readPolicyContextRetrieval(editor.document);
-          if (!retrieval) {
-            return (
-              <p className="small">
-                Add a <code>rag</code> block to the document above to configure
-                context retrieval defaults with assisted controls.
-              </p>
-            );
-          }
-          return (
-            <details className="omnigent-policy-context-retrieval">
-              <summary>Context retrieval (RAG) defaults</summary>
-              <ContextRetrievalControls
-                value={retrieval.value}
-                onChange={(next) =>
-                  setEditor({
-                    ...editor,
-                    document: writePolicyContextRetrieval(retrieval.parsed, next),
-                  })
-                }
-                description="Policy defaults set the allowed collections and the budget ceilings that per-run and workflow authoring narrow within. Only collections and budget ceilings persist to the policy document."
-              />
-            </details>
-          );
-        })()}
         {savePolicy.isError ? <p role="alert">{savePolicy.error.message}</p> : null}
         <button type="submit" disabled={savePolicy.isPending}>Validate and save draft</button>
         <button type="button" onClick={() => setEditor(null)}>Cancel</button>

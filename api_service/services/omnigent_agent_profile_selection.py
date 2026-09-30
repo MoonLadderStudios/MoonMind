@@ -39,8 +39,12 @@ from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
 )
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    reject_retired_vector_fields,
+)
 
-_OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
+_OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "publish"})
 
 # Only version-drift 409s may trigger catalog recovery. Incompatible,
 # contract-mismatch, capacity, and usage-conflict failures cannot be repaired
@@ -169,21 +173,31 @@ def _provider_profile_visibility_filter(user: User | None) -> Any | None:
     return None
 
 
+def without_retired_retrieval_override(
+    overrides: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Drop an absent ``rag`` override and reject an explicit one (#4103).
+
+    Native retrieval is retired, so a non-empty ``rag`` override fails before
+    any launch instead of silently running without it.
+    """
+
+    try:
+        reject_retired_vector_fields(overrides, field_path="agentProfile.overrides")
+    except WorkflowContractError:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "agentProfile.overrides.rag has been retired "
+            "(MoonLadderStudios/MoonMind#4103): MoonMind no longer provides "
+            "native retrieval. Remove the rag override.",
+        ) from None
+    return {key: value for key, value in overrides.items() if key != "rag"}
+
+
 def _enforce_override_ceilings(
     *, defaults: Mapping[str, Any], overrides: Mapping[str, Any]
 ) -> None:
     """Reject authored values that exceed ceilings stored in the version."""
-    rag_defaults = defaults.get("rag") or {}
-    rag_overrides = overrides.get("rag") or {}
-    for key in ("maxTokens", "maxLatencyMs"):
-        ceiling = rag_defaults.get(key)
-        requested = rag_overrides.get(key)
-        if ceiling is not None and requested is not None and requested > ceiling:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"rag.{key} override exceeds the selected profile policy ceiling",
-            )
-
     capture_defaults = defaults.get("capture") or {}
     capture_overrides = overrides.get("capture") or {}
     retention_ceiling = capture_defaults.get("retentionDays")
@@ -301,7 +315,6 @@ def compile_agent_profile_snapshot_parameters(
     omnigent["launchPolicyRef"] = snapshot["launchPolicyRef"]
     compiled["omnigent"] = omnigent
 
-    compiled["rag"] = copy.deepcopy(document.get("rag") or {})
     compiled["capture"] = copy.deepcopy(document.get("capture") or {})
     compiled["workspace"] = copy.deepcopy(document.get("workspace") or {})
     return compiled
@@ -433,6 +446,7 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "agentProfile.overrides must be an object",
         )
+    overrides = without_retired_retrieval_override(overrides)
     rejected = set(overrides) - _OVERRIDABLE_SECTIONS
     if rejected:
         raise HTTPException(
@@ -1395,4 +1409,5 @@ __all__ = [
     "refresh_schedule_deployment_snapshot",
     "resolve_agent_profile_snapshot",
     "resolve_default_agent_profile_snapshot",
+    "without_retired_retrieval_override",
 ]

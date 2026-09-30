@@ -8,7 +8,7 @@ import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,9 @@ from api_service.services.omnigent_agent_bundle_service import (
     BundleValidationError,
     publish_validated_agent_bundle,
 )
+from api_service.services.omnigent_agent_profile_selection import (
+    without_retired_retrieval_override,
+)
 from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
@@ -62,6 +65,10 @@ from moonmind.omnigent.harness_platform import (
     assert_catalog_refresh_attests,
 )
 from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    reject_retired_vector_fields,
+)
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 
 router = APIRouter(
@@ -194,6 +201,12 @@ class CaptureDefaults(BaseModel):
 
 
 class RagDefaults(BaseModel):
+    """Retired native retrieval defaults (MoonLadderStudios/MoonMind#4103).
+
+    Decoded only so versions persisted before retirement stay readable with
+    their recorded digests; new authoring must not carry it.
+    """
+
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     initial: dict[str, Any] = Field(default_factory=dict)
     follow_up: dict[str, Any] = Field(default_factory=dict, alias="followUp")
@@ -225,7 +238,7 @@ class AgentProfileDocument(BaseModel):
     skills: list[str] = Field(default_factory=list, max_length=128)
     tools: list[str] = Field(default_factory=list, max_length=128)
     capture: CaptureDefaults = Field(default_factory=CaptureDefaults)
-    rag: RagDefaults = Field(default_factory=RagDefaults)
+    rag: RagDefaults | None = None
     continuations: ContinuationDefaults = Field(default_factory=ContinuationDefaults)
     publish: PublishDefaults = Field(default_factory=PublishDefaults)
     policy_ref: str = Field(alias="policyRef", min_length=1, max_length=255)
@@ -251,6 +264,28 @@ class AgentProfileDocument(BaseModel):
         return self
 
 
+def _without_retired_retrieval(document: AgentProfileDocument) -> AgentProfileDocument:
+    """Keep new versions free of the retired ``rag`` section (#4103).
+
+    An absent (empty) section is dropped; explicit retrieval defaults fail
+    instead of being stored as an inert, silently ignored configuration.
+    """
+
+    if document.rag is None:
+        return document
+    try:
+        reject_retired_vector_fields(
+            {"rag": document.rag.model_dump(by_alias=True, exclude_none=True)},
+            field_path="document",
+        )
+    except WorkflowContractError:
+        raise ValueError(
+            "rag has been retired (MoonLadderStudios/MoonMind#4103): MoonMind no "
+            "longer provides native retrieval. Remove the rag section."
+        ) from None
+    return document.model_copy(update={"rag": None})
+
+
 class ProfileCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     profile_id: str = Field(alias="profileId")
@@ -258,6 +293,8 @@ class ProfileCreate(BaseModel):
     description: str | None = None
     visibility: Literal["private", "workspace", "public"] = "private"
     document: AgentProfileDocument
+
+    _retire_retrieval = field_validator("document")(_without_retired_retrieval)
 
 
 class GuidedProfileCreate(BaseModel):
@@ -288,6 +325,8 @@ class GuidedProfileCreate(BaseModel):
 
 class VersionCreate(BaseModel):
     document: AgentProfileDocument
+
+    _retire_retrieval = field_validator("document")(_without_retired_retrieval)
 
 
 class CloneCreate(BaseModel):
@@ -1611,14 +1650,15 @@ async def resolve_snapshot(
                     upstream_version=source.get("upstreamVersion"),
                 ),
             )
-    allowed_overrides = {"model", "capture", "rag", "publish"}
-    rejected = set(body.overrides) - allowed_overrides
+    overrides = without_retired_retrieval_override(body.overrides)
+    allowed_overrides = {"model", "capture", "publish"}
+    rejected = set(overrides) - allowed_overrides
     if rejected:
         raise HTTPException(
             422, f"unsupported profile overrides: {', '.join(sorted(rejected))}"
         )
     effective = json.loads(json.dumps(target.document))
-    for key, value in body.overrides.items():
+    for key, value in overrides.items():
         if not isinstance(value, dict):
             raise HTTPException(422, f"{key} override must be an object")
         effective[key] = {**effective.get(key, {}), **value}

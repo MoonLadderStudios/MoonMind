@@ -11,8 +11,9 @@
 > `LlamaIndexManifestSystem.md` and `ManifestIngestDesign.md`) lives in
 > `../tmp/ManifestRemovalResidual-4192.md`.
 
-Omnigent retrieval scope and budgets come from the bound
-[policy snapshot](../Omnigent/PolicyAuthority.md).
+Omnigent [policy snapshots](../Omnigent/PolicyAuthority.md) no longer carry
+retrieval scope or budgets (MoonLadderStudios/MoonMind#4103); versions that
+recorded a `rag` section remain readable as history.
 
 **Status:** Implemented
 **Owners:** MoonMind Engineering

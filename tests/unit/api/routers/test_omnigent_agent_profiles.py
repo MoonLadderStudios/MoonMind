@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from api_service.api.routers.omnigent_agent_profiles import (
     AgentProfileDocument,
     GuidedProfileCreate,
+    ProfileCreate,
+    VersionCreate,
     _catalog_refresh_preserves_builtin_binding,
     _default_builtin_opencode_launch_policy_refs,
     _digest,
@@ -25,7 +27,7 @@ def document(**source):
         "execution": {"defaultExecutionProfileRef": "omnigent-codex@1", "allowedLaunchPolicyRefs": ["codex-on-demand@1"]},
         "providerRequirements": {"runtimeId": "codex_cli", "credentialSource": "oauth_volume", "materializationMode": "oauth_home"},
         "model": {"model": "gpt-5", "effort": "high"}, "workspace": {"mutation": "allowed"},
-        "capture": {"stream": True}, "rag": {"initial": {}, "followUp": {}},
+        "capture": {"stream": True},
         "continuations": {"checkpoint": True, "branch": True, "remediation": True},
         "publish": {"mode": "draft"}, "policyRef": "codex-on-demand@1",
     })
@@ -294,10 +296,45 @@ def test_guided_profile_rejects_unqualified_pi_preset() -> None:
         )
 
 
-def test_defaulted_rag_max_tokens_is_not_mistaken_for_runtime_authority():
+def test_new_profile_documents_carry_no_retired_retrieval_section():
     parsed = document(upstreamId="agent-123")
 
-    assert parsed.rag.max_tokens is None
+    assert parsed.rag is None
+    assert "rag" not in _normalized(parsed)
+
+
+def test_historical_profile_retrieval_section_stays_readable_and_digest_stable():
+    # Every v1 version persisted before #4103 carried this defaulted section.
+    recorded = {**_normalized(document(upstreamId="agent-123")), "rag": {"initial": {}, "followUp": {}}}
+
+    reparsed = _normalized(AgentProfileDocument.model_validate(recorded))
+
+    assert reparsed == recorded
+    assert _digest(reparsed) == _digest(recorded)
+
+
+def test_profile_authoring_rejects_explicit_retired_retrieval_defaults():
+    payload = _normalized(document(upstreamId="agent-123"))
+    payload["rag"] = {"initial": {"collections": ["docs"]}}
+    for model, body in (
+        (ProfileCreate, {"profileId": "team", "displayName": "Team", "document": payload}),
+        (VersionCreate, {"document": payload}),
+    ):
+        with pytest.raises(ValidationError, match="rag has been retired"):
+            model.model_validate(body)
+
+
+def test_profile_authoring_drops_an_absent_retired_retrieval_section():
+    payload = _normalized(document(upstreamId="agent-123"))
+    payload["rag"] = {}
+
+    created = ProfileCreate.model_validate(
+        {"profileId": "team", "displayName": "Team", "document": payload}
+    )
+    versioned = VersionCreate.model_validate({"document": payload})
+
+    assert "rag" not in _normalized(created.document)
+    assert "rag" not in _normalized(versioned.document)
 
 
 def test_fixed_post_routes_precede_lifecycle_catch_all():
@@ -392,8 +429,6 @@ def test_profile_contracts_are_typed_and_reject_unknown_execution_authority():
     [
         ("model", "effort", "unbounded"),
         ("capture", "retentionDays", 0),
-        ("rag", "maxTokens", 1_000_001),
-        ("rag", "maxLatencyMs", 600_001),
         ("publish", "mode", "force"),
     ],
 )
@@ -403,8 +438,8 @@ def test_profile_rejects_unsupported_or_unbounded_defaults(section, field, value
     with pytest.raises(ValidationError):
         AgentProfileDocument.model_validate(payload)
 
-def test_profile_rejects_unknown_model_capture_rag_and_publish_fields():
-    for section in ("model", "capture", "rag", "publish"):
+def test_profile_rejects_unknown_model_capture_and_publish_fields():
+    for section in ("model", "capture", "publish"):
         payload = document(upstreamId="agent-123").model_dump(by_alias=True)
         payload[section]["unexpected"] = True
         with pytest.raises(ValidationError):
