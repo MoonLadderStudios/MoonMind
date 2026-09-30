@@ -263,7 +263,7 @@ def test_plan_persisted_and_retries_load_same_plan():
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
 
 
-def test_workflow_cannot_author_realizer():
+def _codex_plan_inputs(launch_policy_ref: str = "codex-on-demand@1") -> dict:
     catalog = _make_catalog(harness_id="codex-native", digest="sha256:" + "e" * 64)
     impl = HarnessImplementationIdentity.model_validate(
         {
@@ -314,7 +314,7 @@ def test_workflow_cannot_author_realizer():
             "capture": {},
             "continuations": {},
             "publish": {},
-            "allowedLaunchPolicyRefs": ["codex-on-demand@1"],
+            "allowedLaunchPolicyRefs": [launch_policy_ref],
         }
     )
     skills = ResolvedSkillSet.model_validate(
@@ -335,42 +335,102 @@ def test_workflow_cannot_author_realizer():
         },
     )
     host_class = _test_codex_host_class(impl.implementation_ref())
+    return {
+        "agent_profile": profile,
+        "harness_catalog": catalog,
+        "trust_record": trust,
+        "resolved_skills": skills,
+        "credential_binding_set": bs,
+        "host_class_ref": "omnigent-codex-current@1",
+        "host_class": host_class,
+        "launch_policy_ref": launch_policy_ref,
+        "model_qualified_id": "gpt-5",
+        "model_effort": None,
+        "model_route_ref": "openai",
+        "model_normalized_options": {},
+    }
+
+
+def test_workflow_cannot_author_realizer():
+    plan_inputs = _codex_plan_inputs()
     # Workflow tries to author generic realizer for codex – must fail closed (trusted planner only)
     # Trusted for codex-native is codex-profile-bound@1, workflow cannot force generic
     with pytest.raises(Exception) as exc:
         compile_execution_plan(
-            agent_profile=profile,
-            harness_catalog=catalog,
-            trust_record=trust,
-            resolved_skills=skills,
-            credential_binding_set=bs,
-            host_class_ref="omnigent-codex-current@1",
-            host_class=host_class,
-            launch_policy_ref="codex-on-demand@1",
-            model_qualified_id="gpt-5",
-            model_effort=None,
-            model_route_ref="openai",
-            model_normalized_options={},
+            **plan_inputs,
             execution_realizer_ref="generic-omnigent-host@1",  # workflow-authored
         )
     assert "realizer" in str(exc.value).lower()
 
     # Without workflow authoring, planner selects trusted codex-profile-bound@1
-    envelope2 = compile_execution_plan(
-        agent_profile=profile,
-        harness_catalog=catalog,
-        trust_record=trust,
-        resolved_skills=skills,
-        credential_binding_set=bs,
-        host_class_ref="omnigent-codex-current@1",
-        host_class=host_class,
-        launch_policy_ref="codex-on-demand@1",
-        model_qualified_id="gpt-5",
-        model_effort=None,
-        model_route_ref="openai",
-        model_normalized_options={},
-    )
+    envelope2 = compile_execution_plan(**plan_inputs)
     assert envelope2.payload.executionRealizerRef == "codex-profile-bound@1"
+
+
+def _codex_dispatch_request(plan, *, target: str, policy: str):
+    from types import SimpleNamespace
+
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+
+    return SimpleNamespace(
+        omnigent_execution_plan=OmnigentExecutionPlanBinding(
+            planRef=plan.planRef,
+            planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+            planArtifactRef="art_plan",
+            taskInputSnapshotRef="art_input",
+            taskInputSnapshotDigest="sha256:" + "f" * 64,
+        ),
+        execution_profile_ref="p1",
+        parameters={
+            "omnigent": {"executionTargetRef": target, "launchPolicyRef": policy}
+        },
+    )
+
+
+def _codex_coordinator(plan):
+    from moonmind.omnigent.profile_bound_execution import (
+        OmnigentProfileBoundExecutionCoordinator,
+    )
+
+    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
+    coordinator._execution_plan = plan
+    return coordinator
+
+
+def test_codex_dispatch_accepts_a_newer_version_of_the_target_launch_policy():
+    """A republished policy version is the same target authority, not a conflict.
+
+    Bootstrap publishes ``codex-on-demand@2`` when the host image changes; the
+    plan and request both carry it while the built-in target still names @1.
+    """
+    plan = compile_execution_plan(**_codex_plan_inputs("codex-on-demand@2"))
+    request = _codex_dispatch_request(
+        plan, target="omnigent-codex@1", policy="codex-on-demand@2"
+    )
+
+    assert _codex_coordinator(plan)._require_recorded_plan_request(request) is plan
+
+
+@pytest.mark.parametrize(
+    ("target", "policy"),
+    [
+        ("omnigent-claude@1", "claude-on-demand@1"),
+        ("omnigent-codex@1", "codex-static@2"),
+        ("omnigent-codex@9", "codex-on-demand@1"),
+    ],
+)
+def test_codex_dispatch_rejects_a_target_outside_the_admitted_plan(target, policy):
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    plan = compile_execution_plan(**_codex_plan_inputs(policy))
+    request = _codex_dispatch_request(plan, target=target, policy=policy)
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        _codex_coordinator(plan)._require_recorded_plan_request(request)
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
 
 
 def test_realizer_registry_no_fallback():
