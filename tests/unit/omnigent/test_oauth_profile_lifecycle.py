@@ -6832,6 +6832,40 @@ async def test_github_token_requires_credential_when_gh_capability_declared(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("capabilities", [["git"], ["git", "gh"]])
+async def test_github_token_never_substitutes_the_deployment_credential_for_a_selected_connection(
+    monkeypatch, capabilities
+) -> None:
+    """A selected connection fails closed instead of using ambient authority.
+
+    MoonLadderStudios/MoonMind#4011: the deployment resolver is the default
+    connection's credential only.
+    """
+
+    import moonmind.auth.github_credentials as github_credentials
+
+    resolve = AsyncMock(return_value=SimpleNamespace(token="deployment-token"))
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": capabilities},
+        workspaceSpec={
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:tactics-app",
+                "repository": {"name": "org/repo"},
+                "branch": {"name": "main"},
+            }
+        },
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+
+    assert exc.value.code == "github_auth_unavailable"
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_github_token_skipped_for_non_github_source(monkeypatch) -> None:
     import moonmind.auth.github_credentials as github_credentials
 

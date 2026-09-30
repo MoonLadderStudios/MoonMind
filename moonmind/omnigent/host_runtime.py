@@ -170,6 +170,7 @@ class GenericOmnigentHostRuntime:
         anticipated_github = self._github_credentials.anticipated_attachment(
             plan.payload.resolvedTools,
             owner_ref=request.idempotency_key,
+            request=request,
         )
         if anticipated_github is not None and authority_sink is not None:
             await authority_sink(

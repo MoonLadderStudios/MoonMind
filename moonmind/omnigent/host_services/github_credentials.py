@@ -12,7 +12,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.workspace_intent import authored_connection_ref
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.executions.repository_contract import (
+    DEFAULT_GIT_CONNECTION_REF,
+)
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _TARGET_PATH = "/run/mm-credentials/github"
@@ -40,6 +44,26 @@ def github_repository_from_request(request: AgentExecutionRequest) -> str:
     ).strip()
 
 
+def require_deployment_resolver_connection(connection_ref: str | None) -> None:
+    """Refuse the deployment GitHub credential for any other connection.
+
+    The deployment resolver is the credential of the default connection only
+    (``reconcile_default_git_connection``); scoped connections name their own
+    PAT or App installation. A payload without a connection is historical and
+    decodes to the default. A selected connection never falls back to the
+    deployment credential, so it fails closed here until its own issuance is
+    delivered (MoonLadderStudios/MoonMind#4011).
+    """
+
+    selected = str(connection_ref or "").strip() or DEFAULT_GIT_CONNECTION_REF
+    if selected != DEFAULT_GIT_CONNECTION_REF:
+        raise HarnessPlatformError(
+            "the selected repository connection has no generic-host credential "
+            "delivery; the deployment GitHub credential is never substituted",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        )
+
+
 class OmnigentGithubCredentialService:
     """Materialize standard ``gh`` config without exposing token transport."""
 
@@ -47,18 +71,36 @@ class OmnigentGithubCredentialService:
         self._backend = backend
 
     @staticmethod
-    def required(resolved_tools: dict[str, Any]) -> bool:
-        return "gh" in {
+    def required(
+        resolved_tools: dict[str, Any], *, request: AgentExecutionRequest
+    ) -> bool:
+        """Whether this launch needs the repository's admitted GitHub authority.
+
+        Tool presence alone does not: scratch work has no repository, so it
+        gets no projection, resolver call, or ``gh auth`` preflight.
+        """
+
+        if "gh" not in {
             str(value).strip().lower()
             for value in resolved_tools.get("tools", [])
             if str(value).strip()
-        }
+        }:
+            return False
+        if not github_repository_from_request(request):
+            return False
+        require_deployment_resolver_connection(authored_connection_ref(request))
+        return True
 
     @staticmethod
     def anticipated_attachment(
-        resolved_tools: dict[str, Any], *, owner_ref: str
+        resolved_tools: dict[str, Any],
+        *,
+        owner_ref: str,
+        request: AgentExecutionRequest,
     ) -> dict[str, Any] | None:
-        if not OmnigentGithubCredentialService.required(resolved_tools):
+        if not OmnigentGithubCredentialService.required(
+            resolved_tools, request=request
+        ):
             return None
         owner_digest = hashlib.sha256(owner_ref.encode()).hexdigest()[:32]
         return {
@@ -81,7 +123,9 @@ class OmnigentGithubCredentialService:
         runtime_gid: int,
         expected_omnigent_version: str = "",
     ) -> dict[str, Any] | None:
-        attachment = self.anticipated_attachment(resolved_tools, owner_ref=owner_ref)
+        attachment = self.anticipated_attachment(
+            resolved_tools, owner_ref=owner_ref, request=request
+        )
         if attachment is None:
             return None
         repository = github_repository_from_request(request)
@@ -132,14 +176,18 @@ class OmnigentGithubCredentialService:
                 "GitHub credential projection is owned by another lease",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
+        # Write a sibling file and rename it over hosts.yml: a reader copying
+        # the projection sees the previous complete issuance or the new one,
+        # never a file an interrupted writer truncated.
         script = (
             "set -eu; umask 077; mkdir -p /config; "
-            "printf 'github.com:\\n    user: x-access-token\\n    oauth_token: ' "
-            "> /config/hosts.yml; "
-            "cat >> /config/hosts.yml; "
-            "printf '\\n    git_protocol: https\\n' >> /config/hosts.yml; "
-            "chown -R \"$1:$2\" /config; "
-            "chmod 0700 /config; chmod 0600 /config/hosts.yml"
+            "staged=/config/.hosts.yml.$$; "
+            "trap 'rm -f \"$staged\"' EXIT; "
+            "{ printf 'github.com:\\n    user: x-access-token\\n    oauth_token: '; "
+            "cat; printf '\\n    git_protocol: https\\n'; } > \"$staged\"; "
+            'chown "$1:$2" /config "$staged"; '
+            'chmod 0700 /config; chmod 0600 "$staged"; '
+            'mv -f "$staged" /config/hosts.yml'
         )
         # Same-repo SHA drift recovery as credential writers: reuse a qualified
         # deployment image when the plan-pinned digest is absent, avoiding a
@@ -223,9 +271,13 @@ class OmnigentGithubCredentialService:
                 ),
             )
         except BaseException:
-            await self._backend.run(
-                ["docker", "volume", "rm", volume], check=False
-            )
+            # The same ownership-checked removal as lease cleanup; a deferred
+            # or refused removal stays with the durable cleanup authority and
+            # never replaces the write failure.
+            try:
+                await self.cleanup(attachment)
+            except Exception:
+                pass
             raise
         return attachment
 
@@ -273,4 +325,5 @@ class OmnigentGithubCredentialService:
 __all__ = [
     "OmnigentGithubCredentialService",
     "github_repository_from_request",
+    "require_deployment_resolver_connection",
 ]

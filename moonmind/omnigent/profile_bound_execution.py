@@ -85,6 +85,7 @@ from moonmind.omnigent.stock_agents import (
 from moonmind.omnigent.workspace_intent import (
     WorkspaceIntentCompilationError,
     authored_checkout_commit,
+    authored_connection_ref,
     authored_github_mutation_required,
     authored_repository_mutation_required,
     authored_repository_source,
@@ -2952,6 +2953,16 @@ class OmnigentProfileBoundExecutionCoordinator:
         if not gh_required and not clone_needs_credential:
             return None
         from moonmind.auth.github_credentials import resolve_github_credential
+        from moonmind.omnigent.host_services.github_credentials import (
+            require_deployment_resolver_connection,
+        )
+
+        try:
+            require_deployment_resolver_connection(authored_connection_ref(request))
+        except HarnessPlatformError as exc:
+            raise OmnigentOAuthHostError(
+                str(exc), code="github_auth_unavailable"
+            ) from exc
 
         repository = str((request.parameters or {}).get("repository") or "").strip()
         resolved = await resolve_github_credential(repo=repository or None)

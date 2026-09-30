@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +29,9 @@ from moonmind.workflows.executions.repository_contract import (
     compile_repository_target,
     materialize_resolved_repository_target,
     persist_repository_connection,
+)
+from moonmind.workflows.temporal.runtime.github_auth_broker import (
+    GitHubAuthBrokerManager,
 )
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
@@ -5356,3 +5360,132 @@ async def test_launch_skips_redundant_artifacts_chown_for_internal_workspace(
     # Only the single ownership-root chown; the artifacts dir is already covered.
     assert len(chown_calls) == 1
     assert str(workspace.resolve().parent) in {str(call[-1]) for call in chown_calls}
+
+
+# --- Admitted repository authority at the managed process boundary -----------
+# MoonLadderStudios/MoonMind#4011: the launch-resolved GitHub credential B is the
+# admitted authority; ambient selectors A that the real clients prefer
+# (https://cli.github.com/manual/gh_help_environment,
+# https://git-scm.com/docs/gitcredentials) must not reach or outrank it.
+
+_ADMITTED_B = "ghs_admittedManagedCredentialB000000000000"
+_AMBIENT_A = "ghp_ambientManagedCredentialA0000000000000"
+
+
+def _ambient_git_helper(value: str) -> str:
+    return (
+        '"!f() { test \\"$1\\" = get || exit 0; '
+        f'echo username=ambient; echo password={value}; }}; f"'
+    )
+
+
+@pytest.mark.asyncio
+async def test_launch_env_keeps_ambient_gh_selectors_from_outranking_admitted_token(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PATH", os.environ.get("PATH", "/usr/bin:/bin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GITHUB_TOKEN", _ADMITTED_B)
+    for name in ("GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        monkeypatch.setenv(name, _AMBIENT_A)
+    monkeypatch.setenv("GH_HOST", "ambient.invalid")
+
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "store"))
+    profile = _make_profile(command_template=["echo", "hello"], passthrough_env_keys=[])
+
+    class _FakeProcess:
+        pid = 1000
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        if isinstance(kwargs.get("env"), dict):
+            captured_env.update(kwargs["env"])
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-gh-precedence-1", request=_make_request(), profile=profile
+    )
+    await process.wait()
+
+    for name in (
+        "GH_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_HOST",
+    ):
+        assert name not in captured_env
+    assert _AMBIENT_A not in json.dumps(captured_env)
+
+    real_gh = shutil.which("gh")
+    if real_gh is None:
+        pytest.skip("requires the real gh client")
+    (tmp_path / "home").mkdir(exist_ok=True)
+    token = subprocess.run(
+        [real_gh, "auth", "token"],
+        env=captured_env,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+    )
+    assert token.returncode == 0, token.stderr
+    assert token.stdout.strip() == _ADMITTED_B
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("git") is None, reason="requires the real git client")
+async def test_managed_git_config_asks_only_the_admitted_broker(tmp_path):
+    socket_dir = Path("/tmp") / f"mm-gh-4011-{os.getpid()}-{time.monotonic_ns()}"
+    socket_path = socket_dir / "github-auth.sock"
+    workspace = tmp_path / "repo"
+    (workspace / ".git").mkdir(parents=True)
+    # A helper left in the checkout and a host-level configuration layer both
+    # select the ambient credential for the same host.
+    (workspace / ".git" / "config").write_text(
+        "[core]\n\trepositoryformatversion = 0\n"
+        f"[credential]\n\thelper = {_ambient_git_helper(_AMBIENT_A + '-local')}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "system.gitconfig").write_text(
+        f"[credential]\n\thelper = {_ambient_git_helper(_AMBIENT_A)}\n",
+        encoding="utf-8",
+    )
+    manager = GitHubAuthBrokerManager()
+    await manager.start(run_id="run-1", token=_ADMITTED_B, socket_path=str(socket_path))
+    try:
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path)}
+        ManagedRuntimeLauncher._persist_gh_config(
+            env,
+            str(workspace),
+            support_root=str(tmp_path / "support"),
+            github_socket_path=str(socket_path),
+        )
+        env["GIT_CONFIG_SYSTEM"] = str(tmp_path / "system.gitconfig")
+        filled = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\npath=owner/repo.git\n\n",
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=workspace,
+        )
+    finally:
+        await manager.stop("run-1")
+
+    assert filled.returncode == 0, filled.stderr
+    assert f"password={_ADMITTED_B}\n" in filled.stdout
+    assert _AMBIENT_A not in filled.stdout

@@ -1344,7 +1344,10 @@ async def test_authored_step_capabilities_reach_mounted_tool_authority(
     mounts = await OmnigentMountedToolService(backend=backend).materialize(resolved)
     assert mounts[0]["tools"][0]["name"] == "gh"
     assert mounts[0]["accessMode"] == "read-only"
-    assert OmnigentGithubCredentialService.required(resolved)
+    repository_work = SimpleNamespace(
+        workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+    )
+    assert OmnigentGithubCredentialService.required(resolved, request=repository_work)
     assert result.envelope.payload.classAdmissionDecision["requiredSatisfied"] == [
         "gh",
         "git",
@@ -1410,7 +1413,12 @@ async def test_docker_only_plan_materializes_the_projected_container_cli(monkeyp
     ).materialize(resolved)
     assert mounts[0]["tools"][0]["path"] == "bin/moonmind"
     assert mounts[0]["tools"][0]["executableDigests"]
-    assert not OmnigentGithubCredentialService.required(resolved)
+    assert not OmnigentGithubCredentialService.required(
+        resolved,
+        request=SimpleNamespace(
+            workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+        ),
+    )
 
 
 @pytest.mark.asyncio

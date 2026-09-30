@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1207,6 +1208,301 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
         "0:0",
         "--network",
     ]
+
+
+class _RecordingProjectionBackend:
+    """Docker command double that records argv/stdin for the GitHub projection."""
+
+    def __init__(self, *, owner_ref: str, writer_fails: bool = False) -> None:
+        self.calls: list[tuple[list[str], dict]] = []
+        self.observed_owner = hashlib.sha256(owner_ref.encode()).hexdigest()[:32]
+        self.writer_fails = writer_fails
+
+    async def run(self, argv, **kwargs):
+        self.calls.append((list(argv), dict(kwargs)))
+        if argv[1:3] == ["volume", "inspect"]:
+            return 0, self.observed_owner, ""
+        if argv[1:2] == ["run"] and kwargs.get("input_bytes") and self.writer_fails:
+            raise HarnessPlatformError(
+                "writer failed",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        return 0, "", ""
+
+
+def _repository_request(**repository_target) -> AgentExecutionRequest:
+    return _request().model_copy(
+        update={
+            "workspace_spec": {
+                "repositoryTarget": {
+                    "provider": "git",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                    **repository_target,
+                }
+            }
+        }
+    )
+
+
+def _admitted_token_resolver(secret: str):
+    async def resolve(*, repo=None):
+        return ResolvedGitHubCredential(
+            token=secret,
+            source=GitHubCredentialSource.DIRECT_ENV,
+            sourceName="GITHUB_TOKEN",
+            repo=repo,
+        )
+
+    return resolve
+
+
+async def _unexpected_credential_resolution(*, repo=None):
+    raise AssertionError("repository credentials must not be resolved")
+
+
+@pytest.mark.asyncio
+async def test_github_projection_is_not_materialized_for_scratch_work(
+    monkeypatch,
+) -> None:
+    """Tool presence alone does not require repository authentication (#4011)."""
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        _unexpected_credential_resolution,
+    )
+    backend = _RecordingProjectionBackend(owner_ref="lease-owner-1")
+    service = OmnigentGithubCredentialService(backend)
+    scratch = _request().model_copy(update={"workspace_spec": {}})
+
+    assert (
+        service.anticipated_attachment(
+            {"tools": ["gh", "git"]}, owner_ref="lease-owner-1", request=scratch
+        )
+        is None
+    )
+    attachment = await service.materialize(
+        request=scratch,
+        resolved_tools={"tools": ["gh", "git"]},
+        owner_ref="lease-owner-1",
+        writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+        runtime_uid=1000,
+        runtime_gid=1000,
+    )
+
+    assert attachment is None
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_selected_connection_never_receives_the_deployment_github_credential(
+    monkeypatch,
+) -> None:
+    """A selected connection fails closed instead of using ambient authority."""
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        _unexpected_credential_resolution,
+    )
+    backend = _RecordingProjectionBackend(owner_ref="lease-owner-1")
+    service = OmnigentGithubCredentialService(backend)
+    selected = _repository_request(connectionRef="repository-connection:tactics-app")
+
+    with pytest.raises(HarnessPlatformError) as anticipated:
+        service.anticipated_attachment(
+            {"tools": ["gh"]}, owner_ref="lease-owner-1", request=selected
+        )
+    with pytest.raises(HarnessPlatformError) as materialized:
+        await service.materialize(
+            request=selected,
+            resolved_tools={"tools": ["gh"]},
+            owner_ref="lease-owner-1",
+            writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+            runtime_uid=1000,
+            runtime_gid=1000,
+        )
+
+    for failure in (anticipated.value, materialized.value):
+        assert (
+            failure.code
+            == HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+        )
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_default_connection_projection_uses_the_admitted_resolver(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        _admitted_token_resolver("admitted-default-connection-token"),
+    )
+    backend = _RecordingProjectionBackend(owner_ref="lease-owner-1")
+    service = OmnigentGithubCredentialService(backend)
+
+    for request in (
+        _repository_request(connectionRef="repository-connection:git-default"),
+        # Historical payloads without a connection decode to the default.
+        _repository_request(),
+    ):
+        attachment = await service.materialize(
+            request=request,
+            resolved_tools={"tools": ["gh"]},
+            owner_ref="lease-owner-1",
+            writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+            runtime_uid=1000,
+            runtime_gid=1000,
+        )
+        assert attachment == service.anticipated_attachment(
+            {"tools": ["gh"]}, owner_ref="lease-owner-1", request=request
+        )
+
+
+async def _captured_projection_writer(monkeypatch) -> str:
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        _admitted_token_resolver("unused"),
+    )
+    backend = _RecordingProjectionBackend(owner_ref="lease-owner-1")
+    await OmnigentGithubCredentialService(backend).materialize(
+        request=_repository_request(),
+        resolved_tools={"tools": ["gh"]},
+        owner_ref="lease-owner-1",
+        writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+        runtime_uid=1000,
+        runtime_gid=1000,
+    )
+    writer = next(argv for argv, kwargs in backend.calls if kwargs.get("input_bytes"))
+    return writer[writer.index("-ceu") + 1]
+
+
+def _run_projection_writer(script: str, config: Path, **popen):
+    return subprocess.Popen(
+        [
+            "/bin/sh",
+            "-ceu",
+            script.replace("/config", str(config)),
+            "--",
+            str(os.getuid()),
+            str(os.getgid()),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **popen,
+    )
+
+
+@pytest.mark.asyncio
+async def test_github_projection_writer_replaces_hosts_file_completely(
+    monkeypatch, tmp_path
+) -> None:
+    script = await _captured_projection_writer(monkeypatch)
+    config = tmp_path / "config"
+
+    for token in ("first-issuance-token", "refreshed-issuance-token"):
+        writer = _run_projection_writer(script, config)
+        _stdout, stderr = writer.communicate(token.encode(), timeout=30)
+        assert writer.returncode == 0, stderr
+        hosts = (config / "hosts.yml").read_text()
+        assert hosts == (
+            "github.com:\n    user: x-access-token\n"
+            f"    oauth_token: {token}\n    git_protocol: https\n"
+        )
+        assert oct((config / "hosts.yml").stat().st_mode & 0o777) == "0o600"
+        assert oct(config.stat().st_mode & 0o777) == "0o700"
+        assert sorted(path.name for path in config.iterdir()) == ["hosts.yml"]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_github_projection_writer_keeps_the_live_hosts_file(
+    monkeypatch, tmp_path
+) -> None:
+    """A killed writer cannot truncate the issuance a live reader copies."""
+
+    script = await _captured_projection_writer(monkeypatch)
+    config = tmp_path / "config"
+    writer = _run_projection_writer(script, config)
+    writer.communicate(b"live-issuance-token", timeout=30)
+    assert writer.returncode == 0
+    live = (config / "hosts.yml").read_text()
+
+    interrupted = _run_projection_writer(script, config)
+    assert interrupted.stdin is not None
+    interrupted.stdin.write(b"partial-replacement")
+    interrupted.stdin.flush()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not any(
+        b"partial-replacement" in path.read_bytes()
+        for path in config.iterdir()
+        if path.is_file()
+    ):
+        await asyncio.sleep(0.02)
+    interrupted.kill()
+    interrupted.wait(timeout=10)
+
+    assert (config / "hosts.yml").read_text() == live
+
+
+@pytest.mark.asyncio
+async def test_failed_github_projection_write_cleans_only_an_owned_volume(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        _admitted_token_resolver("admitted-token"),
+    )
+    backend = _RecordingProjectionBackend(owner_ref="lease-owner-1", writer_fails=True)
+    service = OmnigentGithubCredentialService(backend)
+
+    async def materialize():
+        await service.materialize(
+            request=_repository_request(),
+            resolved_tools={"tools": ["gh"]},
+            owner_ref="lease-owner-1",
+            writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+            runtime_uid=1000,
+            runtime_gid=1000,
+        )
+
+    with pytest.raises(HarnessPlatformError, match="writer failed"):
+        await materialize()
+    removals = [argv for argv, _ in backend.calls if argv[1:3] == ["volume", "rm"]]
+    owned_volume = (
+        "mm-omnigent-github-" + hashlib.sha256(b"lease-owner-1").hexdigest()[:32]
+    )
+    assert removals == [["docker", "volume", "rm", owned_volume]]
+
+    # Ownership changed between the write and its failure cleanup: the
+    # original failure still surfaces and the other owner's volume survives.
+    backend.calls.clear()
+    real_run = backend.run
+
+    async def run_after_takeover(argv, **kwargs):
+        if kwargs.get("input_bytes"):
+            backend.observed_owner = "another-owner-digest"
+        return await real_run(argv, **kwargs)
+
+    backend.run = run_after_takeover
+    with pytest.raises(HarnessPlatformError, match="writer failed"):
+        await materialize()
+    assert not [argv for argv, _ in backend.calls if argv[1:3] == ["volume", "rm"]]
+
+
+@pytest.mark.asyncio
+async def test_stale_owner_cannot_remove_a_newer_github_projection() -> None:
+    backend = _RecordingProjectionBackend(owner_ref="newer-owner")
+    service = OmnigentGithubCredentialService(backend)
+    stale = OmnigentGithubCredentialService.anticipated_attachment(
+        {"tools": ["gh"]}, owner_ref="stale-owner", request=_repository_request()
+    )
+    assert stale is not None
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await service.cleanup(stale)
+
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT
+    assert not [argv for argv, _ in backend.calls if argv[1:3] == ["volume", "rm"]]
 
 
 @pytest.mark.asyncio
