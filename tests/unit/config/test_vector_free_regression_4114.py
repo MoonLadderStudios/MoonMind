@@ -13,8 +13,9 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   removed the manifest-only distributions:
   ``test_dependency_removal_landed_no_manifest_only_distributions`` asserts
   ``pyproject.toml`` and ``poetry.lock`` carry no ``qdrant-client``,
-  ``llama-index``, or reader packages. The installed graph is qualified by
-  ``test_installed_distributions_carry_no_qdrant_sdk`` (existing
+  ``llama-index``, or reader packages. The installed graph of the built
+  ``test-runtime`` image is qualified by the integration-ci suite
+  ``tests/integration/test_installed_graph_vector_free_4111.py`` (existing
   ``check_dependency_vector_free`` guard over real installed-package
   metadata, MoonLadderStudios/MoonMind#4111) and the shipped image layering
   by ``test_runtime_image_installs_from_poetry_export`` (the
@@ -123,7 +124,12 @@ _STARTUP_SENTINEL_RE = re.compile(
     r"|Qdrant (?:connection|DNS|unavailable|outage)",
     re.IGNORECASE,
 )
-_QDRANT_DISTRIBUTION_RE = re.compile(r"^qdrant(-client)?$", re.IGNORECASE)
+# Every distribution retired by the Qdrant/Manifest removal (#4111, #4192),
+# matched against PEP 503-normalized names so ``llama_index.core`` and
+# ``Qdrant-Client`` spellings fail the same guard.
+_RETIRED_DISTRIBUTION_RE = re.compile(
+    r"^(qdrant(-client)?|llama-index(-.+)?|mem0ai)$", re.IGNORECASE
+)
 _RETIRED_TOOL_DESCRIPTOR_RE = re.compile(
     r"qdrant|followUpRetrieval|follow_up_retrieval", re.IGNORECASE
 )
@@ -212,11 +218,17 @@ def check_init_sql_vector_free(sql_text: str) -> list[str]:
 
 
 def check_dependency_vector_free(distribution_names: list[str]) -> list[str]:
-    """Return problems when a distribution set carries a Qdrant package."""
+    """Return problems when a distribution set carries a retired package.
+
+    Covers the Qdrant SDK and the removed Manifest/RAG distributions
+    (``llama-index``, every ``llama-index-*`` reader/integration, ``mem0ai``).
+    """
     return [
-        f"distribution {name!r} reintroduces the retired Qdrant SDK"
+        f"distribution {name!r} reintroduces a retired vector distribution"
         for name in distribution_names
-        if _QDRANT_DISTRIBUTION_RE.match(str(name).strip())
+        if _RETIRED_DISTRIBUTION_RE.match(
+            re.sub(r"[-_.]+", "-", str(name).strip())
+        )
     ]
 
 
@@ -484,6 +496,28 @@ def test_dependency_guard_passes_without_qdrant() -> None:
 
 def test_dependency_guard_rejects_direct_requirement() -> None:
     assert check_dependency_vector_free(["qdrant-client"]) != []
+
+
+@pytest.mark.parametrize(
+    "distribution",
+    [
+        "llama-index",
+        "llama_index.core",
+        "llama-index-readers-github",
+        "LLaMA-Index-Vector-Stores-Qdrant",
+        "mem0ai",
+    ],
+)
+def test_dependency_guard_rejects_retired_manifest_distribution(
+    distribution: str,
+) -> None:
+    # Negative control: a removed Manifest/RAG distribution without
+    # ``qdrant-client`` must still fail the installed-graph guard.
+    assert check_dependency_vector_free(["httpx", distribution]) != []
+
+
+def test_dependency_guard_allows_similarly_named_surviving_packages() -> None:
+    assert check_dependency_vector_free(["llama-cpp-python", "mem0", "qdrantx"]) == []
 
 
 def test_dependency_guard_rejects_transitive_fixture_requirement() -> None:
@@ -792,49 +826,23 @@ def test_poetry_lock_has_no_qdrant_distribution_transitive() -> None:
     assert not re.search(r'name\s*=\s*"qdrant[^"]*"', lock, re.IGNORECASE)
 
 
-def _installed_distribution_names() -> list[str]:
-    """Enumerate live installed distribution names via package metadata."""
-    from importlib import metadata as importlib_metadata
-
-    names: list[str] = []
-    for distribution in importlib_metadata.distributions():
-        name = (distribution.metadata.get("Name") or "").strip()
-        if name:
-            names.append(name)
-    return names
-
-
-def test_installed_distributions_carry_no_qdrant_sdk() -> None:
-    """The live installed graph carries no Qdrant distribution.
-
-    MoonLadderStudios/MoonMind#4111: declaration/lock checks alone do not
-    prove a clean install. This reuses the existing
-    ``check_dependency_vector_free`` guard over real installed-package
-    metadata instead of creating a dependency scanner: wherever the suite
-    runs (required CI, managed containers), the executing dependency layer
-    itself is qualified. A fixture offender
-    (``test_dependency_guard_rejects_transitive_fixture_requirement``)
-    proves the guard would fail a reintroduced client.
-    """
-    names = _installed_distribution_names()
-    assert names, "expected installed distributions to enumerate"
-    assert check_dependency_vector_free(names) == []
-
-
 def test_surviving_dependency_libraries_remain_supported() -> None:
     """Ordinary provider/HTTP/YAML/source-control libraries stay declared.
 
     MoonLadderStudios/MoonMind#4111: vector removal must not take ordinary
     libraries with it. ``pyproject.toml`` must still explicitly declare the
     provider, HTTP, YAML, artifact, source-control, and workspace libraries.
-    Real importability is proven by the managed-container runs themselves
-    (CLI help and worker-catalog tests import this graph); this hermetic pin
-    keeps declaration support explicit without a warm-environment install.
+    Real importability in the built image is proven by
+    ``tests/integration/test_installed_graph_vector_free_4111.py``; this
+    hermetic pin keeps declaration support explicit without an install.
     """
-    import tomllib
+    # ``toml`` rather than ``tomllib``: pyproject declares python >=3.10 and
+    # tomllib only exists from 3.11.
+    import toml
 
-    with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
-        pyproject = tomllib.load(handle)
+    pyproject = toml.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
     declared = {
         name.lower() for name in pyproject["tool"]["poetry"]["dependencies"]
     }
@@ -857,46 +865,90 @@ def test_surviving_dependency_libraries_remain_supported() -> None:
         )
 
 
-def check_dockerfile_install_vector_free(dockerfile_text: str) -> list[str]:
-    """Return problems when the image install layer bypasses the clean lock.
+def _dockerfile_logical_instructions(
+    dockerfile_text: str,
+) -> list[tuple[int, str, str]]:
+    """Return ``(start_line, stage, instruction)`` with continuations joined.
 
-    The shipped ``runtime-dependencies`` layer must derive from ``poetry
-    export`` output so lock evidence transfers to every image sharing that
-    layer. A direct vector ``pip install`` or ``--no-deps`` on the exported
-    requirements would hide a transitive offender from the installed graph.
+    Comment lines inside a continuation are dropped, as Docker does, so an
+    argument placed on a continuation line is inspected with its ``RUN``.
     """
-    problems: list[str] = []
-    code_lines = [
-        line
-        for line in dockerfile_text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    code = "\n".join(code_lines)
-    if "poetry export --only main" not in code:
-        problems.append(
-            "image installs do not derive from poetry export --only main"
-        )
-    if "requirements-main.txt" not in code:
-        problems.append(
-            "image does not install the exported main requirements layer"
-        )
+    instructions: list[tuple[int, str, str]] = []
+    stage = ""
+    parts: list[str] = []
+    start = 0
     for lineno, line in enumerate(dockerfile_text.splitlines(), start=1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        if "pip install" in stripped and re.search(
-            r"qdrant|llama-index|llama_index|mem0ai", stripped, re.IGNORECASE
-        ):
-            problems.append(
-                "line "
-                f"{lineno} installs a retired vector distribution: "
-                f"{stripped!r}"
-            )
-        if "-r /tmp/requirements-" in stripped and "--no-deps" in stripped:
-            problems.append(
-                f"line {lineno} hides transitive deps with --no-deps "
-                "on exported requirements"
-            )
+        if not parts:
+            start = lineno
+        continued = stripped.endswith("\\")
+        parts.append(stripped[:-1].strip() if continued else stripped)
+        if continued:
+            continue
+        instruction = " ".join(parts)
+        parts = []
+        from_match = re.match(
+            r"FROM\s+\S+(?:\s+AS\s+(\S+))?", instruction, re.IGNORECASE
+        )
+        if from_match:
+            stage = (from_match.group(1) or "").lower()
+        instructions.append((start, stage, instruction))
+    if parts:
+        instructions.append((start, stage, " ".join(parts)))
+    return instructions
+
+
+def check_dockerfile_install_vector_free(dockerfile_text: str) -> list[str]:
+    """Return problems when the image install layer bypasses the clean lock.
+
+    The shipped ``runtime-dependencies`` layer must ``pip install -r`` the
+    ``poetry export`` output so lock evidence transfers to every image
+    sharing that layer. A direct vector ``pip install`` or ``--no-deps`` on
+    the exported requirements would hide a transitive offender from the
+    installed graph. ``RUN`` instructions are inspected as logical
+    (continuation-joined) shell commands.
+    """
+    problems: list[str] = []
+    instructions = _dockerfile_logical_instructions(dockerfile_text)
+    if not any(
+        "poetry export --only main" in instruction
+        for _, _, instruction in instructions
+    ):
+        problems.append(
+            "image installs do not derive from poetry export --only main"
+        )
+    installs_export = False
+    for lineno, stage, instruction in instructions:
+        if not re.match(r"RUN\s", instruction, re.IGNORECASE):
+            continue
+        for command in re.split(r"&&|\|\||;", instruction):
+            if "pip install" not in command:
+                continue
+            if re.search(
+                r"qdrant|llama-index|llama_index|mem0ai", command, re.IGNORECASE
+            ):
+                problems.append(
+                    f"line {lineno} installs a retired vector distribution: "
+                    f"{command.strip()!r}"
+                )
+            exported = re.search(r"-r\s+\S*requirements-\w+\.txt", command)
+            if exported and "--no-deps" in command:
+                problems.append(
+                    f"line {lineno} hides transitive deps with --no-deps "
+                    "on exported requirements"
+                )
+            elif (
+                stage == "runtime-dependencies"
+                and re.search(r"-r\s+\S*requirements-main\.txt", command)
+            ):
+                installs_export = True
+    if not installs_export:
+        problems.append(
+            "runtime-dependencies stage does not pip install the exported "
+            "requirements-main.txt"
+        )
     return problems
 
 
@@ -915,11 +967,31 @@ def test_runtime_image_installs_from_poetry_export() -> None:
     assert check_dockerfile_install_vector_free(text) == []
 
 
+_DOCKERFILE_EXPORT_PREFIX = (
+    "FROM python:3.13-slim-bookworm AS python-requirements\n"
+    "RUN poetry export --only main --format requirements.txt "
+    "--without-hashes --output /deps/requirements-main.txt\n"
+    "FROM python:3.13-slim-bookworm AS runtime-dependencies\n"
+    "COPY --from=python-requirements /deps/requirements-main.txt "
+    "/tmp/requirements-main.txt\n"
+)
+
+
+def test_dockerfile_guard_accepts_multiline_export_install() -> None:
+    """Positive control mirroring the shipped continuation-line install."""
+    fixture = _DOCKERFILE_EXPORT_PREFIX + (
+        "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
+        "    pip install --disable-pip-version-check -r /tmp/requirements-main.txt \\\n"
+        "    && rm -f /tmp/requirements-main.txt\n"
+        "FROM runtime-dependencies AS runtime-base\n"
+        "RUN pip install --disable-pip-version-check --no-deps .\n"
+    )
+    assert check_dockerfile_install_vector_free(fixture) == []
+
+
 def test_dockerfile_guard_rejects_direct_vector_install() -> None:
     """Negative control: a direct vector install fails the layering guard."""
-    fixture = (
-        "RUN poetry export --only main --format requirements.txt "
-        "--without-hashes --output /deps/requirements-main.txt\n"
+    fixture = _DOCKERFILE_EXPORT_PREFIX + (
         "RUN pip install --disable-pip-version-check "
         "-r /tmp/requirements-main.txt\n"
         "RUN pip install qdrant-client==1.19.0\n"
@@ -928,15 +1000,51 @@ def test_dockerfile_guard_rejects_direct_vector_install() -> None:
     assert any("retired vector distribution" in p for p in problems)
 
 
+def test_dockerfile_guard_rejects_multiline_direct_vector_install() -> None:
+    """Negative control: the retired package on a continuation line fails."""
+    fixture = _DOCKERFILE_EXPORT_PREFIX + (
+        "RUN pip install -r /tmp/requirements-main.txt\n"
+        "RUN pip install \\\n"
+        "    # retired client\n"
+        "    qdrant-client\n"
+    )
+    problems = check_dockerfile_install_vector_free(fixture)
+    assert any("retired vector distribution" in p for p in problems)
+
+
 def test_dockerfile_guard_rejects_no_deps_on_exported_requirements() -> None:
     """Negative control: ``--no-deps`` on exports fails the layering guard."""
-    fixture = (
-        "RUN poetry export --only main --format requirements.txt "
-        "--without-hashes --output /deps/requirements-main.txt\n"
+    fixture = _DOCKERFILE_EXPORT_PREFIX + (
         "RUN pip install --no-deps -r /tmp/requirements-main.txt\n"
     )
     problems = check_dockerfile_install_vector_free(fixture)
     assert any("--no-deps" in p for p in problems)
+
+
+def test_dockerfile_guard_rejects_multiline_no_deps_on_exported_requirements() -> None:
+    """Negative control: ``--no-deps`` split from ``-r`` by a continuation."""
+    fixture = _DOCKERFILE_EXPORT_PREFIX + (
+        "RUN pip install --no-deps \\\n"
+        "    -r /tmp/requirements-main.txt\n"
+    )
+    problems = check_dockerfile_install_vector_free(fixture)
+    assert any("--no-deps" in p for p in problems)
+
+
+def test_dockerfile_guard_rejects_export_without_install() -> None:
+    """Negative control: exporting and copying without installing fails."""
+    problems = check_dockerfile_install_vector_free(_DOCKERFILE_EXPORT_PREFIX)
+    assert any("does not pip install" in p for p in problems)
+
+
+def test_dockerfile_guard_rejects_install_outside_runtime_stage() -> None:
+    """Negative control: installing the export in another stage fails."""
+    fixture = _DOCKERFILE_EXPORT_PREFIX + (
+        "FROM runtime-dependencies AS test-runtime\n"
+        "RUN pip install -r /tmp/requirements-main.txt\n"
+    )
+    problems = check_dockerfile_install_vector_free(fixture)
+    assert any("does not pip install" in p for p in problems)
 
 
 # ---------------------------------------------------------------------------
@@ -1269,7 +1377,8 @@ def test_manifest_drain_gate_blocks_on_open_histories() -> None:
 
 
 # ---------------------------------------------------------------------------
-# #4111-owned installed-graph smokes: real API composition + surviving imports.
+# #4111-owned API-composition smoke (installed-graph checks run in the built
+# image: tests/integration/test_installed_graph_vector_free_4111.py).
 # ---------------------------------------------------------------------------
 
 
@@ -1291,32 +1400,6 @@ def test_api_composition_imports_without_vector_backend() -> None:
     assert "/api/manifests" not in paths
     assert not any(str(path).startswith("/api/manifests/") for path in paths)
     assert not any("qdrant" in str(path).lower() for path in paths)
-
-
-def test_surviving_libraries_import_on_installed_graph() -> None:
-    """Surviving provider/HTTP/YAML/source-control libraries stay importable.
-
-    MoonLadderStudios/MoonMind#4111: declaration support
-    (``test_surviving_dependency_libraries_remain_supported``) plus the
-    managed-container runs importing this graph prove install health; this
-    explicit per-library import pins the surviving set on the installed
-    graph without a warm-environment install or a new scanner.
-    """
-    import importlib
-
-    for module_name in (
-        "typer",
-        "fastapi",
-        "temporalio",
-        "httpx",
-        "requests",
-        "yaml",
-        "sqlalchemy",
-        "git",
-    ):
-        assert importlib.import_module(module_name) is not None, (
-            f"surviving library module {module_name!r} is not importable"
-        )
 
 
 # ---------------------------------------------------------------------------
