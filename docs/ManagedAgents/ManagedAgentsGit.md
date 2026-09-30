@@ -12,15 +12,28 @@ Define the fastest safe approach for MoonMind Managed Agents to clone/push GitHu
 
 ## 2. Decision
 
-Use the MoonMind GitHub credential resolver for every GitHub operation. The
-resolver accepts, in order:
+Repository work with a repository target uses the credential of its selected
+repository connection. The common path selects
+`repository-connection:git-default`, whose typed SecretRef MoonMind records once
+at startup from the deployment's legacy GitHub configuration, in this order:
 
-- `GITHUB_TOKEN`
-- `GH_TOKEN`
-- `WORKFLOW_GITHUB_TOKEN`
+- `GITHUB_TOKEN`, `GH_TOKEN`, `WORKFLOW_GITHUB_TOKEN` (recorded as
+  `env://<NAME>`, never by value)
 - `GITHUB_TOKEN_SECRET_REF`
 - `WORKFLOW_GITHUB_TOKEN_SECRET_REF`
-- `MOONMIND_GITHUB_TOKEN_REF` / `integrations.github.token_ref`
+- `MOONMIND_GITHUB_TOKEN_REF`
+- a Settings `integrations.github.token_ref` override, when no source above is
+  configured; a different override alongside one of them is a conflict to
+  resolve, not a winner to guess
+
+The first configured source wins; a configured but unreadable reference is not
+skipped. Rotate the recorded credential by changing the value behind its
+reference (the environment variable or managed secret). A failure of the
+selected source never falls back to another credential.
+
+Callers that have not yet moved to selected connections still use the same
+precedence through the legacy resolver; their cutover is tracked by
+MoonLadderStudios/MoonMind#4010 and #4011.
 
 Publishing passes the resolved token to git and GitHub API calls directly. `gh`
 authentication may exist on a worker, but it is not the authority for managed
