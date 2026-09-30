@@ -294,6 +294,7 @@ class PullRequestOutcome:
     head_sha: str | None = None
     retryable: bool = False
     summary: str = ""
+    retry_after_seconds: int | None = None
 
 
 def admitted_token(*, github_token: str | None, bound_credential: Any | None) -> str:
@@ -450,6 +451,10 @@ def _verified_entries(
             continue
         if saved_work_path_exclusion(path) is not None:
             problems.append(f"excluded_by_current_policy:{path}")
+            continue
+        if entry.kind not in ("file", "symlink"):
+            # An unhashed entry would read as absent and become a deletion.
+            problems.append(f"unsupported_entry_kind:{path}")
             continue
         location = root.joinpath(*path.split("/"))
         parent = location.parent.resolve()
@@ -962,6 +967,7 @@ async def publish_pull_request(
         status="unavailable" if result.retryable else "rejected",
         retryable=bool(result.retryable),
         summary=result.summary,
+        retry_after_seconds=result.retry_after_seconds,
     )
 
 

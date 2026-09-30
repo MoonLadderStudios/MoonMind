@@ -79,6 +79,14 @@ def _retryable(exc: ActivityError) -> bool:
     )
 
 
+def _retry_delay(exc: ActivityError, backoff: timedelta) -> timedelta:
+    """Wait at least the provider's reported cooldown, never less than backoff."""
+
+    cause = exc.cause
+    requested = cause.next_retry_delay if isinstance(cause, ApplicationError) else None
+    return max(backoff, requested) if requested else backoff
+
+
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindPublicationRecoveryWorkflow:
     """Run only the authority boundaries needed to publish an accepted candidate."""
@@ -161,7 +169,7 @@ class MoonMindPublicationRecoveryWorkflow:
                     raise
                 if self._cancellation is None:
                     try:
-                        await workflow.sleep(delay)
+                        await workflow.sleep(_retry_delay(exc, delay))
                     except asyncio.CancelledError as cancelled:
                         self._cancellation = cancelled
                 if self._cancellation is not None:

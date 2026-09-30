@@ -146,6 +146,7 @@ class ProviderFixture:
         self.tokens: list[str] = []
         self.unavailable_reads = 0
         self.lose_create_ack = False
+        self.rate_limited_creates = 0
         self.head_sha: str | None = None
 
     async def reconcile_pull_request(self, **kwargs: Any) -> PullRequestReconciliation:
@@ -176,6 +177,11 @@ class ProviderFixture:
     async def create_pull_request(self, **kwargs: Any) -> CreatePRResult:
         self.creates += 1
         self.tokens.append(kwargs["github_token"])
+        if self.rate_limited_creates:
+            self.rate_limited_creates -= 1
+            return CreatePRResult(
+                created=False, retryable=True, retryAfterSeconds=61, summary="HTTP 429"
+            )
         url = f"https://github.com/dest-owner/dest-repo/pull/{len(self.pull_requests) + 1}"
         self.pull_requests.append(
             {
@@ -367,6 +373,31 @@ async def test_saved_entries_cannot_escape_the_saved_root(tmp_path, git_calls):
 
     assert exc.value.code == "PUBLICATION_CONTENT_INVALID"
     assert "uncontained_path:linked/secret.txt" in exc.value.details
+    assert git_calls == []
+
+
+async def test_unknown_saved_entry_kind_is_rejected_instead_of_deleted(tmp_path, git_calls):
+    remote, _writer, baseline = _destination(
+        tmp_path, {"a.txt": "baseline a\n", "kept.txt": "kept\n"}
+    )
+    content = _saved(tmp_path, {"a.txt": "saved a\n", "kept.txt": "kept\n"}, baseline=baseline)
+    # Materialized manifest data is not bound by the dataclass annotation; an
+    # unhashed entry would otherwise read as absent and become a deletion.
+    unknown = dataclasses.replace(
+        content,
+        entries=tuple(
+            dataclasses.replace(entry, kind="directory") if entry.path == "kept.txt" else entry
+            for entry in content.entries
+        ),
+    )
+
+    with pytest.raises(SavedPublicationError) as exc:
+        await _prepare(
+            tmp_path, _admission(strategy="baseline_delta", expectedBaseSha=baseline), unknown, remote
+        )
+
+    assert exc.value.code == "PUBLICATION_CONTENT_INVALID"
+    assert "unsupported_entry_kind:kept.txt" in exc.value.details
     assert git_calls == []
 
 
@@ -823,6 +854,17 @@ async def test_unavailable_reconciliation_performs_no_create():
 
     assert outcome.status == "unavailable" and outcome.retryable
     assert provider.creates == 0
+
+
+async def test_rate_limited_create_carries_the_provider_retry_delay():
+    provider = ProviderFixture()
+    provider.rate_limited_creates = 1
+
+    outcome = await _publish_pr(provider, "c" * 40, _admission(expectedBaseSha="a" * 40))
+
+    assert outcome.status == "unavailable" and outcome.retryable
+    assert outcome.retry_after_seconds == 61
+    assert provider.pull_requests == []
 
 
 async def test_lost_create_acknowledgment_adopts_the_same_pull_request():

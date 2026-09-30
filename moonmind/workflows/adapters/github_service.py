@@ -696,6 +696,7 @@ class GitHubService:
         expected_head_ref = head.split(":", 1)[1] if ":" in head else head
         if str(head_data.get("ref") or "") != expected_head_ref:
             return False
+        # GitHub owner/repository identities are case-insensitive.
         if ":" in head:
             expected_repo_owner = head.split(":", 1)[0]
             head_repo = head_data.get("repo")
@@ -704,11 +705,13 @@ class GitHubService:
                 if isinstance(head_repo, Mapping)
                 else ""
             )
-            return bool(full_name) and full_name.startswith(f"{expected_repo_owner}/")
+            return bool(full_name) and full_name.lower().startswith(
+                f"{expected_repo_owner.lower()}/"
+            )
         head_repo = head_data.get("repo")
         if isinstance(head_repo, Mapping):
             full_name = str(head_repo.get("full_name") or "")
-            return full_name == repo
+            return full_name.lower() == repo.lower()
         return False
 
     async def _find_open_pull_request(
@@ -1142,7 +1145,10 @@ class GitHubService:
 
         Only the admitted token is used; a missing one is unavailable rather
         than a reason to resolve ambient credentials. A failed or malformed
-        lookup is never reported as confirmed absence.
+        lookup is never reported as confirmed absence. ``absent`` authorizes
+        a create, so it also requires the head branch to hold
+        ``expected_head_sha``: another actor's commit is never opened as
+        this operation's pull request.
         """
 
         token = str(github_token or "").strip()
@@ -1213,6 +1219,50 @@ class GitHubService:
             return observed(merged[0], "merged")
         if matching:
             return observed(matching[0], "closed")
+        return await self._reconcile_absent_head(
+            repo=repo, head=head, expected_head_sha=expected_head_sha, token=token
+        )
+
+    async def _reconcile_absent_head(
+        self, *, repo: str, head: str, expected_head_sha: str, token: str
+    ) -> PullRequestReconciliation:
+        from urllib.parse import quote
+
+        owner, separator, branch = head.partition(":")
+        if not separator:
+            owner, branch = repo.partition("/")[0], head
+        branch_repo = f"{owner}/{repo.partition('/')[2]}"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(
+                    f"https://api.github.com/repos/{branch_repo}/git/ref/heads/"
+                    f"{quote(branch, safe='/')}",
+                    headers=self._github_headers(token),
+                )
+                if response.status_code == 404:
+                    # A just-pushed head may not be visible yet; never create
+                    # without it, and let a bounded retry reconcile again.
+                    return PullRequestReconciliation(
+                        state="unavailable",
+                        retryable=True,
+                        summary="the head branch is not visible on GitHub",
+                    )
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return PullRequestReconciliation(
+                state="unavailable",
+                retryable=True,
+                summary=f"GitHub head branch lookup failed: {exc.__class__.__name__}",
+            )
+        target = data.get("object") if isinstance(data, Mapping) else None
+        tip = str((target if isinstance(target, Mapping) else {}).get("sha") or "")
+        if tip != expected_head_sha:
+            return PullRequestReconciliation(
+                state="mismatched",
+                headSha=tip or None,
+                summary="the head branch no longer holds the expected commit",
+            )
         return PullRequestReconciliation(
             state="absent", summary="no pull request exists for this head and base"
         )

@@ -4419,6 +4419,38 @@ def _saved_publication_failure(exc: Exception) -> temporal_exceptions.Applicatio
     )
 
 
+def _publication_authority_unavailable(
+    credential: Any,
+) -> temporal_exceptions.ApplicationError:
+    """Fail fast on missing authority; retry a reference that could not be read."""
+
+    return temporal_exceptions.ApplicationError(
+        f"publication authority is unavailable: {credential.safe_summary}",
+        type="PUBLICATION_AUTHORITY_UNAVAILABLE",
+        non_retryable=not credential.retryable,
+    )
+
+
+def _publication_pull_request_unavailable(
+    outcome: Any,
+) -> temporal_exceptions.ApplicationError:
+    """Retry an unavailable PR effect no sooner than the provider allows.
+
+    The retry reconciles the same head/base before any create.
+    """
+
+    return temporal_exceptions.ApplicationError(
+        f"publication pull request outcome is unavailable: {outcome.summary}",
+        type="PUBLICATION_PULL_REQUEST_UNAVAILABLE",
+        non_retryable=False,
+        next_retry_delay=(
+            timedelta(seconds=outcome.retry_after_seconds)
+            if outcome.retry_after_seconds
+            else None
+        ),
+    )
+
+
 async def _saved_work_destination_authority(
     contract: Any, *, admitted_authority_ref: str | None = None
 ) -> tuple[str, str]:
@@ -4435,11 +4467,7 @@ async def _saved_work_destination_authority(
         repo=contract.destination.repository
     )
     if not credential.token:
-        raise temporal_exceptions.ApplicationError(
-            f"destination authority is unavailable: {credential.safe_summary}",
-            type="PUBLICATION_AUTHORITY_UNAVAILABLE",
-            non_retryable=True,
-        )
+        raise _publication_authority_unavailable(credential)
     authority_ref = (
         f"{contract.github_authority_ref}#{credential.source.value}:"
         f"{credential.source_name or 'default'}"
@@ -4619,8 +4647,8 @@ class TemporalIntegrationActivities:
         the same head/base (including closed and merged results) before any
         create and accepts adoption only for the expected head (#4018).
         """
+        from moonmind.auth.github_credentials import resolve_github_credential
         from moonmind.publish.service import PublishService
-        from moonmind.workflows.adapters.github_service import GitHubService
 
         contract = dict((payload or {}).get("contract") or {})
         intent = dict(contract.get("intent") or {})
@@ -4638,13 +4666,9 @@ class TemporalIntegrationActivities:
                 f"{continuation.get('remainingWorkRef')}"
             )
         repository = str(intent.get("repository") or "")
-        token, error = await GitHubService.resolve_github_token(repo=repository)
-        if not token:
-            raise temporal_exceptions.ApplicationError(
-                f"publication authority is unavailable: {error}",
-                type="PUBLICATION_AUTHORITY_UNAVAILABLE",
-                non_retryable=True,
-            )
+        credential = await resolve_github_credential(repo=repository)
+        if not credential.token:
+            raise _publication_authority_unavailable(credential)
         outcome = await PublishService().publish_pull_request(
             repository=repository,
             head_branch=str(intent.get("headRef") or ""),
@@ -4653,13 +4677,10 @@ class TemporalIntegrationActivities:
             draft=intent.get("mode") == "draft_pr",
             title=f"Publication recovery: {target.get('sourcePublicationOperationId')}",
             body=body,
-            github_token=token,
+            github_token=credential.token,
         )
         if outcome.status == "unavailable" and outcome.retryable:
-            # The retry reconciles this same head/base before any create.
-            raise TemporalActivityRuntimeError(
-                f"publication recovery PR outcome is unavailable: {outcome.summary}"
-            )
+            raise _publication_pull_request_unavailable(outcome)
         if outcome.status not in {"created", "adopted"} or not outcome.url:
             raise temporal_exceptions.ApplicationError(
                 f"publication recovery PR outcome is {outcome.status}: "
@@ -4715,12 +4736,7 @@ class TemporalIntegrationActivities:
             github_token=token,
         )
         if outcome.status == "unavailable" and outcome.retryable:
-            # The retry reconciles this same head/base before any create.
-            raise temporal_exceptions.ApplicationError(
-                f"saved-work pull request outcome is unavailable: {outcome.summary}",
-                type="PUBLICATION_PULL_REQUEST_UNAVAILABLE",
-                non_retryable=False,
-            )
+            raise _publication_pull_request_unavailable(outcome)
         return {
             "status": outcome.status,
             "url": outcome.url,
