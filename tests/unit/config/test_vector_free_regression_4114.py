@@ -1,70 +1,59 @@
 """Vector-free deployment and workflow regression coverage (#4114).
 
-Cross-boundary verification owner for the Qdrant-removal release
+Hermetic regression owner for the Qdrant-removal release
 (MoonLadderStudios/MoonMind#4114, parent #4103, acceptance contract #4105).
-This module proves removal across the hermetic boundaries it can own in
-required CI and names the protected deployment checks it cannot own, so no
-supported runtime or live deployment is claimed qualified without evidence.
+Live clean-install and upgraded-instance execution is not simulated here;
+it runs in existing CI and this module pins the product wiring it depends on.
 
-Matrix-to-evidence mapping (issue required-coverage rows):
+Evidence map:
 
-- Clean dependencies: fixture negative controls live here
-  (``test_dependency_guard_*``). MR5 (MoonLadderStudios/MoonMind#4192)
-  removed the manifest-only distributions:
-  ``test_dependency_removal_landed_no_manifest_only_distributions`` asserts
-  ``pyproject.toml`` and ``poetry.lock`` carry no ``qdrant-client``,
-  ``llama-index``, or reader packages. The installed graph of the built
+- Live startup and ordinary work: the ``integration-ci`` job runs
+  ``tools/first_run_journey_3938.sh`` on a clean default install (no
+  ``.env``) and with ``--upgrade`` on an in-place upgraded instance. Each
+  candidate instance runs init-db, reaches API/worker readiness, does
+  ordinary work (submit/redeliver, artifacts, recurring dispatch, preset,
+  worker restart with work in flight, dashboard cancel, read-back), and
+  runs the ``vector_free`` phase of ``tools/single_user_journey_checks.py``
+  (live ``/healthz``, served OpenAPI, and a retired submission rejected
+  with no execution created). ``test_vector_free_live_journey_*`` and
+  ``test_vector_free_journey_phase_*`` pin that wiring and the phase's
+  failure modes. Shared-runtime context, artifact, and recovery journeys
+  live in ``tests/integration/reliability_journey``.
+- Clean dependencies: ``test_dependency_guard_*`` negative controls,
+  ``test_dependency_removal_landed_no_manifest_only_distributions``, and
+  the lockfile/import scans. The installed graph of the built
   ``test-runtime`` image is qualified by the integration-ci suite
-  ``tests/integration/test_installed_graph_vector_free_4111.py`` (existing
-  ``check_dependency_vector_free`` guard over real installed-package
-  metadata, MoonLadderStudios/MoonMind#4111) and the shipped image layering
-  by ``test_runtime_image_installs_from_poetry_export`` (the
+  ``tests/integration/test_installed_graph_vector_free_4111.py``
+  (``check_dependency_vector_free`` over real installed-package metadata,
+  MoonLadderStudios/MoonMind#4111), and the shipped image layering by
+  ``test_runtime_image_installs_from_poetry_export`` (the
   ``runtime-dependencies`` layer derives from ``poetry export`` output, so
   lock evidence transfers to sharing images). Surviving ordinary libraries
   stay explicitly declared
-  (``test_surviving_dependency_libraries_remain_supported``). Image-level
-  live qualification stays a protected deployment check (see
-  ``test_topology_matrix_gaps_are_explicit``).
-- Topology: ``test_compose_*`` guards the rendered default Compose file, the
-  test Compose file, every declared profile, and every documented
-  ``--profile``/``COMPOSE_PROFILES`` combination (hermetic YAML render under
-  sanitized env), plus fixture negative controls for renamed services,
-  optional profiles, embedded vector startup, and pgvector init SQL. Live
-  startup remains a protected deployment check (see
-  ``test_topology_matrix_gaps_are_explicit``).
-- Real startup: hermetic sentinel logic
-  (``test_startup_sentinel_*``) plus real settings init under clean-default
-  and upgraded stale env (``test_vector_free_settings_init_*``) and real
-  production import and readiness wiring (``test_vector_free_startup_*``,
-  ``test_vector_free_api_health_*``) under sanitized env with no vector
-  configuration. Fresh Compose startup,
-  init-db/Alembic runs, live API/worker readiness probes, dashboard
-  bootstrap, and repeated startup stay protected checks owned with the
-  cutover child, not claimed here.
-- Ordinary workflow: hermetic execution through the shared production
-  admission path (``test_vector_free_ordinary_workflow_*``,
-  ``test_vector_free_rejection_*``, ``test_vector_free_denied_context_*``,
-  ``test_vector_free_upgraded_residue_*``) proving explicit context,
-  artifacts, terminal outcome, and recovery-safe retry with no vector
-  settings. Live runtime journeys stay protected (see
-  ``test_topology_matrix_gaps_are_explicit``); installed
-  dependency/image evidence is consumed from #4111 and Manifest
-  retirement integration from #4193 (see
+  (``test_surviving_dependency_libraries_remain_supported``). Manifest
+  retirement integration belongs to #4193 (see
   ``test_vector_free_reuses_sibling_evidence_without_duplication``).
-- Public admission: ``test_admission_*`` exercises the real production
-  admission path (``reject_retired_vector_fields`` /
-  ``strip_absent_vector_fields`` from #4105) including hidden-state residue
-  and old required-vector payloads.
-- Runtime/context, Follow-up/chat, Ingestion, Memory/finalization, Security,
-  Recovery/upgrade: mapped to existing owners plus protected checks in
-  ``test_topology_matrix_gaps_are_explicit``; this module adds no parallel
-  framework and replaces no production path with a fake service.
-- Docs/operations: ``test_env_template_*`` and
-  ``test_update_script_*`` prove the shipped examples/scripts do not
-  demand or recreate a vector backend. ``test_docs_operations_*`` verifies
-  the removed worker-vector guide and README advertising, while
-  ``test_cli_help_*`` checks the real generated help. These bounded public
-  surfaces do not establish dependency cleanup or live qualification.
+- Topology: ``test_compose_*`` guards the default and test Compose files,
+  every declared profile, and every documented ``--profile`` /
+  ``COMPOSE_PROFILES`` combination, with fixture negative controls for
+  renamed services, optional profiles, embedded vector startup, and
+  pgvector init SQL.
+- Startup (hermetic slice): clean-interpreter production imports
+  (``test_vector_free_startup_*``), settings init and retired-env
+  inertness on clean and stale env (``test_vector_free_settings_*``), and
+  the served health route (``test_vector_free_api_health_*``), and the
+  mounted API composition (``test_api_composition_*``).
+- Admission and retirement rejection: ``test_admission_*``,
+  ``test_vector_free_ordinary_admission_*``,
+  ``test_vector_free_rejection_*``, ``test_vector_free_denied_context_*``,
+  and ``test_vector_free_upgraded_residue_*`` exercise the production
+  request, checkpoint, and retrieval-issuance boundaries with no
+  consequential effects on rejection.
+- Operator surfaces: ``test_env_template_*`` and the registered CLI tree
+  (``test_cli_command_tree_*``).
+
+Separately authorized live storage/service/cutover observations stay with
+#4115 and #4189 and are not certified by this module.
 
 Negative controls (issue requirement 5): every guard below is proven with a
 fixture that reintroduces the retired capability (transitive requirement,
@@ -118,12 +107,6 @@ _VECTOR_SQL_RE = re.compile(
     r"|\bpgvector\b",
     re.IGNORECASE,
 )
-_STARTUP_SENTINEL_RE = re.compile(
-    r"QDRANT_URL|qdrant[:/]|connect(?:ion|ing)?\s+(?:to\s+)?qdrant"
-    r"|embedding (?:model |index )?(?:init|initializ)"
-    r"|Qdrant (?:connection|DNS|unavailable|outage)",
-    re.IGNORECASE,
-)
 # Every distribution retired by the Qdrant/Manifest removal (#4111, #4192),
 # matched against PEP 503-normalized names so ``llama_index.core`` and
 # ``Qdrant-Client`` spellings fail the same guard.
@@ -132,6 +115,13 @@ _RETIRED_DISTRIBUTION_RE = re.compile(
 )
 _RETIRED_TOOL_DESCRIPTOR_RE = re.compile(
     r"qdrant|followUpRetrieval|follow_up_retrieval", re.IGNORECASE
+)
+# Only the retired surfaces themselves: the top-level native ``manifest``
+# group (#4192) and commands/options naming the retired vector backend.
+# Skill, image, checkpoint, and other ordinary manifests stay permitted.
+_RETIRED_CLI_GROUPS = {"manifest", "manifests"}
+_RETIRED_CLI_BACKEND_RE = re.compile(
+    r"(?:^|-)(?:qdrant|rag)(?:-|$)|(?:^|-)vector-?(?:store|db)s?(?:-|$)"
 )
 
 # MoonLadderStudios/MoonMind#4110: the native Qdrant volume declaration is
@@ -239,6 +229,34 @@ def check_tool_manifest_vector_free(descriptors: list[str]) -> list[str]:
         for descriptor in descriptors
         if _RETIRED_TOOL_DESCRIPTOR_RE.search(str(descriptor))
     ]
+
+
+def check_cli_command_tree_vector_free(typer_app) -> list[str]:
+    """Return problems when the registered CLI tree exposes retired commands."""
+    import typer.main
+
+    problems: list[str] = []
+
+    def retired(name: str) -> bool:
+        normalized = re.sub(r"[-_]+", "-", name.lstrip("-").lower())
+        return bool(_RETIRED_CLI_BACKEND_RE.search(normalized))
+
+    def walk(command, path: tuple[str, ...]) -> None:
+        label = " ".join(path) or "<root>"
+        top_level_group = len(path) == 1 and path[0].lower() in _RETIRED_CLI_GROUPS
+        if path and (top_level_group or retired(path[-1])):
+            problems.append(f"command {path[-1]!r} ({label}) is a retired surface")
+        for param in command.params:
+            for opt in getattr(param, "opts", []):
+                if retired(opt):
+                    problems.append(
+                        f"option {opt!r} on {label!r} is a retired surface"
+                    )
+        for name, sub in (getattr(command, "commands", None) or {}).items():
+            walk(sub, (*path, name))
+
+    walk(typer.main.get_command(typer_app), ())
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -602,27 +620,7 @@ def test_tool_manifest_guard_rejects_leaked_retired_descriptor() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Real startup: hermetic sentinel logic (live startup stays protected).
-# ---------------------------------------------------------------------------
-
-
-def test_startup_sentinel_detects_vector_attempts() -> None:
-    assert _STARTUP_SENTINEL_RE.search("connecting to qdrant:6333")
-    assert _STARTUP_SENTINEL_RE.search("QDRANT_URL=http://qdrant:6333")
-    assert _STARTUP_SENTINEL_RE.search("embedding model initialization started")
-    assert _STARTUP_SENTINEL_RE.search("Qdrant connection outage, retrying")
-
-
-def test_startup_sentinel_passes_vector_free_boot() -> None:
-    clean_log = (
-        "api ready on :8000; postgres healthy; temporal worker started; "
-        "retrieval backend: none (vector-free defaults)"
-    )
-    assert _STARTUP_SENTINEL_RE.search(clean_log) is None
-
-
-# ---------------------------------------------------------------------------
-# Docs/operations: examples and update scripts agree with shipped behavior.
+# Shipped operator surfaces: env template and registered CLI tree.
 # ---------------------------------------------------------------------------
 
 
@@ -633,110 +631,67 @@ def test_env_template_advertises_no_active_vector_backend() -> None:
     assert not re.search(r"(?m)^QDRANT_URL=", template)
 
 
-def test_update_script_does_not_recreate_vector_backend() -> None:
-    script = (
-        REPO_ROOT
-        / ".agents/skills/update-moonmind/scripts/run-update-moonmind.sh"
-    ).read_text(encoding="utf-8")
-    code_lines = [
-        line for line in script.splitlines() if not line.lstrip().startswith("#")
-    ]
-    code = "\n".join(code_lines)
-    assert not re.search(r"\bqdrant\b", code, re.IGNORECASE)
+def test_cli_command_tree_registers_no_retired_vector_command() -> None:
+    """The registered CLI tree has no vector/Manifest command or option.
 
-
-def test_docs_operations_do_not_advertise_retired_vector_backend() -> None:
-    """Verify the public documentation surfaces removed by sibling changes."""
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert not re.search(r"qdrant", readme, re.IGNORECASE)
-    assert not (
-        REPO_ROOT / "docs/ManagedAgents/WorkerVectorEmbedding.md"
-    ).exists()
-
-
-@pytest.mark.parametrize("command", [[], ["worker"], ["container"]])
-def test_cli_help_does_not_advertise_retired_vector_backend(command: list[str]) -> None:
-    from typer.testing import CliRunner
-
-    from moonmind.cli import app
-
-    result = CliRunner().invoke(app, [*command, "--help"], color=False)
-    assert result.exit_code == 0, result.output
-    # MoonLadderStudios/MoonMind#4192: the top-level help carries a
-    # retirement notice naming the removed Manifest/RAG product. Strip that
-    # notice (terminal wrapping may reflow it) before asserting no live
-    # vector backend is advertised.
-    scrubbed = re.sub(
-        r"The native\s+Manifest/RAG\s+ingestion\s+product\s+was\s+retired"
-        r".*?inspection\s+command\.",
-        "",
-        result.output,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    assert not re.search(r"\b(qdrant|rag)\b", scrubbed, re.IGNORECASE)
-
-
-def test_cli_help_advertises_no_manifest_command_group() -> None:
-    """MR5 (#4192): the retired manifest command group must be gone entirely.
-
-    The app help text carries a retirement notice naming the removal, so a
-    zero-substring assertion on rendered `--help` output is stale (rich
-    panels may also truncate prose). Pin the retired posture instead: the
-    notice lives in the app help source, no ``manifest`` command row is
-    listed, and ``manifest --help`` still fails.
+    Checks the Typer command tree the ``moonmind`` entrypoint actually
+    dispatches (#4192 removed the ``manifest`` group) instead of banning
+    words in rendered help, which legitimately carries the retirement
+    notice. A fixture app that registers a retired group or option must
+    fail the same guard.
     """
+    import typer
     from typer.testing import CliRunner
 
     from moonmind.cli import app
 
-    assert "no `manifest` command group" in (app.info.help or "")
-    top = CliRunner().invoke(app, ["--help"], color=False)
-    assert top.exit_code == 0, top.output
-    assert not re.search(r"(?m)^\s*manifest(\s|│|:)", top.output)
+    assert check_cli_command_tree_vector_free(app) == []
     retired = CliRunner().invoke(app, ["manifest", "--help"], color=False)
     assert retired.exit_code != 0
 
+    fixture = typer.Typer()
+    manifest_app = typer.Typer()
 
-def test_topology_matrix_gaps_are_explicit() -> None:
-    """Pin the verification boundary: hermetic guards are not live proof.
+    @manifest_app.command("run")
+    def _manifest_run() -> None:
+        pass
 
-    Hermetic coverage owned by this module (real production boundaries exercised
-    without live services): Compose/topology render, init-SQL enumeration,
-    dependency/import scans, migration SQL scan, settings stale-env tolerance,
-    admission wiring (execution contract, checkpoint branch models,
-    AgentExecutionRequest), retry input-reuse, capability-manifest source scan,
-    worker-registry Manifest absence, drain-gate predicate logic,
-    vector-free startup imports and API health/readiness wiring, ordinary
-    vector-free workflow admission execution (explicit context, artifacts,
-    terminal outcome, omitted/explicit agreement), retirement rejection with
-    no consequential effects, denied-context no-widening, upgraded-residue
-    stripping at admission, sibling-evidence reuse accounting, and
-    docs/operations surfaces.
+    @fixture.command("status")
+    def _status(qdrant_url: str = typer.Option("", "--qdrant-url")) -> None:
+        pass
 
-    The following rows still require protected deployment evidence owned with
-    the cutover child and sibling removals (#4106-#4113), and are NOT claimed
-    qualified by this module: live fresh/upgraded startup against real
-    Compose prerequisites (init-db/Alembic run, API/worker readiness,
-    dashboard bootstrap, repeated startup), live runtime x capability x
-    authority-handoff journeys on supported hosts, live follow-up/chat
-    manifests against real builds, ingestion fail-before-effects on real
-    writers, memory/finalization ordering under real failure, cross-tenant
-    security probes, recovery/upgrade rehearsal on real boundaries, browser
-    journeys, and per-deployment image-layer/observation evidence. This test
-    exists so future edits cannot silently widen the claim without updating
-    the mapping above.
-    """
-    protected = {
-        "real-startup",
-        "runtime-context",
-        "followup-chat-live",
-        "ingestion-effects",
-        "memory-finalization",
-        "security-probes",
-        "recovery-upgrade",
-        "browser-journeys",
-    }
-    assert len(protected) == 8
+    fixture.add_typer(manifest_app, name="manifest")
+    problems = check_cli_command_tree_vector_free(fixture)
+    assert any("'manifest'" in problem for problem in problems), problems
+    assert any("'--qdrant-url'" in problem for problem in problems), problems
+
+    # Positive control: Skill, image, and checkpoint manifests are ordinary
+    # product surfaces, not the retired native Manifest/vector backend.
+    permitted = typer.Typer()
+    skill_app = typer.Typer()
+    checkpoint_app = typer.Typer()
+
+    @skill_app.command("validate-manifest")
+    def _validate(skill_manifest: str = typer.Option("", "--skill-manifest")) -> None:
+        pass
+
+    @skill_app.command("manifest")
+    def _skill_manifest() -> None:
+        pass
+
+    @checkpoint_app.command("restore")
+    def _restore(
+        checkpoint_manifest: str = typer.Option("", "--checkpoint-manifest"),
+    ) -> None:
+        pass
+
+    @permitted.command("image-inspect")
+    def _inspect(image_manifest: str = typer.Option("", "--image-manifest")) -> None:
+        pass
+
+    permitted.add_typer(skill_app, name="skill")
+    permitted.add_typer(checkpoint_app, name="checkpoint")
+    assert check_cli_command_tree_vector_free(permitted) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1071,34 +1026,6 @@ def test_migrations_carry_no_vector_sql() -> None:
     assert offenders == [], f"migrations install vector SQL: {offenders}"
 
 
-def test_settings_model_declares_no_vector_backend_fields() -> None:
-    """Settings declare no Qdrant/vector backend fields; stale env is inert.
-
-    The only ``qdrant`` mention in ``settings.py`` is the #4109 retirement
-    notice explaining why hosted Mem0 cannot parse. No model field wires a
-    ``QDRANT_*`` / ``VECTOR_STORE_*`` / ``*_EMBEDDING_*`` setting, so old
-    deployments carrying those keys stay inert (``extra="ignore"``).
-    """
-    text = (REPO_ROOT / "moonmind/config/settings.py").read_text(encoding="utf-8")
-    mentions = [
-        (lineno, line)
-        for lineno, line in enumerate(text.splitlines(), start=1)
-        if re.search(r"qdrant", line, re.IGNORECASE)
-    ]
-    assert mentions, "expected the retirement notice to be present"
-    for _, line in mentions:
-        assert re.search(
-            r"Mem0|mandatorily requires|retired|4109|4115",
-            line,
-            re.IGNORECASE,
-        ), f"unexpected live qdrant reference in settings: {line!r}"
-    assert not re.search(
-        r'(?m)^\s*(qdrant_\w+|vector_store_\w+)\s*[:=]',
-        text,
-        re.IGNORECASE,
-    )
-
-
 _VECTOR_ENV_KEYS_4114 = (
     "QDRANT_URL",
     "QDRANT_HOST",
@@ -1153,20 +1080,61 @@ def test_vector_free_settings_init_exposes_no_vector_surface(
         assert not hasattr(settings, field), field
 
 
-def test_init_entrypoints_do_not_require_vector_env() -> None:
-    """Init/API entrypoints demand no Qdrant/vector environment."""
-    for rel in ("init_db/init_db_entrypoint.sh", "api_service/entrypoint.sh"):
-        path = REPO_ROOT / rel
-        if not path.is_file():
-            continue
-        code_lines = [
-            line
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        ]
-        code = "\n".join(code_lines)
-        assert not re.search(r"QDRANT_", code)
-        assert not re.search(r"\bqdrant\b", code, re.IGNORECASE)
+def _consumed_env_sentinels(settings, sentinels: set[str]) -> set[str]:
+    """Return sentinels that surface anywhere in a settings tree's values."""
+    from pydantic import BaseModel, SecretBytes, SecretStr
+
+    found: set[str] = set()
+
+    def walk(value) -> None:
+        if isinstance(value, BaseModel):
+            for name in type(value).model_fields:
+                walk(getattr(value, name, None))
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                walk(key)
+                walk(item)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                walk(item)
+        else:
+            if isinstance(value, (SecretStr, SecretBytes)):
+                value = value.get_secret_value()
+            text = value.decode() if isinstance(value, bytes) else str(value)
+            found.update(sentinel for sentinel in sentinels if sentinel in text)
+
+    walk(settings)
+    return found
+
+
+def test_vector_free_settings_consume_no_retired_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upgraded instance: no settings field, nested or aliased, reads vector env.
+
+    Each retired key carries a unique sentinel; the real settings tree must
+    construct and expose none of them. A fixture settings model that still
+    wires ``QDRANT_URL`` must fail the same check.
+    """
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+
+    from moonmind.config.settings import AppSettings
+
+    sentinels = {key: f"stale-4114-{key.lower()}" for key in _VECTOR_ENV_KEYS_4114}
+    for key, value in sentinels.items():
+        monkeypatch.setenv(key, value)
+
+    settings = AppSettings(_env_file=None)
+    assert _consumed_env_sentinels(settings, set(sentinels.values())) == set()
+
+    class _LegacyVectorSettings(BaseSettings):
+        model_config = SettingsConfigDict(extra="ignore")
+        qdrant_url: str = ""
+
+    legacy = _LegacyVectorSettings(_env_file=None)
+    assert _consumed_env_sentinels(legacy, set(sentinels.values())) == {
+        sentinels["QDRANT_URL"]
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1282,33 +1250,86 @@ def test_retry_reuses_exact_input_without_duplicate_delivery() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Chat/tools (hermetic slice): capability-manifest sources issue no retired
-# tool or credential.
+# Chat/tools (hermetic slice): the production capability owners issue no
+# retired tool or credential.
 # ---------------------------------------------------------------------------
 
 
-def test_capability_sources_issue_no_retired_tool_descriptor() -> None:
-    """Capability-manifest sources carry no retired tool descriptor or cred."""
-    candidates = [
-        REPO_ROOT / "moonmind/omnigent/effective_capabilities.py",
-        REPO_ROOT / "moonmind/omnigent/harness_platform/capabilities.py",
-        REPO_ROOT / "api_service/retrieval_capabilities.py",
-    ]
-    checked = 0
-    for path in candidates:
-        if not path.is_file():
-            continue
-        checked += 1
-        text = path.read_text(encoding="utf-8")
-        assert check_tool_manifest_vector_free([text]) == [] or (
-            "qdrant" not in text.lower()
-            and "followUpRetrieval" not in text
-            and "follow_up_retrieval" not in text
-        ), f"capability source {path} leaks retired tool descriptor"
-        assert not re.search(r"qdrant_search", text, re.IGNORECASE), (
-            f"capability source {path} issues retired qdrant_search tool"
+def test_capability_issuance_grants_no_retired_tool_descriptor(
+    tmp_path: Path,
+) -> None:
+    """Issued capability manifests and retrieval tokens stay vector-free.
+
+    Every authority source grants the retired descriptors alongside the full
+    canonical set; the resolved session manifest must still name none of
+    them. Retrieval issuance through the production registry fails closed
+    and persists no live authority for the session.
+    """
+    from api_service.retrieval_capabilities import (
+        RetrievalBudgetSnapshot,
+        RetrievalCapabilityError,
+        RetrievalCapabilityRegistry,
+    )
+    from moonmind.omnigent.effective_capabilities import (
+        CAPABILITY_NAMES,
+        adapt_provider_capabilities,
+        resolve_effective_capabilities,
+    )
+
+    retired = ("qdrant_search", "followUpRetrieval", "follow_up_retrieval")
+    granted = {name: True for name in (*CAPABILITY_NAMES, *retired)}
+    authority = {
+        "agentProfileRef": "profile://default",
+        "agentProfileDigest": "sha256:profile",
+        "providerProfileId": "provider-1",
+        "providerProfileGeneration": "1",
+        "launchPolicyRef": "policy://launch",
+        "policySnapshotRef": "policy://snapshot",
+        "policyDigest": "sha256:policy",
+        "effectiveLaunchSnapshotRef": "launch://snapshot",
+        "sessionEpoch": "1",
+        "authorityFresh": True,
+    }
+    adapted = adapt_provider_capabilities(granted)
+    resolved = resolve_effective_capabilities(
+        authority=authority,
+        upstream_capabilities=adapted,
+        profile_capabilities=granted,
+        launch_capabilities=granted,
+        state_capabilities=granted,
+        caller_capabilities=granted,
+        session_status="running",
+    )
+    manifest = resolved.manifest()
+    assert all(manifest["capabilities"].values())
+    assert check_tool_manifest_vector_free(list(adapted)) == []
+    assert check_tool_manifest_vector_free(list(manifest["capabilities"])) == []
+    assert check_tool_manifest_vector_free(list(manifest["decisions"])) == []
+
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    budget = RetrievalBudgetSnapshot(
+        tenant_id="operator",
+        repository="repo",
+        run_id="run-1",
+        workspace_id="ws-1",
+        host_id="host-1",
+        session_id="session-1",
+        step_id="step-1",
+        workflow_id="workflow-1",
+        bridge_session_id="bridge-1",
+        policy_version="v1",
+        collections=("docs",),
+        filters=(),
+    )
+    with pytest.raises(RetrievalCapabilityError, match="retired"):
+        registry.issue(budget, lifetime_seconds=60)
+    assert registry.has_live_session_authority(session_id="session-1") is False
+    assert (
+        registry.live_scope_capability(
+            run_id="run-1", host_id="host-1", session_id="session-1", step_id="step-1"
         )
-    assert checked, "expected capability-manifest sources to enumerate"
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1388,7 +1409,7 @@ def test_api_composition_imports_without_vector_backend() -> None:
     Imports the mounted production app (the same composition shipped in the
     runtime image) and asserts its served OpenAPI contract exposes the
     ordinary executions surface with no Manifest/vector authoring paths.
-    CLI/worker composition is covered by ``test_cli_help_*`` and
+    CLI/worker composition is covered by ``test_cli_command_tree_*`` and
     ``test_worker_catalog_*``; sibling #4193 mounted-route tests remain the
     shared boundary owner and are re-cited, not duplicated, here.
     """
@@ -1485,16 +1506,14 @@ else:
 
 
 def test_vector_free_api_health_routes_have_no_vector_gate() -> None:
-    """API health/readiness wiring registers with no vector gate.
+    """The production app serves ``/healthz`` and no vector-backend path.
 
-    Readiness hermetic slice of R2: the served OpenAPI contract (rendered
-    from the production app's included routers -- direct ``app.routes``
-    introspection is not used because middleware instrumentation wraps the
-    route table, see the #4193 boundary-suite precedent) exposes ``/healthz``
-    and no vector-backend path, and the readiness source gates on
-    database/migration state, never on a ``QDRANT_*`` / vector backend. A
-    reintroduced vector gate in the health path fails here; live probe
-    execution stays protected.
+    The served OpenAPI contract is rendered from the production app's
+    included routers (direct ``app.routes`` introspection is not used
+    because middleware instrumentation wraps the route table, see the #4193
+    boundary-suite precedent). Live ``/healthz`` readiness on clean and
+    upgraded instances is executed by the integration-ci first-run journey's
+    ``vector_free`` phase.
     """
     from api_service.main import app
 
@@ -1503,27 +1522,18 @@ def test_vector_free_api_health_routes_have_no_vector_gate() -> None:
     assert not any(
         _VECTOR_SERVICE_NAME_RE.search(str(path)) for path in openapi_paths
     ), "served API contract exposes a vector-backend path"
-    source = (REPO_ROOT / "api_service/main.py").read_text(encoding="utf-8")
-    code_lines = [
-        line for line in source.splitlines() if not line.lstrip().startswith("#")
-    ]
-    code = "\n".join(code_lines)
-    assert not _VECTOR_ENV_RE.search(code), (
-        "API startup wires a retired vector environment key"
-    )
-    assert "qdrant_client" not in code
 
 
-def test_vector_free_ordinary_workflow_explicit_context_artifacts_terminal() -> None:
+def test_vector_free_ordinary_admission_preserves_explicit_context() -> None:
     """Ordinary vector-free work admits with explicit context and artifacts.
 
-    Ordinary-workflow hermetic slice of R2 through the shared production
-    implementation that serves multiple harnesses (``AgentExecutionRequest``
-    plus the #4105 execution contract): explicit instructions, input refs,
-    Skill selection, and workspace spec admit with no vector settings, the
-    admitted terminal payload preserves the explicit context verbatim, and
-    omitted-vs-explicit vector-free inputs agree. No harness-specific matrix
-    is commissioned here.
+    Admission only, through the shared production request model that serves
+    multiple harnesses (``AgentExecutionRequest`` plus the #4105 execution
+    contract): explicit instructions, input refs, Skill selection, and
+    workspace spec admit with no vector settings and are preserved verbatim,
+    and omitted vector-free inputs admit with no retrieval authority.
+    Execution to a terminal outcome and recovery run in the integration-ci
+    first-run journey and ``tests/integration/reliability_journey``.
     """
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
