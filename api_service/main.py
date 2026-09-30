@@ -245,6 +245,55 @@ async def _sync_env_managed_secrets() -> int:
         return 0
 
 
+async def _migrate_legacy_github_connection():
+    """Run the one legacy GitHub credential migration (#4023).
+
+    Maps the proven effective legacy GitHub credential reference onto
+    ``repository-connection:git-default``. Once that connection is recorded
+    this is a single existence check. Missing or conflicting evidence and
+    database failures are logged with references and the affected action
+    only; they never block startup, and unrelated work stays usable.
+    """
+
+    from api_service.services.legacy_github_connection import (
+        LegacyGitHubMigrationOutcome,
+        migrate_legacy_github_connection,
+    )
+
+    def _client_policy():
+        from moonmind.workflows.temporal.runtime.launcher import (
+            resolve_deployment_git_client_policy,
+        )
+
+        return resolve_deployment_git_client_policy()
+
+    try:
+        async with get_async_session_context() as session:
+            result = await migrate_legacy_github_connection(
+                session,
+                environ=os.environ,
+                settings_ref=getattr(settings.github, "github_token_secret_ref", None),
+                client_policy_factory=_client_policy,
+            )
+    except Exception as exc:
+        logger.warning(
+            "The legacy GitHub credential migration did not complete (%s); "
+            "authenticated repository-connection:git-default operations stay "
+            "unavailable until a later startup completes it.",
+            type(exc).__name__,
+        )
+        return None
+    diagnostic = result.safe_diagnostic()
+    if result.outcome in {
+        LegacyGitHubMigrationOutcome.MIGRATED,
+        LegacyGitHubMigrationOutcome.ALREADY_PRESENT,
+    }:
+        logger.info("Legacy GitHub credential migration: %s", diagnostic)
+    else:
+        logger.warning("Legacy GitHub credential migration: %s", diagnostic)
+    return result
+
+
 async def _sweep_secret_invalidation_outbox() -> int:
     """Deliver leftover secret invalidation outbox rows (restart recovery).
 
@@ -3233,6 +3282,7 @@ async def startup_event():
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
     await _sweep_secret_invalidation_outbox()
+    await _migrate_legacy_github_connection()
     # The guarded upgrade already ran before the preset seed sync above;
     # it is not repeated here: a second run on the same startup could only
     # re-read the just-seeded catalog, never improve the decision.

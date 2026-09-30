@@ -151,9 +151,13 @@ async def test_selected_source_failure_never_falls_back_to_ambient(
         AsyncMock(return_value=_connection(secret_key="MISSING_GITHUB_PAT")),
     )
 
-    with pytest.raises(RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"):
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ):
         await launcher._ensure_repository_ready_for_launch(_request(), None)
-    with pytest.raises(RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"):
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ):
         await launcher._selected_repository_github_token(_request())
     ambient_resolver.assert_not_awaited()
     launcher._observe_git_remote_tip.assert_not_awaited()
@@ -179,7 +183,9 @@ async def test_disabled_default_is_not_reacquired(tmp_path, ambient_resolver):
         tmp_path, AsyncMock(return_value=_connection(lifecycle="disabled"))
     )
 
-    with pytest.raises(RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"):
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
+    ):
         await launcher._ensure_repository_ready_for_launch(_request(), None)
     ambient_resolver.assert_not_awaited()
 
