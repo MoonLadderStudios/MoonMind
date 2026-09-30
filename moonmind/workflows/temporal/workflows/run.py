@@ -245,6 +245,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     evaluate_publication_decision,
 )
 from moonmind.workflows.temporal.completion_summary import is_generic_completion_summary
+from moonmind.workflows.temporal.publication_recovery import PublicationObservation
 from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
     build_incident_trace_ref,
@@ -873,6 +874,13 @@ RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
 )
 RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH = (
     "run-terminal-gate-published-head-feasibility-v1"
+)
+# Runtimes that publish through git (for example Claude Code) record no
+# workspace checkpoint, so a terminal gate identifies their candidate from the
+# accepted remote head. Retained histories that failed closed without a
+# checkpoint keep that recorded failure during replay.
+RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH = (
+    "run-terminal-gate-published-workspace-head-v1"
 )
 RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH = "run-authoritative-pr-requirement-v1"
@@ -1995,6 +2003,77 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "remaining-work artifact persistence returned no artifact ref"
             )
         return artifact_ref
+
+    async def _persist_published_workspace_head(self) -> str | None:
+        """Persist the accepted remote head as the terminal gate candidate.
+
+        Runtimes that publish through git record no workspace checkpoint. The
+        head the managed push boundary accepted then identifies the exact
+        candidate, so a terminal handoff preserves it instead of failing closed.
+        Accepted evidence is historical, so the branch tip is revalidated first:
+        a moved, deleted, or unobservable branch is not a preserved candidate.
+        """
+
+        published_head = self._accepted_published_head()
+        if (
+            published_head is None
+            or not self._repo
+            or not workflow.patched(RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH)
+        ):
+            return None
+        branch, head_sha = published_head
+        base_branch = self._accepted_published_base_branch()
+        observe_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "publication_recovery.observe"
+        )
+        observation = PublicationObservation.model_validate(
+            await workflow.execute_activity(
+                observe_route.activity_type,
+                {
+                    "contract": {
+                        "intent": {
+                            "repository": self._repo,
+                            "headRef": branch,
+                            "baseRef": base_branch,
+                        },
+                        "continuation": {"expectedHeadSha": head_sha},
+                    }
+                },
+                **self._execute_kwargs_for_route(observe_route),
+            )
+        )
+        if not (
+            observation.authoritative
+            and observation.remote_branch_exists
+            and observation.remote_head_sha == head_sha
+        ):
+            self._get_logger().warning(
+                "Accepted head %s of branch %s is not the current remote tip "
+                "(authoritative=%s, branchExists=%s, remoteHeadSha=%s); it is not "
+                "a preserved terminal candidate.",
+                head_sha,
+                branch,
+                observation.authoritative,
+                observation.remote_branch_exists,
+                observation.remote_head_sha,
+            )
+            return None
+        payload = {
+            "schemaVersion": "workspace-head/v1",
+            "kind": "git_remote_head",
+            "repository": self._repo,
+            "branch": branch,
+            "headSha": head_sha,
+            "baseBranch": base_branch,
+            "authority": "accepted_repository_evidence",
+            "remoteVerified": True,
+        }
+        artifact_id = await self._write_json_artifact(
+            name="reports/workspace_head.json",
+            payload={key: value for key, value in payload.items() if value},
+            metadata_json={"artifact_kind": "workspace_head"},
+        )
+        return self._bounded_story_loop_artifact_ref(artifact_id)
 
     async def _record_step_execution_manifest(
         self,
@@ -14690,6 +14769,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         terminal_handoff_enabled = workflow.patched(
                             RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH
                         )
+                        if not workspace_head_ref and terminal_handoff_enabled:
+                            workspace_head_ref = (
+                                await self._persist_published_workspace_head()
+                            )
                         if (
                             normalized_gate == "ADDITIONAL_WORK_NEEDED"
                             and terminal_handoff_enabled
