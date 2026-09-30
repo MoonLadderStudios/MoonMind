@@ -1370,6 +1370,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repository-connections/{connection_id}/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reconcile a setup or rotation request whose response was lost
+         * @description Report whether this exact request committed, from MoonMind's records.
+         *
+         *     A listed connection or an advanced revision is not evidence that a given
+         *     request committed; the owners' request-identity records are. Nothing is
+         *     replayed and GitHub is not contacted.
+         */
+        get: operations["get_connection_request_outcome_api_v1_repository_connections__connection_id__requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repository-connections/{connection_id}/assignments": {
         parameters: {
             query?: never;
@@ -6983,6 +7007,24 @@ export interface components {
             connectionId: string;
             /** Credentialremoved */
             credentialRemoved: boolean | null;
+        };
+        /**
+         * ConnectionRequestOutcome
+         * @description Whether one submitted setup or rotation request committed.
+         */
+        ConnectionRequestOutcome: {
+            /** Requestid */
+            requestId: string;
+            /** Connectionid */
+            connectionId: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "create" | "rotate";
+            /** Committed */
+            committed: boolean;
+            connection?: components["schemas"]["RepositoryConnectionView"] | null;
         };
         /** ContainerJobAccepted */
         ContainerJobAccepted: {
@@ -17270,6 +17312,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RepositoryConnectionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_connection_request_outcome_api_v1_repository_connections__connection_id__requests__request_id__get: {
+        parameters: {
+            query: {
+                action: "create" | "rotate";
+            };
+            header?: never;
+            path: {
+                connection_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionRequestOutcome"];
                 };
             };
             /** @description Validation Error */

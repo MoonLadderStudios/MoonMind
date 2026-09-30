@@ -11,6 +11,7 @@ type ProbeResult = components['schemas']['ConnectionProbeResponse'];
 type ProbeDiagnostic = components['schemas']['ProbeDiagnostic'];
 type Discovery = components['schemas']['RepositoryDiscoveryResponse'];
 type Removal = components['schemas']['ConnectionRemovalResponse'];
+type RequestOutcome = components['schemas']['ConnectionRequestOutcome'];
 
 export const REPOSITORY_CONNECTIONS_QUERY_KEY = ['repository-connections'] as const;
 const API = '/api/v1/repository-connections';
@@ -198,6 +199,20 @@ async function reconcileConnection(
   return list.items.find((item) => item.id === connectionId) ?? null;
 }
 
+/**
+ * Ask whether this exact request committed. A listed connection or a higher
+ * revision may belong to another request, so neither confirms this one.
+ */
+function fetchRequestOutcome(
+  connectionId: string,
+  requestId: string,
+  action: RequestOutcome['action'],
+): Promise<RequestOutcome> {
+  return requestJson<RequestOutcome>(
+    `${API}/${encodeURIComponent(connectionId)}/requests/${encodeURIComponent(requestId)}?action=${action}`,
+  );
+}
+
 export interface SourceControlSettingsProps {
   onNotice?: ((notice: Notice | null) => void) | undefined;
 }
@@ -347,7 +362,6 @@ function ConnectionSetupForm({
   admissionLost: boolean;
   onSaved: (view: ConnectionView, reconciled: boolean) => void;
 }) {
-  const queryClient = useQueryClient();
   const formId = useId();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -357,6 +371,7 @@ function ConnectionSetupForm({
   const [requestId, setRequestId] = useState(newRequestId);
   const [submitting, setSubmitting] = useState(false);
   const [failure, setFailure] = useState<ApiFailure | null>(null);
+  const submittedId = useRef<string | null>(null);
   const connectionId = idOverride ?? slugify(name);
 
   const reset = useCallback(() => {
@@ -367,6 +382,7 @@ function ConnectionSetupForm({
     setAllowWrite(false);
     setFailure(null);
     setRequestId(newRequestId());
+    submittedId.current = null;
   }, []);
 
   useEffect(() => {
@@ -387,16 +403,16 @@ function ConnectionSetupForm({
 
   const reconcile = async (): Promise<boolean> => {
     try {
-      const committed = await reconcileConnection(queryClient, connectionId);
-      if (committed) {
-        finish(committed, true);
+      const outcome = await fetchRequestOutcome(submittedId.current ?? connectionId, requestId, 'create');
+      if (outcome.committed && outcome.connection) {
+        finish(outcome.connection, true);
         return true;
       }
       setFailure({
         status: null,
         kind: 'no_response',
         message:
-          'MoonMind did not confirm the save and the connection is not in the saved list. Re-enter the token and submit again; resubmitting this form cannot create a duplicate.',
+          'MoonMind has no record of this save, so nothing was saved by it. Re-enter the token and submit again; resubmitting this form cannot create a duplicate.',
         structured: false,
       });
     } catch (error) {
@@ -405,7 +421,7 @@ function ConnectionSetupForm({
         kind: 'no_response',
         structured: false,
         message:
-          'MoonMind could not confirm whether the connection was saved. Check saved connections before submitting again.',
+          'MoonMind could not confirm whether this save committed. Check this save again before submitting again.',
       });
     }
     return false;
@@ -417,6 +433,7 @@ function ConnectionSetupForm({
     // The token leaves component state as soon as it is handed to the request.
     const submittedToken = token;
     setToken('');
+    submittedId.current = connectionId;
     setSubmitting(true);
     setFailure(null);
     try {
@@ -513,7 +530,7 @@ function ConnectionSetupForm({
         <FailureMessage failure={failure}>
           {isUncertain(failure) ? (
             <button type="button" className="ml-2 underline" onClick={() => void reconcile()}>
-              Check saved connections
+              Check this save
             </button>
           ) : null}
         </FailureMessage>
@@ -1131,7 +1148,6 @@ function RotationForm({
   onRotated: (view: ConnectionView) => void;
   onNotice?: ((notice: Notice | null) => void) | undefined;
 }) {
-  const queryClient = useQueryClient();
   const [token, setToken] = useState('');
   const [requestId, setRequestId] = useState(newRequestId);
   const [submitting, setSubmitting] = useState(false);
@@ -1161,10 +1177,14 @@ function RotationForm({
       const outcome = asFailure(error);
       if (isUncertain(outcome)) {
         try {
-          const current = await reconcileConnection(queryClient, connection.id);
-          if (current && (current.secretRevision ?? 0) > expected) {
+          const result = await fetchRequestOutcome(connection.id, requestId, 'rotate');
+          if (result.committed) {
             setRequestId(newRequestId());
-            onNotice?.({ level: 'ok', text: `Token rotated for ${connection.displayName}.` });
+            if (result.connection) onRotated(result.connection);
+            onNotice?.({
+              level: 'ok',
+              text: `Token rotated for ${connection.displayName}; MoonMind confirmed it after the response was lost.`,
+            });
             return;
           }
         } catch {

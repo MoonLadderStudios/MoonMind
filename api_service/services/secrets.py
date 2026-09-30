@@ -390,6 +390,24 @@ class SecretsService:
         )
         return result.scalar_one_or_none()
 
+    @classmethod
+    async def committed_mutation(
+        cls, db: AsyncSession, request_id: str, *, slug: str, operation: str
+    ) -> SecretMutationReceipt | None:
+        """Return the receipt of a request that committed, without replaying it.
+
+        Lets a caller reconcile a lost response by request identity alone,
+        after the candidate has been discarded. ``None`` means this request
+        has not committed; its identity used for another secret or
+        operation is a conflict.
+        """
+        receipt = await cls._find_receipt(db, request_id)
+        if receipt is not None and (
+            receipt.slug != slug or receipt.operation != operation
+        ):
+            raise SecretConflictError(slug, receipt.request_id)
+        return receipt
+
     @staticmethod
     def _check_receipt_conflict(
         receipt: SecretMutationReceipt,

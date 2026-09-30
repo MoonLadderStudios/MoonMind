@@ -488,6 +488,18 @@ class ConnectionRemovalResponse(BaseModel):
     credential_removed: bool | None = Field(alias="credentialRemoved")
 
 
+class ConnectionRequestOutcome(BaseModel):
+    """Whether one submitted setup or rotation request committed."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    request_id: str = Field(alias="requestId")
+    connection_id: str = Field(alias="connectionId")
+    action: Literal["create", "rotate"]
+    committed: bool
+    connection: RepositoryConnectionView | None = None
+
+
 def _required_text(value: str, field_name: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -1018,6 +1030,70 @@ async def rotate_pat_connection(
             message="The stored token is missing, so it cannot be rotated.",
         )
     return await _selected_view(db, connection_id)
+
+
+@router.get(
+    "/{connection_id}/requests/{request_id}",
+    response_model=ConnectionRequestOutcome,
+    summary="Reconcile a setup or rotation request whose response was lost",
+    tags=["RepositoryConnections"],
+)
+async def get_connection_request_outcome(
+    connection_id: str,
+    request_id: str,
+    action: Literal["create", "rotate"] = Query(...),
+    db: AsyncSession = Depends(get_async_session),
+    _user: Any = Depends(get_current_user()),
+) -> ConnectionRequestOutcome:
+    """Report whether this exact request committed, from MoonMind's records.
+
+    A listed connection or an advanced revision is not evidence that a given
+    request committed; the owners' request-identity records are. Nothing is
+    replayed and GitHub is not contacted.
+    """
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from api_service.services.secrets import SecretConflictError, SecretsService
+
+    request_id = _required_text(request_id, "requestId")
+    outcome = {"requestId": request_id, "connectionId": connection_id, "action": action}
+    if action == "create":
+        try:
+            committed = await RepositoryConnectionService(db).replayed_connection(
+                request_id=request_id,
+                action="connection.create",
+                connection_id=connection_id,
+                **_ADMISSION,
+            )
+        except RepositoryRouteError as exc:
+            raise _route_error_to_http(exc) from exc
+        if committed is None:
+            return ConnectionRequestOutcome(**outcome, committed=False)
+        return ConnectionRequestOutcome(
+            **outcome,
+            committed=True,
+            connection=await _selected_view(db, connection_id),
+        )
+
+    connection, assignments, secrets = await _selected(db, connection_id)
+    slug = _managed_secret_slug(connection)
+    receipt = None
+    if slug is not None:
+        try:
+            receipt = await SecretsService.committed_mutation(
+                db, request_id, slug=slug, operation="rotate"
+            )
+        except SecretConflictError as exc:
+            raise _error(
+                status.HTTP_409_CONFLICT,
+                kind="conflict",
+                message="This request ID belongs to a different change.",
+            ) from exc
+    return ConnectionRequestOutcome(
+        **outcome,
+        committed=receipt is not None,
+        connection=_connection_view(connection, assignments, secrets),
+    )
 
 
 @router.post(
