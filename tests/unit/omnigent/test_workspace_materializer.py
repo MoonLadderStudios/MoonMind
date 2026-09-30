@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import os
+import shutil
 import stat
+import subprocess
 import tarfile
 from types import SimpleNamespace
 
@@ -1051,3 +1054,116 @@ async def test_historical_remediation_request_materializes_named_evidence_and_re
         assert (workspace / paths['remainingWorkPath']).read_bytes() == payloads['remaining' if separate_remaining_work else 'gate']
         assert (paths['gateResultPath'] != paths['remainingWorkPath']) is separate_remaining_work
         assert (workspace / 'candidate.txt').read_text() == 'uncommitted candidate'
+
+
+@pytest.mark.asyncio
+async def test_materializer_never_clones_a_selected_connection_with_the_deployment_credential(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A selected connection fails closed instead of using ambient authority.
+
+    MoonLadderStudios/MoonMind#4011: the deployment resolver is the default
+    connection's credential only, so another connection is never cloned with it.
+    """
+
+    calls: list[list[str]] = []
+
+    async def runner(argv, input_bytes=None):
+        calls.append(argv)
+        return 0, "", ""
+
+    async def unexpected_token(*args, **kwargs):
+        raise AssertionError("the deployment credential must not be resolved")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_github_token_for_launch",
+        unexpected_token,
+    )
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=runner, workspace_root=tmp_path
+    )
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await materializer.materialize(
+            _request(
+                {
+                    "workspaceLocator": {
+                        "kind": "sandbox",
+                        "workspaceId": _workspace_id(),
+                        "relativePath": "repo",
+                    },
+                    "repositoryTarget": {
+                        "provider": "git",
+                        "connectionRef": "repository-connection:tactics-app",
+                        "repository": {"name": "MoonLadderStudios/Tactics"},
+                        "branch": {"name": "main"},
+                    },
+                }
+            )
+        )
+
+    assert exc.value.code == "OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED"
+    assert calls == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="requires the real git client")
+def test_daemon_clone_sends_only_the_stdin_credential_to_the_remote(tmp_path):
+    """Real git: the admitted stdin credential B wins over an ambient helper A."""
+
+    from tests.support.credential_recording_remote import (
+        credential_recording_remote,
+    )
+
+    admitted = "ghs_admittedCloneCredentialB00000000000000"
+    ambient = "ghp_ambientCloneCredentialA000000000000000"
+    (tmp_path / "system.gitconfig").write_text(
+        "[credential]\n"
+        '\thelper = "!f() { test \\"$1\\" = get || exit 0; '
+        f'echo username=ambient; echo password={ambient}; }}; f"\n'
+    )
+    argv = build_daemon_git_clone_argv(
+        volume="agent_workspaces",
+        target_in_volume="ws-1/repo",
+        source="https://github.com/org/repo.git",
+        branch="main",
+        image="alpine/git:v2.43.0",
+        git_user_name="MoonMind Worker",
+        git_user_email="moonmind-worker@users.noreply.github.com",
+    )
+    script = argv[argv.index("-ceu") + 1]
+    with credential_recording_remote(tmp_path) as remote:
+        subprocess.run(
+            [
+                "/bin/sh",
+                "-ceu",
+                script,
+                "--",
+                "main",
+                f"{remote.url}/org/repo.git",
+                str(tmp_path / "checkout"),
+                "MoonMind Worker",
+                "moonmind-worker@users.noreply.github.com",
+            ],
+            input=admitted.encode(),
+            env={
+                "PATH": os.environ["PATH"],
+                "HOME": str(tmp_path),
+                "GIT_CONFIG_SYSTEM": str(tmp_path / "system.gitconfig"),
+                "GIT_SSL_CAINFO": str(remote.ca_file),
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+            capture_output=True,
+            check=False,
+            timeout=60,
+            cwd=tmp_path,
+        )
+        received = list(remote.authorization_headers)
+
+    decoded = [
+        base64.b64decode(value.split(" ", 1)[1]).decode()
+        for value in received
+        if value.startswith("Basic ")
+    ]
+    assert f"x-access-token:{admitted}" in decoded
+    assert not any(ambient in value for value in decoded)

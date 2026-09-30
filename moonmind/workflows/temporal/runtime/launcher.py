@@ -62,6 +62,7 @@ from moonmind.workflows.temporal.jira_tool_hints import (
 )
 
 from .github_auth_broker import (
+    AMBIENT_GH_CREDENTIAL_ENV_NAMES,
     GitHubAuthBrokerManager,
     build_github_socket_path,
     render_gh_wrapper_script,
@@ -697,13 +698,16 @@ class ManagedRuntimeLauncher:
 
         Atlassian configuration stays on the trusted MoonMind side and must not
         leak into managed agent subprocesses, even when it is configured on the
-        worker via direct values or secret refs.
+        worker via direct values or secret refs. GitHub CLI selectors that
+        outrank the launch-resolved credential are not inherited either; a
+        profile can still admit one explicitly through its passthrough keys.
         """
 
         return {
             key: value
             for key, value in os.environ.items()
-            if not any(
+            if key not in AMBIENT_GH_CREDENTIAL_ENV_NAMES
+            and not any(
                 key.startswith(prefix)
                 for prefix in _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST
             )
@@ -1738,9 +1742,12 @@ class ManagedRuntimeLauncher:
         ]
         if git_helper_path is not None:
             git_helper_command = shlex.quote(str(git_helper_path))
+            # The empty helper resets any helper a system or checkout layer
+            # supplies, so Git asks only the admitted broker.
             git_config_lines.extend(
                 [
                     "[credential]\n",
+                    "\thelper =\n",
                     f"\thelper = !{git_helper_command}\n",
                 ]
             )
@@ -1768,6 +1775,7 @@ class ManagedRuntimeLauncher:
             credential_section = (
                 f"\n{marker}\n"
                 f"[credential]\n"
+                "\thelper =\n"
                 f"\thelper = !{git_helper_command}\n"
             )
             repo_git_config_path.write_text(
@@ -1818,7 +1826,7 @@ class ManagedRuntimeLauncher:
         if strategy is None:
             from moonmind.workflows.temporal.runtime.strategies import get_strategy
             strategy = get_strategy(profile.runtime_id)
-            
+
         if strategy is not None:
             return strategy.build_command(profile, request)
 
@@ -2212,7 +2220,7 @@ class ManagedRuntimeLauncher:
         # Phase 4 Materialization
         from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer
         from moonmind.workflows.adapters.secret_boundary import SecretResolverBoundary
-        
+
         # Resolve secrets async up-front so the async materializer can access them.
         from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
             assert_managed_secret_refs_active_for_launch,

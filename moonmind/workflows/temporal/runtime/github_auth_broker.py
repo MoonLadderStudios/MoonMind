@@ -20,6 +20,15 @@ from pathlib import Path
 from typing import Any
 
 _BROKER_SOCKET_TIMEOUT_SECONDS = 5.0
+# GitHub CLI prefers these over the brokered GITHUB_TOKEN, and GH_HOST retargets
+# it (https://cli.github.com/manual/gh_help_environment), so an inherited value
+# would replace the admitted credential.
+AMBIENT_GH_CREDENTIAL_ENV_NAMES: tuple[str, ...] = (
+    "GH_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_HOST",
+)
 _BROKER_SOCKET_PATH_MAX_BYTES = 100
 _SHARED_WORKSPACE_ROOT = Path("/work/agent_jobs")
 _SHARED_SOCKET_DIRNAME = ".moonmind-gh"
@@ -99,6 +108,7 @@ def render_gh_wrapper_script(*, socket_path: str, real_gh_path: str | None = Non
         f"SOCKET_PATH = {socket_path!r}\n"
         f"REAL_GH_PATH = {real_gh_path!r}\n"
         f"TIMEOUT_SECONDS = {_BROKER_SOCKET_TIMEOUT_SECONDS!r}\n"
+        f"AMBIENT_GH_CREDENTIAL_ENV_NAMES = {AMBIENT_GH_CREDENTIAL_ENV_NAMES!r}\n"
         "\n"
         "def request_token():\n"
         "    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
@@ -139,7 +149,8 @@ def render_gh_wrapper_script(*, socket_path: str, real_gh_path: str | None = Non
         "def main():\n"
         "    token = request_token()\n"
         "    env = dict(os.environ)\n"
-        "    env.pop('GH_TOKEN', None)\n"
+        "    for name in AMBIENT_GH_CREDENTIAL_ENV_NAMES:\n"
+        "        env.pop(name, None)\n"
         "    env['GITHUB_TOKEN'] = token\n"
         "    real_gh = resolve_real_gh()\n"
         "    os.execvpe(real_gh, [real_gh, *sys.argv[1:]], env)\n"
@@ -413,7 +424,8 @@ def run_gh_wrapper(*, socket_path: str, real_gh_path: str | None = None) -> int:
     resolved_gh_path = str(real_gh_path or _resolve_real_gh_path())
     token = request_github_token(socket_path)
     env = dict(os.environ)
-    env.pop("GH_TOKEN", None)
+    for name in AMBIENT_GH_CREDENTIAL_ENV_NAMES:
+        env.pop(name, None)
     env["GITHUB_TOKEN"] = token
     os.execvpe(resolved_gh_path, [resolved_gh_path, *sys.argv[1:]], env)
     return 0

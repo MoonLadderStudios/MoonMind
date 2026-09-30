@@ -19,11 +19,15 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.host_services.github_credentials import (
+    require_deployment_resolver_connection,
+)
 from moonmind.omnigent.workspace_artifacts import (
     WorkspaceArtifactProjectionError,
     WorkspaceArtifactProjector,
     cleanup_import_staging,
 )
+from moonmind.omnigent.workspace_intent import authored_connection_ref
 from moonmind.omnigent.workspace_sources import (
     CompiledWorkspaceSource,
     ExistingWorkspaceGrantLedger,
@@ -315,6 +319,7 @@ class OmnigentWorkspaceMaterializer:
         candidate, record_store, workspace_id = await self._resolve_source_directory(
             source,
             spec=spec,
+            connection_ref=authored_connection_ref(request),
             owner_workflow_id=owner_workflow_id,
             owner_step_execution_id=owner_step_execution_id,
             runtime_uid=runtime_uid,
@@ -452,6 +457,7 @@ class OmnigentWorkspaceMaterializer:
         source: CompiledWorkspaceSource,
         *,
         spec: dict[str, Any],
+        connection_ref: str | None,
         owner_workflow_id: str,
         owner_step_execution_id: str,
         runtime_uid: int,
@@ -528,6 +534,7 @@ class OmnigentWorkspaceMaterializer:
                     candidate,
                     spec=clone_spec,
                     source=source,
+                    connection_ref=connection_ref,
                     runtime_uid=runtime_uid,
                     runtime_gid=runtime_gid,
                 )
@@ -649,6 +656,7 @@ class OmnigentWorkspaceMaterializer:
         *,
         spec: dict[str, Any],
         source: CompiledWorkspaceSource,
+        connection_ref: str | None,
         runtime_uid: int,
         runtime_gid: int,
     ) -> None:
@@ -701,6 +709,7 @@ class OmnigentWorkspaceMaterializer:
             rel=rel,
             source=clone_source,
             branch=branch,
+            connection_ref=connection_ref,
             runtime_uid=runtime_uid,
             runtime_gid=runtime_gid,
         )
@@ -711,6 +720,7 @@ class OmnigentWorkspaceMaterializer:
         rel: Path,
         source: str,
         branch: str,
+        connection_ref: str | None,
         runtime_uid: int,
         runtime_gid: int,
     ) -> None:
@@ -725,6 +735,7 @@ class OmnigentWorkspaceMaterializer:
             resolve_github_token_for_launch,
         )
 
+        require_deployment_resolver_connection(connection_ref)
         token = await resolve_github_token_for_launch()
         if not token:
             raise HarnessPlatformError(
@@ -868,16 +879,18 @@ def build_daemon_git_clone_argv(
     script = (
         "set -eu; umask 077; token_file=$(mktemp); "
         "trap 'rm -f \"$token_file\"' EXIT HUP INT TERM; "
-        "cat > \"$token_file\"; "
-        "git check-ref-format --branch \"$1\" >/dev/null; "
-        "credential_helper='!f() { test \"$1\" = get || exit 0; "
-        "printf \"username=x-access-token\\npassword=\"; "
-        "cat \"$MM_GIT_TOKEN_FILE\"; printf \"\\n\"; }; f'; "
-        "MM_GIT_TOKEN_FILE=\"$token_file\" git "
-        "-c \"credential.helper=$credential_helper\" clone "
-        "--branch \"$1\" --single-branch -- \"$2\" \"$3\"; "
-        "git -C \"$3\" config --local user.name \"$4\"; "
-        "git -C \"$3\" config --local user.email \"$5\""
+        'cat > "$token_file"; '
+        'git check-ref-format --branch "$1" >/dev/null; '
+        'credential_helper=\'!f() { test "$1" = get || exit 0; '
+        'printf "username=x-access-token\\npassword="; '
+        'cat "$MM_GIT_TOKEN_FILE"; printf "\\n"; }; f\'; '
+        # The empty helper resets any helper the image or its configuration
+        # layers supply, so Git asks only the stdin-backed admitted helper.
+        'MM_GIT_TOKEN_FILE="$token_file" git -c credential.helper= '
+        '-c "credential.helper=$credential_helper" clone '
+        '--branch "$1" --single-branch -- "$2" "$3"; '
+        'git -C "$3" config --local user.name "$4"; '
+        'git -C "$3" config --local user.email "$5"'
     )
     return [
         "docker",

@@ -64,10 +64,35 @@ _EGRESS_PROXY_ENV_NAMES = frozenset(
         "no_proxy",
     }
 )
+# Git asks every configured credential helper in order and libcurl sends every
+# configured extra header. An empty entry resets each list (gitcredentials(7),
+# git-config(1) ``http.extraHeader``), so the projected helper is the only one
+# Git consults for GitHub and no inherited Authorization header rides along.
+_GITHUB_GIT_CONFIG = (
+    ("credential.https://github.com.helper", ""),
+    (
+        "credential.https://github.com.helper",
+        f"!{_RUNTIME_BIN_DIR}/gh auth git-credential",
+    ),
+    ("http.https://github.com/.extraHeader", ""),
+)
+# GitHub CLI prefers these over the stored hosts.yml, and GH_HOST retargets it
+# (https://cli.github.com/manual/gh_help_environment), so GH_CONFIG_DIR alone
+# does not select the projected credential.
+_GITHUB_AMBIENT_CREDENTIAL_ENV_NAMES = (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_HOST",
+)
 _GITHUB_RUNTIME_ENV = {
-    "GIT_CONFIG_COUNT": "1",
-    "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
-    "GIT_CONFIG_VALUE_0": f"!{_RUNTIME_BIN_DIR}/gh auth git-credential",
+    "GIT_CONFIG_COUNT": str(len(_GITHUB_GIT_CONFIG)),
+    **{f"GIT_CONFIG_KEY_{i}": key for i, (key, _) in enumerate(_GITHUB_GIT_CONFIG)},
+    **{
+        f"GIT_CONFIG_VALUE_{i}": value
+        for i, (_, value) in enumerate(_GITHUB_GIT_CONFIG)
+    },
     "GH_CONFIG_DIR": "/home/app/.config/gh",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
@@ -223,14 +248,12 @@ class OmnigentRuntimeScriptService:
             + runtime_context_exports
             + f"'export PATH={':'.join(tool_bins)}:$PATH' "
             + "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
-            "'  export GH_CONFIG_DIR=/home/app/.config/gh' "
-            "'  export GH_PROMPT_DISABLED=1' "
-            "'  export GH_NO_UPDATE_NOTIFIER=1' "
-            "'  export GH_NO_EXTENSION_UPDATE_NOTIFIER=1' "
-            "'  export GIT_CONFIG_COUNT=1' "
-            "'  export GIT_CONFIG_KEY_0=credential.https://github.com.helper' "
-            f"'  export GIT_CONFIG_VALUE_0=\"!{_RUNTIME_BIN_DIR}/gh auth git-credential\"' "
-            f"'fi' > {context_profile}; "
+            f"'  unset {' '.join(_GITHUB_AMBIENT_CREDENTIAL_ENV_NAMES)}' "
+            + "".join(
+                f"'  export {key}=\"{value}\"' "
+                for key, value in _GITHUB_RUNTIME_ENV.items()
+            )
+            + f"'fi' > {context_profile}; "
             f"chmod 0600 {runtime_context_dir}/*; "
             f"printf '%s\\n' '. {context_profile}' > /home/app/.bash_profile; "
             "cp /home/app/.bash_profile /home/app/.profile; "
@@ -317,6 +340,7 @@ class OmnigentRuntimeScriptService:
             "/home/app/.config/gh/config.yml; "
             "mkdir -p " + _RUNTIME_BIN_DIR + "; "
             "printf '%s\\n' '#!/bin/sh' "
+            "'unset " + " ".join(_GITHUB_AMBIENT_CREDENTIAL_ENV_NAMES) + "' "
             "'export GH_CONFIG_DIR=/home/app/.config/gh' "
             "'exec /opt/moonmind-tools/bin/gh \"$@\"' "
             "> " + _RUNTIME_BIN_DIR + "/gh; "

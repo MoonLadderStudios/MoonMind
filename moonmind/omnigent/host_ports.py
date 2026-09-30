@@ -147,7 +147,11 @@ class OmnigentGithubCredentialPort(Protocol):
     """Materialize and clean up run-owned repository credentials."""
 
     def anticipated_attachment(
-        self, resolved_tools: Any, *, owner_ref: str
+        self,
+        resolved_tools: Any,
+        *,
+        owner_ref: str,
+        request: AgentExecutionRequest,
     ) -> dict[str, Any] | None: ...
 
     async def materialize(
