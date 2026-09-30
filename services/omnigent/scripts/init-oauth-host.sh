@@ -24,3 +24,24 @@ done
 [ -d "$oauth_root" ] || { echo "OAuth volume is missing" >&2; exit 66; }
 [ "$(stat -c '%u:%g' "$oauth_root")" = "1000:1000" ] ||
   { echo "OAuth volume root must be owned by 1000:1000" >&2; exit 67; }
+
+# Repository authority for mounted gh arrives on stdin, never as container
+# configuration that docker inspect and every docker exec would carry
+# (MoonLadderStudios/MoonMind#4011). Write a sibling file and rename it, so a
+# reader sees the previous complete hosts.yml or the new one.
+if [ "${MOONMIND_GITHUB_CREDENTIAL_STDIN:-}" = 1 ]; then
+  github_config_home=$cache_root/moonmind-xdg
+  github_config_dir=$github_config_home/gh
+  umask 077
+  mkdir -p "$github_config_dir"
+  github_staged=$github_config_dir/.hosts.yml.$$
+  trap 'rm -f "$github_staged"' EXIT
+  {
+    printf 'github.com:\n    oauth_token: '
+    cat
+    printf '\n    git_protocol: https\n'
+  } > "$github_staged"
+  chmod 0600 "$github_staged"
+  chown -R 1000:1000 "$github_config_home"
+  mv -f "$github_staged" "$github_config_dir/hosts.yml"
+fi

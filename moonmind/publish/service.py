@@ -125,11 +125,22 @@ def push_env_from_bound_credential(
                 repository=f"{owner.strip()}/{name.strip()}",
                 endpoint=endpoint,
             )
+            from moonmind.workflows.temporal.runtime.git_auth import (
+                AMBIENT_GIT_CREDENTIAL_ENV_NAMES,
+            )
+
             bound_env = dict(bound.get("env") or {})
-            for key in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
-                        "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1"):
-                if key in bound_env:
-                    env[key] = bound_env[key]
+            # The shared builder's complete per-process config list; inherited
+            # Git selectors would otherwise be asked for, or handed, the token.
+            env.update(
+                {
+                    key: value
+                    for key, value in bound_env.items()
+                    if key.startswith("GIT_CONFIG_")
+                }
+            )
+            for name in AMBIENT_GIT_CREDENTIAL_ENV_NAMES:
+                env.pop(name, None)
         except ValueError:
             # Invalid repository/endpoint for the bound credential-helper
             # contract; keep the PAT-compatible GITHUB_TOKEN/GH_TOKEN env

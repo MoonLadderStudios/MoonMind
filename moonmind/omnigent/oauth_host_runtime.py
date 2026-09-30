@@ -181,6 +181,8 @@ _DEFAULT_HOST_PATH = (
 _RUNNER_PROXY_ENV_NAMES = tuple(
     proxy_env.partition("=")[0] for proxy_env in omnigent_proxy_env()
 )
+# The on-demand init writer embeds the credential as an unquoted YAML scalar.
+_GITHUB_TOKEN_CHARSET = re.compile(r"[A-Za-z0-9_.-]+")
 _RUNNER_GITHUB_ENV_NAMES = (
     "XDG_CONFIG_HOME",
     "GH_PROMPT_DISABLED",
@@ -2311,12 +2313,24 @@ class OmnigentOAuthHostRuntime:
                     code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
                 )
             await self._run("docker", "rm", "-f", container_name, check=False)
+        # The admitted GitHub credential reaches the host only through this
+        # networkless init container's stdin; ``--env`` values would persist in
+        # container metadata and every ``docker exec`` (#4011).
+        github_stdin: bytes | None = None
+        if github_token:
+            if not _GITHUB_TOKEN_CHARSET.fullmatch(github_token):
+                raise OmnigentOAuthHostError(
+                    "GitHub credential contains unsupported characters",
+                    code="github_auth_unavailable",
+                )
+            github_stdin = github_token.encode("ascii")
         # Initialize the dedicated state volume as root before the actual host
         # drops to UID/GID 1000.
         await self._run(
             "docker",
             "run",
             "--rm",
+            *(("-i",) if github_stdin is not None else ()),
             "--user",
             "0:0",
             "--network",
@@ -2345,9 +2359,15 @@ class OmnigentOAuthHostRuntime:
             f"type=bind,src={runtime_scripts},dst=/opt/moonmind,readonly",
             "--env",
             f"OAUTH_HOME={adapter['home']}",
+            *(
+                ("--env", "MOONMIND_GITHUB_CREDENTIAL_STDIN=1")
+                if github_stdin is not None
+                else ()
+            ),
             "--entrypoint",
             "/opt/moonmind/init-oauth-host.sh",
             host_image_ref,
+            **({"input_bytes": github_stdin} if github_stdin is not None else {}),
         )
         labels = {
             "moonmind.kind": "omnigent-oauth-host",
@@ -2462,13 +2482,10 @@ class OmnigentOAuthHostRuntime:
         if token:
             child_env["OMNIGENT_API_TOKEN"] = token
             args.extend(["--env", "OMNIGENT_API_TOKEN"])
-        if github_token:
-            child_env["GH_TOKEN"] = github_token
+        if github_stdin is not None:
             runner_env_passthrough.extend(_RUNNER_GITHUB_ENV_NAMES)
             args.extend(
                 [
-                    "--env",
-                    "GH_TOKEN",
                     "--env",
                     "XDG_CONFIG_HOME=/home/app/.cache/moonmind-xdg",
                     "--env",
@@ -4176,10 +4193,12 @@ class OmnigentOAuthHostRuntime:
         *args: str,
         env: Mapping[str, str] | None = None,
         check: bool = True,
+        input_bytes: bytes | None = None,
     ) -> tuple[int, str, str]:
         return_code, stdout, stderr = await run_runtime_command(
             args,
             env=env,
+            input_bytes=input_bytes,
             timeout_seconds=600,
             output_limit_bytes=4096,
         )
