@@ -913,6 +913,31 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --upgrade
+      - name: Set up Python for the Operations controller journey
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Run Operations controller journey
+        # MoonLadderStudios/MoonMind#4502: this checkout's compiled dashboard,
+        # served by the real API app, drives Settings > Operations against
+        # the shipped deploy/controller on its socket in the mounted-state
+        # layout, with Temporal stopped: submit, reload reconnect, duplicate
+        # reattach, original failure and logs, Retry, and read-only
+        # workflow-era history.
+        env:
+          RUN_E2E_TESTS: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y libcairo2-dev pkg-config
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests] "playwright>=1.58.0,<2.0.0"
+          python -m playwright install chromium
+          npm run ui:build
+          mkdir -p var/artifacts
+          python -m pytest tests/e2e/test_operations_controller_journey_browser.py \
+            -v --tb=short -p no:cacheprovider \
+            --junitxml=var/artifacts/operations-controller-journey.xml
       - name: Capture docker compose diagnostics
         if: failure()
         run: |

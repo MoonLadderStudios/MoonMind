@@ -220,6 +220,14 @@ INTEGRATION_CI_EXACT = {
     "api_service/api/routers/temporal_artifacts.py",
     "api_service/api/routers/recurring_workflows.py",
     "api_service/api/routers/workflow_console.py",
+    # MoonLadderStudios/MoonMind#4502: the compiled-dashboard Operations
+    # journey runs in the integration-ci job against the real API and the
+    # standalone controller; its test, router, service, and page select it
+    # (deploy/controller/ already fails open to the full backend).
+    "tests/e2e/test_operations_controller_journey_browser.py",
+    "api_service/api/routers/deployment_operations.py",
+    "api_service/services/deployment_operations.py",
+    "frontend/src/components/settings/OperationsSettingsSection.tsx",
 }
 
 INTEGRATION_CI_PREFIXES = (
