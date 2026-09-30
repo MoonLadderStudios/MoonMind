@@ -245,6 +245,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     evaluate_publication_decision,
 )
 from moonmind.workflows.temporal.completion_summary import is_generic_completion_summary
+from moonmind.workflows.temporal.publication_recovery import PublicationObservation
 from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
     build_incident_trace_ref,
@@ -2009,22 +2010,63 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         Runtimes that publish through git record no workspace checkpoint. The
         head the managed push boundary accepted then identifies the exact
         candidate, so a terminal handoff preserves it instead of failing closed.
+        Accepted evidence is historical, so the branch tip is revalidated first:
+        a moved, deleted, or unobservable branch is not a preserved candidate.
         """
 
         published_head = self._accepted_published_head()
-        if published_head is None or not workflow.patched(
-            RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH
+        if (
+            published_head is None
+            or not self._repo
+            or not workflow.patched(RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH)
         ):
             return None
         branch, head_sha = published_head
+        base_branch = self._accepted_published_base_branch()
+        observe_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "publication_recovery.observe"
+        )
+        observation = PublicationObservation.model_validate(
+            await workflow.execute_activity(
+                observe_route.activity_type,
+                {
+                    "contract": {
+                        "intent": {
+                            "repository": self._repo,
+                            "headRef": branch,
+                            "baseRef": base_branch,
+                        },
+                        "continuation": {"expectedHeadSha": head_sha},
+                    }
+                },
+                **self._execute_kwargs_for_route(observe_route),
+            )
+        )
+        if not (
+            observation.authoritative
+            and observation.remote_branch_exists
+            and observation.remote_head_sha == head_sha
+        ):
+            self._get_logger().warning(
+                "Accepted head %s of branch %s is not the current remote tip "
+                "(authoritative=%s, branchExists=%s, remoteHeadSha=%s); it is not "
+                "a preserved terminal candidate.",
+                head_sha,
+                branch,
+                observation.authoritative,
+                observation.remote_branch_exists,
+                observation.remote_head_sha,
+            )
+            return None
         payload = {
             "schemaVersion": "workspace-head/v1",
             "kind": "git_remote_head",
             "repository": self._repo,
             "branch": branch,
             "headSha": head_sha,
-            "baseBranch": self._accepted_published_base_branch(),
+            "baseBranch": base_branch,
             "authority": "accepted_repository_evidence",
+            "remoteVerified": True,
         }
         artifact_id = await self._write_json_artifact(
             name="reports/workspace_head.json",
