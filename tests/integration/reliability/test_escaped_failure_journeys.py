@@ -140,6 +140,7 @@ from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 from moonmind.workflows.executions.repository_contract import (
     RepositoryClientEvidence,
     RepositoryClientPolicy,
+    RepositoryConnection,
 )
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
@@ -300,6 +301,30 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
         clientVersion="2.46.0",
         executableSha256="sha256:git",
     )
+    # The default connection is the migrated legacy identity (#4023): its
+    # own SecretRef is acquired, never an ambient credential search.
+    recorded_default = RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "repository-connection:git-default",
+            "provider": "git",
+            "displayName": "Default GitHub connection",
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "clientPolicy": {
+                "pinnedVersion": "2.39.5",
+                "toolBundleRef": "repository-client:git-system",
+                "executableSha256": "sha256:migration-host",
+            },
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "REPLAY_GITHUB_PAT"},
+            },
+            "ownership": {"ownerRef": "owner:operator", "scopeType": "system"},
+            "hostingService": "github",
+        }
+    )
+    monkeypatch.setenv("REPLAY_GITHUB_PAT", "replay-selected-token")
     launcher = ManagedRuntimeLauncher(
         ManagedRunStore(tmp_path / "managed_runs"),
         repository_client_policy=RepositoryClientPolicy(
@@ -307,19 +332,11 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
             toolBundleRef=evidence.tool_bundle_ref,
             executableSha256=evidence.executable_sha256,
         ),
+        default_git_connection_loader=AsyncMock(return_value=recorded_default),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(
         return_value=manifest["preparedCommitSha"]
-    )
-
-    async def resolved_github_credential(*, repo: str) -> SimpleNamespace:
-        assert repo == manifest["repository"]
-        return SimpleNamespace(resolved=True, safe_summary="resolved")
-
-    monkeypatch.setattr(
-        "moonmind.auth.github_credentials.resolve_github_credential",
-        resolved_github_credential,
     )
     request = AgentExecutionRequest.model_validate(manifest["request"])
 

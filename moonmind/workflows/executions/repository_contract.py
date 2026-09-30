@@ -176,6 +176,16 @@ class RepositoryMergeCoordinatorPolicy(BaseModel):
 
 
 class GitHubResolverCredential(BaseModel):
+    """Historical ambient-resolver credential; readable, never admitted.
+
+    Before MoonLadderStudios/MoonMind#4023 the deployment default connection
+    carried this source and searched ambient GitHub credentials on every use.
+    Recorded connection files and histories still decode, but new writes
+    reject it and readiness fails closed instead of resolving ambient
+    credentials. Removal condition: drop this variant once no retained
+    connection record or replay-sensitive history carries it.
+    """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     source: Literal["github_resolver"]
 
@@ -349,7 +359,12 @@ class RepositoryConnection(BaseModel):
 
 
 def compile_repository_target(value: object) -> AuthoredRepositoryTarget:
-    """Compile a UI draft, injecting only the well-known common Git connection."""
+    """Compile a UI draft, injecting only the well-known common Git connection.
+
+    ``repository-connection:git-default`` names the proven legacy identity
+    recorded by the one #4023 migration, not an ambient credential search; an
+    unmigrated deployment fails the authenticated operation at readiness.
+    """
 
     if not isinstance(value, Mapping):
         raise RepositoryContractError(
@@ -451,7 +466,14 @@ def repository_branch_from_value(value: object) -> str:
 def decode_legacy_repository_history_v1(
     repository: str, branch: str | None = None
 ) -> AuthoredGitRepositoryTarget:
-    """Frozen decoder for already-recorded histories; never call for authoring."""
+    """Frozen decoder for already-recorded histories; never call for authoring.
+
+    Recorded scalar repositories used the deployment's legacy GitHub identity,
+    which the #4023 migration records as ``git-default``. Decoding describes
+    that past authority only: current use still requires the recorded
+    connection to be present and active. Removal condition: delete once no
+    retained history or schedule carries a scalar repository.
+    """
 
     return AuthoredGitRepositoryTarget(
         provider="git",
@@ -479,22 +501,25 @@ def derive_repository_capabilities(
     return list(dict.fromkeys(item for item in required if item))
 
 
-def reconcile_default_git_connection(
+def bind_deployment_client_policy(
+    connection: RepositoryConnection,
     *,
     client_policy: RepositoryClientPolicy,
 ) -> RepositoryConnection:
-    """Return the deployment-owned connection selecting the existing resolver."""
+    """Bind the recorded default connection to this worker's Git client.
 
-    return RepositoryConnection(
-        schemaVersion="moonmind.repository-connection.v1",
-        id=DEFAULT_GIT_CONNECTION_REF,
-        provider="git",
-        displayName="Default GitHub connection",
-        endpointRef="https://github.com",
-        allowedOperations=("read", "write", "branch_write", "review_request"),
-        clientPolicy=client_policy,
-        credential={"source": "github_resolver"},
-    )
+    The deployment owns the Git client policy of ``git-default``: each worker
+    observes its own executable, so a different SHA or patch version on
+    another worker is not an incompatible connection. Credential, operations,
+    lifecycle, and revisions remain those of the recorded connection.
+    """
+
+    if connection.id != DEFAULT_GIT_CONNECTION_REF or connection.provider != "git":
+        raise RepositoryContractError(
+            REPOSITORY_CONNECTION_MISMATCH,
+            "only the default Git connection uses the deployment client policy",
+        )
+    return connection.model_copy(update={"client_policy": client_policy})
 
 
 def persist_repository_connection(connection: RepositoryConnection, path: Path) -> None:
@@ -702,14 +727,6 @@ class CapabilityReadinessRegistry:
                 )
 
 
-async def resolve_default_git_credential(repository: str) -> object:
-    """Invoke the canonical GitHub resolver selected by the default connection."""
-
-    from moonmind.auth.github_credentials import resolve_github_credential
-
-    return await resolve_github_credential(repo=repository)
-
-
 async def _await_if_needed(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
@@ -726,13 +743,17 @@ async def ensure_repository_ready(
     connection_resolver: ConnectionResolver,
     evidence_resolver: ClientEvidenceResolver,
     readiness_registry: CapabilityReadinessRegistry,
-    credential_resolver: CredentialResolver = resolve_default_git_credential,
+    credential_resolver: CredentialResolver | None = None,
     remote_tip_verifier: RemoteTipVerifier | None = None,
 ) -> RepositoryConnection:
     """Resolve and validate all repository authority before any side effect.
 
     Callers must complete this composition boundary before workspace
     preparation, runtime launch, or repository Tool execution.
+
+    ``credential_resolver`` acquires only the selected connection's own
+    credential. There is no ambient default: a Git target without one, or a
+    historical ambient-resolver connection, fails closed (#4023).
     """
 
     connection = await _await_if_needed(connection_resolver(target))
@@ -754,7 +775,19 @@ async def ensure_repository_ready(
     )
     await readiness_registry.check(required, context)
 
-    if connection.credential.source == "github_resolver":
+    if target.provider == "git":
+        if connection.credential.source == "github_resolver":
+            raise RepositoryContractError(
+                REPOSITORY_CREDENTIAL_UNAVAILABLE,
+                f"{connection.id} is a retired ambient-resolver connection; "
+                "restart MoonMind so the legacy GitHub credential migration "
+                "records its typed reference",
+            )
+        if credential_resolver is None:
+            raise RepositoryContractError(
+                REPOSITORY_CREDENTIAL_UNAVAILABLE,
+                f"no credential acquisition was supplied for {connection.id}",
+            )
         credential = await _await_if_needed(
             credential_resolver(target.repository.name)
         )
@@ -1461,6 +1494,7 @@ __all__ = [
     "admit_legacy_free_connection",
     "admit_scoped_route",
     "authorize_connection_use",
+    "bind_deployment_client_policy",
     "build_connection_audit_record",
     "compile_repository_target",
     "decode_legacy_repository_history_v1",
@@ -1477,11 +1511,9 @@ __all__ = [
     "normalize_scope",
     "persist_repository_connection",
     "publish_connection_snapshot",
-    "reconcile_default_git_connection",
     "reconcile_verified_rename",
     "repository_branch_from_value",
     "repository_name_from_value",
-    "resolve_default_git_credential",
     "route_diagnostic",
     "route_key_for",
     "scope_key_for",

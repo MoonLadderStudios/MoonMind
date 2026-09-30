@@ -94,7 +94,9 @@ async def _records(maker):
 
 async def _count(maker, model):
     async with maker() as session:
-        return (await session.execute(select(func.count()).select_from(model))).scalar_one()
+        return (
+            await session.execute(select(func.count()).select_from(model))
+        ).scalar_one()
 
 
 async def _set_operator_ref(maker, value):
@@ -164,11 +166,15 @@ async def test_rerun_converges_without_duplicate_or_reading_legacy_sources(
 ):
     maker, engine = await _maker(tmp_path)
     try:
-        first = await _migrate(maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"})
+        first = await _migrate(
+            maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"}
+        )
         assert first.outcome is LegacyGitHubMigrationOutcome.MIGRATED
 
         def _census_forbidden(*_args, **_kwargs):
-            raise AssertionError("post-migration startup must not reread legacy sources")
+            raise AssertionError(
+                "post-migration startup must not reread legacy sources"
+            )
 
         monkeypatch.setattr(
             migration_module, "classify_legacy_github_credential", _census_forbidden
@@ -245,7 +251,9 @@ async def test_missing_or_conflicting_evidence_is_bounded_and_actionable(
         # No guessed mapping is written; nothing blocks later startup, and a
         # corrected configuration converges on the next run.
         assert await _records(maker) == []
-        corrected = await _migrate(maker, {"GH_TOKEN": _TOKEN_B} if operator_ref is None else {})
+        corrected = await _migrate(
+            maker, {"GH_TOKEN": _TOKEN_B} if operator_ref is None else {}
+        )
         assert corrected.outcome is LegacyGitHubMigrationOutcome.MIGRATED
     finally:
         await engine.dispose()
@@ -396,7 +404,9 @@ async def test_concurrent_different_identity_is_preserved_not_overwritten(
         async def _operator_records_other(session):
             if not raced["done"]:
                 raced["done"] = True
-                await _migrate(maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"})
+                await _migrate(
+                    maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"}
+                )
                 return None
             return await original_lookup(session)
 
@@ -422,7 +432,9 @@ async def test_rotation_keeps_reference_mapping_and_newer_connection_work(tmp_pa
         async with maker() as db:
             await SecretsService.create_secret(db, "github-pat-main", _TOKEN_A)
 
-        first = await _migrate(maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"})
+        first = await _migrate(
+            maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"}
+        )
         assert first.outcome is LegacyGitHubMigrationOutcome.MIGRATED
 
         # Managed-secret rotation changes the value behind the reference, not
@@ -457,7 +469,9 @@ async def test_rotation_keeps_reference_mapping_and_newer_connection_work(tmp_pa
                 principal_scope=("system", None),
             )
 
-        rerun = await _migrate(maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"})
+        rerun = await _migrate(
+            maker, {"GITHUB_TOKEN_SECRET_REF": "db://github-pat-main"}
+        )
 
         assert rerun.outcome is LegacyGitHubMigrationOutcome.ALREADY_PRESENT
         records = await _records(maker)
@@ -515,7 +529,9 @@ async def test_migrated_default_is_never_a_routed_wildcard(tmp_path):
             admit_scoped_route(
                 identity=identity,
                 requested_operations=("read",),
-                candidates=[ScopedRouteCandidate(connection=c, assignment=a) for c, a in routes],
+                candidates=[
+                    ScopedRouteCandidate(connection=c, assignment=a) for c, a in routes
+                ],
                 principal_ref="owner:operator",
                 principal_scope=("system", None),
             )

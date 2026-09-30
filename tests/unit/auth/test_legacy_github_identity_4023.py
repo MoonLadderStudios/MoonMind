@@ -22,9 +22,10 @@ _TOKEN_B = "ghp_legacyTokenValueBBBBBBBBBBBBBBBBBBBB"
 
 
 def _assert_no_token_material(identity) -> None:
-    rendered = json.dumps(
-        identity.safe_diagnostic(affected_action="git-default operations")
-    ) + identity.model_dump_json()
+    rendered = (
+        json.dumps(identity.safe_diagnostic(affected_action="git-default operations"))
+        + identity.model_dump_json()
+    )
     assert _TOKEN_A not in rendered
     assert _TOKEN_B not in rendered
 
