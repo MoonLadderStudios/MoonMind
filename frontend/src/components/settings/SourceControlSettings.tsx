@@ -1158,6 +1158,38 @@ function RotationForm({
     if (admissionLost) setToken('');
   }, [admissionLost]);
 
+  const reconcile = async (): Promise<void> => {
+    try {
+      const result = await fetchRequestOutcome(connection.id, requestId, 'rotate');
+      if (result.committed) {
+        setFailure(null);
+        setRequestId(newRequestId());
+        if (result.connection) onRotated(result.connection);
+        onNotice?.({
+          level: 'ok',
+          text: `Token rotated for ${connection.displayName}; MoonMind confirmed it after the response was lost.`,
+        });
+        return;
+      }
+      // Another request may have rotated the token, so name neither as active.
+      setFailure({
+        status: null,
+        kind: 'no_response',
+        message:
+          'MoonMind has no record of this rotation committing. Re-enter the replacement token and rotate again; resubmitting this form cannot apply it twice.',
+        structured: false,
+      });
+    } catch (error) {
+      setFailure({
+        ...asFailure(error),
+        kind: 'no_response',
+        structured: false,
+        message:
+          'MoonMind could not confirm whether this rotation committed. Check this rotation again before rotating again.',
+      });
+    }
+  };
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (expected === null || expected === undefined) return;
@@ -1176,27 +1208,10 @@ function RotationForm({
     } catch (error) {
       const outcome = asFailure(error);
       if (isUncertain(outcome)) {
-        try {
-          const result = await fetchRequestOutcome(connection.id, requestId, 'rotate');
-          if (result.committed) {
-            setRequestId(newRequestId());
-            if (result.connection) onRotated(result.connection);
-            onNotice?.({
-              level: 'ok',
-              text: `Token rotated for ${connection.displayName}; MoonMind confirmed it after the response was lost.`,
-            });
-            return;
-          }
-        } catch {
-          // Report the unconfirmed outcome below.
-        }
-        setFailure({
-          ...outcome,
-          message: 'MoonMind did not confirm the rotation. The previous token stays active until a rotation is confirmed.',
-        });
-        return;
+        await reconcile();
+      } else {
+        setFailure(outcome);
       }
-      setFailure(outcome);
     } finally {
       setSubmitting(false);
     }
@@ -1228,7 +1243,15 @@ function RotationForm({
           {submitting ? 'Rotating…' : 'Rotate token'}
         </button>
       </div>
-      {failure ? <FailureMessage failure={failure} /> : null}
+      {failure ? (
+        <FailureMessage failure={failure}>
+          {isUncertain(failure) ? (
+            <button type="button" className="ml-2 underline" onClick={() => void reconcile()}>
+              Check this rotation
+            </button>
+          ) : null}
+        </FailureMessage>
+      ) : null}
     </form>
   );
 }

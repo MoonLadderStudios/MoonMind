@@ -30,7 +30,14 @@ from api_service.db.models import (
     ManagedSecret,
     RepositoryConnectionAssignment,
     RepositoryConnectionRecord,
+    SecretMutationReceipt,
 )
+from api_service.services.repository_connections import (
+    RepositoryConnectionConflict,
+    RepositoryConnectionService,
+)
+from api_service.services.secrets import SecretsService
+from moonmind.workflows.executions.repository_contract import REPOSITORY_ROUTE_CONFLICT
 
 pytestmark = pytest.mark.asyncio
 
@@ -350,6 +357,113 @@ async def test_failed_candidate_validation_saves_nothing_and_allows_the_same_req
     assert accepted.status_code == 201, accepted.text
     # Only the selected candidate was ever presented to GitHub.
     assert "ambient-token-should-not-be-used" not in github.tokens_used()
+
+
+def _record_staged_secrets(monkeypatch) -> list[tuple[str, bool]]:
+    """Observe the real secret writer without replacing it."""
+
+    staged: list[tuple[str, bool]] = []
+    create_secret = SecretsService.create_secret
+
+    async def _recording(db, slug, *args, **kwargs):
+        staged.append((slug, kwargs.get("commit", True)))
+        return await create_secret(db, slug, *args, **kwargs)
+
+    monkeypatch.setattr(SecretsService, "create_secret", _recording)
+    return staged
+
+
+async def test_partial_setup_rolls_back_the_staged_secret_when_the_id_is_taken(
+    harness, monkeypatch
+):
+    api, _github, sessions = harness
+    # Another owner already holds the ID with a token that is not this
+    # setup's Managed Secret, so staging succeeds and the connection
+    # writer then refuses the ID.
+    async with sessions() as db:
+        await RepositoryConnectionService(db).create_connection(
+            router_module._pat_connection(
+                connection_id="alpha",
+                display_name="Imported alpha",
+                operations=["read"],
+                slug="imported-alpha-token",
+            ),
+            actor_ref="operator",
+            request_id="req-import-alpha",
+            **router_module._ADMISSION,
+        )
+    staged = _record_staged_secrets(monkeypatch)
+
+    conflict = await _create(
+        api, connection_id="alpha", token="token-alpha-0001", requestId="req-setup"
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"]["kind"] == "conflict"
+    _assert_no_token(conflict.text)
+    assert staged == [("repository-connection-alpha", False)]
+    assert await _count(sessions, ManagedSecret) == 0
+    assert await _count(sessions, SecretMutationReceipt) == 0
+    async with sessions() as db:
+        records = (await db.execute(select(RepositoryConnectionRecord))).scalars().all()
+    assert [(record.connection_id, record.display_name) for record in records] == [
+        ("alpha", "Imported alpha")
+    ]
+
+    # The operator picks a free ID; the same request is not blocked by
+    # anything the failed attempt staged.
+    accepted = await _create(
+        api, connection_id="alpha-work", token="token-alpha-0001", requestId="req-setup"
+    )
+    assert accepted.status_code == 201, accepted.text
+    _assert_no_token(accepted.text)
+    assert await _count(sessions, RepositoryConnectionRecord) == 2
+    assert await _count(sessions, ManagedSecret) == 1
+    assert await _count(sessions, SecretMutationReceipt) == 1
+
+
+async def test_partial_setup_rolls_back_when_the_connection_write_fails_after_staging(
+    harness, monkeypatch
+):
+    api, _github, sessions = harness
+    staged = _record_staged_secrets(monkeypatch)
+    create_connection = RepositoryConnectionService.create_connection
+    staged_before_write: list[int] = []
+
+    async def _fail_first_write(self, connection, **kwargs):
+        if not staged_before_write:
+            rows = await self._session.execute(select(ManagedSecret))
+            staged_before_write.append(len(rows.scalars().all()))
+            # What the writer raises when its commit hits a constraint.
+            raise RepositoryConnectionConflict(
+                REPOSITORY_ROUTE_CONFLICT, "connection creation conflict"
+            )
+        return await create_connection(self, connection, **kwargs)
+
+    monkeypatch.setattr(
+        RepositoryConnectionService, "create_connection", _fail_first_write
+    )
+
+    failed = await _create(
+        api, connection_id="alpha", token="token-alpha-0001", requestId="req-setup"
+    )
+    assert failed.status_code == 409, failed.text
+    _assert_no_token(failed.text)
+    # The secret really was staged in the same transaction before the failure.
+    assert staged == [("repository-connection-alpha", False)]
+    assert staged_before_write == [1]
+    assert await _count(sessions, ManagedSecret) == 0
+    assert await _count(sessions, SecretMutationReceipt) == 0
+    assert await _count(sessions, RepositoryConnectionRecord) == 0
+
+    retried = await _create(
+        api, connection_id="alpha", token="token-alpha-0001", requestId="req-setup"
+    )
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["account"] == "alpha-bot"
+    _assert_no_token(retried.text)
+    assert await _count(sessions, RepositoryConnectionRecord) == 1
+    assert await _count(sessions, ManagedSecret) == 1
+    assert await _count(sessions, SecretMutationReceipt) == 1
 
 
 def _rate_limited(request: httpx.Request) -> httpx.Response:

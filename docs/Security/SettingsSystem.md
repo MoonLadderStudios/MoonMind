@@ -1885,7 +1885,9 @@ separately from Provider Profiles.
    limited, not as a rejected token. When the rotation response is lost, UI
    confirms it only through that request's Secrets receipt
    (`action=rotate`); a revision advanced by another request is reported as
-   unconfirmed.
+   unconfirmed. When that check also fails, UI says the outcome is unknown,
+   names neither token as active, and offers Check this rotation, which asks
+   about the same request again instead of resubmitting it.
 10. Remove is available once no repositories are assigned. It tombstones the
     connection (its ID cannot be reused) and deletes its Managed Secret when the
     Secrets System finds no other consumer.
