@@ -6127,15 +6127,15 @@ class TemporalAgentRuntimeActivities:
         scratch: Path,
         admission: Any = None,
         persisted_head_sha: str | None = None,
-        prior: Mapping[str, Any] | None = None,
+        priors: Sequence[Mapping[str, Any]] = (),
     ) -> tuple[Any, Any, str]:
         """Materialize verified saved work and build its admitted candidate.
 
         Only saved-work artifacts are read, each under a publication use claim
         and the admitted owner scope; the original source is never looked up.
-        ``prior`` is an earlier run's persisted record of the same operation:
-        when it is exactly this decision under the current authority, its
-        admission and candidate are rebuilt instead of observing the base again.
+        ``priors`` are persisted decisions of the same operation, newest
+        first: the newest one that is exactly this decision under the current
+        authority is rebuilt instead of observing the base again.
         """
         from moonmind.publish.saved_candidate import SavedPublicationError
         from moonmind.publish.saved_work_source import (
@@ -6189,13 +6189,15 @@ class TemporalAgentRuntimeActivities:
                 admission.authority_ref if admission is not None else None
             ),
         )
-        if admission is None and prior is not None:
+        # A plain retry completes the same decision; it never admits a moved
+        # base as a second candidate for the same operation, and a newer,
+        # different request of that operation never hides it.
+        for prior in priors if admission is None else ():
             reused = _saved_decision(contract, prior, authority_ref=authority_ref)
             if reused is not None:
-                # A plain retry completes the same decision; it never admits a
-                # moved base as a second candidate for the same operation.
                 admission = reused
                 persisted_head_sha = str(prior["candidate"]["headSha"])
+                break
 
         async def read(ref: str, content_types: frozenset[str]) -> bytes:
             artifact_id = saved_work_artifact_id(ref)
@@ -6262,39 +6264,67 @@ class TemporalAgentRuntimeActivities:
         return admission, candidate, token
 
     async def publication_recovery_saved_work_prepare(self, payload, /, **kwargs):
-        """Admit the destination once and persist the exact saved candidate.
+        """Admit the destination once and durably persist the exact candidate.
 
-        The returned admission and candidate identity are recorded in workflow
-        history before any remote effect (#4018). A later run of the same
-        operation reuses the decision its earlier run persisted, so a plain
-        retry completes the unfinished effect instead of building a second
-        candidate on a moved base.
+        The admission and candidate identity are written as this run's
+        decision record before any remote effect (#4018). A later run of the
+        same operation reuses the newest decision matching its request, even
+        when an earlier run ended before its terminal result, so a plain retry
+        completes the unfinished effect instead of building a second candidate
+        on a moved base.
         """
         from moonmind.workflows.temporal.artifacts import (
-            find_saved_work_publication_decision,
+            find_saved_work_publication_decisions,
+            persist_saved_work_publication_decision,
         )
 
         contract = _saved_work_publication_contract(payload)
         workflow_id = str((payload or {}).get("destinationWorkflowId") or "").strip()
-        prior = None
-        if workflow_id and self._artifact_service is not None:
-            prior = await find_saved_work_publication_decision(
-                self._artifact_service,
-                workflow_id=workflow_id,
-                operation_key=contract.publication_idempotency_key,
+        run_id = str((payload or {}).get("destinationRunId") or "").strip()
+        if not workflow_id or not run_id:
+            raise temporal_exceptions.ApplicationError(
+                "saved-work prepare requires the destination workflow and run",
+                type="PUBLICATION_CONTRACT_INVALID",
+                non_retryable=True,
             )
+        if self._artifact_service is None:
+            raise TemporalActivityRuntimeError(
+                "saved-work publication requires the artifact service"
+            )
+        operation_key = contract.publication_idempotency_key
+        priors = await find_saved_work_publication_decisions(
+            self._artifact_service,
+            workflow_id=workflow_id,
+            operation_key=operation_key,
+        )
         with self._saved_work_scratch(contract) as scratch:
             admission, candidate, _token = await _await_with_activity_heartbeats(
-                self._saved_work_candidate(contract, scratch=scratch, prior=prior),
+                self._saved_work_candidate(contract, scratch=scratch, priors=priors),
                 heartbeat_payload={"activity": "publication_recovery.saved_work_prepare"},
             )
-        return {
+        prepared = {
             "admission": admission.model_dump(by_alias=True, mode="json"),
             "decisionDigest": candidate.decision_digest,
             "candidate": _compact_saved_candidate(candidate),
-            "decisionReused": prior is not None
-            and prior.get("decisionDigest") == candidate.decision_digest,
+            "decisionReused": any(
+                prior.get("decisionDigest") == candidate.decision_digest
+                for prior in priors
+            ),
         }
+        await persist_saved_work_publication_decision(
+            self._artifact_service,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            operation_key=operation_key,
+            decision={
+                "sourceWorkflowId": contract.source_workflow_id,
+                "sourceRunId": contract.source_run_id,
+                "savedWorkRef": contract.saved_work_ref,
+                "savedWorkDigest": contract.saved_work_digest,
+                **prepared,
+            },
+        )
+        return prepared
 
     async def publication_recovery_saved_work_push(self, payload, /, **kwargs):
         """Push the persisted candidate under its admitted remote expectation.
