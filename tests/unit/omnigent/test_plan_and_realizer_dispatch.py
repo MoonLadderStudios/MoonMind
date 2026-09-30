@@ -397,16 +397,19 @@ def _codex_coordinator(plan):
     return coordinator
 
 
-def test_codex_dispatch_accepts_a_newer_version_of_the_target_launch_policy():
-    """A republished policy version is the same target authority, not a conflict.
+@pytest.mark.parametrize("policy", ["codex-on-demand@2", "codex-static@2"])
+def test_codex_dispatch_accepts_an_admitted_policy_other_than_the_target_default(
+    policy,
+):
+    """The target default is a selection fallback, not a conflict.
 
-    Bootstrap publishes ``codex-on-demand@2`` when the host image changes; the
-    plan and request both carry it while the built-in target still names @1.
+    Bootstrap publishes ``codex-on-demand@2`` when the host image changes, and
+    ``codex-static`` is also bound to ``omnigent-codex@1``; the plan and request
+    both carry the admitted policy while the built-in target still names
+    ``codex-on-demand@1``.
     """
-    plan = compile_execution_plan(**_codex_plan_inputs("codex-on-demand@2"))
-    request = _codex_dispatch_request(
-        plan, target="omnigent-codex@1", policy="codex-on-demand@2"
-    )
+    plan = compile_execution_plan(**_codex_plan_inputs(policy))
+    request = _codex_dispatch_request(plan, target="omnigent-codex@1", policy=policy)
 
     assert _codex_coordinator(plan)._require_recorded_plan_request(request) is plan
 
@@ -415,7 +418,6 @@ def test_codex_dispatch_accepts_a_newer_version_of_the_target_launch_policy():
     ("target", "policy"),
     [
         ("omnigent-claude@1", "claude-on-demand@1"),
-        ("omnigent-codex@1", "codex-static@2"),
         ("omnigent-codex@9", "codex-on-demand@1"),
     ],
 )
