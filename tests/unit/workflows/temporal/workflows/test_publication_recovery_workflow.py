@@ -4,6 +4,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from temporalio.exceptions import (
+    ActivityError,
+    ApplicationError,
+    RetryState,
+    TimeoutType,
+)
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 from moonmind.workflows.temporal.publication_recovery import publication_operation_key
 from moonmind.workflows.temporal.workflows import publication_recovery as workflow_module
@@ -177,3 +184,58 @@ async def test_matching_existing_pr_reconciles_without_restore_or_mutation(
         "publication_recovery.persist_result",
         "publication_recovery.cleanup",
     ]
+
+
+def _activity_error(cause: BaseException) -> ActivityError:
+    error = ActivityError(
+        "activity failed",
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="test",
+        activity_type="publication_recovery.saved_work_push",
+        activity_id="1",
+        retry_state=RetryState.TIMEOUT,
+    )
+    error.__cause__ = cause
+    return error
+
+
+@pytest.mark.parametrize(
+    ("timeout_type", "reason"),
+    [
+        (TimeoutType.START_TO_CLOSE, "publication_activity_timeout:start_to_close"),
+        (TimeoutType.SCHEDULE_TO_CLOSE, "publication_activity_timeout:schedule_to_close"),
+        (TimeoutType.HEARTBEAT, "publication_activity_timeout:heartbeat"),
+    ],
+)
+def test_timed_out_saved_work_activity_has_a_readable_reason(timeout_type, reason):
+    failure = _activity_error(
+        TemporalTimeoutError(
+            "activity timed out", type=timeout_type, last_heartbeat_details=()
+        )
+    )
+
+    assert workflow_module._activity_failure(failure) == ("unavailable", reason)
+
+
+def test_saved_work_activity_failure_keeps_the_application_error_type():
+    retryable = _activity_error(ApplicationError("push", type="PUBLICATION_PUSH_UNAVAILABLE"))
+    rejected = _activity_error(
+        ApplicationError("scan", type="PUBLICATION_SCAN_BLOCKED", non_retryable=True)
+    )
+    stale = _activity_error(
+        ApplicationError("base", type="PUBLICATION_STALE_EXPECTATION", non_retryable=True)
+    )
+
+    assert workflow_module._activity_failure(retryable) == (
+        "unavailable",
+        "PUBLICATION_PUSH_UNAVAILABLE",
+    )
+    assert workflow_module._activity_failure(rejected) == (
+        "rejected",
+        "PUBLICATION_SCAN_BLOCKED",
+    )
+    assert workflow_module._activity_failure(stale) == (
+        "conflict",
+        "PUBLICATION_STALE_EXPECTATION",
+    )

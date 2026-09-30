@@ -27,7 +27,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.exceptions import CancelledError as TemporalCancelledError
-from temporalio.exceptions import RetryState, is_cancelled_exception
+from temporalio.exceptions import RetryState, TimeoutType, is_cancelled_exception
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 from api_service.db.models import Base
 from moonmind.auth import github_credentials
@@ -68,6 +69,7 @@ from tests.support.saved_work_capture import CapturedSavedWork, capture_saved_wo
 OPERATOR = str(uuid.UUID(int=4018))
 DESTINATION_TOKEN = "admitted-destination-token"
 REPOSITORY = "dest-owner/dest-repo"
+JOURNEY_WORKFLOW_ID = "mm:source:saved-work-publication:x"
 
 
 @pytest.fixture(autouse=True)
@@ -373,40 +375,59 @@ async def journey(
             "publication_recovery.cleanup": runtime.publication_recovery_cleanup,
         }
 
-        async def execute_activity(name: str, payload: dict[str, Any], **_kwargs: Any):
+        executions: dict[str, int] = {}
+
+        def activity_error(name: str, attempt: int) -> ActivityError:
+            return ActivityError(
+                "activity failed",
+                scheduled_event_id=1,
+                started_event_id=2,
+                identity="journey",
+                activity_type=name,
+                activity_id=str(attempt),
+                retry_state=RetryState.NON_RETRYABLE_FAILURE,
+            )
+
+        async def execute_activity(name: str, payload: dict[str, Any], **kwargs: Any):
             state.calls.append(name)
-            for attempt in range(1, 6):
+            attempts = kwargs["retry_policy"].maximum_attempts
+            for attempt in range(1, attempts + 1):
+                # Hooks see the Nth execution of this Activity in the journey,
+                # whether Temporal or the workflow started the attempt.
+                executions[name] = executions.get(name, 0) + 1
                 try:
                     if name in state.hooks:
-                        await state.hooks[name](attempt)
+                        await state.hooks[name](executions[name])
                     result = await handlers[name](payload)
                     if name in state.after:
-                        await state.after[name](attempt)
+                        await state.after[name](executions[name])
                     return result
                 except ApplicationError as exc:
-                    if exc.non_retryable or attempt == 5:
-                        raise ActivityError(
-                            "activity failed",
-                            scheduled_event_id=1,
-                            started_event_id=2,
-                            identity="journey",
-                            activity_type=name,
-                            activity_id=str(attempt),
-                            retry_state=RetryState.NON_RETRYABLE_FAILURE,
-                        ) from exc
+                    if exc.non_retryable or attempt == attempts:
+                        raise activity_error(name, attempt) from exc
                 except _WorkerLost:
-                    continue
+                    if attempt == attempts:
+                        # Temporal reports a lost worker as a start-to-close timeout.
+                        raise activity_error(name, attempt) from TemporalTimeoutError(
+                            "activity timed out",
+                            type=TimeoutType.START_TO_CLOSE,
+                            last_heartbeat_details=(),
+                        )
             raise AssertionError(f"{name} exhausted retries")
+
+        async def sleep(_duration: Any, **_kwargs: Any) -> None:
+            await asyncio.sleep(0)
 
         if emulate_temporal:
             monkeypatch.setattr(
                 workflow_module.workflow, "execute_activity", execute_activity
             )
+            monkeypatch.setattr(workflow_module.workflow, "sleep", sleep)
             monkeypatch.setattr(
                 workflow_module.workflow,
                 "info",
                 lambda: SimpleNamespace(
-                    workflow_id="mm:source:saved-work-publication:x",
+                    workflow_id=JOURNEY_WORKFLOW_ID,
                     run_id=state.run_id,
                 ),
             )
@@ -635,7 +656,11 @@ async def test_verified_existing_pr_is_adopted_without_create_or_metadata_write(
             objective="pr", baseBranch="main", strategy="additive_import"
         )
         prepared = await state.runtime.publication_recovery_saved_work_prepare(
-            {"contract": contract}
+            {
+                "contract": contract,
+                "destinationWorkflowId": JOURNEY_WORKFLOW_ID,
+                "destinationRunId": "earlier-run",
+            }
         )
         # Another attempt already pushed the candidate and opened its PR.
         await state.runtime.publication_recovery_saved_work_push(
@@ -924,6 +949,116 @@ async def test_a_changed_decision_is_not_reused_and_never_overwrites_the_pushed_
         assert state.provider.creates == []
 
 
+@pytest.mark.asyncio
+async def test_resubmission_after_the_terminal_record_was_lost_reuses_the_pushed_candidate(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        before = state.saved_bytes()
+        contract = state.contract(
+            objective="pr", baseBranch="main", strategy="additive_import"
+        )
+        # The PR outage outlasts every retry, and the terminal record cannot
+        # be written either: the first run leaves no result record.
+        state.provider.unavailable_reads = 5
+
+        async def artifact_store_down(execution: int) -> None:
+            raise ApplicationError("artifact store unavailable")
+
+        state.hooks["publication_recovery.persist_result"] = artifact_store_down
+        with pytest.raises(ActivityError):
+            await state.run(contract)
+        del state.hooks["publication_recovery.persist_result"]
+        head = git(state.remote, "rev-parse", "refs/heads/saved/work")
+        _write_destination(tmp_path, state.remote, {"later.txt": "base advanced\n"})
+
+        result = await state.run(contract)
+
+        assert result["outcome"] == "published"
+        assert result["candidate"]["headSha"] == head
+        assert result["push"]["status"] == "reconciled"
+        assert result["pullRequest"]["status"] == "created"
+        assert git(state.remote, "rev-parse", "refs/heads/saved/work") == head
+        assert len(state.pushes()) == 1
+        assert len(state.provider.creates) == 1
+        assert state.saved_objects_unchanged(before)
+        assert await state.use_claims() == []
+
+
+@pytest.mark.asyncio
+async def test_an_intervening_changed_request_does_not_hide_the_original_decision(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        contract = state.contract(
+            objective="pr", baseBranch="main", strategy="additive_import"
+        )
+        state.provider.unavailable_reads = 5
+        with pytest.raises(ApplicationError):
+            await state.run(contract)
+        head = git(state.remote, "rev-parse", "refs/heads/saved/work")
+        _write_destination(tmp_path, state.remote, {"later.txt": "base advanced\n"})
+        # A changed request under the same operation key conflicts and becomes
+        # the operation's newest record.
+        changed = {
+            **contract,
+            "commit": {**contract["commit"], "message": "A different commit"},
+        }
+        with pytest.raises(ApplicationError):
+            await state.run(changed)
+
+        result = await state.run(contract)
+
+        assert result["outcome"] == "published"
+        assert result["candidate"]["headSha"] == head
+        assert result["push"]["status"] == "reconciled"
+        assert result["pullRequest"]["status"] == "created"
+        assert git(state.remote, "rev-parse", "refs/heads/saved/work") == head
+        assert len(state.pushes()) == 1
+        assert len(state.provider.creates) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_push_is_recorded_readably_and_reconciled_by_a_retry(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        contract = state.contract(
+            objective="pr", baseBranch="main", strategy="additive_import"
+        )
+
+        async def lose_every_acknowledgment(execution: int) -> None:
+            raise _WorkerLost()
+
+        # The push lands, but no attempt ever reports before its timeout.
+        state.after["publication_recovery.saved_work_push"] = (
+            lose_every_acknowledgment
+        )
+        with pytest.raises(ApplicationError) as exc:
+            await state.run(contract)
+
+        timeout = "publication_activity_timeout:start_to_close"
+        assert exc.value.type == timeout
+        first = await _persisted_result(state)
+        assert (first["outcome"], first["reasonCode"]) == ("unavailable", timeout)
+        assert first["push"] == {"status": "unconfirmed", "reasonCode": timeout}
+        assert state.provider.creates == []
+
+        del state.after["publication_recovery.saved_work_push"]
+        result = await state.run(contract)
+
+        assert result["outcome"] == "published"
+        assert result["push"]["status"] == "reconciled"
+        assert len(state.pushes()) == 1
+        assert len(state.provider.creates) == 1
+
+
 async def _publication_closure(state: Journey) -> set[str]:
     """Artifact ids of every saved object publication reads."""
     import json
@@ -1091,9 +1226,9 @@ async def _persisted_result(state: Journey) -> dict[str, Any]:
 
     artifacts = await state.service.list_for_execution(
         namespace=state.service._default_namespace,
-        workflow_id="mm:source:saved-work-publication:x",
+        workflow_id=JOURNEY_WORKFLOW_ID,
         run_id=state.run_id,
-        principal="workflow:mm:source:saved-work-publication:x",
+        principal=f"workflow:{JOURNEY_WORKFLOW_ID}",
         link_type="result",
     )
     (artifact,) = [
@@ -1103,6 +1238,6 @@ async def _persisted_result(state: Journey) -> dict[str, Any]:
     ]
     _meta, payload = await state.service.read(
         artifact_id=artifact.artifact_id,
-        principal="workflow:mm:source:saved-work-publication:x",
+        principal=f"workflow:{JOURNEY_WORKFLOW_ID}",
     )
     return json.loads(payload)

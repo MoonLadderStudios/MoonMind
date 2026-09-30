@@ -525,6 +525,7 @@ def publication_action_eligibility(
 
 SAVED_WORK_PUBLICATION_SCHEMA_VERSION = "saved-work-publication-v1"
 SAVED_WORK_PUBLICATION_RESULT_SCHEMA_VERSION = "saved-work-publication-result-v1"
+SAVED_WORK_PUBLICATION_DECISION_SCHEMA_VERSION = "saved-work-publication-decision-v1"
 # Placeholder that lets admission validation run before the destination base
 # is observed; it never becomes a remote expectation.
 _UNOBSERVED_BASE_SHA = "0" * 40
@@ -711,6 +712,7 @@ class SavedWorkPublicationResult(BaseModel):
 
 __all__ = [
     "PUBLICATION_ONLY_PHASES",
+    "SAVED_WORK_PUBLICATION_DECISION_SCHEMA_VERSION",
     "SAVED_WORK_PUBLICATION_RESULT_SCHEMA_VERSION",
     "SAVED_WORK_PUBLICATION_SCHEMA_VERSION",
     "SavedWorkPublicationContract",
