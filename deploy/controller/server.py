@@ -425,11 +425,19 @@ def default_target(stack: str, *, repo: str, runner=None) -> dict:
         compose_files=files,
         env_files=env_files,
     )
-    result = engine.run_command(
-        runner or engine.subprocess_runner(),
-        (*base, "config", "--services"),
-        timeout_seconds=TARGET_CONFIG_TIMEOUT_SECONDS,
-    )
+    try:
+        result = engine.run_command(
+            runner or engine.subprocess_runner(),
+            (*base, "config", "--services"),
+            timeout_seconds=TARGET_CONFIG_TIMEOUT_SECONDS,
+        )
+    except engine.CommandError as exc:
+        raise ValueError(
+            f"compose config failed (exit {exc.exit_status}): "
+            + redact_text(str(exc.output or ""))[-500:]
+        ) from None
+    except OSError as exc:
+        raise ValueError(f"compose is unavailable to the controller: {exc}") from None
     if int(result.get("exit", 0)) != 0:
         raise ValueError(
             "compose config failed: "
@@ -595,7 +603,11 @@ def build_app(
                     if cutover_block is not None:
                         return _json_response(start_response, "409 Conflict", {"error": cutover_block})
                     target = body.get("target") if isinstance(body.get("target"), dict) else None
-                    if target is None and target_resolver is not None:
+                    reattachable = any(
+                        (op.get("desired") or {}).get("image") == desired_image
+                        for op in store.list_open(stack=stack)
+                    ) or store.find_completed(stack=stack, desired_image=desired_image)
+                    if target is None and target_resolver is not None and not reattachable:
                         try:
                             target = target_resolver(stack)
                         except ValueError as exc:

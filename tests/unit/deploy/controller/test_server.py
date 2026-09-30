@@ -1003,3 +1003,64 @@ def test_submission_without_a_derivable_target_is_refused_without_a_record(
     finally:
         httpd.shutdown()
         thread.join(timeout=10)
+
+
+def test_default_target_reports_compose_failures_as_refusals(controller_path, tmp_path):
+    import pytest
+
+    engine_mod = load("engine")
+    server_mod = load("server")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+
+    class _Failing:
+        def __init__(self, error):
+            self.error = error
+
+        def run(self, args, timeout_seconds):
+            raise self.error
+
+    for error in (
+        engine_mod.CommandError("config", 1, "service api: token=hunter2 invalid"),
+        FileNotFoundError("docker"),
+    ):
+        with pytest.raises(ValueError) as refused:
+            server_mod.default_target("moonmind", repo=str(repo), runner=_Failing(error))
+        assert "hunter2" not in str(refused.value)
+
+
+def test_reattaching_submission_does_not_rederive_the_target(controller_path, tmp_path):
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    derived = []
+
+    def resolver(stack):
+        derived.append(stack)
+        return {
+            "project": "moonmind",
+            "projectDir": "/srv/moonmind",
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api"],
+        }
+
+    def applier(operation):
+        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+
+    app = server_mod.build_app(
+        store=store, secret="test-secret", applier=applier, target_resolver=resolver
+    )
+    httpd = server_mod.make_http_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = httpd.server_address[1]
+        body = {"stack": "moonmind", "desiredImage": "img", "operationId": "ui-1"}
+        assert _post_operation(port, body)[0] == 202
+        status, again = _post_operation(port, {**body, "operationId": "ui-2"})
+        assert (status, again["operationId"]) == (202, "ui-1")
+        assert derived == ["moonmind"]
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=10)
