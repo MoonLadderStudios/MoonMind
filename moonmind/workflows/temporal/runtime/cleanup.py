@@ -27,6 +27,12 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
+#: Runtime-root children whose immediate children are separate ownership roots.
+#: ``temporal_sandbox`` holds one attempt-owned workspace per child, beside the
+#: ``.workspace_records`` owner store, which is never a workspace candidate.
+_PER_OWNER_PARENTS = ("workspaces", "temporal_sandbox")
+_SANDBOX_OWNER_RECORDS = ".workspace_records"
+
 ManagedRuntimeCandidateKind = Literal[
     "workspace",
     "artifact",
@@ -626,10 +632,12 @@ class ManagedRuntimeWorkspaceJanitor:
     ) -> list[ManagedRuntimeCleanupCandidate]:
         runtime_root = self._config.runtime_store_root
         candidates: list[ManagedRuntimeCleanupCandidate] = []
-        workspace_parent = runtime_root / "workspaces"
-        if workspace_parent.exists():
+        for parent_name in _PER_OWNER_PARENTS:
+            workspace_parent = runtime_root / parent_name
+            if not workspace_parent.exists():
+                continue
             for path in sorted(child for child in workspace_parent.iterdir() if child.is_dir()):
-                if path not in known_roots:
+                if path.name != _SANDBOX_OWNER_RECORDS and path not in known_roots:
                     candidates.append(
                         ManagedRuntimeCleanupCandidate(
                             kind="workspace",
@@ -638,7 +646,12 @@ class ManagedRuntimeWorkspaceJanitor:
                         )
                     )
         if runtime_root.exists():
-            reserved = {"artifacts", "managed_runs", "managed_sessions", "workspaces"}
+            reserved = {
+                "artifacts",
+                "managed_runs",
+                "managed_sessions",
+                *_PER_OWNER_PARENTS,
+            }
             for path in sorted(child for child in runtime_root.iterdir() if child.is_dir()):
                 if path.name in reserved or path in known_roots:
                     continue
@@ -734,21 +747,23 @@ class ManagedRuntimeWorkspaceJanitor:
             return None
         path = Path(raw_path)
         runtime_root = self._config.runtime_store_root
-        workspaces_root = runtime_root / "workspaces"
-        try:
-            relative = path.absolute().relative_to(workspaces_root.absolute())
-            if relative.parts:
-                return workspaces_root / relative.parts[0]
-        except (OSError, ValueError):
-            # Paths outside /workspaces fall through to the per-run root check.
-            pass
+        for parent_name in _PER_OWNER_PARENTS:
+            parent = runtime_root / parent_name
+            try:
+                relative = path.absolute().relative_to(parent.absolute())
+            except (OSError, ValueError):
+                # Paths outside this parent fall through to the next root check.
+                continue
+            if relative.parts and relative.parts[0] != _SANDBOX_OWNER_RECORDS:
+                return parent / relative.parts[0]
+            return None
         try:
             relative = path.absolute().relative_to(runtime_root.absolute())
             if relative.parts and relative.parts[0] not in {
                 "artifacts",
                 "managed_runs",
                 "managed_sessions",
-                "workspaces",
+                *_PER_OWNER_PARENTS,
             }:
                 return runtime_root / relative.parts[0]
         except (OSError, ValueError):
