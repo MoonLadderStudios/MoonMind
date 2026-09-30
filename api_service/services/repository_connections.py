@@ -1231,6 +1231,92 @@ class RepositoryConnectionService:
             )
         return admitted
 
+    async def replayed_connection(
+        self,
+        *,
+        request_id: str,
+        action: str,
+        connection_id: str,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> RepositoryConnection | None:
+        """Return the connection a retried request already committed.
+
+        Lets a caller reconcile an uncertain save before repeating external
+        validation; ``None`` means the request has not committed.
+        """
+
+        if not await self._replayed_action(
+            request_id=request_id, action=action, connection_id=connection_id
+        ):
+            return None
+        record = await self._get_record(connection_id)
+        if record is None or record.tombstone:
+            raise RepositoryRouteError(
+                REPOSITORY_ROUTE_CONFLICT, "request identity already used"
+            )
+        return self._check_use(
+            record=record,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+            action="edit",
+        )
+
+    async def list_administered_connections(
+        self,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> list[tuple[RepositoryConnection, list[RepositoryAssignment]]]:
+        """Settings projection: administered connections with stored assignments.
+
+        Disabled connections stay listed so their owner can repair or remove
+        them; deleted ones do not. Assignments are the persisted rows only,
+        so an empty list means the connection grants no repository access.
+        """
+
+        records = (
+            await self._session.execute(
+                select(RepositoryConnectionRecord)
+                .where(RepositoryConnectionRecord.tombstone.is_(False))
+                .order_by(
+                    RepositoryConnectionRecord.display_name,
+                    RepositoryConnectionRecord.connection_id,
+                )
+            )
+        ).scalars().all()
+        rows = (
+            await self._session.execute(
+                select(RepositoryConnectionAssignment).order_by(
+                    RepositoryConnectionAssignment.display_name
+                )
+            )
+        ).scalars().all()
+        by_connection: dict[str, list[RepositoryConnectionAssignment]] = {}
+        for row in rows:
+            by_connection.setdefault(row.connection_id, []).append(row)
+        administered: list[tuple[RepositoryConnection, list[RepositoryAssignment]]] = []
+        for record in records:
+            try:
+                connection = self._check_use(
+                    record=record,
+                    principal_ref=principal_ref,
+                    principal_scope=principal_scope,
+                    action="edit",
+                )
+            except RepositoryRouteError:
+                continue
+            administered.append(
+                (
+                    connection,
+                    [
+                        self._stored_assignment(row, endpoint=record.endpoint_ref)
+                        for row in by_connection.get(record.connection_id, [])
+                    ],
+                )
+            )
+        return administered
+
     async def export_snapshot_connections(
         self,
         *,
