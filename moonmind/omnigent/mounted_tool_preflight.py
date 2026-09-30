@@ -107,7 +107,9 @@ def _github_access_probes(repository: str) -> tuple[Probe, ...]:
 _TRANSIENT_GITHUB_FAILURE = re.compile(
     r"HTTP 5\d\d|(?:connection|network) (?:reset|refused|unreachable|failure)|"
     r"temporary (?:failure|provider connection failure)|"
-    r"no such host|i/o timeout|TLS handshake timeout|command timed out|unexpected EOF",
+    r"no such host|i/o timeout|TLS handshake timeout|command timed out|unexpected EOF|"
+    r"context deadline exceeded|timeout exceeded while awaiting headers|"
+    r"connection timed out|network is unreachable",
     re.IGNORECASE,
 )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway
@@ -22,6 +23,7 @@ from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
     preflight_github_access,
 )
+from moonmind.omnigent.workspace_intent import authored_github_mutation_required
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import (
     OMNIGENT_EGRESS_PROFILE,
@@ -1120,6 +1122,7 @@ class DockerOmnigentHostAttestor:
                 access = await preflight_github_access(
                     repository=repository,
                     boundaries=boundaries,
+                    mutation_required=authored_github_mutation_required(request),
                 )
             except MountedToolPreflightError as exc:
                 # Keep bounded, redacted attempts in durable diagnostics even
