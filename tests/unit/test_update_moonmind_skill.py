@@ -366,6 +366,30 @@ def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
     assert calls == [["git", "check-ref-format", "--branch", "main"]]
 
 
+def test_update_warns_when_env_redefines_a_key_with_another_value(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".env").write_text(
+        "GITHUB_TOKEN=edited-token\n"
+        "GITHUB_ENABLED=true\n"
+        "# pasted block\n"
+        "export GITHUB_TOKEN='stale-token'\n"
+        "GITHUB_ENABLED=true\n"
+    )
+    monkeypatch.setattr(update, "run", lambda args, **kwargs: "")
+    assert update.main(["--repo", str(tmp_path), "--dry-run"]) == 0
+    err = capsys.readouterr().err
+    assert "GITHUB_TOKEN (lines 1, 4)" in err
+    assert "line 4" in err
+    assert "GITHUB_ENABLED" not in err
+    assert "edited-token" not in err and "stale-token" not in err
+
+
+def test_update_is_quiet_when_env_keys_are_unique(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".env").write_text("GITHUB_TOKEN=token\nAUTH_PROVIDER=disabled\n")
+    monkeypatch.setattr(update, "run", lambda args, **kwargs: "")
+    assert update.main(["--repo", str(tmp_path), "--dry-run"]) == 0
+    assert capsys.readouterr().err == ""
+
+
 @pytest.mark.parametrize(
     "rendered",
     [

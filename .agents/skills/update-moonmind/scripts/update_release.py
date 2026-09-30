@@ -219,6 +219,53 @@ def _select_release_image(*, repo, branch, tip_revision, image_repository):
     ) from last_error
 
 
+def _conflicting_env_redefinitions(env_file):
+    """Return ``{key: [line numbers]}`` for keys assigned different values.
+
+    Compose silently keeps the last assignment, so an edit to an earlier copy
+    of a duplicated key never reaches the deployment. Values are compared but
+    never returned, keeping credentials out of the warning.
+    """
+    try:
+        lines = env_file.read_text().splitlines()
+    except (FileNotFoundError, UnicodeDecodeError):
+        return {}
+    assignments = {}
+    for number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.removeprefix("export ").split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        assignments.setdefault(key.strip(), []).append((number, value))
+    return {
+        key: [number for number, _ in entries]
+        for key, entries in assignments.items()
+        if len({value for _, value in entries}) > 1
+    }
+
+
+def _warn_conflicting_env_redefinitions(repo):
+    conflicts = _conflicting_env_redefinitions(repo / ".env")
+    if not conflicts:
+        return
+    print(
+        "WARNING: .env assigns different values to the same key; Compose uses "
+        "the last assignment, so edits to earlier lines are ignored:",
+        file=sys.stderr,
+        flush=True,
+    )
+    for key, numbers in conflicts.items():
+        listed = ", ".join(str(number) for number in numbers)
+        print(
+            f"  {key} (lines {listed}): using line {numbers[-1]}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -269,6 +316,7 @@ def main(argv=None):
     if args.local_build and args.image_repository != parser.get_default("image_repository"):
         raise ValueError("A local working-tree update uses no registry image; omit --image-repository")
     repo = args.repo.resolve(strict=True)
+    _warn_conflicting_env_redefinitions(repo)
     if args.local_build:
         return _local_build_update(args, repo)
     submissions = repo / "deploy" / "state" / "release-submissions"

@@ -114,7 +114,7 @@ A workflow may request this existing operation when authorized. It does not impl
 
 Use the existing deployment-state directory and its image env overlay, JSON metadata, lock, and operation files. The normal mounted boundaries remain a read-only host project at `/workspace/host_project` and narrowly writable state at `/workspace/deployment_state` where configured.
 
-Preserve the operator's `.env`, Compose overrides, project identity, credentials, bindings, and network attachments. Update only controller-owned image/operation fields and preserve unrelated entries. Write state safely so interruption leaves recoverable intent, not a truncated sole copy.
+Preserve the operator's `.env`, Compose overrides, project identity, credentials, bindings, and network attachments. Update only controller-owned image/operation fields and preserve unrelated entries. Write state safely so interruption leaves recoverable intent, not a truncated sole copy. The host entrypoint warns, by key and line number and never by value, when the operator `.env` assigns different values to one key, because Compose keeps only the last assignment.
 
 Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release. A requested branch tip whose image is still publishing is an availability condition: use the existing bounded resolution policy, preserve explicit target intent, and report the actual selected source. Do not silently substitute a different target for an explicit request.
 
