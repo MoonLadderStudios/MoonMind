@@ -23,6 +23,23 @@ class FakeRunner:
         return {"exit": 0, "output": "ok"}
 
 
+def test_apply_names_the_target_checkout_compose_files(controller_path):
+    """A relative target file belongs to the project directory, not the cwd."""
+    engine = load("engine")
+    runner = FakeRunner()
+    engine.apply(
+        runner,
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml", "/etc/moonmind/site.yaml"),
+        services=("api",),
+        images=("img:api",),
+    )
+    for command, _ in runner.commands:
+        files = [command[i + 1] for i, arg in enumerate(command) if arg == "-f"]
+        assert files == ["/srv/moonmind/docker-compose.yaml", "/etc/moonmind/site.yaml"]
+
+
 def test_apply_stages_all_images_before_any_up(controller_path):
     engine = load("engine")
     runner = FakeRunner()
