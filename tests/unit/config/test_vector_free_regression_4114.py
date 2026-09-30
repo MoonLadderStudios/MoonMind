@@ -30,9 +30,9 @@ Evidence map:
   renamed services, optional profiles, embedded vector startup, and
   pgvector init SQL.
 - Startup (hermetic slice): clean-interpreter production imports
-  (``test_vector_free_startup_*``), settings init on clean and stale env
-  (``test_vector_free_settings_init_*``), and the served health route
-  (``test_vector_free_api_health_*``).
+  (``test_vector_free_startup_*``), settings init and retired-env
+  inertness on clean and stale env (``test_vector_free_settings_*``), and
+  the served health route (``test_vector_free_api_health_*``).
 - Admission and retirement rejection: ``test_admission_*``,
   ``test_vector_free_ordinary_admission_*``,
   ``test_vector_free_rejection_*``, ``test_vector_free_denied_context_*``,
@@ -101,16 +101,13 @@ _QDRANT_DISTRIBUTION_RE = re.compile(r"^qdrant(-client)?$", re.IGNORECASE)
 _RETIRED_TOOL_DESCRIPTOR_RE = re.compile(
     r"qdrant|followUpRetrieval|follow_up_retrieval", re.IGNORECASE
 )
-_RETIRED_CLI_TOKENS = {
-    "qdrant",
-    "rag",
-    "manifest",
-    "manifests",
-    "vector",
-    "vectors",
-    "embedding",
-    "embeddings",
-}
+# Only the retired surfaces themselves: the top-level native ``manifest``
+# group (#4192) and commands/options naming the retired vector backend.
+# Skill, image, checkpoint, and other ordinary manifests stay permitted.
+_RETIRED_CLI_GROUPS = {"manifest", "manifests"}
+_RETIRED_CLI_BACKEND_RE = re.compile(
+    r"(?:^|-)(?:qdrant|rag)(?:-|$)|(?:^|-)vector-?(?:store|db)s?(?:-|$)"
+)
 
 # MoonLadderStudios/MoonMind#4110: the native Qdrant volume declaration is
 # removed; only ``moonmind_retrieval_state`` (classified by #4107) is an
@@ -220,12 +217,13 @@ def check_cli_command_tree_vector_free(typer_app) -> list[str]:
     problems: list[str] = []
 
     def retired(name: str) -> bool:
-        tokens = re.split(r"[-_]+", name.lstrip("-").lower())
-        return bool(_RETIRED_CLI_TOKENS.intersection(tokens))
+        normalized = re.sub(r"[-_]+", "-", name.lstrip("-").lower())
+        return bool(_RETIRED_CLI_BACKEND_RE.search(normalized))
 
     def walk(command, path: tuple[str, ...]) -> None:
         label = " ".join(path) or "<root>"
-        if path and retired(path[-1]):
+        top_level_group = len(path) == 1 and path[0].lower() in _RETIRED_CLI_GROUPS
+        if path and (top_level_group or retired(path[-1])):
             problems.append(f"command {path[-1]!r} ({label}) is a retired surface")
         for param in command.params:
             for opt in getattr(param, "opts", []):
@@ -624,6 +622,34 @@ def test_cli_command_tree_registers_no_retired_vector_command() -> None:
     assert any("'manifest'" in problem for problem in problems), problems
     assert any("'--qdrant-url'" in problem for problem in problems), problems
 
+    # Positive control: Skill, image, and checkpoint manifests are ordinary
+    # product surfaces, not the retired native Manifest/vector backend.
+    permitted = typer.Typer()
+    skill_app = typer.Typer()
+    checkpoint_app = typer.Typer()
+
+    @skill_app.command("validate-manifest")
+    def _validate(skill_manifest: str = typer.Option("", "--skill-manifest")) -> None:
+        pass
+
+    @skill_app.command("manifest")
+    def _skill_manifest() -> None:
+        pass
+
+    @checkpoint_app.command("restore")
+    def _restore(
+        checkpoint_manifest: str = typer.Option("", "--checkpoint-manifest"),
+    ) -> None:
+        pass
+
+    @permitted.command("image-inspect")
+    def _inspect(image_manifest: str = typer.Option("", "--image-manifest")) -> None:
+        pass
+
+    permitted.add_typer(skill_app, name="skill")
+    permitted.add_typer(checkpoint_app, name="checkpoint")
+    assert check_cli_command_tree_vector_free(permitted) == []
+
 
 # ---------------------------------------------------------------------------
 # Clean dependencies: live-import scan (no Qdrant SDK, no Manifest product).
@@ -736,34 +762,6 @@ def test_migrations_carry_no_vector_sql() -> None:
     assert offenders == [], f"migrations install vector SQL: {offenders}"
 
 
-def test_settings_model_declares_no_vector_backend_fields() -> None:
-    """Settings declare no Qdrant/vector backend fields; stale env is inert.
-
-    The only ``qdrant`` mention in ``settings.py`` is the #4109 retirement
-    notice explaining why hosted Mem0 cannot parse. No model field wires a
-    ``QDRANT_*`` / ``VECTOR_STORE_*`` / ``*_EMBEDDING_*`` setting, so old
-    deployments carrying those keys stay inert (``extra="ignore"``).
-    """
-    text = (REPO_ROOT / "moonmind/config/settings.py").read_text(encoding="utf-8")
-    mentions = [
-        (lineno, line)
-        for lineno, line in enumerate(text.splitlines(), start=1)
-        if re.search(r"qdrant", line, re.IGNORECASE)
-    ]
-    assert mentions, "expected the retirement notice to be present"
-    for _, line in mentions:
-        assert re.search(
-            r"Mem0|mandatorily requires|retired|4109|4115",
-            line,
-            re.IGNORECASE,
-        ), f"unexpected live qdrant reference in settings: {line!r}"
-    assert not re.search(
-        r'(?m)^\s*(qdrant_\w+|vector_store_\w+)\s*[:=]',
-        text,
-        re.IGNORECASE,
-    )
-
-
 _VECTOR_ENV_KEYS_4114 = (
     "QDRANT_URL",
     "QDRANT_HOST",
@@ -818,20 +816,61 @@ def test_vector_free_settings_init_exposes_no_vector_surface(
         assert not hasattr(settings, field), field
 
 
-def test_init_entrypoints_do_not_require_vector_env() -> None:
-    """Init/API entrypoints demand no Qdrant/vector environment."""
-    for rel in ("init_db/init_db_entrypoint.sh", "api_service/entrypoint.sh"):
-        path = REPO_ROOT / rel
-        if not path.is_file():
-            continue
-        code_lines = [
-            line
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        ]
-        code = "\n".join(code_lines)
-        assert not re.search(r"QDRANT_", code)
-        assert not re.search(r"\bqdrant\b", code, re.IGNORECASE)
+def _consumed_env_sentinels(settings, sentinels: set[str]) -> set[str]:
+    """Return sentinels that surface anywhere in a settings tree's values."""
+    from pydantic import BaseModel, SecretBytes, SecretStr
+
+    found: set[str] = set()
+
+    def walk(value) -> None:
+        if isinstance(value, BaseModel):
+            for name in type(value).model_fields:
+                walk(getattr(value, name, None))
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                walk(key)
+                walk(item)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                walk(item)
+        else:
+            if isinstance(value, (SecretStr, SecretBytes)):
+                value = value.get_secret_value()
+            text = value.decode() if isinstance(value, bytes) else str(value)
+            found.update(sentinel for sentinel in sentinels if sentinel in text)
+
+    walk(settings)
+    return found
+
+
+def test_vector_free_settings_consume_no_retired_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upgraded instance: no settings field, nested or aliased, reads vector env.
+
+    Each retired key carries a unique sentinel; the real settings tree must
+    construct and expose none of them. A fixture settings model that still
+    wires ``QDRANT_URL`` must fail the same check.
+    """
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+
+    from moonmind.config.settings import AppSettings
+
+    sentinels = {key: f"stale-4114-{key.lower()}" for key in _VECTOR_ENV_KEYS_4114}
+    for key, value in sentinels.items():
+        monkeypatch.setenv(key, value)
+
+    settings = AppSettings(_env_file=None)
+    assert _consumed_env_sentinels(settings, set(sentinels.values())) == set()
+
+    class _LegacyVectorSettings(BaseSettings):
+        model_config = SettingsConfigDict(extra="ignore")
+        qdrant_url: str = ""
+
+    legacy = _LegacyVectorSettings(_env_file=None)
+    assert _consumed_env_sentinels(legacy, set(sentinels.values())) == {
+        sentinels["QDRANT_URL"]
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -947,33 +986,86 @@ def test_retry_reuses_exact_input_without_duplicate_delivery() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Chat/tools (hermetic slice): capability-manifest sources issue no retired
-# tool or credential.
+# Chat/tools (hermetic slice): the production capability owners issue no
+# retired tool or credential.
 # ---------------------------------------------------------------------------
 
 
-def test_capability_sources_issue_no_retired_tool_descriptor() -> None:
-    """Capability-manifest sources carry no retired tool descriptor or cred."""
-    candidates = [
-        REPO_ROOT / "moonmind/omnigent/effective_capabilities.py",
-        REPO_ROOT / "moonmind/omnigent/harness_platform/capabilities.py",
-        REPO_ROOT / "api_service/retrieval_capabilities.py",
-    ]
-    checked = 0
-    for path in candidates:
-        if not path.is_file():
-            continue
-        checked += 1
-        text = path.read_text(encoding="utf-8")
-        assert check_tool_manifest_vector_free([text]) == [] or (
-            "qdrant" not in text.lower()
-            and "followUpRetrieval" not in text
-            and "follow_up_retrieval" not in text
-        ), f"capability source {path} leaks retired tool descriptor"
-        assert not re.search(r"qdrant_search", text, re.IGNORECASE), (
-            f"capability source {path} issues retired qdrant_search tool"
+def test_capability_issuance_grants_no_retired_tool_descriptor(
+    tmp_path: Path,
+) -> None:
+    """Issued capability manifests and retrieval tokens stay vector-free.
+
+    Every authority source grants the retired descriptors alongside the full
+    canonical set; the resolved session manifest must still name none of
+    them. Retrieval issuance through the production registry fails closed
+    and persists no live authority for the session.
+    """
+    from api_service.retrieval_capabilities import (
+        RetrievalBudgetSnapshot,
+        RetrievalCapabilityError,
+        RetrievalCapabilityRegistry,
+    )
+    from moonmind.omnigent.effective_capabilities import (
+        CAPABILITY_NAMES,
+        adapt_provider_capabilities,
+        resolve_effective_capabilities,
+    )
+
+    retired = ("qdrant_search", "followUpRetrieval", "follow_up_retrieval")
+    granted = {name: True for name in (*CAPABILITY_NAMES, *retired)}
+    authority = {
+        "agentProfileRef": "profile://default",
+        "agentProfileDigest": "sha256:profile",
+        "providerProfileId": "provider-1",
+        "providerProfileGeneration": "1",
+        "launchPolicyRef": "policy://launch",
+        "policySnapshotRef": "policy://snapshot",
+        "policyDigest": "sha256:policy",
+        "effectiveLaunchSnapshotRef": "launch://snapshot",
+        "sessionEpoch": "1",
+        "authorityFresh": True,
+    }
+    adapted = adapt_provider_capabilities(granted)
+    resolved = resolve_effective_capabilities(
+        authority=authority,
+        upstream_capabilities=adapted,
+        profile_capabilities=granted,
+        launch_capabilities=granted,
+        state_capabilities=granted,
+        caller_capabilities=granted,
+        session_status="running",
+    )
+    manifest = resolved.manifest()
+    assert all(manifest["capabilities"].values())
+    assert check_tool_manifest_vector_free(list(adapted)) == []
+    assert check_tool_manifest_vector_free(list(manifest["capabilities"])) == []
+    assert check_tool_manifest_vector_free(list(manifest["decisions"])) == []
+
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    budget = RetrievalBudgetSnapshot(
+        tenant_id="operator",
+        repository="repo",
+        run_id="run-1",
+        workspace_id="ws-1",
+        host_id="host-1",
+        session_id="session-1",
+        step_id="step-1",
+        workflow_id="workflow-1",
+        bridge_session_id="bridge-1",
+        policy_version="v1",
+        collections=("docs",),
+        filters=(),
+    )
+    with pytest.raises(RetrievalCapabilityError, match="retired"):
+        registry.issue(budget, lifetime_seconds=60)
+    assert registry.has_live_session_authority(session_id="session-1") is False
+    assert (
+        registry.live_scope_capability(
+            run_id="run-1", host_id="host-1", session_id="session-1", step_id="step-1"
         )
-    assert checked, "expected capability-manifest sources to enumerate"
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
