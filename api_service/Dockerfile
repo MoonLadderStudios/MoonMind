@@ -14,7 +14,7 @@ ARG CLAUDE_CLI_VERSION=2.1.281
 ARG INSTALL_CODEX_CLI=true
 ARG INSTALL_CLAUDE_CLI=true
 
-FROM node:22-bookworm AS tooling-builder
+FROM node:26-bookworm AS tooling-builder
 
 # Ensure all RUN commands in this stage use bash with pipefail and fail fast on
 # unset variables, so we don't hit dash incompatibilities or silently continue
@@ -65,7 +65,7 @@ RUN codex --version \
 # Frontend builder – compiles Tailwind CSS and Vite assets in a Node environment
 # so the slim Python runtime image does not need npm.
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm AS frontend-builder
+FROM node:26-bookworm AS frontend-builder
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /build
 
@@ -95,7 +95,7 @@ RUN rm -rf /build/api_service/static/workflow_console/dist \
     && python3 /build/tools/verify_vite_manifest.py
 
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS python-requirements
+FROM python:3.13-slim-bookworm AS python-requirements
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /deps
 
@@ -110,7 +110,7 @@ RUN poetry export --only main --format requirements.txt --without-hashes --outpu
     && poetry export --only main --extras tests --format requirements.txt --without-hashes --output /deps/requirements-tests.txt
 
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime-dependencies
+FROM python:3.13-slim-bookworm AS runtime-dependencies
 
 ARG CODEX_CLI_VERSION
 # Use bash with pipefail and strict mode in the runtime image as well so
@@ -151,6 +151,8 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 
 # Install system packages required by the Python service along with the
 # Node.js runtime libraries that the bundled CLIs rely on.
+# libatomic1 provides libatomic.so.1 required by the Node 26 runtime copied
+# from the tooling-builder stage onto this Python slim base.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -158,6 +160,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         bubblewrap \
+        libatomic1 \
         libffi-dev \
         ripgrep \
         tesseract-ocr \

@@ -74,7 +74,7 @@ def test_status_reports_every_registered_combination_with_exact_dimensions():
 
 def test_status_labels_compatibility_paths_distinctly():
     status = build_runtime_provider_migration_status(
-        policy=_policy({_CODEX_GATE: "true"})
+        policy=_policy({_CODEX_GATE: "true", _CLAUDE_GATE: "false"})
     )
     rows = {row.target_id: row for row in status.combinations}
     assert rows["codex.legacy-profile-bound-omnigent"].default_status == (

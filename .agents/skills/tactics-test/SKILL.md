@@ -140,4 +140,9 @@ build verdict when only the test phase ran.
   successful container start alone does not establish completion.
 - A stale `latest/gate.json` from an earlier run must not be reused: always
   read the gate written by the current run and confirm its `resultsDir`
-  matches the timestamped folder just produced.
+  matches the timestamped folder just produced. Each non-dry-run replaces the
+  gate before validation or work, so an interrupted run leaves `INCOMPLETE`
+  or `FAIL`, never the prior `PASS`.
+- A zero exit code alone is not test success. A test log that reports a
+  failed automation result fails the gate, and one that reports no matching
+  automation tests fails it with `testStatus="no_tests"`.

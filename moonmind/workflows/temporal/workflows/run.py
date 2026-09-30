@@ -649,6 +649,14 @@ RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH = "run-terminal-contract-retry-decisi
 RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH = (
     "run-terminal-contract-retry-flattened-outputs-v1"
 )
+# A managed-session adapter that validates the resolver's own terminal artifact
+# derives the step failure itself, so AgentRun skips terminal-evidence
+# evaluation and the result carries no ``terminalContract*`` fields; the adapter
+# marks it with ``prResolverTerminalVerdictApplied`` instead. Without this patch
+# the parent retried that validated verdict three more times.
+RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH = (
+    "run-adapter-resolver-verdict-retry-decision-v1"
+)
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
@@ -782,6 +790,12 @@ RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH = (
 )
 RUN_PROFILE_SNAPSHOT_CREDENTIAL_CAPABILITY_PATCH = (
     "run-profile-snapshot-credential-capability-v1"
+)
+# Claude Code runs through Omnigent on the generic realizer, so an Omnigent
+# child accepts a ``claude_code`` Provider Profile. Accepting it changes a
+# workflow-time validation outcome, so the widened set is replay-gated.
+RUN_OMNIGENT_CLAUDE_PROVIDER_RUNTIME_PATCH = (
+    "run-omnigent-claude-provider-runtime-v1"
 )
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
@@ -998,6 +1012,14 @@ RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
 # previously recorded clean-checkout command.
 RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-publication-checkpoint-restore-v1"
+)
+# GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
+# and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
+# candidate into doc reconciliation, then publish that reconciled archive (or
+# the verified candidate when reconciliation left none). Older histories retain
+# their recorded clean-checkout commands.
+RUN_OMNIGENT_ORCHESTRATE_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
+    "run-omnigent-orchestrate-publication-checkpoint-restore-v1"
 )
 # An issue-implementation PR handoff may restore a candidate that was already
 # pushed by the implementation stage. ``no_commits`` at that later sandbox is
@@ -1489,6 +1511,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # attempts inherit it so ``auto`` loop tools never reach adapter routing.
         self._remediation_loop_runtime: dict[str, Any] | None = None
         self._remediation_loop_continuation: dict[str, Any] | None = None
+        # Orchestrate doc-reconciliation Step launched from the verified
+        # candidate archive; only its archive may replace that candidate at PR.
+        self._omnigent_reconciled_candidate_step_id: str | None = None
         # Controller-attested canonical turn lineage per logical step (#3707).
         # Compact and deterministic: the workflow is the only authority that can
         # say which closed turn source a Step Execution launches under.
@@ -7565,13 +7590,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         node: Mapping[str, Any],
         node_inputs: Mapping[str, Any],
     ) -> str | None:
-        """Return the verified candidate archive consumed by a PR handoff."""
+        """Return the verified candidate archive consumed by a PR handoff.
 
+        Orchestrate presets reconcile docs after verification; that Step
+        continues from the same candidate, and its archive is what the PR
+        handoff publishes.
+        """
+
+        annotations = self._node_annotations_mapping(node)
+        issue_implement_handoff = (
+            annotations.get("issueImplementRole") == "pull-request-handoff"
+        )
+        orchestrate_role = (
+            ""
+            if issue_implement_handoff
+            else str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        )
         if (
-            self._node_annotations_mapping(node).get("issueImplementRole")
-            != "pull-request-handoff"
-            or not self._remediation_loop_uses_omnigent()
-        ):
+            not issue_implement_handoff
+            and orchestrate_role not in {"doc-reconciliation", "pull-request-handoff"}
+        ) or not self._remediation_loop_uses_omnigent():
             return None
         tool = self._plan_node_tool_mapping(node) or {}
         agent_id = self._agent_id_from_runtime_inputs(
@@ -7580,13 +7618,47 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         if _normalize_agent_runtime_id(agent_id) != "omnigent":
             return None
+        if orchestrate_role and not workflow.patched(
+            RUN_OMNIGENT_ORCHESTRATE_PUBLICATION_CHECKPOINT_RESTORE_PATCH
+        ):
+            return None
+        node_id = str(node.get("id") or "")
+        if orchestrate_role == "pull-request-handoff":
+            reconciled = self._reconciled_candidate_checkpoint_ref()
+            if reconciled is not None:
+                return reconciled
         head = self._remediation_workspace_head
         if head is not None:
-            return head.head_checkpoint_ref
-        candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
-            str(node.get("id") or "")
+            restore_ref = head.head_checkpoint_ref
+        else:
+            candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
+                node_id
+            )
+            restore_ref = candidate[1]["checkpointRef"] if candidate else None
+        if orchestrate_role == "doc-reconciliation" and restore_ref is not None:
+            self._omnigent_reconciled_candidate_step_id = node_id
+        return restore_ref
+
+    def _reconciled_candidate_checkpoint_ref(self) -> str | None:
+        """Return the completed doc-reconciliation archive of the candidate."""
+
+        step_id = self._omnigent_reconciled_candidate_step_id
+        if not step_id:
+            return None
+        row = next(
+            (
+                row
+                for row in self._step_ledger_rows
+                if str(row.get("logicalStepId") or "").strip() == step_id
+            ),
+            None,
         )
-        return candidate[1]["checkpointRef"] if candidate is not None else None
+        if row is None or str(row.get("status") or "").strip().lower() != (
+            "completed"
+        ):
+            return None
+        evidence = self._canonical_remediation_checkpoint_evidence(step_id)
+        return evidence["checkpointRef"] if evidence is not None else None
 
     def _remediation_loop_uses_omnigent(self) -> bool:
         runtime = self._remediation_loop_runtime
@@ -9847,7 +9919,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         """Declare durable prior-step artifacts as fresh-workspace attachments."""
 
         merged = [str(ref).strip() for ref in input_refs if str(ref).strip()]
-        if agent_kind == "managed":
+        if agent_kind == "managed" and not self._patched_or_false_outside_workflow(
+            "run-managed-handoff-attachments-v1"
+        ):
             return list(dict.fromkeys(merged))
         artifact_refs = [
             self._assessment_context.get("assessmentArtifactRef")
@@ -15240,7 +15314,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         if self._plan_blocked_message:
             self._summary = self._plan_blocked_message
-        else:
+        elif self._publish_context.get("objectiveOutcome") != "idle":
+            # An idle stop already recorded why nothing remained to do.
             self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -15450,6 +15525,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if (
                 terminal_contract_outcome == "continuation_requested"
                 and provider_error_code == "pr_resolver_reenter_gate"
+            ):
+                return False
+
+        if self._workflow_patch_enabled(
+            RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH
+        ):
+            # Artifact fields alone only say a valid verdict exists; the run
+            # may still have failed for an unrelated runtime reason. The
+            # adapter marks the result only when the failure it reported is
+            # that validated verdict, so any other failure keeps its retry.
+            if outputs.get("prResolverTerminalVerdictApplied") is True and (
+                str(outputs.get("mergeAutomationDisposition") or "")
+                .strip()
+                .lower()
+                in {"manual_review", "failed"}
             ):
                 return False
 
@@ -19397,7 +19487,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return "publishMode 'pr' requested but no PR was created"
         if publish_mode == "branch" and self._publish_status is None:
             return "branch publish outcome unknown"
-        if self._merge_required(parameters) and not self._merge_happened():
+        draft_preserved = (
+            self._moonspec_draft_publication_reason is not None
+            and self._publish_status == "published"
+            and self._pull_request_created()
+            and self._patched_or_false_outside_workflow(
+                "run-preserved-draft-defers-merge-v1"
+            )
+        )
+        if (
+            self._merge_required(parameters)
+            and not self._merge_happened()
+            and not draft_preserved
+        ):
             return "merge automation requested but PR was not merged"
         if self._report_requested(parameters) and not self._report_created:
             return "reportOutput requested but no final report was created"
@@ -22563,7 +22665,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 child_runtime_id = self._managed_runtime_id(agent_id or "")
                 compatible_runtime_ids = {child_runtime_id}
                 if child_runtime_id == "omnigent":
-                    compatible_runtime_ids.update(_OMNIGENT_PROVIDER_RUNTIME_IDS)
+                    compatible_runtime_ids.update(
+                        self._omnigent_provider_runtime_ids()
+                    )
                 if compatible_runtime_ids.isdisjoint(
                     str(item).strip() for item in authoritative_runtime_ids
                 ):
@@ -22593,7 +22697,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         child_runtime_id = self._managed_runtime_id(agent_id)
         compatible_runtime_ids = {child_runtime_id}
         if child_runtime_id == "omnigent":
-            compatible_runtime_ids.update(_OMNIGENT_PROVIDER_RUNTIME_IDS)
+            compatible_runtime_ids.update(self._omnigent_provider_runtime_ids())
         if runtime_id not in compatible_runtime_ids:
             if self._workflow_is_replaying():
                 return profile_id
@@ -22603,6 +22707,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 % (source_label, profile_id, runtime_id, child_runtime_id)
             )
         return profile_id
+
+    def _omnigent_provider_runtime_ids(self) -> frozenset[str]:
+        """Return the Provider Profile runtimes an Omnigent child may use."""
+        if self._workflow_patch_enabled(RUN_OMNIGENT_CLAUDE_PROVIDER_RUNTIME_PATCH):
+            return _OMNIGENT_PROVIDER_RUNTIME_IDS | {"claude_code"}
+        return _OMNIGENT_PROVIDER_RUNTIME_IDS
 
     @staticmethod
     def _managed_runtime_id(agent_id: str) -> str:
