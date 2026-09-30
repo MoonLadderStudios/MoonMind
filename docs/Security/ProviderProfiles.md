@@ -1228,7 +1228,8 @@ Two states are ambiguous rather than exempt, and both are rejected:
 Its primary placement is the authority handoff every launch converges on,
 `TemporalExecutionService.create_execution`. Direct execution submission (both
 the task/workflow envelope and the raw request shape), rerun, continuation,
-checkpoint branching, manifest ingest, and deployment
+checkpoint branching, retired manifest ingest (rejected at that boundary since
+MoonLadderStudios/MoonMind#4192), and deployment
 operations all reach a launch through that method, so an alternate client
 cannot find a submission shape that accepts a pair the runtime-scoped selectors
 would never offer. Routers translate the typed rejection into the same 409

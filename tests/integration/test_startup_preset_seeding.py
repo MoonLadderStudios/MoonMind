@@ -52,7 +52,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "moonspec-align",
             "moonspec-implement",
             "moonspec-verify",
-            "auto",
             "moonspec-doc-reconcile",
         ]
         seeded_step_titles = [step["title"] for step in template.steps]

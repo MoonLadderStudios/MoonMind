@@ -179,9 +179,12 @@ def _reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
     ):
         reasons.append("mandatory requirement evidence missing")
     target = current.get("completionTarget", {})
+    evidence_target = evidence.get("completionTarget", {})
     if (
         not target.get("ref")
-        or evidence.get("completionTarget", {}).get("ref") != target["ref"]
+        or evidence_target.get("ref") != target["ref"]
+        or not evidence_target.get("revision")
+        or not evidence_target.get("contentDigest")
     ):
         reasons.append("completion policy changed or missing")
     freshness = evidence.get("freshness", {})
@@ -211,6 +214,97 @@ def _reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
     }
 
 
+def _valid_remaining_work(work: object) -> bool:
+    """Require actionable handoff fields, not just a nonempty mapping."""
+    if not isinstance(work, list) or not work:
+        return False
+    for item in work:
+        if not isinstance(item, dict):
+            return False
+        for field in ("requirement", "gapType", "remainingWork"):
+            value = item.get(field)
+            if not isinstance(value, str) or not value.strip():
+                return False
+    return True
+
+
+def validate_report(report: object, current: dict | None = None) -> dict:
+    """Preflight producer output, not proof that referenced checks actually ran.
+
+    Preserve the report and return diagnostics only. The host still validates
+    its envelope and the verifier still inspects evidence through its owners.
+    Success binding reuses the existing acceptance implementation below.
+    """
+    if not isinstance(report, dict):
+        return {"valid": False, "errors": ["structured report must be a JSON object"]}
+    actions = {
+        "FULLY_IMPLEMENTED": {"advance"},
+        "ADDITIONAL_WORK_NEEDED": {"reattempt_current_step", "needs_human", "blocked"},
+        "NO_DETERMINATION": {"reattempt_current_step", "needs_human", "blocked"},
+        "BLOCKED": {"blocked"},
+    }
+    errors = []
+    verdict = report.get("verdict")
+    action = report.get("recommendedNextAction")
+    if not isinstance(verdict, str) or verdict not in actions:
+        errors.append("verdict is missing or is not a canonical verification verdict")
+    elif not isinstance(action, str) or action not in actions[verdict]:
+        errors.append("recommendedNextAction is missing or incompatible with verdict")
+    if not isinstance(report.get("recoverableInCurrentRuntime"), bool):
+        errors.append("recoverableInCurrentRuntime must be an explicit boolean")
+    for flag in ("invalid", "degraded"):
+        if not isinstance(report.get(flag, False), bool) or report.get(flag, False):
+            errors.append(f"producer report is flagged {flag} or the flag is not boolean")
+    if verdict == "FULLY_IMPLEMENTED":
+        if report.get("remainingWork") or report.get("remainingWorkRef"):
+            errors.append("success cannot retain unresolved remaining work")
+        if current is None:
+            errors.append("success preflight requires freshly captured current subject and scope")
+        else:
+            errors.extend(reuse(report, current)["reasons"])
+    elif isinstance(verdict, str) and verdict in actions:
+        work = report.get("remainingWork")
+        reference = report.get("remainingWorkRef")
+        if not _valid_remaining_work(work) and not (
+            isinstance(reference, str) and reference.strip()
+        ):
+            errors.append("non-passing report requires remainingWork or a remainingWorkRef")
+    return {"valid": not errors, "errors": errors}
+
+
+def skill_identity(script: Path) -> dict:
+    """Describe the files beside the executed helper, not an upstream checkout."""
+    root = script.resolve().parents[1]
+    paths = ("SKILL.md", "references/acceptance-policy.md", "scripts/acceptance.py")
+    return {
+        "skill": "moonspec-verify",
+        "skillPath": str(root),
+        "files": {
+            name: "sha256:" + hashlib.sha256((root / name).read_bytes()).hexdigest()
+            for name in paths
+        },
+    }
+
+
+def read_report_json(path: Path) -> object:
+    """Reject ambiguous duplicate fields and non-JSON numeric constants."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON field")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("non-JSON numeric constant")
+
+    return json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=unique_object,
+        parse_constant=reject_constant,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -232,6 +326,10 @@ def main() -> None:
     reuse_parser = commands.add_parser("reuse")
     reuse_parser.add_argument("--report", type=Path, required=True)
     reuse_parser.add_argument("--current", type=Path, required=True)
+    report_parser = commands.add_parser("validate-report")
+    report_parser.add_argument("--report", type=Path, required=True)
+    report_parser.add_argument("--current", type=Path)
+    commands.add_parser("identity")
     args = parser.parse_args()
     if args.command == "capture":
         result = capture(
@@ -244,11 +342,23 @@ def main() -> None:
             complete=not args.incomplete,
         )
         result["freshnessPolicy"] = args.freshness_policy
-    else:
+    elif args.command == "reuse":
         result = reuse(
             json.loads(args.report.read_text()), json.loads(args.current.read_text())
         )
+    elif args.command == "identity":
+        result = skill_identity(Path(__file__))
+    else:
+        try:
+            result = validate_report(
+                read_report_json(args.report),
+                read_report_json(args.current) if args.current else None,
+            )
+        except (OSError, UnicodeError, ValueError):
+            result = {"valid": False, "errors": ["report or current JSON is unreadable or malformed"]}
     print(json.dumps(result, indent=2, sort_keys=True))
+    if args.command == "validate-report" and not result["valid"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

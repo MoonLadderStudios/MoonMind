@@ -8004,11 +8004,12 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             page_size=10,
             next_page_token=None,
         )
-        # MoonLadderStudios/MoonMind#4192: retired ManifestIngest rows stay
-        # readable as old-release replay/drain evidence but are excluded
-        # from the product listing (product scope is UserWorkflow only).
-        assert len(manifest_page.items) == 0
-        assert manifest_page.count == 0
+        # MoonLadderStudios/MoonMind#4189: retired ManifestIngest rows stay
+        # readable through the generic listing as historical records.
+        assert [item.workflow_type for item in manifest_page.items] == [
+            TemporalWorkflowType.MANIFEST_INGEST
+        ]
+        assert manifest_page.count == 1
 
 @pytest.mark.asyncio
 async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):

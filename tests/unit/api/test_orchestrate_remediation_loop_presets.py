@@ -1,8 +1,10 @@
-"""MoonSpec orchestrate presets reach the one workflow-owned remediation loop.
+"""GitHub and Jira orchestrate presets reach the one workflow-owned remediation loop.
 
-MoonLadderStudios/MoonMind#4268: the GitHub, Jira, and MoonSpec orchestrate
+MoonLadderStudios/MoonMind#4268: the MoonMind-owned GitHub and Jira orchestrate
 seed presets expand through the real catalog, and the resulting loop
 declaration drives the production ``MoonMindRunWorkflow`` loop controller.
+MoonSpec Orchestrate is an upstream-owned projection; it adopts the loop through
+the MoonSpec bundle and a pin bump, not a local edit.
 """
 
 from __future__ import annotations
@@ -42,10 +44,6 @@ _ORCHESTRATE_INPUTS: dict[str, dict[str, Any]] = {
     },
     "jira-orchestrate": {
         "jira_issue_key": "MM-4268",
-        "constraints": "Keep scope bounded.",
-    },
-    "moonspec-orchestrate": {
-        "feature_request": "MM-4268: one bounded story",
         "constraints": "Keep scope bounded.",
     },
 }

@@ -312,3 +312,24 @@ def test_latest_startup_outcome_wins(tmp_path):
 
     assert code == 0
     assert state["conversion"]["outcome"] == "published"
+
+
+def test_api_bypasses_egress_proxy_for_loopback(
+    api_server, tmp_path, monkeypatch
+):
+    """The disposable journey always targets the local stack directly.
+
+    Container-job environments export an egress proxy; routing loopback
+    journey traffic through it can only fail. The journey helper must not
+    honor proxy variables for its own API base.
+    """
+    base, _ = api_server
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9/")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9/")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9/")
+    monkeypatch.setenv("https_proxy", "http://127.0.0.1:9/")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+
+    info = journey.Api(base).json("GET", "/api/ui/info")
+    assert info["dashboardConfig"]["system"]["defaultRepository"] == "o/r"

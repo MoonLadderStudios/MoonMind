@@ -47,6 +47,20 @@ def _stable_deployment_architecture(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_deployment_resolved_images(monkeypatch):
+    """Keep a local deployment's resolved image state out of these tests.
+
+    Generic Claude admission is on by default, so a checkout that also runs the
+    stack would otherwise seed ``claude-on-demand`` from its real resolved
+    shared host image. Tests that need that image supply it themselves.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state", lambda: None
+    )
+
+
 @asynccontextmanager
 async def policy_db(tmp_path):
     engine = create_async_engine(
@@ -584,6 +598,12 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
     opencode_host_digest = (
         "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
     )
+    # The deployment image leg persists the shared host digest before policy
+    # reconciliation; the default configuration seeds Claude from it.
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=opencode_host_digest),
+    )
     resolution_calls: list[str] = []
 
     async def resolver(image_ref: str) -> str:
@@ -607,6 +627,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             "omnigent-codex",
             "codex-static",
             "codex-on-demand",
+            "claude-on-demand",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -621,7 +642,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             .scalars()
             .all()
         )
-        assert len(versions) == 5
+        assert len(versions) == 6
         assert all(version.state == "active" for version in versions)
         assert all(version.validation_json["valid"] is True for version in versions)
         assert all(
@@ -643,6 +664,11 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
                 by_policy[policy_id].document_json["host"]["hostImageRef"]
                 == host_digest
             )
+        assert by_policy["claude-on-demand"].document_json["execution"] == {
+            "profileRef": "omnigent-claude@1",
+            "harness": "claude-native",
+            "agentIdentities": ["claude-native-ui"],
+        }
         for policy_id in {"omnigent-on-demand", "opencode-on-demand"}:
             assert by_policy[policy_id].document_json["execution"] == {
                 "profileRef": "omnigent-opencode@1",
@@ -670,11 +696,22 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shared_image_tag", [False, True])
+@pytest.mark.parametrize("claude_switch", [None, "true"])
 async def test_qualified_claude_bootstrap_uses_installed_shared_host_image(
-    tmp_path, monkeypatch, shared_image_tag
+    tmp_path, monkeypatch, shared_image_tag, claude_switch
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
-    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    # Omitting the switch is the shipped default and must seed the same
+    # Claude policy as an explicit opt-in.
+    claude_env = (
+        {}
+        if claude_switch is None
+        else {"MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": claude_switch}
+    )
+    if claude_switch is None:
+        monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", raising=False)
+    else:
+        monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", claude_switch)
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
     shared_host_digest = (
@@ -694,7 +731,7 @@ async def test_qualified_claude_bootstrap_uses_installed_shared_host_image(
         seeded = await seed_bootstrap_policies(
             session,
             env={
-                "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "true",
+                **claude_env,
                 "OMNIGENT_SHARED_HOST_IMAGE_REF": (
                     "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
                     if shared_image_tag
@@ -810,6 +847,8 @@ async def test_opencode_kill_switch_does_not_add_policy_or_image_dependencies(
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "false")
+    # A Codex-only deployment also stops the shared-image Claude family.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "false")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
     resolution_calls: list[str] = []
@@ -821,7 +860,10 @@ async def test_opencode_kill_switch_does_not_add_policy_or_image_dependencies(
     async with policy_db(tmp_path) as sessions, sessions() as session:
         seeded = await seed_bootstrap_policies(
             session,
-            env={"MOONMIND_OMNIGENT_OPENCODE_ENABLED": "false"},
+            env={
+                "MOONMIND_OMNIGENT_OPENCODE_ENABLED": "false",
+                "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "false",
+            },
             image_resolver=resolver,
         )
 

@@ -63,14 +63,15 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert (
         config["sources"]["temporal"]["update"] == "/api/executions/{workflowId}/update"
     )
-    assert (
-        config["sources"]["temporal"]["manifestStatus"]
-        == "/api/executions/{workflowId}/manifest-status"
-    )
-    assert (
-        config["sources"]["temporal"]["manifestNodes"]
-        == "/api/executions/{workflowId}/manifest-nodes"
-    )
+    # MoonLadderStudios/MoonMind#4187: the native Manifest product is retired
+    # and its manifest-status/manifest-nodes routes are removed
+    # (test_retired_manifest_status_route_is_gone,
+    # test_retired_manifest_nodes_route_is_gone). The served boot payload
+    # must not advertise links to removed routes; historical
+    # manifest_ref/manifestArtifactRef reads stay served through the
+    # execution list/detail projections, not through retired endpoints.
+    assert "manifestStatus" not in config["sources"]["temporal"]
+    assert "manifestNodes" not in config["sources"]["temporal"]
     assert (
         config["sources"]["temporal"]["signal"] == "/api/executions/{workflowId}/signal"
     )
@@ -1289,21 +1290,29 @@ def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
 # T024: Run-index pagination and shared visibility totals
 # ---------------------------------------------------------------------------
 
-def test_runtime_config_exposes_manifest_status_endpoint() -> None:
-    """Manifest-status endpoint must be present for run-index visibility."""
-    config = dashboard_view_model.build_runtime_config("/workflows")
-    assert (
-        config["sources"]["temporal"]["manifestStatus"]
-        == "/api/executions/{workflowId}/manifest-status"
-    )
+def test_runtime_config_omits_retired_manifest_status_endpoint() -> None:
+    """Retired manifest-status link must be absent from the boot payload.
 
-def test_runtime_config_exposes_manifest_nodes_endpoint() -> None:
-    """Manifest-nodes endpoint must be present for run-index pagination."""
+    MoonLadderStudios/MoonMind#4187: the native Manifest product is retired
+    and GET /api/executions/{workflowId}/manifest-status is removed. The
+    served boot payload must not advertise the removed route; historical
+    manifest_ref reads stay served through the execution projections.
+    """
     config = dashboard_view_model.build_runtime_config("/workflows")
-    assert (
-        config["sources"]["temporal"]["manifestNodes"]
-        == "/api/executions/{workflowId}/manifest-nodes"
-    )
+    assert "manifestStatus" not in config["sources"]["temporal"]
+
+
+def test_runtime_config_omits_retired_manifest_nodes_endpoint() -> None:
+    """Retired manifest-nodes link must be absent from the boot payload.
+
+    MoonLadderStudios/MoonMind#4187: the native Manifest product is retired
+    and GET /api/executions/{workflowId}/manifest-nodes is removed. The
+    served boot payload must not advertise the removed route; historical
+    manifestArtifactRef reads stay served through the execution
+    projections.
+    """
+    config = dashboard_view_model.build_runtime_config("/workflows")
+    assert "manifestNodes" not in config["sources"]["temporal"]
 
 def test_normalize_status_maps_manifest_ingest_states() -> None:
     """Manifest-ingest-specific temporal states should map correctly."""

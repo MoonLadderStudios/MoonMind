@@ -878,12 +878,38 @@ async def main() -> int:
     if args.state.strip() != "open":
         print(f"warning: non-open state requested: {args.state}")
     runtime = _resolve_runtime_selection(args)
+    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
+    contract = {
+        "schemaVersion": "moonmind.batch-pr-resolver-result.v1",
+        "contractId": "batch_pr_resolver_fanout.v1",
+        "executionRef": _runtime_text(os.getenv("MOONMIND_STEP_EXECUTION_ID"))
+        or f"local:batch-pr-resolver:{repo}",
+    }
+    # Replace any previous attempt's success before discovery or child effects.
+    _write_artifacts(
+        artifacts_dir / "batch_pr_resolver_result.json",
+        {
+            **contract,
+            "status": "running",
+            "requested": 0,
+            "created": 0,
+            "queued": [],
+            "skipped": [],
+            "errors": [],
+        },
+    )
 
     open_prs = _run_pr_list(repo=repo, state=args.state)
     queue_requests, skipped = _build_request_records(repo, open_prs, args, runtime)
     created, errors = await _submit_jobs(queue_requests)
 
     payload = {
+        **contract,
+        "status": (
+            ("partial_failure" if created else "failed")
+            if errors
+            else ("queued" if created else "no_op")
+        ),
         "timestamp": datetime.now(UTC).isoformat(),
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "repository": repo,
@@ -903,7 +929,6 @@ async def main() -> int:
     if payload["created"] == 0:
         payload["message"] = "No matching PRs were queued."
 
-    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
     _write_run_artifacts(artifacts_dir, payload)
 
     print(json.dumps(payload, indent=2))

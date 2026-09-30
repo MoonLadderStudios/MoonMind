@@ -4380,7 +4380,6 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 "moonspec-align",
                 "moonspec-implement",
                 "moonspec-verify",
-                "auto",
                 "moonspec-doc-reconcile",
             ]
             step_titles = [step["title"] for step in template.steps]
@@ -4388,8 +4387,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 "Return orchestration report and defer publish actions"
                 not in step_titles
             )
-            assert step_titles[-3] == "Verify completion"
-            assert step_titles[-2] == "Remediation loop controller"
+            assert step_titles[-2] == "Verify completion"
             assert step_titles[-1] == "Reconcile declarative docs"
             template_payload = await service.get_template(
                 slug="moonspec-orchestrate",
@@ -4430,7 +4428,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 context={},
             )
 
-            assert len(expanded["steps"]) == 9
+            assert len(expanded["steps"]) == 8
             assert (
                 expanded["appliedTemplate"]["inputs"]["orchestration_mode"]
                 == "runtime"
@@ -4439,11 +4437,8 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             assert "runtime implementation workflow" in expanded["steps"][0][
                 "instructions"
             ]
-            assert expanded["steps"][-3]["title"] == "Verify completion"
-            assert "moonspec-verify" == expanded["steps"][-3]["skill"]["id"]
-            assert expanded["steps"][-3]["repositoryOperation"] == "read"
-            assert expanded["steps"][-2]["title"] == "Remediation loop controller"
-            assert "remediationLoop" in expanded["steps"][-2]["annotations"]
+            assert expanded["steps"][-2]["title"] == "Verify completion"
+            assert "moonspec-verify" == expanded["steps"][-2]["skill"]["id"]
             assert expanded["steps"][-1]["title"] == "Reconcile declarative docs"
             assert "moonspec-doc-reconcile" == expanded["steps"][-1]["skill"]["id"]
             assert "at least one canonical source candidate exists" in expanded[
