@@ -236,8 +236,9 @@ interface RepositoryConnectionBase {
 interface GitRepositoryConnection extends RepositoryConnectionBase {
   provider: "git";
   credential:
-    | { source: "github_resolver" }
-    | { source: "secret_ref"; credentialRef: SecretRef };
+    | { source: "secret_ref"; credentialRef: SecretRef }
+    // Historical records only: readable, never admitted for new use.
+    | { source: "github_resolver" };
 
   pullRequest?: {
     provider: "github";
@@ -281,25 +282,25 @@ Rules:
 - The tool-bundle manifest is observed runtime evidence; the connection policy is the expected value. Readiness requires the manifest's executable digest and version to equal the connection policy. Any mismatch fails closed with `LORE_CLIENT_UNAVAILABLE` for Lore or the corresponding Git client-readiness diagnostic.
 - A connection may select a compatible worker or host pool carrying its exact tool-bundle snapshot.
 
-#### Seeded default Git connection
+#### Default Git connection
 
-MoonMind reconciles a deployment-owned connection with the well-known id:
+MoonMind records one database-owned connection with the well-known id:
 
 ```text
 repository-connection:git-default
 ```
 
-The default connection has `provider = "git"` and `credential.source = "github_resolver"`. Startup or Settings reconciliation derives its readiness from the existing GitHub settings and token resolver chain rather than asking an operator to manually create a connection record.
+The default connection has `provider = "git"` and a typed `secret_ref` credential naming the deployment's proven legacy GitHub credential reference (for example `env://GITHUB_TOKEN` or `db://github-pat-main`). One idempotent startup migration records it from the configuration the legacy resolver chain read; once recorded it is never remapped from that configuration. It is not a live fallback chain, and `github_resolver` records remain readable history only. See [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md) for migration semantics.
 
 The common GitHub authoring path therefore remains low ceremony:
 
 1. The user selects a GitHub repository and branch as today.
 2. The Create compiler injects `repository-connection:git-default` when no advanced connection was selected.
 3. The normalized submitted payload always carries the explicit connection ref.
-4. Repository readiness invokes the canonical GitHub credential resolver.
+4. Repository readiness acquires only the selected connection's own credential and binds `git-default` to the worker's observed Git client policy. A missing, disabled, or unreadable selected credential fails the authenticated operation without using another credential.
 5. Advanced deployments may select a different Git connection explicitly.
 
-`ManagedAgentsGit.md` remains authoritative for Git/GitHub credential-source precedence, token probes, transport shaping, and GitHub permissions. `RepositoryConnection` wraps and selects that resolver boundary; it does not redefine or duplicate the resolver chain. Lore credential resolution remains governed by this design, the Secrets System, and the future repository integration module.
+`ManagedAgentsGit.md` remains authoritative for token probes, transport shaping, and GitHub permissions. Lore credential resolution remains governed by this design, the Secrets System, and the future repository integration module.
 
 ### 3.4 Authored repository target
 
@@ -1420,7 +1421,7 @@ Endpoint, trust, credential resolver, repository allowlist, operation allowlist,
 
 ### CONTRACT-004 The common Git path is deployment-seeded
 
-Ordinary GitHub workflows compile to `repository-connection:git-default`, which selects the existing resolver from `ManagedAgentsGit.md`. Operators do not need to create a connection record before using the common path.
+Ordinary GitHub workflows compile to `repository-connection:git-default`, the recorded default connection holding the deployment's proven GitHub credential reference. Operators with an existing GitHub token configuration do not need to create a connection record before using the common path.
 
 ### CONTRACT-005 One publication evidence contract
 
@@ -1561,9 +1562,9 @@ A product path may advertise only matrix cells with current conformance evidence
 
 An implementation conforms only when it proves at least these cases:
 
-1. startup or Settings reconciliation creates `repository-connection:git-default` from the existing GitHub settings/resolver boundary;
+1. the startup migration records `repository-connection:git-default` from the proven effective legacy GitHub credential reference, and later startups neither reread legacy sources nor overwrite the recorded connection;
 2. an ordinary GitHub workflow requires no manual connection creation and persists the injected default connection ref;
-3. the default Git connection invokes `ManagedAgentsGit.md` credential resolution rather than duplicating its precedence chain;
+3. the default Git connection acquires only its recorded credential reference, and a failure of that source never falls back to ambient GitHub credentials;
 4. new authoring accepts the top-level Git and Lore repository unions;
 5. new authoring rejects the old repository string and `task.git` fields after cutover;
 6. legacy recorded histories replay through the explicit frozen decoder without enabling new legacy submissions;
