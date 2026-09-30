@@ -4488,7 +4488,13 @@ class TemporalIntegrationActivities:
         }
 
     async def publication_recovery_publish(self, payload, /, **kwargs):
-        """Create or adopt exactly one PR using the frozen publication intent."""
+        """Create or adopt exactly one PR using the frozen publication intent.
+
+        The PR effect goes through the existing publisher, which reconciles
+        the same head/base (including closed and merged results) before any
+        create and accepts adoption only for the expected head (#4018).
+        """
+        from moonmind.publish.service import PublishService
         from moonmind.workflows.adapters.github_service import GitHubService
 
         contract = dict((payload or {}).get("contract") or {})
@@ -4506,29 +4512,44 @@ class TemporalIntegrationActivities:
                 "remains failed. Remaining-work evidence: "
                 f"{continuation.get('remainingWorkRef')}"
             )
-        result = await GitHubService().create_pull_request(
-            repo=str(intent.get("repository") or ""),
-            head=str(intent.get("headRef") or ""),
-            base=str(intent.get("baseRef") or ""),
+        repository = str(intent.get("repository") or "")
+        token, error = await GitHubService.resolve_github_token(repo=repository)
+        if not token:
+            raise temporal_exceptions.ApplicationError(
+                f"publication authority is unavailable: {error}",
+                type="PUBLICATION_AUTHORITY_UNAVAILABLE",
+                non_retryable=True,
+            )
+        outcome = await PublishService().publish_pull_request(
+            repository=repository,
+            head_branch=str(intent.get("headRef") or ""),
+            base_branch=str(intent.get("baseRef") or ""),
+            candidate_sha=str(continuation.get("expectedHeadSha") or ""),
+            draft=intent.get("mode") == "draft_pr",
             title=f"Publication recovery: {target.get('sourcePublicationOperationId')}",
             body=body,
-            draft=intent.get("mode") == "draft_pr",
+            github_token=token,
         )
-        if not result.url:
+        if outcome.status == "unavailable" and outcome.retryable:
+            # The retry reconciles this same head/base before any create.
             raise TemporalActivityRuntimeError(
-                f"publication recovery failed before a PR was reconciled: {result.summary}"
+                f"publication recovery PR outcome is unavailable: {outcome.summary}"
             )
-        expected_draft = intent.get("mode") == "draft_pr"
-        if expected_draft and not (result.created or result.adopted):
-            raise TemporalActivityRuntimeError(
-                "publication recovery did not reconcile the authorized draft PR"
+        if outcome.status not in {"created", "adopted"} or not outcome.url:
+            raise temporal_exceptions.ApplicationError(
+                f"publication recovery PR outcome is {outcome.status}: "
+                f"{outcome.summary}",
+                type="PUBLICATION_RECONCILIATION_BLOCKED",
+                non_retryable=True,
             )
         return {
-            "pullRequestUrl": result.url,
-            "headSha": result.head_sha,
-            "created": result.created,
-            "adopted": result.adopted,
-            "reconciliationOutcome": "new" if result.created else "reconciled",
+            "pullRequestUrl": outcome.url,
+            "headSha": outcome.head_sha,
+            "created": outcome.status == "created",
+            "adopted": outcome.status == "adopted",
+            "reconciliationOutcome": (
+                "new" if outcome.status == "created" else "reconciled"
+            ),
         }
 
     async def publication_recovery_verify(self, payload, /, **kwargs):

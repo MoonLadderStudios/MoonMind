@@ -57,8 +57,8 @@ async def test_recurring_publication_uses_durable_retry_and_one_remote_create(mo
                 created = True
                 status, payload = (403 if rate_limited else 500), {'message': 'lost acknowledgment'}
             else:
-                assert self.command == 'PATCH'
-                status, payload = 200, pr
+                # Adoption performs no metadata overwrite (#4018).
+                status, payload = 405, {'message': f'unexpected {self.command}'}
             body = json.dumps(payload).encode()
             self.send_response(status)
             if rate_limited and status == 403:
@@ -101,7 +101,7 @@ async def test_recurring_publication_uses_durable_retry_and_one_remote_create(mo
                 id=queue, task_queue=queue, execution_timeout=timedelta(minutes=2),
             )
         assert result['adopted'] and result['url'] == pr['html_url']
-        assert calls == ['GET', 'POST', 'GET', 'PATCH']
+        assert calls == ['GET', 'POST', 'GET']
         if rate_limited:
             assert observed_times[2] - observed_times[1] >= 1
     finally:

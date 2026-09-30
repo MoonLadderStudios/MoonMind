@@ -473,3 +473,124 @@ def test_action_projection_requires_complete_unambiguous_contract() -> None:
         False,
         "publication_recovery_evidence_missing",
     )
+
+
+def _recovery_provider(monkeypatch, *, state: str, retryable: bool = False) -> dict:
+    """#4018: the recovery PR effect goes through the existing publisher."""
+    from moonmind.workflows.adapters.github_service import (
+        CreatePRResult,
+        GitHubService,
+        PullRequestReconciliation,
+    )
+
+    seen: dict = {"tokens": [], "creates": []}
+
+    async def resolve(explicit_token=None, *, repo=None):
+        assert repo == "MoonLadderStudios/MoonMind"
+        return "destination-token", None
+
+    async def reconcile(self, **kwargs):
+        seen["tokens"].append(kwargs["github_token"])
+        return PullRequestReconciliation(
+            state=state,
+            url="https://github.com/MoonLadderStudios/MoonMind/pull/9",
+            headSha=kwargs["expected_head_sha"],
+            retryable=retryable,
+        )
+
+    async def create(self, **kwargs):
+        seen["creates"].append(kwargs)
+        return CreatePRResult(
+            created=True,
+            url="https://github.com/MoonLadderStudios/MoonMind/pull/10",
+            headSha="a" * 40,
+            summary="created",
+        )
+
+    monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(resolve))
+    monkeypatch.setattr(GitHubService, "reconcile_pull_request", reconcile)
+    monkeypatch.setattr(GitHubService, "create_pull_request", create)
+    return seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["closed", "merged", "mismatched"])
+async def test_recovery_publish_never_recreates_or_overwrites_existing_results(
+    monkeypatch, state
+) -> None:
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    seen = _recovery_provider(monkeypatch, state=state)
+
+    with pytest.raises(ApplicationError) as exc:
+        await TemporalIntegrationActivities().publication_recovery_publish(
+            {"contract": _contract_payload()}
+        )
+
+    assert exc.value.non_retryable is True
+    assert exc.value.type == "PUBLICATION_RECONCILIATION_BLOCKED"
+    assert seen["creates"] == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_publish_adopts_verified_pr_without_create(monkeypatch) -> None:
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    seen = _recovery_provider(monkeypatch, state="matched")
+
+    result = await TemporalIntegrationActivities().publication_recovery_publish(
+        {"contract": _contract_payload()}
+    )
+
+    assert result["adopted"] is True and result["created"] is False
+    assert result["reconciliationOutcome"] == "reconciled"
+    assert result["headSha"] == "a" * 40
+    assert seen["creates"] == []
+    assert seen["tokens"] == ["destination-token"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_publish_creates_once_with_admitted_destination_token(
+    monkeypatch,
+) -> None:
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    seen = _recovery_provider(monkeypatch, state="absent")
+
+    result = await TemporalIntegrationActivities().publication_recovery_publish(
+        {"contract": _contract_payload()}
+    )
+
+    assert result["created"] is True
+    assert result["reconciliationOutcome"] == "new"
+    assert [call["github_token"] for call in seen["creates"]] == ["destination-token"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_publish_unavailable_reconciliation_retries_without_create(
+    monkeypatch,
+) -> None:
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalActivityRuntimeError,
+        TemporalIntegrationActivities,
+    )
+
+    seen = _recovery_provider(monkeypatch, state="unavailable", retryable=True)
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc:
+        await TemporalIntegrationActivities().publication_recovery_publish(
+            {"contract": _contract_payload()}
+        )
+
+    assert not isinstance(exc.value, ApplicationError)
+    assert seen["creates"] == []
