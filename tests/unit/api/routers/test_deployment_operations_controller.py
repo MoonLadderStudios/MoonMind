@@ -434,3 +434,28 @@ def test_historical_workflow_actions_remain_readable_beside_controller_operation
     assert history["operationId"] is None
     assert history["retryAllowed"] is False
     assert temporal.calls == []
+
+
+def test_controller_endpoint_is_resolved_only_from_an_installed_controller(
+    tmp_path: Path,
+) -> None:
+    resolve = controller_client.resolve_controller_endpoint
+    state = tmp_path / "state"
+    env = {"MOONMIND_CONTROLLER_STATE_DIR": str(state)}
+    assert resolve(env) is None
+    (state / "secrets").mkdir(parents=True)
+    (state / "secrets" / "controller-bearer").write_text("s3cret\n")
+    # An install that could not pin its image left an identity only.
+    (state / "controller-identity.json").write_text(
+        json.dumps({"project": "moonmind-controller-x", "port": 8511, "alias": "evil"})
+    )
+    (state / "controller-image.json").write_text(json.dumps({"verified": False}))
+    assert resolve(env) is None
+    (state / "controller-image.json").write_text(json.dumps({"verified": True}))
+    endpoint = resolve(env)
+    # The host is the fixed network alias; a state file never redirects it.
+    assert endpoint == controller_client.ControllerEndpoint(
+        base_url="http://moonmind-controller:8511", secret="s3cret"
+    )
+    explicit = resolve({**env, "MOONMIND_CONTROLLER_URL": "http://controller.test:1/"})
+    assert explicit.base_url == "http://controller.test:1"
