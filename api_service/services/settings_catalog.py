@@ -601,7 +601,12 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
     SettingRegistryEntry(
         key="integrations.github.token_ref",
         title="GitHub Token Reference",
-        description="Secret reference used for GitHub API access.",
+        description=(
+            "Managed secret recorded as the default GitHub connection "
+            "credential at the next restart when no GitHub token is "
+            "configured in the environment. Changing it later does not "
+            "change the recorded connection."
+        ),
         category="Integrations",
         section="providers-secrets",
         value_type="secret_ref",
