@@ -25,6 +25,7 @@ remains usable.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -101,8 +102,10 @@ def compose_base(
         "--project-directory",
         project_dir,
     ]
+    # Compose resolves a relative `-f` against the process working directory,
+    # and the controller does not run from the checkout.
     for compose_file in compose_files:
-        base.extend(["-f", compose_file])
+        base.extend(["-f", os.path.join(project_dir, compose_file)])
     # Layered env files in order: Compose applies them left to right, so the
     # deployment-owned `.env` stays first and the controller-owned image
     # overlay overrides only the release selection. Passing only the overlay

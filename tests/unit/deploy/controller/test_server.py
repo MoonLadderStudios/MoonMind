@@ -909,6 +909,48 @@ def test_default_target_is_derived_from_the_mounted_checkout(
     ]
 
 
+def _compose_file_args(command):
+    return [command[i + 1] for i, arg in enumerate(command) if arg == "-f"]
+
+
+def test_default_target_resolves_compose_files_from_any_working_directory(
+    controller_path, tmp_path, monkeypatch
+):
+    """The controller runs from its own directory, not the checkout.
+
+    Compose resolves a relative ``-f`` against the process working
+    directory, so the files it is given must name the checkout's own files.
+    """
+    import os
+
+    server_mod = load("server")
+    repo = tmp_path / "MoonMind"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    (repo / "docker-compose.override.yaml").write_text("services: {}\n")
+    elsewhere = tmp_path / "opt-moonmind-controller"
+    elsewhere.mkdir()
+    (elsewhere / "docker-compose.yaml").write_text("services: {decoy: {}}\n")
+    monkeypatch.chdir(elsewhere)
+    commands = []
+
+    class _Runner:
+        def run(self, args, timeout_seconds):
+            commands.append(tuple(args))
+            return {"exit": 0, "output": "api\n"}
+
+    target = server_mod.default_target("moonmind", repo=str(repo), runner=_Runner())
+    assert target["composeFiles"] == [
+        "docker-compose.yaml",
+        "docker-compose.override.yaml",
+    ]
+    files = _compose_file_args(commands[0])
+    assert [os.path.realpath(name) for name in files] == [
+        str((repo / "docker-compose.yaml").resolve()),
+        str((repo / "docker-compose.override.yaml").resolve()),
+    ]
+
+
 def test_default_target_uses_the_override_file_and_refuses_escapes(
     controller_path, tmp_path
 ):
