@@ -211,6 +211,18 @@ async def load_recorded_default_git_connection() -> RepositoryConnection | None:
 _OPERATOR_PRINCIPAL_REF = "owner:operator"
 
 
+def _credential_reference(connection: RepositoryConnection) -> str:
+    """Name a connection's credential reference for diagnostics (no value)."""
+
+    credential = connection.credential
+    if credential.source == "secret_ref":
+        ref = credential.credential_ref
+        return f"{ref.provider}://{ref.key}"
+    if credential.source == "github_app":
+        return f"GitHub App installation {credential.installation_ref}"
+    return credential.source
+
+
 class _SelectedCredentialReady:
     """Readiness marker: the selected connection's credential was acquired."""
 
@@ -741,13 +753,15 @@ class ManagedRuntimeLauncher:
             code = str(getattr(exc, "code", "") or type(exc).__name__)
             raise RepositoryContractError(
                 REPOSITORY_CREDENTIAL_UNAVAILABLE,
-                f"the credential of the selected connection {connection.id} is "
-                f"unavailable ({code}); no other GitHub credential is used",
+                f"the selected connection {connection.id} reads "
+                f"{_credential_reference(connection)}, which is unavailable "
+                f"({code}); restore it. No other GitHub credential is used",
             ) from exc
         if not token:
             raise RepositoryContractError(
                 REPOSITORY_CREDENTIAL_UNAVAILABLE,
-                f"the credential of the selected connection {connection.id} is empty",
+                f"the selected connection {connection.id} reads "
+                f"{_credential_reference(connection)}, which is empty",
             )
         return token
 

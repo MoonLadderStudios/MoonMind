@@ -157,8 +157,11 @@ async def test_selected_source_failure_never_falls_back_to_ambient(
         await launcher._ensure_repository_ready_for_launch(_request(), None)
     with pytest.raises(
         RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
-    ):
+    ) as failed:
         await launcher._selected_repository_github_token(_request())
+    # The correction names the selected reference to restore, never a value.
+    assert "env://MISSING_GITHUB_PAT" in str(failed.value)
+    assert _AMBIENT_A not in str(failed.value)
     ambient_resolver.assert_not_awaited()
     launcher._observe_git_remote_tip.assert_not_awaited()
 
