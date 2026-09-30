@@ -2439,7 +2439,7 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
     github_request = _request().model_copy(
         update={"workspace_spec": {"repository": "owner/repo"}}
     )
-    attestation_call = attestor.attest(
+    attest_kwargs = dict(
         request=github_request,
         plan=attest_plan,
         spec=spec,
@@ -2455,7 +2455,7 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
     )
     if github_failure:
         with pytest.raises(HarnessPlatformError, match="HTTP 401") as raised:
-            await attestation_call
+            await attestor.attest(**attest_kwargs)
         assert (
             raised.value.code
             == HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH
@@ -2469,7 +2469,7 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
                 for payload in attestor._artifacts.payloads
             )
         return
-    attestations = await attestation_call
+    attestations = await attestor.attest(**attest_kwargs)
     evidence = next(
         payload
         for payload in attestor._artifacts.payloads
