@@ -21,6 +21,7 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryClientPolicy,
     RepositoryConnection,
     RepositoryContractError,
+    decode_legacy_repository_history_v1,
 )
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -258,4 +259,31 @@ async def test_repository_target_clone_token_comes_from_selected_connection(
 
     assert token == _SELECTED_B
     launch_resolver.assert_not_awaited()
+    ambient_resolver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recorded_scalar_repository_uses_migrated_identity_under_current_authority(
+    tmp_path, ambient_resolver
+):
+    """Histories and schedules keep their bytes; current use stays authorized.
+
+    A recorded scalar repository decodes through the frozen v1 reader to
+    ``git-default`` (no schedule recreation), which now names the migrated
+    legacy identity. A deleted connection is never reacquired from history.
+    """
+
+    request = _request()
+    request.workspace_spec["repositoryTarget"] = decode_legacy_repository_history_v1(
+        "MoonLadderStudios/MoonMind", "main"
+    ).model_dump(by_alias=True, mode="json")
+
+    live = _launcher(tmp_path, AsyncMock(return_value=_connection()))
+    assert await live._selected_repository_github_token(request) == _SELECTED_B
+
+    deleted = _launcher(tmp_path, AsyncMock(return_value=None))
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
+    ):
+        await deleted._selected_repository_github_token(request)
     ambient_resolver.assert_not_awaited()
