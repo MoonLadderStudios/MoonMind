@@ -98,6 +98,7 @@ import {
   normalizeGovernanceReportStatus,
 } from '../lib/governanceReport';
 import { WorkflowNativeChatRoute } from '../features/workflow-native-chat';
+import { fetchCapturedEvidence } from '../features/workflow-native-chat/WorkflowTerminalChatActions';
 import {
   buildContinueInNewWorkflowBody,
   buildSavedResultDownloadHref,
@@ -105,6 +106,7 @@ import {
   canDownloadSavedResultRaw,
   projectSavedResults,
   resolveUncertainSavedResultSubmission,
+  savedResultErrorMessage,
   savedResultIdempotencyKey,
   shouldApplySavedResultResponse,
 } from './saved-results';
@@ -8552,8 +8554,11 @@ function SavedResultsSection({
   artifacts,
   isLoading,
   error,
+  stale,
   onRefresh,
   onPublishSavedWork,
+  publishAvailable,
+  publishDisabledReason,
   publishBusy,
 }: {
   workflowId: string;
@@ -8563,10 +8568,30 @@ function SavedResultsSection({
   artifacts: z.infer<typeof ArtifactSummarySchema>[];
   isLoading: boolean;
   error: Error | null;
+  stale: boolean;
   onRefresh: () => void;
   onPublishSavedWork: () => void;
+  publishAvailable: boolean;
+  publishDisabledReason: string | null;
   publishBusy: boolean;
 }) {
+  // `/continue` authorizes only the source's captured-evidence refs, so only
+  // those saved outputs are submitted with a continuation.
+  const capturedEvidenceQuery = useQuery({
+    queryKey: ['workflow-captured-evidence', workflowId],
+    queryFn: () => fetchCapturedEvidence(apiBase, workflowId),
+    enabled: Boolean(workflowId),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const capturedEvidence = capturedEvidenceQuery.data;
+  const authorizedContinuationRefs = useMemo(
+    () =>
+      capturedEvidence?.available
+        ? capturedEvidence.items.map((item) => item.artifactRef)
+        : [],
+    [capturedEvidence],
+  );
   const projection = useMemo(
     () =>
       projectSavedResults({
@@ -8581,10 +8606,11 @@ function SavedResultsSection({
           artifacts as unknown as Parameters<
             typeof projectSavedResults
           >[0]['artifacts'],
-        artifactsStale: false,
+        artifactsStale: stale,
         artifactsError: error,
+        authorizedContinuationRefs,
       }),
-    [workflowId, runId, execution, artifacts, error],
+    [workflowId, runId, execution, artifacts, stale, error, authorizedContinuationRefs],
   );
   const selectionKeyRef = useRef(projection.selectedKey);
   selectionKeyRef.current = projection.selectedKey;
@@ -8600,14 +8626,14 @@ function SavedResultsSection({
     error?: string | undefined;
   }>({ status: 'idle' });
   const [actionError, setActionError] = useState<string | null>(null);
+  // Continuation state belongs to one selected run: a new selection starts
+  // idle rather than inheriting a pending or admitted operation.
+  useEffect(() => {
+    setContinueState({ status: 'idle' });
+    setActionError(null);
+  }, [projection.selectedKey]);
 
-  const completeRefs = projection.entries
-    .filter((entry) => entry.complete)
-    .map((entry) => entry.artifactId);
-  const terminalSource =
-    projection.computeOutcome === 'failed' ||
-    projection.computeOutcome === 'canceled' ||
-    projection.computeOutcome === 'completed';
+  const terminalSource = projection.terminalSource;
 
   const handleContinue = async () => {
     if (
@@ -8623,7 +8649,7 @@ function SavedResultsSection({
     try {
       const body = buildContinueInNewWorkflowBody({
         idempotencyKey: continueIdempotencyKey,
-        selectedSourceArtifactRefs: completeRefs,
+        selectedSourceArtifactRefs: projection.continuationRefs,
         instructions: 'Continue working from the selected saved result.',
       });
       const response = await fetch(
@@ -8677,7 +8703,8 @@ function SavedResultsSection({
           return;
         }
         throw new Error(
-          textOf(payload) || `Continue: ${response.statusText || response.status}`,
+          savedResultErrorMessage(payload) ||
+            `Continue: ${response.statusText || response.status}`,
         );
       }
       setContinueState({
@@ -8768,7 +8795,7 @@ function SavedResultsSection({
               {formatStatusLabel(projection.publicationOutcome)}
             </Card>
             <Card label="Cleanup">
-              {projection.cleanupPreserved ? 'Preserved' : 'Unknown'}
+              {formatStatusLabel(projection.cleanupOutcome)}
             </Card>
           </div>
           <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
@@ -8816,7 +8843,7 @@ function SavedResultsSection({
                       <td>{entry.retention ?? 'Unknown'}</td>
                       <td>
                         <div className="actions">
-                          {source ? (
+                          {source && !entry.expired ? (
                             <a
                               className="button secondary"
                               href={buildSavedResultPreviewHref(
@@ -8830,7 +8857,9 @@ function SavedResultsSection({
                               Preview
                             </a>
                           ) : null}
-                          {source && rawAllowed ? (
+                          {entry.expired ? (
+                            <span className="small">Expired</span>
+                          ) : source && rawAllowed ? (
                             <a
                               className="button secondary"
                               href={buildSavedResultDownloadHref(
@@ -8873,7 +8902,8 @@ function SavedResultsSection({
             <button
               type="button"
               className="secondary"
-              disabled={publishBusy}
+              disabled={!publishAvailable || publishBusy}
+              title={publishAvailable ? undefined : publishDisabledReason ?? undefined}
               onClick={handlePublish}
             >
               Publish saved work
@@ -8895,23 +8925,6 @@ function SavedResultsSection({
       )}
     </section>
   );
-}
-
-function textOf(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (value && typeof value === 'object') {
-    const detail = (value as Record<string, unknown>).detail;
-    if (typeof detail === 'string') {
-      return detail;
-    }
-    const message = (value as Record<string, unknown>).message;
-    if (typeof message === 'string') {
-      return message;
-    }
-  }
-  return '';
 }
 
 function InterventionMonitorPanel({
@@ -11437,12 +11450,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 execution={execution}
                 artifacts={artifactsQuery.data?.artifacts || []}
                 isLoading={artifactsQuery.isLoading}
-                error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
+                error={artifactsQuery.isLoadingError ? (artifactsQuery.error as Error) : null}
+                stale={artifactsQuery.isRefetchError}
                 onRefresh={invalidate}
                 onPublishSavedWork={() => {
                   setActionError(null);
                   retryPublicationMutation.mutate();
                 }}
+                publishAvailable={Boolean(actionsOn && actions?.canRetryPublication)}
+                publishDisabledReason={
+                  actionsOn
+                    ? actionDisabledReason('canRetryPublication')
+                    : 'Workflow actions are disabled.'
+                }
                 publishBusy={retryPublicationMutation.isPending}
               />
 

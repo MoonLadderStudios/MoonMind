@@ -977,7 +977,17 @@ Rules:
   cleanup never erases either. Missing or stale projection data shows an
   unavailable/pending state with the existing refresh behavior. The UI
   never restarts compute or invents a frontend-only status to repair
-  presentation.
+  presentation. Publication reads the control-stop
+  `auxiliaryOutcomes.gitPublication` status first; cleanup reports the
+  recorded `hostCleanup`/`providerProfileRelease`/`janitorRequired`
+  outcome, or unknown when no evidence exists.
+- Saved outputs are only artifacts linked as results (`output.*` other
+  than `output.logs`, `report.*`, repository/patch/checkpoint links, or
+  `result`); inputs, runtime logs, and debug evidence are not saved work.
+  Continuation submits only complete saved outputs that the source's
+  captured evidence authorizes. Expiry comes from the artifact's
+  `expires_at` (or a `DELETED` status), and expired entries show no
+  Preview/Download affordance.
 - Completeness never comes from a provider exit code, a local directory
   path, an absent digest, or a permissive generic metadata default. Only
   a server `COMPLETE` status bound to real content identity (digest plus
@@ -995,9 +1005,12 @@ Rules:
   the existing required confirmation: Download via the authorized
   artifact download endpoint; Continue working via
   `POST /executions/{workflow_id}/continue` (fresh admitted execution,
-  never a revived session/lease); Publish Saved Work via the
-  publication-only `POST /executions/{workflow_id}/retry-publication`
-  path (no model rerun). Changing the actual destination/base/content
+  never a revived session/lease, available for every terminal state
+  including `no_commit`); Publish Saved Work via the publication-only
+  `POST /executions/{workflow_id}/retry-publication` path (no model
+  rerun), enabled only by the server's `canRetryPublication` capability.
+  An idempotency conflict counts as a reused operation only when it
+  returns the confirmed destination. Changing the actual destination/base/content
   invalidates its old preview approval through the existing destination
   checks, without a second approval system or routine manual review.
 - Instance/resource cache keys stay under the single-user model: no
