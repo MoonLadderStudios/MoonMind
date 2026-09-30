@@ -85,8 +85,24 @@ def github_boundary(candidate, pull_request, monkeypatch):
             return httpx.Response(200, json={"default_branch": "release"})
         if path == "/repos/example/repo/pulls/2":
             return httpx.Response(200, json=pull_request)
+        if "/compare/" in path:
+            base, head = path.split("/compare/", 1)[1].split("...", 1)
+            if base == git(repo, "rev-parse", head):
+                status = "identical"
+            else:
+                ancestor = subprocess.run(
+                    ["git", "-C", str(repo), "merge-base", "--is-ancestor", base, head]
+                )
+                status = "ahead" if ancestor.returncode == 0 else "diverged"
+            return httpx.Response(200, json={"status": status})
         if "/commits/" in path:
             ref = path.split("/commits/", 1)[1]
+            known = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", ref],
+                capture_output=True,
+            )
+            if known.returncode:
+                return httpx.Response(404, json={"message": "No commit found for SHA"})
             return httpx.Response(
                 200,
                 json={
@@ -439,8 +455,10 @@ async def test_jira_review_rejects_stale_or_incomplete_candidate_proof(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("target", [None, "release"])
-@pytest.mark.parametrize("defect", [None, "open", "head", "issue", "target", "configured-target", "number", "moved", "missing"])
+# "origin/release" is the remote-tracking name a workspace records as its
+# publish base; "advanced" is a later merge landing on the target after ours.
+@pytest.mark.parametrize("target", [None, "release", "origin/release"])
+@pytest.mark.parametrize("defect", [None, "advanced", "open", "head", "issue", "target", "configured-target", "number", "moved", "missing"])
 async def test_post_merge_activity_validates_real_merge_before_github_completion(
     candidate, pull_request, github_boundary, monkeypatch, target, defect,
 ):
@@ -458,7 +476,7 @@ async def test_post_merge_activity_validates_real_merge_before_github_completion
     parent._repo = "example/repo"
     parent._publish_context.update(branch="feature", baseRef=target)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
-    completion_target = "refs/heads/feature" if defect == "configured-target" else f"refs/heads/{target}" if target else ""
+    completion_target = "refs/heads/feature" if defect == "configured-target" else "refs/heads/release" if target == "release" else ""
     payload = parent._build_merge_gate_start_payload(
         parameters={"publishMode": "pr", "mergeAutomation": {"enabled": True},
                     "workflow": {"inputs": {"github_issue": {"repository": "example/repo", "number": 1},
@@ -481,6 +499,10 @@ async def test_post_merge_activity_validates_real_merge_before_github_completion
         gate._input.pull_request.number = 3
     elif defect == "moved":
         git(repo, "update-ref", "refs/heads/release", git(repo, "rev-parse", "HEAD"))
+    elif defect == "advanced":
+        later = git(repo, "commit-tree", git(repo, "rev-parse", "HEAD^{tree}"), "-p", squash, "-m", "later merge")
+        git(repo, "update-ref", "refs/heads/release", later)
+    succeeds = defect in {None, "advanced"}
 
     async def dispatch(name, activity_payload, **kwargs):
         assert name == "merge_automation.complete_post_merge_github"
@@ -494,6 +516,6 @@ async def test_post_merge_activity_validates_real_merge_before_github_completion
 
     monkeypatch.setattr(merge_module.workflow, "execute_activity", dispatch)
     completed = await gate._complete_post_merge_github(resolver_disposition="merged")
-    assert completed is (defect is None), gate._post_merge_github_result
-    assert issue["state"] == ("open" if defect else "closed")
-    assert any(method != "GET" for method, _ in requests) is (defect is None)
+    assert completed is succeeds, gate._post_merge_github_result
+    assert issue["state"] == ("closed" if succeeds else "open")
+    assert any(method != "GET" for method, _ in requests) is succeeds

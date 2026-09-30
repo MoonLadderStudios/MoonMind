@@ -159,8 +159,9 @@ steps:
     requirement. Materialize the `constraints` input value to
     artifacts/batch-workflows-constraints.txt with a file write (never via
     shell echo, redirection, or interpolation of the value into a shell
-    command). When the constraints input is empty, leave the file absent
-    and send empty constraints.
+    command). When the constraints input is empty, write no file; the
+    rendered command then omits --constraints-file, so a file left by an
+    earlier run is never read.
 
     The trusted GitHub query excludes closed issues, pull requests, absent
     numbers, and responses without an explicit open state, rejects numeric
@@ -170,16 +171,17 @@ steps:
     Resolve the range and queue each matched issue with "{{ inputs.run_ref }}",
     publish override "{{ inputs.publish_mode }}", cap {{ inputs.max_workflows }}
     targets, and run_verify="{{ inputs.run_verify }}" from inputs. Invoke the
-    resolved Skill entrypoint exactly once with data-safe arguments:
+    resolved Skill entrypoint exactly once, quoted exactly as rendered, with
+    data-safe arguments:
     python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
-    --github-issue-range "{{ inputs.issue_range }}" \
-    --github-repository "{{ inputs.repository }}" \
+    --github-issue-range {{ inputs.issue_range | shell_quote }} \
+    --github-repository {{ inputs.repository | shell_quote }} \
     --repository-connection-ref "$MOONMIND_REPOSITORY_CONNECTION_REF" \
-    --run-ref "{{ inputs.run_ref }}" \
-    --publish-mode "{{ inputs.publish_mode }}" \
-    --max-workflows "{{ inputs.max_workflows }}" \
-    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
-    --constraints-file artifacts/batch-workflows-constraints.txt
+    --run-ref {{ inputs.run_ref | shell_quote }} \
+    --publish-mode {{ inputs.publish_mode | shell_quote }} \{% if inputs.max_workflows %}
+    --max-workflows {{ inputs.max_workflows | shell_quote }} \{% endif %}
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %}{% if inputs.constraints %} \
+    --constraints-file artifacts/batch-workflows-constraints.txt{% endif %}
     The arbitrary constraints value travels only as batchOrchestration
     sharedInputs data and the fixed constraints file path; never interpolate
     the constraints value into shell commands. The batchOrchestration binding

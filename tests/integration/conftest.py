@@ -52,9 +52,6 @@ def control_plane_postgres_url():
     if os.geteuid() == 0:
         shutil.chown(data_root, user="postgres", group="postgres")
         command_prefix = ["runuser", "--user", "postgres", "--"]
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
     subprocess.run(
         [
             *command_prefix,
@@ -73,23 +70,36 @@ def control_plane_postgres_url():
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        [
-            *command_prefix,
-            pg_ctl,
-            "--pgdata",
-            str(data_dir),
-            "--log",
-            str(log_path),
-            "--options",
-            f"-F -p {port} -h 127.0.0.1 -k {data_dir}",
-            "--wait",
-            "start",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    # The probed port is free only until it is closed, so a parallel worker
+    # can take it before the server binds; retry on a fresh port.
+    for _attempt in range(3):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        started = subprocess.run(
+            [
+                *command_prefix,
+                pg_ctl,
+                "--pgdata",
+                str(data_dir),
+                "--log",
+                str(log_path),
+                "--options",
+                f"-F -p {port} -h 127.0.0.1 -k {data_dir}",
+                "--wait",
+                "start",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if started.returncode == 0:
+            break
+    else:
+        server_log = log_path.read_text(errors="replace")[-4000:] if log_path.exists() else ""
+        shutil.rmtree(data_root, ignore_errors=True)
+        pytest.fail(
+            f"PostgreSQL did not start: {started.stdout}{started.stderr}\n{server_log}"
+        )
     try:
         yield f"postgresql+asyncpg://postgres@127.0.0.1:{port}/postgres"
     finally:

@@ -3309,6 +3309,10 @@ async def test_remaining_work_digest_is_independent_of_entry_order() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "remaining_ref",
+    [None, "https://github.com/org/repo/issues/2727", "artifacts/remaining.json"],
+)
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
 @pytest.mark.parametrize(
     "supplied_digest",
@@ -3319,6 +3323,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
     monkeypatch: pytest.MonkeyPatch,
     runtime: str,
     supplied_digest: str | None,
+    remaining_ref: str | None,
 ) -> None:
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3332,6 +3337,8 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
                 ).read_text(encoding="utf-8")
             )
             payload = fixture["verifierPayload"]
+            if remaining_ref:
+                payload["remainingWorkRef"] = remaining_ref
             refs = payload["validatedRefs"]
             if supplied_digest == "absent":
                 # Historical verifier payloads omitted publisher metadata.

@@ -6,9 +6,13 @@ Source issue: MoonLadderStudios/MoonMind#3710.
 This is a lightweight, credential-free consumer of a non-secret status
 document (assembled from the GitHub Actions / self-hosted runner API and the
 latest published acceptance manifest).  It emits a versioned readiness
-projection and exits non-zero when the protected provider-verification tier is
-queued, offline, stale, incomplete, or missing a successful canary for the
-deployed commit and required image digests.
+projection whose ``rolloutReady`` is false when the protected
+provider-verification tier is queued, offline, stale, incomplete, or missing a
+successful canary for the deployed commit and required image digests.  Strict
+consumers (``assert_live_health_projection``) fail closed on that projection;
+this observer only warns, so an unprovisioned protected runner is reported
+instead of failing every scheduled run.  It exits non-zero only when the status
+document cannot be evaluated.
 
 Usage:
     python tools/omnigent_live_verification_health.py --status status.json
@@ -89,8 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not projection["rolloutReady"]:
         reasons = ", ".join(projection["notReadyReasons"]) or "unknown"
-        print(f"::error::Omnigent live verification is not ready: {reasons}")
-        return 1
+        print(f"::warning::Omnigent live verification is not ready: {reasons}")
     return 0
 
 

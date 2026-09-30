@@ -76,6 +76,16 @@ def test_opencode_materializer_pins_deterministic_server_startup_environment():
     assert syntax.returncode == 0, syntax.stderr
 
 
+_EGRESS_PROXY_NAMES = {
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+}
+
+
 def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
     _script, environment = _build(target_path="/run/mm-credentials/other")
 
@@ -86,7 +96,23 @@ def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
     assert set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")) == {
         "MOONMIND_ACTIVE_SKILLS_DIR",
         "MOONMIND_STEP_EXECUTION_ID",
-    }
+    } | _EGRESS_PROXY_NAMES
+
+
+@pytest.mark.parametrize("target_path", ["/home/app/.claude", "/home/app/.codex"])
+def test_oauth_home_runners_keep_the_restricted_egress_proxy(target_path):
+    """Every on-demand host sits behind the egress proxy, not only OpenCode.
+
+    Omnigent filters the host environment before spawning a runner, so a
+    Claude or Codex runner that loses these names resolves provider DNS
+    directly and fails (``EAI_AGAIN``) on the restricted network.
+    """
+
+    _script, environment = _build(target_path=target_path)
+
+    passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
+    assert _EGRESS_PROXY_NAMES <= passthrough
+    assert not any(name.startswith("OPENCODE_") for name in environment)
 
 
 def test_credentialless_opencode_runtime_builds_wrapper_without_auth_mount():

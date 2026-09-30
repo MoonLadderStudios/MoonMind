@@ -18,6 +18,7 @@ from temporalio import activity
 
 from api_service.db.models import GitHubIssueClaim
 from moonmind.workflows.temporal.github_issue_attempts import (
+    ATTEMPT_ACTIVITY_PREPARING,
     parse_attempt_comment,
 )
 
@@ -358,6 +359,7 @@ def inspect_claim_comments(
     successor's labels, overwrites their PR, or reports stopped writers.
     """
     from moonmind.workflows.temporal.github_issue_claim_lease import (
+        RESERVATION_LIVE,
         blocks_new_work,
         reservation_status,
     )
@@ -416,6 +418,21 @@ def inspect_claim_comments(
         raise ValueError(
             "claim_evidence_conflict: own receipt is missing or duplicated"
         )
+    if own and own[0].isdigit():
+        # GitHub comment IDs totally order simultaneous announcements. The
+        # earliest claim continues and a later one still preparing yields, so
+        # deployments racing for one issue cannot all stand down. A contender
+        # that has started work still stops this attempt.
+        contenders = [
+            item
+            for item in contenders
+            if not (
+                item["reservationStatus"] == RESERVATION_LIVE
+                and item.get("activity") == ATTEMPT_ACTIVITY_PREPARING
+                and item["commentId"].isdigit()
+                and int(item["commentId"]) > int(own[0])
+            )
+        ]
     if block_on_contenders and contenders and not observed_release:
         raise ActiveIssueClaimConflict(
             "active_attempt_conflict: another unresolved attempt is present",
