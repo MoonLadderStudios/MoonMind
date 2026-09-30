@@ -974,6 +974,26 @@ def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
     assert outputs["full_backend"] == "false", changed_path
 
 
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "tests/e2e/test_operations_controller_journey_browser.py",
+        "api_service/api/routers/deployment_operations.py",
+        "api_service/services/deployment_operations.py",
+        "deploy/controller/server.py",
+        "frontend/src/components/settings/OperationsSettingsSection.tsx",
+    ],
+)
+def test_operations_controller_journey_boundaries_select_integration_ci(
+    changed_path: str,
+) -> None:
+    """MoonLadderStudios/MoonMind#4502: the compiled-dashboard Operations journey
+    runs in the integration-ci job, so the router, service, controller, and
+    page it drives must select that job."""
+    outputs = _outputs([changed_path])
+    assert outputs["integration_ci"] == "true", changed_path
+
+
 def test_single_user_design_prose_does_not_select_integration_ci() -> None:
     """Design prose stays on the fast shard without the integration foundation."""
     outputs = _outputs(["docs/SingleUserApplicationDesign.md", "README.md"])
