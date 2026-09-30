@@ -922,6 +922,15 @@ services:
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
+      # Managed Skills run here. The standalone deployment controller's
+      # bearer secret and the operation records it applies on restart live
+      # in deploy/state/controller, so both views of it are empty.
+      - type: tmpfs
+        target: /workspace/host_project/deploy/state/controller
+        read_only: true
+      - type: tmpfs
+        target: /workspace/deployment_state/controller
+        read_only: true
       - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
       - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw

@@ -60,6 +60,8 @@ artifacts*/
 /deploy/state/locks/
 /deploy/state/release-jobs/
 /deploy/state/release-submissions/
+/deploy/state/controller/*
+!/deploy/state/controller/.gitkeep
 live_streams.spool
 .specify/feature.json
 
