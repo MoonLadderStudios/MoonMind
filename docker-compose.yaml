@@ -1006,6 +1006,9 @@ services:
       - MOONMIND_DEPLOYMENT_LOCK_DIR=${MOONMIND_DEPLOYMENT_LOCK_DIR:-/workspace/deployment_state/locks}
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-}
+      # With an installed standalone controller, deployment.update_compose_stack
+      # only submits and observes the controller's operation (#4502).
+      - MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       # Omnigent release migration runs in this worker: it needs the same
       # effective defaults as the runtime-facing services, otherwise the
@@ -1069,6 +1072,7 @@ services:
     networks:
       - control-plane-network
       - docker-proxy-network
+      - deployment-controller-network
     restart: unless-stopped
 
   temporal-worker-integrations:
@@ -1733,9 +1737,9 @@ networks:
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
     internal: true
-  # Private link from the API to the standalone deployment controller, which
-  # joins it under the `moonmind-controller` alias. Only the API is attached:
-  # agent runtimes never reach the controller endpoint.
+  # Private link from the API and the deployment-control worker to the
+  # standalone deployment controller, which joins it under the
+  # `moonmind-controller` alias. Agent runtimes are never attached.
   deployment-controller-network:
     name: ${MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK:-moonmind_deployment-controller-network}
     internal: true

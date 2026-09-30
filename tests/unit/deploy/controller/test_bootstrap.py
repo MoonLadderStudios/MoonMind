@@ -250,3 +250,41 @@ def test_bootstrap_start_creates_a_missing_api_network_before_up(
     ]
     kinds = [kind for kind, _ in calls]
     assert kinds.index("compose") > kinds.index("run")
+
+
+def test_only_trusted_deployment_services_join_the_controller_link(controller_path):
+    """The controller endpoint is reachable by the API and deployment worker only."""
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    bootstrap = load("bootstrap")
+    compose = yaml.safe_load(
+        (Path(controller_path).parents[1] / "docker-compose.yaml").read_text()
+    )
+    link = compose["networks"][bootstrap.TARGET_NETWORK_KEY]
+    assert link["internal"] is True
+    # Compose names the network from the same setting bootstrap resolves.
+    assert link["name"] == (
+        f"${{{bootstrap.TARGET_NETWORK_SETTING}:-{bootstrap.DEFAULT_TARGET_NETWORK}}}"
+    )
+    attached = sorted(
+        name
+        for name, service in compose["services"].items()
+        if bootstrap.TARGET_NETWORK_KEY in (service.get("networks") or [])
+    )
+    assert attached == ["api", "temporal-worker-deployment-control"]
+    for name in attached:
+        environment = compose["services"][name]["environment"]
+        state_dirs = [
+            item
+            for item in environment
+            if re.match(r"^MOONMIND_CONTROLLER_STATE_DIR=", item)
+        ]
+        # The controller state is read from the deployment state mount; the
+        # controller secret is never an environment value.
+        assert state_dirs == [
+            "MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller"
+        ]
+        assert not any("CONTROLLER_SECRET" in item for item in environment)

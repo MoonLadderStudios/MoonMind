@@ -8,13 +8,11 @@ fails if Temporal is touched. Only the Compose applier is replaced.
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 import threading
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable, Iterator
 from uuid import uuid4
 
 import pytest
@@ -26,21 +24,21 @@ from api_service.api.routers.deployment_operations import (
     router,
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
-from api_service.services import deployment_operations as operations_service
+from moonmind.workflows.skills import deployment_controller as controller_client
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
 )
+from tests.support.deployment_controller import (
+    DEFAULT_TARGET,
+    InProcessController,
+    forget_controller_modules,
+    install_controller_state,
+    load_controller_modules,
+    slow_applier,
+)
 
-CONTROLLER_DIR = Path(__file__).resolve().parents[4] / "deploy" / "controller"
-_CONTROLLER_MODULES = ("redact", "mounts", "lock", "record", "engine", "server")
 SECRET = "controller-test-secret-value"
-TARGET = {
-    "project": "moonmind",
-    "projectDir": "/srv/moonmind",
-    "composeFiles": ["docker-compose.yaml"],
-    "services": ["api"],
-}
 IMAGE_REPOSITORY = "ghcr.io/moonladderstudios/moonmind"
 
 
@@ -61,66 +59,13 @@ class _TemporalStopped:
         raise ConnectionError("Temporal is stopped")
 
 
-class _Controller:
-    def __init__(self, state_dir: Path, applier: Callable[[dict], object]) -> None:
-        self.server = importlib.import_module("server")
-        record = importlib.import_module("record")
-        self.engine = importlib.import_module("engine")
-        self.record = record
-        self.store = record.OperationStore(state_dir)
-        self.applied: list[str] = []
-
-        def tracking_applier(operation: dict) -> object:
-            self.applied.append(operation["operationId"])
-            return applier(operation)
-
-        app = self.server.build_app(
-            store=self.store,
-            secret=SECRET,
-            applier=tracking_applier,
-            target_resolver=lambda stack: dict(TARGET),
-        )
-        self.httpd = self.server.make_http_server("127.0.0.1", 0, app)
-        self.port = self.httpd.server_address[1]
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-        self.thread.start()
-
-    def close(self) -> None:
-        if self.thread.is_alive():
-            self.httpd.shutdown()
-            self.thread.join(timeout=10)
-        self.httpd.server_close()
-
-
-@pytest.fixture
-def controller_modules(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.syspath_prepend(str(CONTROLLER_DIR))
-    for name in _CONTROLLER_MODULES:
-        sys.modules.pop(name, None)
-    yield
-    for name in _CONTROLLER_MODULES:
-        sys.modules.pop(name, None)
-
-
-def _install_controller_state(state_dir: Path, *, port: int, secret: str) -> None:
-    """Write what bootstrap install leaves in the deployment state mount."""
-    (state_dir / "secrets").mkdir(parents=True, exist_ok=True)
-    (state_dir / "secrets" / "controller-bearer").write_text(secret + "\n")
-    (state_dir / "controller-identity.json").write_text(
-        json.dumps({"project": "moonmind-controller-abc", "port": port})
-    )
-    (state_dir / "controller-image.json").write_text(
-        json.dumps({"pinned": "ctl@sha256:" + "a" * 64, "verified": True})
-    )
-
-
 @pytest.fixture
 def controller_factory(
-    controller_modules: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Callable[..., _Controller]]:
-    started: list[_Controller] = []
+) -> Iterator[Callable[..., InProcessController]]:
+    load_controller_modules(monkeypatch)
+    started: list[InProcessController] = []
     state_dir = tmp_path / "controller-state"
     state_dir.mkdir()
     monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(state_dir))
@@ -128,31 +73,27 @@ def controller_factory(
     monkeypatch.delenv("MOONMIND_CONTROLLER_SECRET_FILE", raising=False)
 
     def start(
-        applier: Callable[[dict], object] | None = None,
+        applier: Callable[[InProcessController, dict], object] | None = None,
         *,
         api_secret: str = SECRET,
-    ) -> _Controller:
-        holder: dict[str, _Controller] = {}
-
-        def install(operation: dict) -> None:
-            holder["controller"].store.confirm_installed(
-                operation["operationId"], image=operation["desired"]["image"]
-            )
-
-        controller = _Controller(state_dir, applier or install)
-        holder["controller"] = controller
+    ) -> InProcessController:
+        controller = InProcessController(
+            state_dir,
+            secret=SECRET,
+            applier=applier,
+            target_resolver=lambda stack: dict(DEFAULT_TARGET),
+        )
         started.append(controller)
-        _install_controller_state(state_dir, port=controller.port, secret=api_secret)
+        install_controller_state(state_dir, port=controller.port, secret=api_secret)
         # The alias resolves only on the deployment network; tests use the
         # published loopback endpoint the host entrypoint also uses.
-        monkeypatch.setenv(
-            "MOONMIND_CONTROLLER_URL", f"http://127.0.0.1:{controller.port}"
-        )
+        monkeypatch.setenv("MOONMIND_CONTROLLER_URL", controller.url)
         return controller
 
     yield start
     for controller in started:
         controller.close()
+    forget_controller_modules()
 
 
 def _override_user(app: FastAPI, *, is_superuser: bool) -> None:
@@ -204,7 +145,7 @@ def _stack(client: TestClient) -> dict:
 
 
 def test_operations_router_submits_to_the_real_controller_with_temporal_stopped(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
     controller = controller_factory()
     client, temporal = _client()
@@ -225,7 +166,7 @@ def test_operations_router_submits_to_the_real_controller_with_temporal_stopped(
     recorded = controller.store.load(operation_id)
     assert recorded["desired"]["image"] == _desired("sha256:" + "b" * 64)
     # The controller derived the deployment target; the API sent none.
-    assert recorded["target"] == TARGET
+    assert recorded["target"] == DEFAULT_TARGET
 
     state = _stack(client)
     assert state["controller"] == {
@@ -247,25 +188,14 @@ def test_operations_router_submits_to_the_real_controller_with_temporal_stopped(
 
 
 def test_lost_acknowledgment_and_duplicates_keep_one_update_owner(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     release = threading.Event()
-    holder: dict[str, _Controller] = {}
-
-    def slow_apply(operation: dict) -> None:
-        store = holder["controller"].store
-        store.mark_stage(operation["operationId"], stage="applying")
-        assert release.wait(timeout=30)
-        store.confirm_installed(
-            operation["operationId"], image=operation["desired"]["image"]
-        )
-
-    controller = controller_factory(slow_apply)
-    holder["controller"] = controller
+    controller = controller_factory(slow_applier(release))
     # The controller applies inside the submission request, so the API's
     # bounded wait ends first: exactly the lost-acknowledgment case.
-    monkeypatch.setattr(operations_service, "CONTROLLER_SUBMIT_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(controller_client, "CONTROLLER_SUBMIT_TIMEOUT_SECONDS", 0.5)
     client, temporal = _client()
     try:
         first = client.post("/api/v1/operations/deployment/update", json=_update())
@@ -308,12 +238,11 @@ def test_lost_acknowledgment_and_duplicates_keep_one_update_owner(
 
 
 def test_explicit_retry_after_exhaustion_preserves_the_first_failure(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
-    holder: dict[str, object] = {"fail": True}
+    holder = {"fail": True}
 
-    def flaky_apply(operation: dict) -> None:
-        controller = holder["controller"]
+    def flaky_apply(controller: InProcessController, operation: dict) -> None:
         if holder["fail"]:
             controller.store.record_attempt_error(
                 operation["operationId"], error="pull failed: manifest unknown"
@@ -323,8 +252,7 @@ def test_explicit_retry_after_exhaustion_preserves_the_first_failure(
             operation["operationId"], image=operation["desired"]["image"]
         )
 
-    controller = controller_factory(flaky_apply)
-    holder["controller"] = controller
+    controller_factory(flaky_apply)
     client, temporal = _client()
 
     submitted = client.post("/api/v1/operations/deployment/update", json=_update())
@@ -358,13 +286,15 @@ def test_explicit_retry_after_exhaustion_preserves_the_first_failure(
 
 
 def test_failed_postcheck_is_partially_verified_with_the_failed_check(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
-    holder: dict[str, _Controller] = {}
-
-    def apply_with_failed_postcheck(operation: dict) -> None:
-        store = holder["controller"].store
-        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+    def apply_with_failed_postcheck(
+        controller: InProcessController, operation: dict
+    ) -> None:
+        store = controller.store
+        store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
         store.record_verification(
             operation["operationId"],
             name="operator-access:http://127.0.0.1:1",
@@ -372,7 +302,7 @@ def test_failed_postcheck_is_partially_verified_with_the_failed_check(
             detail="Operator URL failed its health check",
         )
 
-    holder["controller"] = controller_factory(apply_with_failed_postcheck)
+    controller_factory(apply_with_failed_postcheck)
     client, _temporal = _client()
 
     submitted = client.post("/api/v1/operations/deployment/update", json=_update())
@@ -392,7 +322,7 @@ def test_failed_postcheck_is_partially_verified_with_the_failed_check(
 
 
 def test_unavailable_controller_is_reported_and_never_becomes_a_workflow(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     controller = controller_factory()
@@ -414,7 +344,7 @@ def test_unavailable_controller_is_reported_and_never_becomes_a_workflow(
 
 
 def test_controller_rejecting_the_api_credential_is_distinct_and_redacted(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
     controller_factory(api_secret="stale-api-secret-value")
     client, temporal = _client()
@@ -429,7 +359,7 @@ def test_controller_rejecting_the_api_credential_is_distinct_and_redacted(
 
 
 def test_non_admin_cannot_retry_a_controller_operation(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
     controller_factory()
     client, _temporal = _client(is_superuser=False)
@@ -441,7 +371,7 @@ def test_non_admin_cannot_retry_a_controller_operation(
 
 
 def test_retry_rejects_an_unsafe_operation_id_before_calling_the_controller(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
     controller = controller_factory()
     client, _temporal = _client()
@@ -455,7 +385,7 @@ def test_retry_rejects_an_unsafe_operation_id_before_calling_the_controller(
 
 
 def test_historical_workflow_actions_remain_readable_beside_controller_operations(
-    controller_factory: Callable[..., _Controller],
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
     controller_factory()
     client, temporal = _client()

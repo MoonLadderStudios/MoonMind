@@ -8,23 +8,28 @@ the registry/Docker CLI calls, and the Compose applier are replaced.
 
 from __future__ import annotations
 
-import importlib
 import importlib.util
 import json
 import subprocess
-import sys
 import threading
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable, Iterator
 
 import pytest
 
+from tests.support.deployment_controller import (
+    InProcessController,
+    forget_controller_modules,
+    install_controller_state,
+    load_controller_modules,
+    slow_applier,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
-CONTROLLER_DIR = ROOT / "deploy" / "controller"
-_CONTROLLER_MODULES = ("redact", "mounts", "lock", "record", "engine", "server")
 SPEC = importlib.util.spec_from_file_location(
-    "update_release_handoff", ROOT / ".agents/skills/update-moonmind/scripts/update_release.py"
+    "update_release_handoff",
+    ROOT / ".agents/skills/update-moonmind/scripts/update_release.py",
 )
 update = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update)
@@ -34,39 +39,11 @@ DIGEST = "sha256:" + "a" * 64
 IMAGE = f"ghcr.io/moonladderstudios/moonmind@{DIGEST}"
 
 
-class _Controller:
-    def __init__(self, state_dir: Path, applier: Callable[[dict], object] | None) -> None:
-        server = importlib.import_module("server")
-        record = importlib.import_module("record")
-        self.store = record.OperationStore(state_dir)
-        self.applied: list[str] = []
-
-        def tracking(operation: dict) -> object:
-            self.applied.append(operation["operationId"])
-            if applier is not None:
-                return applier(operation)
-            self.store.confirm_installed(
-                operation["operationId"], image=operation["desired"]["image"]
-            )
-            return None
-
-        app = server.build_app(store=self.store, secret=SECRET, applier=tracking)
-        self.httpd = server.make_http_server("127.0.0.1", 0, app)
-        self.port = self.httpd.server_address[1]
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-        self.thread.start()
-
-    def close(self) -> None:
-        self.httpd.shutdown()
-        self.thread.join(timeout=10)
-        self.httpd.server_close()
-
-
 @pytest.fixture
-def installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., tuple[Path, _Controller]]]:
-    monkeypatch.syspath_prepend(str(CONTROLLER_DIR))
-    for name in _CONTROLLER_MODULES:
-        sys.modules.pop(name, None)
+def installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Callable[..., tuple[Path, InProcessController]]]:
+    load_controller_modules(monkeypatch)
     for name in (
         "MOONMIND_CONTROLLER_URL",
         "MOONMIND_CONTROLLER_SECRET_FILE",
@@ -74,31 +51,30 @@ def installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Calla
         "COMPOSE_FILE",
     ):
         monkeypatch.delenv(name, raising=False)
-    started: list[_Controller] = []
+    started: list[InProcessController] = []
 
-    def start(applier: Callable[[dict], object] | None = None) -> tuple[Path, _Controller]:
+    def start(
+        applier: Callable[[InProcessController, dict], object] | None = None,
+    ) -> tuple[Path, InProcessController]:
         repo = tmp_path / "installed"
         state = repo / "deploy" / "state" / "controller"
-        (state / "secrets").mkdir(parents=True, exist_ok=True)
-        controller = _Controller(state, applier)
+        state.mkdir(parents=True, exist_ok=True)
+        controller = InProcessController(state, secret=SECRET, applier=applier)
         started.append(controller)
-        (state / "secrets" / "controller-bearer").write_text(SECRET + "\n")
-        (state / "controller-identity.json").write_text(
-            json.dumps({"project": "moonmind-controller-test", "port": controller.port})
-        )
-        (state / "controller-image.json").write_text(json.dumps({"verified": True}))
+        install_controller_state(state, port=controller.port, secret=SECRET)
         return repo, controller
 
     yield start
     for controller in started:
         controller.close()
-    for name in _CONTROLLER_MODULES:
-        sys.modules.pop(name, None)
+    forget_controller_modules()
 
 
 def _git_checkout(repo: Path) -> str:
     def git(*args: str) -> str:
-        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True
+        ).strip()
 
     git("init", "-b", "main")
     git("config", "user.email", "qualification@example.invalid")
@@ -111,7 +87,9 @@ def _git_checkout(repo: Path) -> str:
     return git("rev-parse", "HEAD")
 
 
-def _stub_host_docker(monkeypatch: pytest.MonkeyPatch, revision: str) -> list[list[str]]:
+def _stub_host_docker(
+    monkeypatch: pytest.MonkeyPatch, revision: str
+) -> list[list[str]]:
     original_run = subprocess.run
     commands: list[list[str]] = []
 
@@ -124,7 +102,9 @@ def _stub_host_docker(monkeypatch: pytest.MonkeyPatch, revision: str) -> list[li
                 [
                     {
                         "RepoDigests": [IMAGE],
-                        "Config": {"Labels": {"org.opencontainers.image.revision": revision}},
+                        "Config": {
+                            "Labels": {"org.opencontainers.image.revision": revision}
+                        },
                     }
                 ]
             )
@@ -143,7 +123,7 @@ def _stub_host_docker(monkeypatch: pytest.MonkeyPatch, revision: str) -> list[li
 
 
 def test_no_argument_host_command_submits_the_controller_operation(
-    installed: Callable[..., tuple[Path, _Controller]],
+    installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo, controller = installed()
@@ -173,24 +153,19 @@ def test_no_argument_host_command_submits_the_controller_operation(
 
 
 def test_host_lost_acknowledgment_observes_instead_of_resubmitting(
-    installed: Callable[..., tuple[Path, _Controller]],
+    installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     release = threading.Event()
-    holder: dict[str, _Controller] = {}
-
-    def slow_apply(operation: dict) -> None:
-        store = holder["controller"].store
-        store.mark_stage(operation["operationId"], stage="applying")
-        assert release.wait(timeout=30)
-        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
-
-    repo, controller = installed(slow_apply)
-    holder["controller"] = controller
+    repo, controller = installed(slow_applier(release))
     monkeypatch.setattr(update, "_CONTROLLER_SUBMIT_TIMEOUT_SECONDS", 0.3)
     monkeypatch.setattr(update, "_sleep", lambda _seconds: release.set())
     monkeypatch.setattr(
-        update, "run", lambda args, **kwargs: json.dumps({"name": "moonmind", "services": {"api": {}}})
+        update,
+        "run",
+        lambda args, **kwargs: json.dumps(
+            {"name": "moonmind", "services": {"api": {}}}
+        ),
     )
     record = {
         "project": "moonmind",
@@ -214,22 +189,13 @@ def test_host_lost_acknowledgment_observes_instead_of_resubmitting(
 
 
 def test_host_and_settings_operations_duplicates_have_one_mutation_owner(
-    installed: Callable[..., tuple[Path, _Controller]],
+    installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from api_service.services import deployment_operations as operations
+    from moonmind.workflows.skills import deployment_controller as operations
 
     release = threading.Event()
-    holder: dict[str, _Controller] = {}
-
-    def slow_apply(operation: dict) -> None:
-        store = holder["controller"].store
-        store.mark_stage(operation["operationId"], stage="applying")
-        assert release.wait(timeout=30)
-        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
-
-    repo, controller = installed(slow_apply)
-    holder["controller"] = controller
+    repo, controller = installed(slow_applier(release))
     endpoint = operations.ControllerEndpoint(
         base_url=f"http://127.0.0.1:{controller.port}", secret=SECRET
     )
@@ -245,7 +211,9 @@ def test_host_and_settings_operations_duplicates_have_one_mutation_owner(
         monkeypatch.setattr(
             update,
             "run",
-            lambda args, **kwargs: json.dumps({"name": "moonmind", "services": {"api": {}}}),
+            lambda args, **kwargs: json.dumps(
+                {"name": "moonmind", "services": {"api": {}}}
+            ),
         )
         original_print = print
 
@@ -275,7 +243,7 @@ def test_host_and_settings_operations_duplicates_have_one_mutation_owner(
 
 
 def test_legacy_direct_is_refused_once_a_controller_owns_the_deployment(
-    installed: Callable[..., tuple[Path, _Controller]],
+    installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo, controller = installed()
