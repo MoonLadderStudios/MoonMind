@@ -8,7 +8,7 @@ Last updated: 2026-09-23
 
 ## Implementation status
 
-This document defines the target contract. The repository currently implements the persistent profile/version/audit/usage records, lifecycle API, bounded upstream projection, metadata and archive-content validation, an explicit snapshot-resolution API, an operator-triggered bounded smoke-validation endpoint with lease cleanup and secret-scanned diagnostics, and durable bootstrap materialization. The observed stock `codex-native-ui` identity is seeded as an explicit active default bootstrap profile after it passes structural readiness. A qualified Claude deployment also seeds a compatible managed Claude configuration and launch policy. `OMNIGENT_DEFAULT_AGENT_NAME` remains an optional first-start override when durable state is absent; its use is recorded and durable conflicts fail closed.
+This document defines the target contract. The repository currently implements the persistent profile/version/audit/usage records, lifecycle API, bounded upstream projection, metadata and archive-content validation, an explicit snapshot-resolution API, an operator-triggered bounded smoke-validation endpoint with lease cleanup and secret-scanned diagnostics, and durable bootstrap materialization. The observed stock `codex-native-ui` identity is seeded as an explicit active default bootstrap profile after it passes structural readiness. Unless generic Claude admission is explicitly stopped, the deployment also seeds a compatible managed Claude configuration and launch policy. `OMNIGENT_DEFAULT_AGENT_NAME` remains an optional first-start override when durable state is absent; its use is recorded and durable conflicts fail closed.
 
 Dashboard profile management, readiness-aware workflow and schedule selectors, transactional immutable snapshots, bounded bundle import, smoke validation, and durable bootstrap authority are implemented. Checkpoint-branch and remediation authoring preserve the originating immutable agent-profile and Provider Profile selection so continuation cannot silently substitute runtime authority.
 
@@ -59,10 +59,13 @@ upstream identity and version. Refresh commits only discovery in its own transac
 it cannot commit partial workflow authoring, change a selected profile, or replace
 an unavailable version. Failed refreshes remain actionable admission failures.
 
-For a qualified Claude deployment, the authenticated stock `claude-native-ui`
-agent observation also supplies a `claude-native` harness record in the same
-persisted catalog snapshot. The upstream harness picker omits native wrappers;
-the catalog record is present only while the stock agent is observed.
+The upstream harness picker omits native wrappers, so an authenticated stock
+agent observation supplies each wrapper's harness record in the same persisted
+catalog snapshot: `codex-native-ui` supplies `codex-native`, and, unless generic
+Claude admission is explicitly stopped, `claude-native-ui` supplies
+`claude-native`. The picker's `codex` row is the separate CLI-subprocess harness
+and never stands in for `codex-native`. Each wrapper record is present only
+while its stock agent is observed.
 
 Workflow, schedule, checkpoint-branch, and remediation authoring expose
 Runtime and one Profile selection. Runtime stays visible and names a stable
@@ -138,7 +141,7 @@ Native Workflow Chat validation also proves that the binding-scoped facade can p
 
 The synchronized stock `codex-native-ui` identity is materialized as an explicit active bootstrap profile version after structural readiness passes. `OMNIGENT_DEFAULT_AGENT_NAME` may override that first-start selector only when durable profile state is absent in bootstrap/local development; its use is recorded. Durable state wins, and conflicts fail closed.
 
-When `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=true`, policy reconciliation uses the deployment-resolved shared host image digest to activate `claude-on-demand`. Inventory reconciliation then binds an observed, structurally ready `claude-native-ui` identity to `omnigent-claude-default` with `claude_code` / `anthropic` OAuth requirements. This managed configuration is a fallback for a compatible Provider Profile; an explicit pin or compatible operator-authored configuration keeps selection authority. Image, policy, inventory, provider readiness, and rollout gates still apply independently. A connected OAuth Profile alone does not qualify the Claude host combination.
+Unless `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` explicitly stops it (the default is true), policy reconciliation uses the deployment-resolved shared host image digest to activate `claude-on-demand`. Inventory reconciliation then binds an observed, structurally ready `claude-native-ui` identity to `omnigent-claude-default` with `claude_code` / `anthropic` OAuth requirements. This managed configuration is a fallback for a compatible Provider Profile; an explicit pin or compatible operator-authored configuration keeps selection authority. Image, policy, inventory, provider readiness, and rollout gates still apply independently. A connected Anthropic OAuth Profile needs no manual rollout toggle, but it does not bypass those checks or exact-host attestation.
 
 ## Deployment-managed default authority
 

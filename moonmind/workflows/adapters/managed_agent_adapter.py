@@ -120,6 +120,10 @@ _PR_RESOLVER_CONTRACT_ID = "pr-resolver.v1"
 # the operator's action, not an engine fault: the resolver has already cleared
 # every blocker it owns and no automated action can produce an approval.
 _PR_RESOLVER_HUMAN_APPROVAL_REASON = "merge_gate_requires_human_approval"
+PR_RESOLVER_TERMINAL_VERDICT_APPLIED_KEY = "prResolverTerminalVerdictApplied"
+_PR_RESOLVER_VERDICT_DISPOSITIONS: frozenset[str] = frozenset(
+    {"manual_review", "failed"}
+)
 _PR_RESOLVER_USER_ACTIONABLE_REASONS: frozenset[str] = frozenset(
     {"actionable_comments", _PR_RESOLVER_HUMAN_APPROVAL_REASON}
 )
@@ -1006,6 +1010,22 @@ def _derive_pr_resolver_metadata(
             metadata["publishResult"] = publish_result
     return metadata
 
+def mark_pr_resolver_verdict_applied(
+    metadata: dict[str, Any], disposition: str
+) -> None:
+    """Record that the reported failure is the Skill's validated verdict.
+
+    A disposition in ``metadata`` only says a valid terminal artifact exists;
+    the run may still have failed for an unrelated runtime reason that keeps
+    its own failure. Only the adapter knows which failure it reported, so the
+    parent reads this marker, not the artifact fields, before declining its
+    bounded retry.
+    """
+
+    if disposition in _PR_RESOLVER_VERDICT_DISPOSITIONS:
+        metadata[PR_RESOLVER_TERMINAL_VERDICT_APPLIED_KEY] = True
+
+
 def _is_generic_process_exit_summary(summary: str | None) -> bool:
     """Return whether a run summary only reports generic process exit."""
 
@@ -1410,6 +1430,9 @@ class ManagedAgentAdapter:
                             failure_class = derived_failure_class
                             if derived_summary:
                                 summary = derived_summary
+                            mark_pr_resolver_verdict_applied(
+                                metadata, resolver_disposition
+                            )
                     elif (
                         resolver_disposition == "reenter_gate"
                         and record.status == "failed"

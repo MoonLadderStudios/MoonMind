@@ -95,6 +95,7 @@ from moonmind.workloads.gpu import (
 )
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    DOCKER_FINISHED_STATES,
     attest_docker_workload_egress,
     bounded_denial_diagnostics,
     denied_connection_count,
@@ -868,12 +869,6 @@ class DockerContainerJobBackend:
     _SLOT_HOLDING_STATES = frozenset(
         {"restarting", "running", "paused", "removing"}
     )
-    #: The daemon reports ``exited`` or ``dead`` only for a container whose
-    #: process has already run. A start retry that finds its own container
-    #: finished (the start was applied, its acknowledgment was lost, and the
-    #: workload ended) reconciles that outcome instead of executing it again.
-    _FINISHED_STATES = frozenset({"exited", "dead"})
-
     async def _container_states(self) -> dict[str, str]:
         """Return {container name: state} for every owned container job."""
 
@@ -1167,6 +1162,7 @@ class DockerContainerJobBackend:
         image: str,
         *,
         image_source_ref: str | None = None,
+        direct_reference: bool = False,
         auth_dir: Path | None = None,
         secrets: Sequence[str] = (),
     ) -> tuple[int, str | None]:
@@ -1196,6 +1192,26 @@ class DockerContainerJobBackend:
             if (
                 failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
                 and image_source_ref is not None
+                and direct_reference
+            ):
+                # The job named an image inside a declared ghcr.io repository,
+                # which authenticates only through the deployment GitHub
+                # credential. A source registryCredentialRef would not apply
+                # to this request, so never advise it here.
+                detail = (
+                    f"docker pull failed for the requested image ({failure.value}): "
+                    f"the image is in the repository of deployment image source "
+                    f"{image_source_ref!r}, but no deployment GitHub credential "
+                    "was available, so the pull was anonymous and the registry "
+                    "denied it. Give the deployment GITHUB_TOKEN (or GITHUB_PAT) "
+                    "read:packages and leave "
+                    "MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED enabled, or "
+                    f"submit imageSourceRef {image_source_ref!r} instead of a "
+                    "direct image."
+                )
+            elif (
+                failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and image_source_ref is not None
             ):
                 # This source took the public path because it declares no
                 # credential, and the registry denied the anonymous pull. Name
@@ -1220,15 +1236,43 @@ class DockerContainerJobBackend:
             )
         return duration_ms, diagnostics_ref
 
+    def _declared_registry_source_ref(self, image: str) -> str | None:
+        """Return the credential-free ghcr.io source declaring ``image``'s repository.
+
+        Matching is exact on registry and repository, never on tag or digest,
+        so the requested reference is pulled unchanged. Only ``ghcr.io`` can
+        match, because only there does a declared source supply a credential
+        (the deployment GitHub identity). A source bound to its own
+        ``registryCredentialRef`` never matches: that identity is selected
+        through the source and its grant, not replaced by another one.
+        """
+
+        requested = normalize_image_reference(image)
+        if requested.registry.lower() != "ghcr.io":
+            return None
+        for source in self._settings.image_sources:
+            if not isinstance(source, RegistryImageSource):
+                continue
+            if source.registry_credential_ref:
+                continue
+            declared = normalize_image_reference(source.image)
+            if (
+                declared.registry.lower() == requested.registry.lower()
+                and declared.repository == requested.repository
+            ):
+                return source.source_ref
+        return None
+
     async def _deployment_ghcr_credential(
         self, image: str, image_source_ref: str | None
     ) -> RegistryCredential | None:
         """Derive a ``ghcr.io`` identity for a deployment-declared image.
 
-        Restricted on purpose. The reference must come from a deployment image
-        source, never from job input, and the registry must be ``ghcr.io``,
-        because a GitHub token is meaningless anywhere else and must not be
-        presented to a registry an image string could name.
+        Restricted on purpose. The repository must come from a deployment image
+        source, never from job input alone, and the registry must be
+        ``ghcr.io``, because a GitHub token is meaningless anywhere else and
+        must not be presented to a registry or repository an image string
+        could name.
         """
 
         if image_source_ref is None:
@@ -1639,6 +1683,7 @@ class DockerContainerJobBackend:
             policy = source.pull_policy
             image_source_ref = source.source_ref
             credential_ref = source.registry_credential_ref
+            declared_source_ref = image_source_ref
         else:
             if spec.image is None:  # schema validation is the public guard
                 raise ImageAcquisitionError(
@@ -1649,6 +1694,15 @@ class DockerContainerJobBackend:
             policy = spec.pull_policy
             image_source_ref = None
             credential_ref = spec.registry_credential_ref
+            # A direct reference inside a repository the deployment already
+            # declared is that source's image at another tag or digest, so it
+            # authenticates as that source would. Any other reference stays
+            # workflow input and is pulled anonymously.
+            declared_source_ref = (
+                self._declared_registry_source_ref(image)
+                if credential_ref is None
+                else None
+            )
 
         authorization = request.registry_authorization
         if authorization is not None and authorization.credential_ref != credential_ref:
@@ -1735,11 +1789,14 @@ class DockerContainerJobBackend:
                             action="reuse",
                         )
                     derived = await self._deployment_ghcr_credential(
-                        image, image_source_ref
+                        image, declared_source_ref
                     )
                     if derived is None:
                         pull_ms, diagnostics_ref = await self._pull_image(
-                            request, image, image_source_ref=image_source_ref
+                            request,
+                            image,
+                            image_source_ref=declared_source_ref,
+                            direct_reference=image_source_ref is None,
                         )
                     else:
                         auth_dir = self._auth_dir(request)
@@ -1752,7 +1809,8 @@ class DockerContainerJobBackend:
                             pull_ms, diagnostics_ref = await self._pull_image(
                                 request,
                                 image,
-                                image_source_ref=image_source_ref,
+                                image_source_ref=declared_source_ref,
+                                direct_reference=image_source_ref is None,
                                 auth_dir=auth_dir,
                                 secrets=(derived.username, derived.secret),
                             )
@@ -2378,51 +2436,30 @@ class DockerContainerJobBackend:
             states = await self._container_states()
             if request.resolved_resources is None:
                 request.resolved_resources = request.request.spec.resources.model_copy()
-            if states.get(container_name) in self._FINISHED_STATES:
-                # A retry after an uncertain start whose workload already ran
-                # to completion: report the existing container so the workflow
-                # observes its one real outcome. Starting it again would
-                # re-execute the job, and it needs no slot to be observed.
-                if request.request.spec.network_mode == "bridge":
-                    # Restricted-egress acceptance needs launch evidence
-                    # observed while the workload ran, and Docker releases a
-                    # stopped container's endpoint, so it cannot be recovered
-                    # now. Fail closed rather than accept the pre-launch
-                    # evidence; the container stays for the workflow's
-                    # evidence publication and cleanup.
-                    raise ContainerJobBackendError(
-                        ContainerJobFailureClass.LAUNCH,
-                        "restricted-egress workload finished before its running "
-                        "launch evidence was recorded",
+            finished_before_start = states.get(container_name) in DOCKER_FINISHED_STATES
+            finished = finished_before_start
+            # Reconcile an uncertain start without repeating a completed command.
+            # Its retained network/image authority can still be published below.
+            if not finished:
+                # Fixed count-only admission under the cross-worker lock. Waiting
+                # work returns to the durable capacity-wait state; the workflow
+                # retries under the existing overall job timeout and cancellation.
+                try:
+                    await self._admit_job_slot(
+                        request, container_name=container_name, states=states
                     )
-                return ContainerJobActivityResult(
-                    containerRef=container_name,
-                    running=False,
-                    resolvedResources=request.resolved_resources,
-                    diagnosticsRef=request.egress_attestation_ref,
-                    gpuObservation=gpu_observation(
-                        requested_gpu, backend_supported=True, launched=True
-                    ),
-                )
-            # Fixed count-only admission under the cross-worker lock. Waiting
-            # work returns to the durable capacity-wait state; the workflow
-            # retries under the existing overall job timeout and cancellation.
-            try:
-                await self._admit_job_slot(
-                    request, container_name=container_name, states=states
-                )
-            except _CapacityWait as exc:
-                return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
-            code, _, start_stderr = await self._runner(("start", container_name))
-            if code:
-                # The daemon resolves a device request when the container
-                # starts, so this is where an unavailable GPU runtime or device
-                # is refused. Classify it before the ordinary launch failure.
-                self._reject_gpu_launch_refusal(
-                    requested_gpu, stderr=start_stderr, exit_code=code
-                )
-                detail = start_stderr.decode(errors="replace").strip()[:1000]
-                raise RuntimeError(f"docker start failed: {detail}")
+                except _CapacityWait as exc:
+                    return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
+                code, _, start_stderr = await self._runner(("start", container_name))
+                if code:
+                    # The daemon resolves a device request when the container
+                    # starts, so this is where an unavailable GPU runtime or device
+                    # is refused. Classify it before the ordinary launch failure.
+                    self._reject_gpu_launch_refusal(
+                        requested_gpu, stderr=start_stderr, exit_code=code
+                    )
+                    detail = start_stderr.decode(errors="replace").strip()[:1000]
+                    raise RuntimeError(f"docker start failed: {detail}")
         finally:
             try:
                 await self._capacity_lock.release(capacity_lease)
@@ -2448,31 +2485,43 @@ class DockerContainerJobBackend:
                     expected_image_ref=str(request.resolved_image_ref or ""),
                     started_at=started_at,
                 )
+                finished = (
+                    finished or workload_evidence.get("evidenceStage") == "finished"
+                )
                 diagnostics_ref = await self._publish_container_job_egress_launch(
                     request,
                     attestation=attestation,
                     attachment_identity=container_name,
                     workload_evidence=workload_evidence,
-                    reconciliation_result="not_required",
+                    reconciliation_result=(
+                        "recovered" if finished_before_start else "not_required"
+                    ),
                 )
                 if not diagnostics_ref:
                     raise RuntimeError(
                         "restricted-egress evidence publisher is unavailable"
                     )
             except Exception as exc:
-                # A running restricted workload without its immutable evidence
-                # chain is not ready. Remove only this owned container and fail
-                # before caller execution can proceed. The launch class is not
-                # retried: nothing is left to start, so a retry would only
-                # replace this cause with a missing-container failure.
-                await self._runner(("rm", "--force", container_name))
+                # Stop a workload whose authority cannot be confirmed, but keep
+                # its logs/results for the workflow's normal evidence publication
+                # and cleanup. A reporting failure must not delete the only copy.
+                try:
+                    await self.stop_container(request)
+                except Exception as stop_exc:
+                    # The existing Activity retry owns another shutdown attempt;
+                    # an unconfirmed stop is not a terminal launch rejection.
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.INFRASTRUCTURE,
+                        "restricted-egress launch failed and owned container "
+                        "shutdown could not be confirmed",
+                    ) from stop_exc
                 raise ContainerJobBackendError(
                     ContainerJobFailureClass.LAUNCH,
                     "restricted-egress running launch evidence could not be persisted",
                 ) from exc
         return ContainerJobActivityResult(
             containerRef=container_name,
-            running=True,
+            running=not finished,
             resolvedResources=request.resolved_resources,
             diagnosticsRef=diagnostics_ref,
             gpuObservation=gpu_observation(
@@ -2622,17 +2671,37 @@ class DockerContainerJobBackend:
 
     async def stop_container(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
-        ownership = await self._owned_ownership_label(ref)
-        if ownership is None:
-            return ContainerJobActivityResult(containerRef=ref, running=False)
-        if ownership != request.ownership_token:
-            raise RuntimeError("container job ownership mismatch; refusing stop")
-        await self._checked(
-            "stop", "--time", "10", ref
-        )
-        return ContainerJobActivityResult(
-            containerRef=ref, running=False
-        )
+        stopped = ContainerJobActivityResult(containerRef=ref, running=False)
+        last_error = None
+        for command in (("stop", "--time", "10", ref), ("kill", ref)):
+            # Recheck ownership before escalation: a failed command may race
+            # removal and replacement. Never delete the container's evidence.
+            ownership = await self._owned_ownership_label(ref)
+            if ownership is None:
+                return stopped
+            if ownership != request.ownership_token:
+                raise RuntimeError("container job ownership mismatch; refusing stop")
+            try:
+                await self._checked(*command)
+            except Exception as exc:
+                last_error = exc
+                try:
+                    running = await self._checked(
+                        "inspect", "--format", "{{.State.Running}}", ref
+                    )
+                except Exception:
+                    logger.warning(
+                        "Container-job stop outcome could not be observed",
+                        exc_info=True,
+                    )
+                else:
+                    if running == "false":
+                        return stopped
+            else:
+                return stopped
+        raise RuntimeError(
+            "owned container shutdown could not be confirmed"
+        ) from last_error
 
     async def remove_container(self, request: ContainerJobActivityRequest):
         # Re-read immutable ownership immediately before deletion. A prior

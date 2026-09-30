@@ -69,6 +69,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     _pr_resolver_disposition,
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
+    mark_pr_resolver_verdict_applied,
 )
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.codex_session_timeouts import (
@@ -712,9 +713,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             binding=binding,
             request=request,
         )
-        if request.input_refs:
+        if request.input_refs and self._prepare_turn_instructions is None:
             raise ValueError(
-                "CodexSessionAdapter does not support inputRefs for managed session turns"
+                "Managed inputRefs require turn instruction materialization"
             )
         prepared_instructions: str | None = None
         if self._defer_turn_instructions_until_session_launch:
@@ -1420,6 +1421,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         ):
                             should_apply_derived = True
                         if should_apply_derived:
+                            mark_pr_resolver_verdict_applied(
+                                metadata, resolver_disposition
+                            )
                             result = result.model_copy(
                                 update={
                                     "failure_class": derived_failure_class,

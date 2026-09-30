@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -447,21 +448,70 @@ def _synthetic_opencode_harness_row() -> dict[str, Any]:
     }
 
 
-def _observed_claude_native_harness_row(result: Any) -> dict[str, Any] | None:
-    """Describe the native wrapper only when its stock agent was observed."""
+@dataclass(frozen=True)
+class _StockNativeHarness:
+    """A native wrapper whose existence is proven by its observed stock agent."""
+
+    harness_id: str
+    label: str
+    stock_agent_name: str
+    runtime_pack_ref: str
+    diagnostic_key: str
+
+
+def _stock_native_harnesses() -> tuple[_StockNativeHarness, ...]:
+    from moonmind.omnigent.settings import generic_claude_qualified
+    from moonmind.omnigent.stock_agents import (
+        CLAUDE_STOCK_AGENT_NAME,
+        CODEX_STOCK_AGENT_NAME,
+    )
+
+    # Codex is always projected: its default realizer is the profile-bound
+    # path, so the generic-host qualification switch never governs whether the
+    # harness exists. Claude has no other realizer, so its switch does.
+    harnesses = [
+        _StockNativeHarness(
+            harness_id="codex-native",
+            label="Codex",
+            stock_agent_name=CODEX_STOCK_AGENT_NAME,
+            runtime_pack_ref="codex-native-pack@1",
+            diagnostic_key="observedCodexNativeOverlay",
+        )
+    ]
+    if generic_claude_qualified():
+        harnesses.append(
+            _StockNativeHarness(
+                harness_id="claude-native",
+                label="Claude Code",
+                stock_agent_name=CLAUDE_STOCK_AGENT_NAME,
+                runtime_pack_ref="claude-native-pack@1",
+                diagnostic_key="observedClaudeNativeOverlay",
+            )
+        )
+    return tuple(harnesses)
+
+
+def _observed_native_harness_row(
+    result: Any, native: _StockNativeHarness
+) -> dict[str, Any] | None:
+    """Describe a native wrapper only when its stock agent was observed."""
 
     from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
-    from moonmind.omnigent.stock_agents import CLAUDE_STOCK_AGENT_NAME
+    from moonmind.omnigent.harness_platform.harness_registry import (
+        harness_auth_model,
+    )
 
+    # Stock inventory rows may omit their optional version, exactly as
+    # bootstrap reconciliation accepts them; the wrapper identity below does
+    # not depend on it.
     stock = next(
         (
             row
             for row in result.diagnostics.get("agents", [])
             if isinstance(row, Mapping)
-            and row.get("name") == CLAUDE_STOCK_AGENT_NAME
-            and row.get("harness") == "claude-native"
+            and row.get("name") == native.stock_agent_name
+            and row.get("harness") == native.harness_id
             and str(row.get("id") or "").strip()
-            and str(row.get("version") or "").strip()
         ),
         None,
     )
@@ -469,8 +519,8 @@ def _observed_claude_native_harness_row(result: Any) -> dict[str, Any] | None:
         return None
     identity = {
         "omnigentBuildDigest": result.snapshot.omnigentBuildDigest,
-        "harnessId": "claude-native",
-        "runtimePackRef": "claude-native-pack@1",
+        "harnessId": native.harness_id,
+        "runtimePackRef": native.runtime_pack_ref,
     }
     implementation = HarnessImplementationIdentity.model_validate(
         {
@@ -485,16 +535,16 @@ def _observed_claude_native_harness_row(result: Any) -> dict[str, Any] | None:
         }
     )
     return {
-        "id": "claude-native",
-        "label": "Claude Code",
+        "id": native.harness_id,
+        "label": native.label,
         "aliases": [],
         "implementation": implementation.model_dump(mode="json", by_alias=True),
         "capabilities": {
             "integrationMode": "native-server",
-            "authModel": "oauth_volume",
+            "authModel": harness_auth_model(native.harness_id),
         },
         "setupSteps": [],
-        "runtimeRequirements": {"runtimePackRef": "claude-native-pack@1"},
+        "runtimeRequirements": {"runtimePackRef": native.runtime_pack_ref},
     }
 
 
@@ -502,8 +552,9 @@ def _overlay_native_harnesses(result: Any) -> Any:
     """Merge deployment-owned native harnesses into one observation.
 
     The upstream picker catalog omits native wrappers. OpenCode has an
-    installed local runtime; Claude additionally requires its observed stock
-    agent. Agent identity remains owned by authenticated ``/v1/agents``.
+    installed local runtime; Codex and Claude additionally require their
+    observed stock agents. Agent identity remains owned by authenticated
+    ``/v1/agents``.
     """
 
     from moonmind.omnigent.harness_platform.catalog import (
@@ -515,19 +566,20 @@ def _overlay_native_harnesses(result: Any) -> Any:
     from moonmind.omnigent.harness_platform.catalog_service import (
         HarnessCatalogSyncResult,
     )
-    from moonmind.omnigent.settings import (
-        generic_claude_qualified,
-        opencode_support_enabled,
-    )
+    from moonmind.omnigent.settings import opencode_support_enabled
 
     existing = {harness.id for harness in result.snapshot.harnesses}
     overlays: list[dict[str, Any]] = []
     if opencode_support_enabled() and "opencode-native" not in existing:
         overlays.append(_synthetic_opencode_harness_row())
-    if generic_claude_qualified() and "claude-native" not in existing:
-        claude = _observed_claude_native_harness_row(result)
-        if claude is not None:
-            overlays.append(claude)
+    observed_natives: list[_StockNativeHarness] = []
+    for native in _stock_native_harnesses():
+        if native.harness_id in existing:
+            continue
+        row = _observed_native_harness_row(result, native)
+        if row is not None:
+            overlays.append(row)
+            observed_natives.append(native)
     if not overlays:
         return result
     harness_rows = [
@@ -587,11 +639,7 @@ def _overlay_native_harnesses(result: Any) -> Any:
                 if any(row["id"] == "opencode-native" for row in overlays)
                 else {}
             ),
-            **(
-                {"observedClaudeNativeOverlay": True}
-                if any(row["id"] == "claude-native" for row in overlays)
-                else {}
-            ),
+            **{native.diagnostic_key: True for native in observed_natives},
         },
     )
 

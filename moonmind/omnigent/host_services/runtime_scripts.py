@@ -48,11 +48,13 @@ _OPENCODE_RUNTIME_ENV = {
     "OPENCODE_DISABLE_AUTOUPDATE": "1",
 }
 
-# The on-demand host receives these values from the sandbox egress boundary.
+# Every on-demand host receives these values from the sandbox egress boundary.
 # Omnigent deliberately filters the host environment before spawning a runner,
-# so their *names* must survive the host -> runner hop. The OpenCode server then
-# inherits the values through its own restricted environment builder.
-_OPENCODE_PROXY_ENV_NAMES = frozenset(
+# so their *names* must survive the host -> runner hop for every harness; a
+# runner without them resolves provider DNS directly on the restricted network.
+# Native harness children (the OpenCode server, the Claude Code TUI) then
+# inherit the values from the runner.
+_EGRESS_PROXY_ENV_NAMES = frozenset(
     {
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -188,7 +190,7 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_ACTIVE_SKILLS_DIR",
             "MOONMIND_STEP_EXECUTION_ID",
             *(_OPENCODE_RUNTIME_ENV if opencode_runtime else {}),
-            *(_OPENCODE_PROXY_ENV_NAMES if opencode_runtime else {}),
+            *_EGRESS_PROXY_ENV_NAMES,
             *(_GITHUB_RUNTIME_ENV if github_credential_attachment is not None else {}),
             *supplied_runtime_environment,
         }

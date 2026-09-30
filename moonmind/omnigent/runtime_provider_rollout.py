@@ -1036,11 +1036,15 @@ def default_runtime_provider_rollout_policy(
                 "once the generic Codex row is promoted."
             ),
         ),
+        # Claude Code via Omnigent is reached by choosing an Anthropic Provider
+        # Profile; its built-in Agent Profile never holds the deployment
+        # default. Admitted Claude is therefore an explicit choice, so default
+        # new work never records this row as its selected target.
         _rule(
             target_id="claude.generic-omnigent",
             label="Claude Code via generic Omnigent",
             state=(
-                RolloutState.new_work_default
+                RolloutState.explicit_only
                 if claude_generic
                 else RolloutState.disabled
             ),

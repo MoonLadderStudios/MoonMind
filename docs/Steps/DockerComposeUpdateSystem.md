@@ -173,6 +173,18 @@ permission to operate on an arbitrary project. The deployment-owned Compose file
 explicit repair operations only, never automatic escalation. Recreate only
 changed services by default.
 
+The updater reaches Docker through `docker-proxy`, so the main pass never
+recreates it, `postgres`, or `sandbox-egress-proxy`, whichever caller
+submitted the update. The egress gateway is aligned before the workers that
+attest it. Other excluded substrate is reconciled in a staged pass after the
+main stack verifies when its image or its installed definition differs from
+the release. Definition drift compares each container's recorded Compose
+config hash with the release rendered under the project directory that
+container recorded, so a different spelling of the same checkout never
+counts as drift. The updater never recreates its own transport: a drifted
+`docker-proxy` stays running and fails the release as unconverged substrate
+for the standalone controller to reconcile.
+
 Preserve dependency order and required `init-db`/schema migration gating before new dependent services start. Bring necessary infrastructure up in the existing Compose lifecycle. A failed migration preserves the original error and data rather than starting an incompatible application or attempting a destructive downgrade.
 
 ### 10.7 Verify desired state
@@ -186,8 +198,8 @@ An unavailable optional integration is reported separately. Missing mandatory ve
 An ordinary MoonMind update also checks the deployment-configured Omnigent
 server and required host image channels (image/tag inputs present in the operator `.env` or worker environment) for newly published artifacts. Resolve
 mutable tags to concrete digests, assess the required runtime behavior, and
-advance the installed release when a suitable new image is available for a configured channel; channels without configured inputs retain their recorded refs. Record
-the selected digests in deployment-owned state before restarting consumers and refresh their running
+advance the installed release when a suitable new image is available for a configured channel; channels without configured inputs retain their recorded refs. A running server container that already carries the candidate outside the release, for example after a plain `docker compose up` rendered the mutable tag, is adopted rather than converged back, because it may already have migrated the Omnigent database forward. Record
+the selected digests in deployment-owned state under the same deployment lock as the main Compose pass, before that pass renders them, so it installs the selected server rather than one that refuses the current schema. After the fleet verifies, the migration finishes that selected revision without resolving the channels again, and refreshes the running
 consumers through the same Compose owner. This includes the server, API and
 agent runtime worker; already-running static host profiles follow a changed
 shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
