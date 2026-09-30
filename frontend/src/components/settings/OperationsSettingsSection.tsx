@@ -1202,7 +1202,11 @@ export function OperationsSettingsSection({
                             <button
                               type="button"
                               className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
-                              disabled={!canInvokeOperations || rollbackMutation.isPending}
+                              disabled={
+                                !canInvokeOperations ||
+                                rollbackMutation.isPending ||
+                                controllerUnavailable
+                              }
                               onClick={() => rollbackMutation.mutate(action)}
                             >
                               Roll back to {action.rollbackEligibility.targetImage.reference}

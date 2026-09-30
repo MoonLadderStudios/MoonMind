@@ -593,6 +593,7 @@ describe('OperationsSettingsSection deployment update card', () => {
   function mockControllerState(
     controller: { installed: boolean; reachable: boolean; message?: string | null },
     extra: (url: string, init?: RequestInit) => Promise<Response> | null = () => null,
+    recentActions: unknown[] = [failedControllerAction, recentAction],
   ) {
     fetchSpy.mockImplementation((input, init) => {
       const url = String(input);
@@ -613,7 +614,7 @@ describe('OperationsSettingsSection deployment update card', () => {
             ...stackState,
             controller,
             latestAction: failedControllerAction,
-            recentActions: [failedControllerAction, recentAction],
+            recentActions,
           }),
         } as Response);
       }
@@ -682,11 +683,15 @@ describe('OperationsSettingsSection deployment update card', () => {
   });
 
   it('reports an unreachable controller and does not offer dashboard submission', async () => {
-    mockControllerState({
-      installed: true,
-      reachable: false,
-      message: 'The deployment controller is unavailable: controller endpoint is unreachable.',
-    });
+    mockControllerState(
+      {
+        installed: true,
+        reachable: false,
+        message: 'The deployment controller is unavailable: controller endpoint is unreachable.',
+      },
+      () => null,
+      [failedControllerAction, stackStateWithRollback.recentActions[0]],
+    );
     renderOperations();
 
     const card = await screen.findByRole('region', { name: /moonmind update/i });
@@ -697,6 +702,9 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(submit.disabled).toBe(true);
     const retry = within(card).getByRole('button', { name: /retry operation/i }) as HTMLButtonElement;
     expect(retry.disabled).toBe(true);
+    // A rollback from workflow-backed history is also a submission.
+    const rollback = within(card).getByRole('button', { name: /roll back to stable/i }) as HTMLButtonElement;
+    expect(rollback.disabled).toBe(true);
   });
 
   it('names the controller operation that accepted a submitted update', async () => {
