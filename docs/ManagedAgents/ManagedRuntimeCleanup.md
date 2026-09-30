@@ -247,17 +247,21 @@ candidateSource:
   filesystem:
     roots:
       - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/workspaces/*
+      - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/temporal_sandbox/*
       - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/${agent_run_id}
 truthSource:
   stores:
     - ManagedRunStore
     - ManagedSessionStore
+    - SandboxWorkspaceRecordStore retention decisions and grants
+    - saved-work artifact availability and use claims
   dockerActiveContainers: true
 eligibility:
   deleteWhen:
     - every referencing run is terminal
     - every referencing session is terminal
     - no referencing record has activeTurnId
+    - an unowned sandbox workspace has a verified save whose objects are available and unused
     - newest owner activity is older than workspace retention
     - no live Docker container or volume references the session/workspace
 safety:
@@ -474,7 +478,14 @@ Examples:
 - `/work/agent_jobs/<agent_run_id>/artifacts` belongs to `/work/agent_jobs/<agent_run_id>`.
 - `/work/agent_jobs/temporal_sandbox/<workspace_id>/repo` belongs to `/work/agent_jobs/temporal_sandbox/<workspace_id>`. The `temporal_sandbox` directory is never a candidate itself, and neither is its `.workspace_records` owner store.
 
-The workspace root is eligible only when every run/session that maps to that ownership root is terminal and past retention. A sandbox workspace with no managed run/session record (for example, a generic Omnigent host workspace that is still waiting for its verified save) is reported as `skipped_ambiguous_owner` and kept. One finished run cannot make its siblings deletable.
+The workspace root is eligible only when every run/session that maps to that ownership root is terminal and past retention. One finished run cannot make its siblings deletable.
+
+A sandbox workspace with no managed run/session record, such as a generic Omnigent host workspace, follows the retention decision its finalization owner persisted in `.workspace_records/<workspace_id>.retention.json`. The owner writes the decision during cleanup, stale-binding recovery, and finalization recovery, after the session, host, and credentials no longer use the workspace:
+
+- `saved` names the durable checkpoint, archive, and manifest of a verified save. The workspace is reclaimable after the normal retention, grace, budget, and rescan gates. Once retention has elapsed, the janitor also confirms before deletion that the saved-work artifact store still reports every named object as available and not held by a live use claim.
+- `save_pending` means no verified save exists, so the workspace is the only recoverable copy.
+
+The janitor keeps a workspace that is still the only recoverable copy and reports it on every pass. It is never deleted to clear a warning. This covers a pending save, a workspace with no decision, and, past retention, a saved copy that is expired, quarantined, deleted, or cannot be verified. Inside retention, a pending save is `protected_pending_save` and a workspace with no decision stays `skipped_ambiguous_owner`. Past retention, every such workspace is `retained_past_retention`. A live existing-workspace grant or saved-work use claim protects the workspace as `protected_active`.
 
 ### 8.5 Terminal states
 
@@ -600,6 +611,8 @@ class ManagedRuntimeCleanupResult:
     skipped_recent: int
     skipped_unsafe_path: int
     skipped_ambiguous_owner: int
+    retained_pending_save: int
+    retained_past_retention: int
     errors: tuple[str, ...]
 ```
 
@@ -637,6 +650,8 @@ Each candidate should receive exactly one final classification:
 | `deleted` | Candidate was renamed and removed. |
 | `skipped_unsafe_path` | Path is outside canonical roots, symlinked, or traversal-like. |
 | `skipped_ambiguous_owner` | Ownership cannot be derived safely. |
+| `protected_pending_save` | A sandbox workspace whose finalization save is pending is the only recoverable copy, and retention has not elapsed. |
+| `retained_past_retention` | The only recoverable copy has outlived retention. It is kept and reported, never deleted. |
 | `error` | Candidate was safe to consider, but an unexpected error occurred. |
 
 ### 9.2 Activity timestamp
@@ -650,7 +665,8 @@ Use the newest available timestamp from all owners and the filesystem:
 5. session `updated_at`,
 6. session `last_log_at`,
 7. session `started_at`,
-8. candidate path mtime.
+8. sandbox retention decision `recordedAt`,
+9. candidate path mtime.
 
 A missing timestamp should make a candidate more conservative, not less.
 

@@ -156,6 +156,27 @@ class OmnigentWorkspacePublicationService:
             must_exist=must_exist,
         )
 
+    def record_retention_decision(self, request: AgentExecutionRequest, *, saved, save_failure=None) -> None:
+        """Persist this owner's release decision beside the workspace owner record.
+
+        Only a save naming its durable checkpoint, archive, and manifest makes
+        the local copy reclaimable. Anything else keeps the workspace as the
+        only recoverable copy for every janitor, across restarts.
+        """
+        from moonmind.omnigent.realizers.turn_delivery import execution_identity
+        workflow_id, step_id = execution_identity(request)
+        self.resolve_request_workspace(request, must_exist=False)
+        saved_refs = {
+            key: str(saved[key]) for key in ("checkpointRef", "archiveRef", "manifestRef")
+            if isinstance(saved, Mapping) and str(saved.get(key) or "").startswith("artifact://")
+        }
+        verified = len(saved_refs) == 3
+        SandboxWorkspaceRecordStore(self._workspace_root).record_retention_decision(
+            hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24],
+            saved_refs=saved_refs if verified else None,
+            save_failure=None if verified else save_failure,
+        )
+
     async def restore_saved_request_workspace(self, request, saved):
         """Resume the same finalization owner after its local volume was lost."""
         from moonmind.omnigent.realizers.turn_delivery import execution_identity

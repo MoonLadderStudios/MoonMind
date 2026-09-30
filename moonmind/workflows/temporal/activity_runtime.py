@@ -11906,6 +11906,7 @@ class TemporalAgentRuntimeActivities:
         from moonmind.workflows.temporal.runtime.cleanup import (
             DockerReferenceState,
             ManagedRuntimeCleanupConfig,
+            SavedWorkState,
             cleanup_managed_runtime_files,
         )
         from moonmind.workflows.temporal.runtime.managed_session_store import (
@@ -12015,6 +12016,26 @@ class TemporalAgentRuntimeActivities:
                 loop,
             ).result()
 
+        async def _read_saved_work_state(ref: str) -> SavedWorkState:
+            from api_service.db import base as db_base
+            from moonmind.workflows import get_temporal_artifact_repository
+            from moonmind.workflows.temporal.artifacts import (
+                read_saved_work_protection,
+            )
+
+            async with db_base.get_async_session_context() as session:
+                availability, in_use = await read_saved_work_protection(
+                    get_temporal_artifact_repository(session), ref
+                )
+            return SavedWorkState(availability=availability, in_use=in_use)
+
+        def _saved_work_probe(ref: str) -> SavedWorkState:
+            # A generic-host workspace is reclaimable only while #4017 still
+            # reports its saved copy available and unused.
+            return asyncio.run_coroutine_threadsafe(
+                _read_saved_work_state(ref), loop
+            ).result(timeout=60)
+
         # The janitor performs recursive synchronous filesystem work. Keep it
         # off this fleet's async loop so live status/control Activities remain
         # serviceable, and own heartbeats from the event-loop side. Cancellation
@@ -12036,6 +12057,7 @@ class TemporalAgentRuntimeActivities:
                     docker_reference_provider=(
                         None if docker_state is None else _docker_reference_provider
                     ),
+                    saved_work_probe=_saved_work_probe,
                     progress_callback=_check_cleanup_cancellation,
                 ),
                 cancellation_requested=cancellation_requested,
@@ -12064,6 +12086,7 @@ class TemporalAgentRuntimeActivities:
             "deleted_artifact_dirs=%s deleted_record_files=%s "
             "estimated_deleted_bytes=%s skipped_active=%s skipped_recent=%s "
             "skipped_unsafe_path=%s skipped_ambiguous_owner=%s "
+            "retained_pending_save=%s retained_past_retention=%s "
             "delete_budget_exhausted=%s errors=%s candidate_samples=%s",
             not result_payload.get("disabled", False),
             result_payload.get("dryRun"),
@@ -12081,6 +12104,8 @@ class TemporalAgentRuntimeActivities:
             result_payload.get("skippedRecent", 0),
             result_payload.get("skippedUnsafePath", 0),
             result_payload.get("skippedAmbiguousOwner", 0),
+            result_payload.get("retainedPendingSave", 0),
+            result_payload.get("retainedPastRetention", 0),
             result_payload.get("deleteBudgetExhausted", 0),
             len(result_payload.get("errors", [])),
             result_payload.get("candidateSamples", []),

@@ -4189,6 +4189,32 @@ class TemporalArtifactService:
         ref = build_artifact_ref(completed)
         return {"artifact_ref_v": ref.artifact_ref_v, "artifact_id": ref.artifact_id}
 
+
+async def read_saved_work_protection(
+    repository: TemporalArtifactRepository,
+    ref: str,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, bool]:
+    """Report one saved object's availability and live use protection.
+
+    Janitors deciding whether a local copy is still the only recoverable one
+    read the same evidence the lifecycle sweep honors: an absent row is
+    ``deleted``, and a live use claim protects an in-flight consumer.
+    """
+
+    artifact_id = str(ref).removeprefix("artifact://")
+    try:
+        artifact = await repository.get_artifact(artifact_id)
+    except TemporalArtifactNotFoundError:
+        return "deleted", False
+    reference_now = now or datetime.now(UTC)
+    return (
+        TemporalArtifactService.saved_work_availability_of(artifact, now=reference_now),
+        await repository.has_live_use_claim(artifact_id, now=reference_now),
+    )
+
+
 class TemporalArtifactActivities:
     """Activity-friendly facade used by Temporal workflow/activity code."""
 
