@@ -205,7 +205,6 @@ def ensure_identity(
             or (existing or {}).get("targetProject")
             or target_project_for_repo(repo)
         )
-        identity["alias"] = CONTROLLER_ALIAS
     _identity_path(state_dir).write_text(
         json.dumps(identity, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )

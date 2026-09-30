@@ -140,10 +140,11 @@ def resolve_controller_endpoint(
             return None
     base_url = explicit_url
     if not base_url:
+        # Only the recorded port is read; the host is the fixed alias on the
+        # deployment-controller network, never a value from a state file.
         port = (identity or {}).get("port")
-        alias = str((identity or {}).get("alias") or CONTROLLER_HOST_ALIAS)
         if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
-            base_url = f"http://{alias}:{port}"
+            base_url = f"http://{CONTROLLER_HOST_ALIAS}:{port}"
     return ControllerEndpoint(
         base_url=base_url.rstrip("/"), secret=_controller_secret(env, state_dir)
     )
