@@ -60,6 +60,8 @@ _CHECKBOX_PREFIX_RE = re.compile(r"^\[[ xX]\]\s+")
 # of a heading phrase the parser would have to enumerate.
 _LEADING_ISSUE_REFERENCE_RE = re.compile(r"^(?:[\w.-]+/[\w.-]+)?#[1-9]\d*")
 
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
+
 _ISSUE_LINK_RE = re.compile(
     r"\[[^\]\n]*\]\((https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9]\d*)\)"
 )
@@ -94,11 +96,29 @@ class PrerequisiteLookup:
     """Bound and reuse validated prerequisite reads within one admission scan."""
 
     states: dict[tuple[str, int], str] = field(default_factory=dict)
+    epics: set[tuple[str, int]] = field(default_factory=set)
     requests: int = 0
     completion_dependencies: list[dict[str, Any]] = field(default_factory=list)
 
 
-def declared_dependencies(body: str, repository: str) -> dict[tuple[str, int], str]:
+def is_parent_epic(issue: Mapping[str, Any]) -> bool:
+    """Whether the issue declares itself a parent epic through its labels."""
+
+    labels = issue.get("labels")
+    if not isinstance(labels, Sequence) or isinstance(labels, (str, bytes)):
+        return False
+    return any(
+        str(label.get("name") if isinstance(label, Mapping) else label)
+        .strip()
+        .casefold()
+        == "epic"
+        for label in labels
+    )
+
+
+def declared_dependencies(
+    body: str, repository: str, *, parent_epic: bool = False
+) -> dict[tuple[str, int], str]:
     """Read declared dependencies and child lists, never contextual issue links.
 
     Each reference carries its declared scope. Only a declaration whose own
@@ -106,6 +126,11 @@ def declared_dependencies(body: str, repository: str) -> dict[tuple[str, int], s
     everything else keeps its established start-blocking meaning, so no
     existing declaration is silently reinterpreted. Child lists and other
     conventions move deliberately, declaration by declaration.
+
+    A ``parent_epic`` also declares a child with each top-level paragraph
+    sentence that leads with an issue reference: epics assign remaining work
+    to owning issues in prose as well as in tracking lists. Ordinary issues use
+    the same shape to divide scope with siblings, so it stays contextual there.
     """
     declarations = [
         (match.group("refs"), _declaration_scope(match.group("keyword")), False)
@@ -132,6 +157,21 @@ def declared_dependencies(body: str, repository: str) -> dict[tuple[str, int], s
                 child_section_level = level
             elif context_section_level is None and _CONTEXT_SECTION_RE.search(heading):
                 context_section_level = level
+        elif (
+            parent_epic
+            and token.type == "inline"
+            and index >= 1
+            and tokens[index - 1].type == "paragraph_open"
+            and tokens[index - 1].level == 0
+            and context_section_level is None
+        ):
+            # Only each sentence's leading reference list is consumed below,
+            # so later contextual mentions in the same sentence stay prose.
+            declarations.extend(
+                (sentence, PREREQUISITE_SCOPE_START, True)
+                for sentence in _SENTENCE_BOUNDARY_RE.split(token.content)
+                if _declares_tracked_child(sentence)
+            )
         elif (
             token.type == "inline"
             and index >= 2
@@ -180,18 +220,22 @@ def declared_dependencies(body: str, repository: str) -> dict[tuple[str, int], s
                 # nothing useful can start until it is resolved.
                 if scopes.get(key) != PREREQUISITE_SCOPE_START:
                     scopes[key] = scope
-            text = text[match.end():].lstrip(" \t,;")
+            text = text[match.end():].lstrip(" \t,;/")
             text = re.sub(r"^(?:and\b|&)\s*", "", text, flags=re.IGNORECASE)
     if len(scopes) > 100:
         raise ValueError("GitHub prerequisite declaration exceeds 100 issues.")
     return scopes
 
 
-def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
+def declared_prerequisites(
+    body: str, repository: str, *, parent_epic: bool = False
+) -> list[tuple[str, int]]:
     """References that must be resolved before implementation can start."""
     return [
         key
-        for key, scope in declared_dependencies(body, repository).items()
+        for key, scope in declared_dependencies(
+            body, repository, parent_epic=parent_epic
+        ).items()
         if scope == PREREQUISITE_SCOPE_START
     ]
 
@@ -222,7 +266,17 @@ async def check_prerequisites(
     ``include_completion`` authorizes the extra reads) so the completion gate
     can hold closure without stopping independently useful implementation.
     """
-    scopes = declared_dependencies(str(issue.get("body") or ""), repository)
+    body = str(issue.get("body") or "")
+    parent_epic = is_parent_epic(issue)
+    scopes = declared_dependencies(body, repository, parent_epic=parent_epic)
+    # An epic's prose naming another epic describes a peer program, not a
+    # child; open peers that name each other would otherwise block both
+    # forever. A tracking list still declares an epic child explicitly.
+    prose_children = (
+        set(scopes) - set(declared_dependencies(body, repository))
+        if parent_epic
+        else set()
+    )
     refs = [
         (repo, number, scope)
         for (repo, number), scope in scopes.items()
@@ -267,8 +321,12 @@ async def check_prerequisites(
                 ):
                     raise ValueError("GitHub prerequisite identity or state is invalid.")
                 lookup.states[key] = payload["state"]
+                if is_parent_epic(payload):
+                    lookup.epics.add(key)
                 prerequisite_state = payload["state"]
             if prerequisite_state != "open":
+                continue
+            if (dependency_repo, number) in prose_children and key in lookup.epics:
                 continue
             if scope == PREREQUISITE_SCOPE_START:
                 return [_prerequisite_blocker(dependency_repo, number)]
