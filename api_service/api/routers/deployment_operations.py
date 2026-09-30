@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.deployment_operations import (
+    DeploymentControllerObservation,
     DeploymentCurrentImage,
     DeploymentOperationError,
     DeploymentOperationsService,
@@ -62,13 +64,35 @@ class DeploymentUpdateRequest(BaseModel):
     confirmation: str | None = None
 
 
+DeploymentActionStatus = Literal[
+    "QUEUED", "RUNNING", "SUCCEEDED", "PARTIALLY_VERIFIED", "FAILED", "SUPERSEDED"
+]
+
+
 class DeploymentUpdateResponse(BaseModel):
+    """The accepted update and who owns it.
+
+    A controller-owned update is identified by its durable controller
+    ``operationId``; ``taskId``/``workflowId`` are set only for the
+    transitional workflow updater, never manufactured for a local operation.
+    """
+
     model_config = ConfigDict(populate_by_name=True)
 
     deployment_update_run_id: str = Field(..., alias="deploymentUpdateRunId")
-    task_id: str = Field(..., alias="taskId")
-    workflow_id: str = Field(..., alias="workflowId")
-    status: Literal["QUEUED"]
+    task_id: str | None = Field(None, alias="taskId")
+    workflow_id: str | None = Field(None, alias="workflowId")
+    operation_id: str | None = Field(None, alias="operationId")
+    owner: Literal["controller", "workflow"]
+    status: DeploymentActionStatus
+
+
+class DeploymentControllerModel(BaseModel):
+    """Whether the standalone controller is installed and answered this read."""
+
+    installed: bool
+    reachable: bool
+    message: str | None = None
 
 
 class DeploymentCurrentImageModel(BaseModel):
@@ -108,6 +132,7 @@ class DeploymentStackStateResponse(BaseModel):
     recent_actions: list["DeploymentRecentActionModel"] = Field(
         default_factory=list, alias="recentActions"
     )
+    controller: DeploymentControllerModel
     policy: DeploymentPolicyModel
 
 
@@ -124,6 +149,18 @@ class RollbackEligibilityModel(BaseModel):
     target_image: RollbackImageTargetModel | None = Field(None, alias="targetImage")
     reason: str | None = None
     evidence_ref: str | None = Field(None, alias="evidenceRef")
+
+
+class DeploymentAttemptModel(BaseModel):
+    attempt: int
+    error: str
+    at: str | None = None
+
+
+class DeploymentVerificationCheckModel(BaseModel):
+    name: str
+    status: str
+    detail: str | None = None
 
 
 class DeploymentRecentActionModel(BaseModel):
@@ -150,6 +187,14 @@ class DeploymentRecentActionModel(BaseModel):
     rollback_eligibility: RollbackEligibilityModel | None = Field(
         None, alias="rollbackEligibility"
     )
+    owner: Literal["controller", "workflow"] = "workflow"
+    operation_id: str | None = Field(None, alias="operationId")
+    installed_image: str | None = Field(None, alias="installedImage")
+    error_summary: str | None = Field(None, alias="errorSummary")
+    attempts: list[DeploymentAttemptModel] = Field(default_factory=list)
+    attempt_group: int | None = Field(None, alias="attemptGroup")
+    verification: list[DeploymentVerificationCheckModel] = Field(default_factory=list)
+    retry_allowed: bool = Field(False, alias="retryAllowed")
 
 
 class ImageTargetModel(BaseModel):
@@ -210,8 +255,8 @@ def _require_admin(user: User) -> None:
 
 def _policy_error(exc: DeploymentOperationError) -> HTTPException:
     return HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        detail={"code": exc.code, "message": exc.message},
+        status_code=exc.status_code,
+        detail={**exc.details, "code": exc.code, "message": exc.message},
     )
 
 
@@ -453,6 +498,22 @@ def _recent_action_model(action: DeploymentRecentAction) -> DeploymentRecentActi
         after_summary=action.after_summary,
         before_build_id=action.before_build_id,
         after_build_id=action.after_build_id,
+        owner=action.owner,
+        operation_id=action.operation_id,
+        installed_image=action.installed_image,
+        error_summary=action.error_summary,
+        attempts=[
+            DeploymentAttemptModel(attempt=item.attempt, error=item.error, at=item.at)
+            for item in action.attempts
+        ],
+        attempt_group=action.attempt_group,
+        verification=[
+            DeploymentVerificationCheckModel(
+                name=item.name, status=item.status, detail=item.detail
+            )
+            for item in action.verification
+        ],
+        retry_allowed=action.retry_allowed,
         rollback_eligibility=(
             RollbackEligibilityModel(
                 eligible=eligibility.eligible,
@@ -500,15 +561,10 @@ def _policy_model(policy: DeploymentStackPolicy) -> DeploymentPolicyModel:
 
 def _stack_state(
     policy: DeploymentStackPolicy,
-    service: DeploymentOperationsService,
-    recent_actions: tuple[DeploymentRecentAction, ...] | None = None,
+    controller: DeploymentControllerObservation,
+    recent_actions: tuple[DeploymentRecentAction, ...],
 ) -> DeploymentStackStateResponse:
-    actions = (
-        recent_actions
-        if recent_actions is not None
-        else service.recent_actions(policy.stack)
-    )
-    action_models = [_recent_action_model(action) for action in actions]
+    action_models = [_recent_action_model(action) for action in recent_actions]
     return DeploymentStackStateResponse(
         stack=policy.stack,
         project_name=policy.project_name,
@@ -518,6 +574,11 @@ def _stack_state(
         ),
         latest_action=action_models[0] if action_models else None,
         recent_actions=action_models,
+        controller=DeploymentControllerModel(
+            installed=controller.installed,
+            reachable=controller.reachable,
+            message=controller.message,
+        ),
         policy=_policy_model(policy),
     )
 
@@ -584,6 +645,27 @@ async def submit_deployment_update(
     return DeploymentUpdateResponse(**queued)
 
 
+@router.post(
+    "/operations/{operation_id}/retry",
+    response_model=DeploymentUpdateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_deployment_operation(
+    operation_id: str = Path(
+        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    ),
+    service: DeploymentOperationsService = Depends(_get_deployment_service),
+    user: User = Depends(get_current_user()),
+) -> DeploymentUpdateResponse:
+    """Request the controller's fresh bounded attempt for a failed operation."""
+    _require_admin(user)
+    try:
+        retried = await service.retry_operation(operation_id)
+    except DeploymentOperationError as exc:
+        raise _policy_error(exc) from exc
+    return DeploymentUpdateResponse(**retried)
+
+
 @router.get("/stacks/{stack}", response_model=DeploymentStackStateResponse)
 async def get_deployment_stack_state(
     stack: str,
@@ -597,13 +679,14 @@ async def get_deployment_stack_state(
         policy = service.get_policy(stack)
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
-    recent_actions = service.recent_actions(policy.stack)
-    if not recent_actions:
-        recent_actions = await _recent_actions_from_executions(
-            execution_service=execution_service,
-            policy=policy,
-        )
-    return _stack_state(policy, service, recent_actions=recent_actions)
+    controller = await asyncio.to_thread(service.observe_controller, policy.stack)
+    # Controller operations first; workflow-backed updates stay readable as
+    # history of the transitional updater.
+    history = service.recent_actions(policy.stack) or await _recent_actions_from_executions(
+        execution_service=execution_service,
+        policy=policy,
+    )
+    return _stack_state(policy, controller, (*controller.actions, *history))
 
 
 @router.get("/image-targets", response_model=ImageTargetsResponse)
