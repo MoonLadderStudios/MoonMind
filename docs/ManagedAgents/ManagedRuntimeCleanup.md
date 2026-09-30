@@ -450,6 +450,7 @@ The janitor may discover candidates only under canonical managed-runtime roots:
 
 ```text
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/workspaces/<workspace_key>
+${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/temporal_sandbox/<workspace_id>
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/<agent_run_id>
 normalized_managed_runtime_artifact_root()/<job_id>
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_runs/<run_id>.json
@@ -471,8 +472,9 @@ Examples:
 - `/work/agent_jobs/<agent_run_id>/repo` belongs to `/work/agent_jobs/<agent_run_id>`.
 - `/work/agent_jobs/<agent_run_id>/session` belongs to `/work/agent_jobs/<agent_run_id>`.
 - `/work/agent_jobs/<agent_run_id>/artifacts` belongs to `/work/agent_jobs/<agent_run_id>`.
+- `/work/agent_jobs/temporal_sandbox/<workspace_id>/repo` belongs to `/work/agent_jobs/temporal_sandbox/<workspace_id>`. The `temporal_sandbox` directory is never a candidate itself, and neither is its `.workspace_records` owner store.
 
-The workspace root is eligible only when every run/session that maps to that ownership root is terminal and past retention.
+The workspace root is eligible only when every run/session that maps to that ownership root is terminal and past retention. A sandbox workspace with no managed run/session record (for example, a generic Omnigent host workspace that is still waiting for its verified save) is reported as `skipped_ambiguous_owner` and kept. One finished run cannot make its siblings deletable.
 
 ### 8.5 Terminal states
 

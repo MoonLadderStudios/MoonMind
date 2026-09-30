@@ -889,3 +889,56 @@ def test_managed_runtime_cleanup_true_boolean_overrides(value: str) -> None:
 
     assert enabled.enabled is True
     assert dry_run.dry_run is True
+
+
+def test_sandbox_workspaces_are_separate_owners_and_unsaved_work_survives_restart(
+    tmp_path: Path,
+) -> None:
+    """MoonLadderStudios/MoonMind#4016: one finished run never deletes the sandbox.
+
+    Every attempt-owned sandbox workspace is its own ownership root. A terminal
+    run's workspace is deleted alone; a sibling workspace whose only durable
+    owner is its sandbox record (a generic-host candidate still pending its
+    save) is reported and kept, pass after pass, with its owner records.
+    """
+
+    root = tmp_path / "agent_jobs"
+    sandbox = root / "temporal_sandbox"
+    finished = sandbox / ("a" * 24)
+    pending = sandbox / ("b" * 24)
+    records = sandbox / ".workspace_records"
+    _touch_old(finished / "repo")
+    (pending / "repo").mkdir(parents=True)
+    (pending / "repo" / "result.txt").write_text("unsaved candidate bytes")
+    records.mkdir(parents=True)
+    (records / f"{'b' * 24}.json").write_text(
+        json.dumps({"workspace_id": "b" * 24, "workflow_id": "mm:wf-b"})
+    )
+    for path in (pending / "repo", pending, records, finished, sandbox):
+        os.utime(path, (OLD.timestamp(), OLD.timestamp()))
+    run_store, session_store = _stores(root)
+    run_store.save(
+        _run(
+            "run-a",
+            "completed",
+            root=root,
+            workspace_path=str(finished / "repo"),
+        )
+    )
+
+    for _restart in range(2):
+        result = _janitor(root, run_store, session_store, dry_run=False).run()
+        by_path = {
+            Path(d.path): d.classification
+            for d in result.decisions
+            if d.kind == "workspace"
+        }
+        assert sandbox not in by_path
+        assert records not in by_path
+        assert by_path[pending] == "skipped_ambiguous_owner"
+        assert (pending / "repo" / "result.txt").read_text() == (
+            "unsaved candidate bytes"
+        )
+        assert (records / f"{'b' * 24}.json").exists()
+
+    assert not finished.exists()
