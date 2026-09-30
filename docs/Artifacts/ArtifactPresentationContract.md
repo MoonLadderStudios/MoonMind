@@ -959,63 +959,104 @@ Debug artifacts should be hidden by default in normal user views and shown in op
 Workflow Detail shows one compact Saved Results section bound to the
 server's actual selected run/attempt/result and committed artifact
 references. Report-only and non-Git output remain useful. The section
-reuses the existing result/artifact projection, the existing Create flow
-for continuation, and the existing publication-only publisher path. It
+reuses the existing result/artifact projection, the existing linked
+continuation client, and the existing publication-only publisher path. It
 introduces no second result store and no recovery wizard.
 
 Rules:
 
 - The section binds requests and displayed state to the exact selected
-  `(workflow_id, run_id)` result/action. Late responses never retarget a
-  historical selection or overwrite a newer operation. Uncertain
-  submissions (lost acknowledgment, reload, double click) reuse the
-  stable per-selection idempotency key and the returned operation ID.
-  Leaving a dialog is not cancellation of accepted remote work.
+  `(workflow_id, run_id)`. Continue and Publish send the displayed run as
+  `expectedSourceRunId`; the server still pins the source and rejects a
+  changed run with `409` (`continuation_source_changed`, or
+  `publication_retry_not_available` with reason
+  `publication_source_changed`) before any side effect. When the
+  displayed run is not the execution's current run, both actions are
+  disabled. Late responses never retarget a historical selection or
+  overwrite a newer operation, and action state resets when the
+  selection changes.
+- Uncertain submissions reuse server idempotency. The Continue key is
+  derived from the selected run plus the exact authored title,
+  instructions, and carried refs, so a lost acknowledgment, reload, or
+  double click resubmits the same key and the server returns the same
+  continuation (`created: false` is shown as a reused continuation). A
+  changed request is a new continuation. Publication recovery has one
+  deterministic operation per source contract; the returned operation id
+  is shown. Accepted continuations are listed from the server's
+  outbound linked-continuation relationships, so leaving the form or
+  reloading does not hide accepted remote work.
 - Compute, saving, requested publication, and cleanup outcomes stay
-  distinct. A failed/canceled run may still show committed saved work; a
-  failed requested publication may still show a successful save; pending
-  cleanup never erases either. Missing or stale projection data shows an
-  unavailable/pending state with the existing refresh behavior. The UI
-  never restarts compute or invents a frontend-only status to repair
-  presentation. Publication reads the control-stop
-  `auxiliaryOutcomes.gitPublication` status first; cleanup reports the
-  recorded `hostCleanup`/`providerProfileRelease`/`janitorRequired`
-  outcome, or unknown when no evidence exists.
+  distinct, and the four outcome cards stay visible in unavailable,
+  pending, and stale states. A failed/canceled run may still show
+  committed saved work; a failed requested publication may still show a
+  successful save; pending cleanup never erases either. Missing or stale
+  projection data shows an unavailable/pending state with the existing
+  refresh behavior. The UI never restarts compute or invents a
+  frontend-only status to repair presentation.
+- Outcome sources: publication reads the control-stop
+  `auxiliaryOutcomes.gitPublication` status first. Save shows how many
+  listed outputs are committed, plus the server-recorded
+  `auxiliaryOutcomes.evidencePublication` and `workspacePreservation`
+  statuses when present; a recorded `evidencePublication: failed` is
+  never masked by listed artifacts. Capture completeness comes from the
+  run's captured-evidence projection (item count, capture manifest, or
+  the server's unavailable reason). Cleanup reports the recorded
+  `hostCleanup`/`providerProfileRelease`/`janitorRequired` outcome, or
+  unknown when no evidence exists.
 - Saved outputs are only artifacts linked as results (`output.*` other
   than `output.logs`, `report.*`, repository/patch/checkpoint links, or
   `result`); inputs, runtime logs, and debug evidence are not saved work.
-  Continuation submits only complete saved outputs that the source's
-  captured evidence authorizes. Expiry comes from the artifact's
-  `expires_at` (or a `DELETED` status), and expired entries show no
-  Preview/Download affordance.
+  Expiry comes from the artifact's `expires_at` (or a `DELETED` status),
+  and expired entries show no Preview/Download affordance.
 - Completeness never comes from a provider exit code, a local directory
   path, an absent digest, or a permissive generic metadata default. Only
   a server `COMPLETE` status bound to real content identity (digest plus
   size) counts as a complete save. Available downloads,
   completeness/exclusions, and retention are shown without requiring
   every format.
-- Previews reuse the existing safe-preview path: metadata-first,
-  `default_read_ref`-honoring, bounded inert renderers with redaction.
-  Preview access never authorizes raw restore/publication; an ArtifactRef
-  is an identifier, not a URL or credential. Raw download affordances
-  appear only when `raw_access_allowed === true`. Expired links and
-  hostile generated content never trigger credentialed fetches or
-  workflow controls.
-- Actions reuse existing endpoints with current server authorization and
-  the existing required confirmation: Download via the authorized
-  artifact download endpoint; Continue working via
-  `POST /executions/{workflow_id}/continue` (fresh admitted execution,
-  never a revived session/lease, available for every terminal state
-  including `no_commit`); Publish Saved Work via the publication-only
+- Preview is offered only for a distinct server preview artifact
+  (`preview_artifact_ref`, or a `default_read_ref` that is not the
+  artifact itself). When raw access is denied and no preview exists, the
+  server's `default_read_ref` is the raw artifact, so the row says
+  "Raw restricted; no safe preview" instead of showing a link the server
+  refuses. Preview access never authorizes raw restore/publication; an
+  ArtifactRef is an identifier, not a URL or credential. Raw download
+  affordances appear only when `raw_access_allowed === true`, and the
+  download route enforces the same policy. Generated titles and metadata
+  render as inert text, and links are built only from the fixed
+  `/api/artifacts/{id}` routes, so hostile content or expired links
+  cannot trigger credentialed fetches or workflow controls.
+- Continue working opens an inline form for operator-authored
+  instructions and an optional title, then calls
+  `POST /executions/{workflow_id}/continue` through the existing
+  continuation client. The server creates a fresh admitted execution
+  through the ordinary create path, inheriting the source workflow's
+  runtime, provider profile, and repository settings and resolving them
+  again against current authorization. It never revives a session or
+  lease. It is available for every terminal state, including
+  `no_commit`. The request carries only committed, raw-allowed, unexpired
+  saved outputs whose refs the run's captured evidence authorizes (refs
+  match after the server's `artifact://` normalization). Restricted
+  outputs are never carried, because continuation copies raw bytes. When
+  no saved output is authorized (for example, Omnigent gateway refs are
+  not listed execution artifacts), the form says so and the server still
+  pins the source lineage. Choosing a different harness or profile uses
+  the existing Edit/Rerun Create flow.
+- Publish Saved Work calls the publication-only
   `POST /executions/{workflow_id}/retry-publication` path (no model
-  rerun), enabled only by the server's `canRetryPublication` capability.
-  An idempotency conflict counts as a reused operation only when it
-  returns the confirmed destination. Changing the actual destination/base/content
-  invalidates its old preview approval through the existing destination
-  checks, without a second approval system or routine manual review.
+  rerun) after the existing confirmation, enabled only by the server's
+  `canRetryPublication` capability. Publishing a saved result whose
+  publication never failed, or to a new destination, belongs to the
+  publisher (#4018) and stays disabled with the server's reason until it
+  exists. Changing the actual destination/base/content invalidates its
+  old preview approval through the existing destination checks, without
+  a second approval system or routine manual review.
 - Instance/resource cache keys stay under the single-user model: no
-  human-user partitions. Protected content is invalidated when admission
-  changes, while machine/resource access restrictions remain effective.
+  human-user partitions. Captured-evidence authorization is cached per
+  `(workflow_id, run_id)` and applied only when its `runId` matches the
+  displayed run; Refresh invalidates captured evidence and linked
+  continuations with the other detail queries. Machine/resource access
+  restrictions remain effective.
 
 ---
 

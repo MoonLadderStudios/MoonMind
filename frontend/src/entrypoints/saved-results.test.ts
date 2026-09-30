@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { apiErrorMessage } from '../features/workflow-native-chat/WorkflowTerminalChatActions';
 import {
-  buildContinueInNewWorkflowBody,
   buildSavedResultDownloadHref,
   buildSavedResultPreviewHref,
   canDownloadSavedResultRaw,
   classifySavedResultArtifact,
   projectSavedResults,
-  resolveUncertainSavedResultSubmission,
-  savedResultErrorMessage,
-  savedResultIdempotencyKey,
+  savedResultContinueIdempotencyKey,
   savedResultSelectionKey,
   shouldApplySavedResultResponse,
 } from './saved-results';
@@ -153,51 +151,63 @@ describe('stale-response guard binds to the exact selected result', () => {
   });
 });
 
-describe('uncertain submissions reuse idempotency and returned operation IDs', () => {
-  it('produces a stable key per selected result and action', () => {
-    const first = savedResultIdempotencyKey('wf-4020', 'run-1', 'continue');
-    const second = savedResultIdempotencyKey('wf-4020', 'run-1', 'continue');
-    expect(first).toBe(second);
-    expect(savedResultIdempotencyKey('wf-4020', 'run-2', 'continue')).not.toBe(
-      first,
-    );
+describe('uncertain submissions reuse idempotency', () => {
+  const intent = {
+    workflowId: 'wf-4020',
+    runId: 'run-1',
+    title: '',
+    instructions: 'Finish the report.',
+    selectedSourceArtifactRefs: ['art-b', 'art-a'],
+  };
+
+  it('resubmits the same key for the same selected run and authored request', () => {
+    const first = savedResultContinueIdempotencyKey(intent);
+    expect(savedResultContinueIdempotencyKey({ ...intent })).toBe(first);
+    expect(
+      savedResultContinueIdempotencyKey({
+        ...intent,
+        instructions: '  Finish the report.  ',
+        selectedSourceArtifactRefs: ['art-a', 'art-b'],
+      }),
+    ).toBe(first);
+    expect(first.length).toBeLessThanOrEqual(512);
   });
 
-  it('reuses the returned operation after a lost acknowledgment or double click', () => {
-    const resolved = resolveUncertainSavedResultSubmission({
-      pendingOperationId: 'op-continue-1',
-      response: {
-        status: 409,
-        code: 'continuation_idempotency_conflict',
-        operationId: 'op-continue-1',
-      },
-    });
-    expect(resolved.reused).toBe(true);
-    expect(resolved.operationId).toBe('op-continue-1');
-  });
-
-  it('binds continue requests to the exact selected source artifacts', () => {
-    const body = buildContinueInNewWorkflowBody({
-      idempotencyKey: savedResultIdempotencyKey('wf-4020', 'run-1', 'continue'),
-      selectedSourceArtifactRefs: ['art_01TESTSAVEDRESULT01'],
-      instructions: 'Continue working from the saved result.',
-    });
-    expect(body.selectedSourceArtifactRefs).toEqual([
-      'art_01TESTSAVEDRESULT01',
-    ]);
-    expect(body).not.toHaveProperty('host');
-    expect(body).not.toHaveProperty('sessionId');
-    expect(body).not.toHaveProperty('credential');
+  it('uses a new key when the run or the authored request changes', () => {
+    const first = savedResultContinueIdempotencyKey(intent);
+    expect(savedResultContinueIdempotencyKey({ ...intent, runId: 'run-2' })).not.toBe(first);
+    expect(
+      savedResultContinueIdempotencyKey({ ...intent, instructions: 'Something else.' }),
+    ).not.toBe(first);
+    expect(
+      savedResultContinueIdempotencyKey({ ...intent, selectedSourceArtifactRefs: [] }),
+    ).not.toBe(first);
   });
 });
 
 describe('denied and raw access honors preview-versus-raw policy', () => {
-  it('hides raw download when raw access is denied and keeps preview inert', () => {
+  it('offers no preview when raw access is denied and no distinct preview exists', () => {
     const denied = artifact({ rawAccessAllowed: false });
     expect(canDownloadSavedResultRaw(denied)).toBe(false);
-    const preview = buildSavedResultPreviewHref('/api', denied);
-    const raw = buildSavedResultDownloadHref('/api', denied);
-    expect(preview).not.toBe(raw);
+    expect(buildSavedResultPreviewHref('/api', denied)).toBeNull();
+    // The server points default_read_ref at the raw artifact itself when no
+    // preview exists; that download is refused, so it is not a preview.
+    const selfRead = artifact({
+      rawAccessAllowed: false,
+      default_read_ref: { artifact_id: 'art_01TESTSAVEDRESULT01' },
+    });
+    expect(buildSavedResultPreviewHref('/api', selfRead)).toBeNull();
+  });
+
+  it('uses the server preview artifact ref in the real API shape', () => {
+    const restricted = artifact({
+      rawAccessAllowed: false,
+      default_read_ref: { artifact_id: 'art_01PREVIEW02' },
+      preview_artifact_ref: { artifact_id: 'art_01PREVIEW02' },
+    });
+    expect(buildSavedResultPreviewHref('/api', restricted)).toBe(
+      '/api/artifacts/art_01PREVIEW02/download',
+    );
   });
 
   it('resolves preview through default_read_ref without authorizing raw restore', () => {
@@ -257,10 +267,120 @@ describe('saved outputs come only from canonical result artifacts', () => {
         artifact({ artifactId: 'art-output', links: [{ linkType: 'output.primary' }] }),
         artifact({ artifactId: 'art-partial', status: 'PENDING_UPLOAD' }),
       ],
-      authorizedContinuationRefs: ['art-output', 'art-partial', 'art-final-snapshot'],
+      capturedEvidence: evidence(['art-output', 'art-partial', 'art-final-snapshot']),
     });
     expect(projection.continuationRefs).toEqual(['art-output']);
     expect(project().continuationRefs).toEqual([]);
+  });
+
+  it('matches artifact:// refs and never carries restricted or expired outputs', () => {
+    const projection = project({
+      now: Date.parse('2026-09-30T00:00:00Z'),
+      artifacts: [
+        artifact({ artifactId: 'art-output', links: [{ linkType: 'output.primary' }] }),
+        artifact({ artifactId: 'art-restricted', rawAccessAllowed: false }),
+        artifact({ artifactId: 'art-expired', expires_at: '2026-09-01T00:00:00Z' }),
+      ],
+      capturedEvidence: evidence([
+        'artifact://art-output',
+        'art-restricted',
+        'art-expired',
+      ]),
+    });
+    // The authorized ref string is submitted unchanged.
+    expect(projection.continuationRefs).toEqual(['artifact://art-output']);
+  });
+
+  it('never applies captured evidence recorded for a different run', () => {
+    const projection = project({
+      capturedEvidence: {
+        ...evidence(['art_01TESTSAVEDRESULT01']),
+        runId: 'run-newer-2',
+      },
+    });
+    expect(projection.continuationRefs).toEqual([]);
+    expect(projection.capture.state).toBe('stale');
+  });
+});
+
+function evidence(refs: string[], extra: Record<string, unknown> = {}) {
+  return {
+    workflowId: 'wf-4020',
+    runId: 'run-selected-1',
+    available: true,
+    items: refs.map((ref) => ({ label: 'Output artifact', kind: 'output_artifact', artifactRef: ref })),
+    ...extra,
+  };
+}
+
+describe('save outcome comes from server evidence', () => {
+  it('shows a recorded save failure and preserved workspace instead of a browser label', () => {
+    const projection = project({
+      execution: execution({
+        state: 'failed',
+        finishSummary: {
+          controlStop: {
+            auxiliaryOutcomes: {
+              evidencePublication: { status: 'failed' },
+              workspacePreservation: { status: 'preserved' },
+              gitPublication: { status: 'not_attempted' },
+              hostCleanup: { status: 'pending' },
+            },
+          },
+        },
+      }),
+    });
+    expect(projection.saveOutcome).toBe('failed');
+    expect(projection.committedCount).toBe(1);
+    expect(projection.evidencePublicationOutcome).toBe('failed');
+    expect(projection.workspacePreservationOutcome).toBe('preserved');
+    expect(projection.computeOutcome).toBe('failed');
+    expect(projection.publicationOutcome).toBe('not_attempted');
+    expect(projection.cleanupOutcome).toBe('pending');
+  });
+
+  it('reports capture-manifest completeness from the captured-evidence projection', () => {
+    const recorded = project({
+      capturedEvidence: {
+        ...evidence(['art-output']),
+        items: [
+          { label: 'Capture manifest', kind: 'capture_manifest', artifactRef: 'art-manifest' },
+          { label: 'Output artifact', kind: 'output_artifact', artifactRef: 'art-output' },
+        ],
+      },
+    });
+    expect(recorded.capture).toEqual({
+      state: 'recorded',
+      itemCount: 2,
+      captureManifestRef: 'art-manifest',
+      reason: null,
+    });
+    const unavailable = project({
+      capturedEvidence: {
+        ...evidence([]),
+        available: false,
+        unavailableReason: 'no_terminal_artifacts_captured',
+      },
+    });
+    expect(unavailable.capture.state).toBe('unavailable');
+    expect(unavailable.capture.reason).toBe('no_terminal_artifacts_captured');
+    expect(project({ capturedEvidenceError: true }).capture.state).toBe('unavailable');
+    expect(project().capture.state).toBe('pending');
+  });
+
+  it('keeps separate outcomes when saved-result evidence is unavailable', () => {
+    const projection = project({
+      execution: execution({
+        state: 'canceled',
+        finishSummary: {
+          controlStop: { auxiliaryOutcomes: { gitPublication: { status: 'failed' } } },
+        },
+      }),
+      artifactsError: new Error('Artifacts: unavailable'),
+    });
+    expect(projection.state).toBe('unavailable');
+    expect(projection.computeOutcome).toBe('canceled');
+    expect(projection.publicationOutcome).toBe('failed');
   });
 });
 
@@ -337,22 +457,14 @@ describe('expired saved outputs', () => {
 });
 
 describe('continuation responses', () => {
-  it('treats an idempotency conflict without a destination as a failure', () => {
-    const resolved = resolveUncertainSavedResultSubmission({
-      pendingOperationId: 'op-continue-1',
-      response: { status: 409, code: 'continuation_idempotency_conflict', operationId: null },
-    });
-    expect(resolved.reused).toBe(false);
-  });
-
   it('preserves structured FastAPI error messages', () => {
     expect(
-      savedResultErrorMessage({
+      apiErrorMessage({
         detail: { code: 'continuation_source_not_terminal', message: 'Source is not terminal.' },
       }),
     ).toBe('Source is not terminal.');
-    expect(savedResultErrorMessage({ detail: 'plain detail' })).toBe('plain detail');
-    expect(savedResultErrorMessage({ message: 'top-level' })).toBe('top-level');
-    expect(savedResultErrorMessage(null)).toBe('');
+    expect(apiErrorMessage({ detail: 'plain detail' })).toBe('plain detail');
+    expect(apiErrorMessage({ message: 'top-level' })).toBe('top-level');
+    expect(apiErrorMessage(null)).toBe('');
   });
 });

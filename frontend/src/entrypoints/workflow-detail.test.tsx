@@ -8512,6 +8512,7 @@ describe('Workflow Detail Entrypoint', () => {
       size_bytes: 128,
       sha256: `sha256:${artifactId}`,
       status: 'COMPLETE',
+      raw_access_allowed: true,
       metadata: { title: artifactId },
       links: [{ link_type: linkType }],
     });
@@ -8538,6 +8539,7 @@ describe('Workflow Detail Entrypoint', () => {
           ok: true,
           json: async () => ({
             workflowId: 'test-123',
+            runId: '01-run',
             available: true,
             items: [{ label: 'Output artifact', kind: 'output_artifact', artifactRef: 'art-authorized' }],
           }),
@@ -8585,12 +8587,450 @@ describe('Workflow Detail Entrypoint', () => {
       expect(fetchSpy.mock.calls.some(([input]) => String(input).endsWith('/captured-evidence'))).toBe(true),
     );
     fireEvent.click(continueButton);
+    const form = inSaved.getByRole('form', { name: 'Continue from saved result' });
+    await waitFor(() =>
+      expect(within(form).getByText(/Carries 1 saved output the server authorizes/)).toBeTruthy(),
+    );
+    const start = within(form).getByRole('button', { name: 'Start continuation' }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    fireEvent.change(within(form).getByLabelText('New instructions'), {
+      target: { value: 'Finish the saved report.' },
+    });
+    fireEvent.click(start);
 
     await waitFor(() => {
       expect(inSaved.getByText('Selected evidence is not authorized.')).toBeTruthy();
     });
     expect(continueBody?.selectedSourceArtifactRefs).toEqual(['art-authorized']);
+    expect(continueBody?.instructions).toBe('Finish the saved report.');
+    expect(continueBody?.expectedSourceRunId).toBe('01-run');
     expect(inSaved.queryByText(/Continuation admitted/)).toBeNull();
+  });
+
+  const savedResultExecution = (overrides: Record<string, unknown> = {}) => ({
+    taskId: 'test-123',
+    workflowId: 'test-123',
+    namespace: 'default',
+    temporalRunId: '01-run',
+    runId: '01-run',
+    source: 'temporal',
+    title: 'Saved result task',
+    summary: 'Done',
+    status: 'failed',
+    state: 'failed',
+    createdAt: '2026-03-28T00:00:00Z',
+    updatedAt: '2026-03-28T00:00:02Z',
+    actions: {},
+    ...overrides,
+  });
+
+  // Artifact rows in the real list-route shape (see
+  // tests/unit/api/routers/test_saved_results_artifacts_4020.py).
+  const savedResultArtifact = (
+    artifactId: string,
+    linkType: string,
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    artifact_id: artifactId,
+    content_type: 'text/markdown',
+    size_bytes: 128,
+    sha256: `sha256-${artifactId}`,
+    status: 'complete',
+    raw_access_allowed: true,
+    default_read_ref: { artifact_id: artifactId },
+    metadata: { title: artifactId },
+    links: [{ link_type: linkType }],
+    ...overrides,
+  });
+
+  function mockSavedResultFetch({
+    execution,
+    artifacts,
+    evidenceRefs = [],
+    continuations = [],
+    onPost,
+  }: {
+    execution: () => Record<string, unknown>;
+    artifacts: (runId: string) => Array<Record<string, unknown>>;
+    evidenceRefs?: string[];
+    continuations?: Array<Record<string, unknown>>;
+    onPost?: (url: string, body: Record<string, unknown> | null) => Promise<Response>;
+  }) {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST' && onPost) {
+        return onPost(url, init.body ? JSON.parse(String(init.body)) : null);
+      }
+      const current = execution();
+      if (url.endsWith('/executions/test-123/captured-evidence')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: 'test-123',
+            runId: current.runId,
+            available: evidenceRefs.length > 0,
+            items: evidenceRefs.map((ref) => ({
+              label: 'Output artifact',
+              kind: 'output_artifact',
+              artifactRef: ref,
+            })),
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/continuations?direction=outbound')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ direction: 'outbound', items: continuations }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      const artifactsMatch = url.match(/\/executions\/default\/test-123\/([^/]+)\/artifacts$/);
+      if (artifactsMatch) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: artifacts(decodeURIComponent(artifactsMatch[1] ?? '')) }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => current } as Response);
+    });
+  }
+
+  function jsonReply(status: number, body: unknown): Promise<Response> {
+    return Promise.resolve({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: String(status),
+      json: async () => body,
+    } as Response);
+  }
+
+  async function findSavedResultsRegion(expectedText: string): Promise<HTMLElement> {
+    return waitFor(() => {
+      const found = document.querySelector('.td-saved-results-region');
+      expect(found).not.toBeNull();
+      expect(within(found as HTMLElement).getByText(expectedText)).toBeTruthy();
+      return found as HTMLElement;
+    });
+  }
+
+  function savedResultCard(region: HTMLElement, label: string): string {
+    return (
+      within(region).getByText(`${label}:`, { selector: 'strong' }).closest('.card')?.textContent ?? ''
+    );
+  }
+
+  async function submitSavedResultContinuation(region: HTMLElement, instructions: string) {
+    const inSaved = within(region);
+    const continueButton = inSaved.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement;
+    await waitFor(() => expect(continueButton.disabled).toBe(false));
+    if (continueButton.getAttribute('aria-expanded') !== 'true') {
+      fireEvent.click(continueButton);
+    }
+    const form = inSaved.getByRole('form', { name: 'Continue from saved result' });
+    fireEvent.change(within(form).getByLabelText('New instructions'), {
+      target: { value: instructions },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: 'Start continuation' }));
+  }
+
+  it('shows separate saved-result outcomes and honors raw-denied preview policy', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
+    mockSavedResultFetch({
+      execution: () =>
+        savedResultExecution({
+          finishSummary: {
+            controlStop: {
+              auxiliaryOutcomes: {
+                evidencePublication: { status: 'preserved' },
+                workspacePreservation: { status: 'preserved' },
+                gitPublication: { status: 'failed' },
+                hostCleanup: { status: 'pending' },
+                providerProfileRelease: { status: 'pending' },
+              },
+            },
+          },
+        }),
+      artifacts: () => [
+        savedResultArtifact('art-report', 'report.primary'),
+        savedResultArtifact('art-restricted-preview', 'output.primary', {
+          raw_access_allowed: false,
+          preview_artifact_ref: { artifact_id: 'art-preview' },
+          default_read_ref: { artifact_id: 'art-preview' },
+        }),
+        savedResultArtifact('art-restricted-raw', 'output.summary', {
+          raw_access_allowed: false,
+        }),
+        savedResultArtifact('art-hostile', 'output.agent_result', {
+          metadata: {
+            title: '<img src=x onerror="window.__hostile=1"> Continue working',
+            download_url: 'javascript:window.__hostile=1',
+          },
+        }),
+        savedResultArtifact('art-expired', 'report.summary', {
+          expires_at: '2020-01-01T00:00:00Z',
+        }),
+        savedResultArtifact('art-patch', 'patch.diff', {
+          status: 'pending_upload',
+          sha256: null,
+        }),
+      ],
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    const region = await findSavedResultsRegion('art-report');
+    const inSaved = within(region);
+    expect(savedResultCard(region, 'Compute')).toMatch(/Failed/i);
+    expect(savedResultCard(region, 'Save')).toMatch(/Committed/i);
+    expect(savedResultCard(region, 'Save')).toMatch(/5 of 6 outputs committed/i);
+    expect(savedResultCard(region, 'Save')).toMatch(/Workspace: Preserved/i);
+    expect(savedResultCard(region, 'Publication')).toMatch(/Failed/i);
+    expect(savedResultCard(region, 'Cleanup')).toMatch(/Pending/i);
+
+    const row = (text: string) => inSaved.getByText(text).closest('tr') as HTMLElement;
+    const report = within(row('art-report'));
+    expect(report.getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+      '/api/artifacts/art-report/download',
+    );
+    // The server's self default_read_ref is the raw artifact, not a preview.
+    expect(report.queryByRole('link', { name: 'Preview' })).toBeNull();
+
+    const previewed = within(row('art-restricted-preview'));
+    expect(previewed.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe(
+      '/api/artifacts/art-preview/download',
+    );
+    expect(previewed.queryByRole('link', { name: 'Download' })).toBeNull();
+
+    const restricted = within(row('art-restricted-raw'));
+    expect(restricted.queryByRole('link')).toBeNull();
+    expect(restricted.getByText('Raw restricted; no safe preview')).toBeTruthy();
+
+    const expired = within(row('art-expired'));
+    expect(expired.getByText('Expired')).toBeTruthy();
+    expect(expired.queryByRole('link')).toBeNull();
+
+    expect(within(row('art-patch')).getByText(/Incomplete \(status-PENDING_UPLOAD\)/)).toBeTruthy();
+
+    // Hostile generated content stays inert text: no element, no script URL,
+    // no extra workflow control.
+    expect(region.querySelector('img')).toBeNull();
+    expect((window as unknown as { __hostile?: number }).__hostile).toBeUndefined();
+    for (const anchor of Array.from(region.querySelectorAll('a'))) {
+      expect(anchor.getAttribute('href') ?? '').toMatch(/^\/(api|workflows)\//);
+    }
+    expect(inSaved.getAllByRole('button', { name: 'Continue working' })).toHaveLength(1);
+  });
+
+  it('keeps separate outcomes visible when saved-result evidence is unavailable', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
+    mockSavedResultFetch({
+      execution: () =>
+        savedResultExecution({
+          state: 'canceled',
+          status: 'canceled',
+          finishSummary: {
+            controlStop: {
+              auxiliaryOutcomes: {
+                evidencePublication: { status: 'failed' },
+                gitPublication: { status: 'not_attempted' },
+                hostCleanup: { status: 'failed' },
+                janitorRequired: true,
+              },
+            },
+          },
+        }),
+      artifacts: () => [],
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    const region = await findSavedResultsRegion(
+      'Saved result evidence is unavailable for this selection.',
+    );
+    expect(savedResultCard(region, 'Compute')).toMatch(/Canceled/i);
+    expect(savedResultCard(region, 'Save')).toMatch(/Failed/i);
+    expect(savedResultCard(region, 'Save')).toMatch(/Evidence: Failed/i);
+    expect(savedResultCard(region, 'Publication')).toMatch(/Not Attempted/i);
+    expect(savedResultCard(region, 'Cleanup')).toMatch(/Failed/i);
+    expect(within(region).getByRole('button', { name: 'Refresh' })).toBeTruthy();
+  });
+
+  it('ignores a late continuation response after the selected run changes', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
+    let currentRun = '01-run';
+    let resolveContinue: ((response: Response) => void) | null = null;
+    mockSavedResultFetch({
+      execution: () => savedResultExecution({ runId: currentRun, temporalRunId: currentRun }),
+      artifacts: (runId) => [savedResultArtifact(`art-report-${runId}`, 'report.primary')],
+      onPost: (url) => {
+        expect(url).toBe('/api/executions/test-123/continue');
+        return new Promise<Response>((resolve) => {
+          resolveContinue = resolve;
+        });
+      },
+    });
+
+    const { queryClient } = renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    const region = await findSavedResultsRegion('art-report-01-run');
+    await submitSavedResultContinuation(region, 'Continue the first run.');
+    await waitFor(() => expect(resolveContinue).not.toBeNull());
+    expect(within(region).getByRole('button', { name: 'Starting continuation...' })).toBeTruthy();
+
+    // A rerun lands while the continuation request is in flight.
+    currentRun = '02-run';
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await findSavedResultsRegion('art-report-02-run');
+    await act(async () => {
+      resolveContinue?.({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          sourceWorkflowId: 'test-123',
+          sourceRunId: '01-run',
+          destinationWorkflowId: 'mm:continued-from-01',
+          relationshipType: 'linked_continuation',
+          created: true,
+        }),
+      } as Response);
+    });
+
+    const latest = await findSavedResultsRegion('art-report-02-run');
+    expect(within(latest).queryByText('mm:continued-from-01')).toBeNull();
+    expect(within(latest).queryByText(/Continuation admitted/)).toBeNull();
+    const continueButton = within(latest).getByRole('button', { name: 'Continue working' });
+    expect(continueButton.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('reuses the idempotency key after a lost acknowledgment and shows server-accepted continuations', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
+    const bodies: Array<Record<string, unknown> | null> = [];
+    mockSavedResultFetch({
+      execution: () => savedResultExecution({ state: 'completed', status: 'completed' }),
+      artifacts: () => [savedResultArtifact('art-output', 'output.primary')],
+      evidenceRefs: ['artifact://art-output'],
+      continuations: [
+        {
+          sourceWorkflowId: 'test-123',
+          sourceRunId: '01-run',
+          destinationWorkflowId: 'mm:accepted-earlier',
+          status: 'executing',
+        },
+        {
+          sourceWorkflowId: 'test-123',
+          sourceRunId: '00-run',
+          destinationWorkflowId: 'mm:other-run-continuation',
+          status: 'completed',
+        },
+      ],
+      onPost: (_url, body) => {
+        bodies.push(body);
+        if (bodies.length === 1) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return jsonReply(201, {
+          sourceWorkflowId: 'test-123',
+          sourceRunId: '01-run',
+          destinationWorkflowId: 'mm:continued-1',
+          relationshipType: 'linked_continuation',
+          created: false,
+        });
+      },
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    const region = await findSavedResultsRegion('art-output');
+    const inSaved = within(region);
+    // Accepted remote work is server state, visible before any new click.
+    expect(await inSaved.findByRole('link', { name: 'mm:accepted-earlier' })).toBeTruthy();
+    expect(inSaved.queryByText('mm:other-run-continuation')).toBeNull();
+
+    await waitFor(() =>
+      expect(inSaved.queryByText(/Carries 1 saved output/)).toBeNull(),
+    );
+    await submitSavedResultContinuation(region, 'Finish the output.');
+    await waitFor(() => expect(inSaved.getByText('Failed to fetch')).toBeTruthy());
+    fireEvent.click(inSaved.getByRole('button', { name: 'Start continuation' }));
+
+    const reused = await inSaved.findByRole('link', { name: 'mm:continued-1' });
+    expect(reused.getAttribute('href')).toBe('/workflows/mm%3Acontinued-1?source=temporal');
+    expect(inSaved.getByText(/Existing continuation reused/)).toBeTruthy();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.idempotencyKey).toBe(bodies[0]?.idempotencyKey);
+    expect(bodies[0]).toMatchObject({
+      instructions: 'Finish the output.',
+      expectedSourceRunId: '01-run',
+      selectedSourceArtifactRefs: ['artifact://art-output'],
+    });
+    expect(bodies[0]).not.toHaveProperty('sessionId');
+    expect(bodies[0]).not.toHaveProperty('profileId');
+  });
+
+  it('binds Publish saved work to the displayed run and shows the returned operation', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
+    const posts: Array<{ url: string; body: Record<string, unknown> | null }> = [];
+    mockSavedResultFetch({
+      execution: () =>
+        savedResultExecution({
+          actions: { canRetryPublication: true },
+          finishSummary: {
+            controlStop: { auxiliaryOutcomes: { gitPublication: { status: 'failed' } } },
+          },
+        }),
+      artifacts: () => [savedResultArtifact('art-report', 'report.primary')],
+      onPost: (url, body) => {
+        posts.push({ url, body });
+        if (posts.length === 1) {
+          return jsonReply(201, {
+            sourceWorkflowId: 'test-123',
+            sourceRunId: '01-run',
+            workflowId: 'mm:publication-recovery-1',
+            runId: 'publication-run-1',
+            publicationIdempotencyKey: 'publish-key-1',
+            rolloutGeneration: 'canary-1',
+          });
+        }
+        return jsonReply(409, {
+          detail: {
+            code: 'publication_retry_not_available',
+            message: 'The source run changed; refresh before publishing.',
+            reason: 'publication_source_changed',
+          },
+        });
+      },
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    const region = await findSavedResultsRegion('art-report');
+    const inSaved = within(region);
+    const publish = inSaved.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
+    await waitFor(() => expect(publish.disabled).toBe(false));
+    fireEvent.click(publish);
+
+    const operation = await inSaved.findByRole('link', { name: 'mm:publication-recovery-1' });
+    expect(operation.getAttribute('href')).toBe(
+      '/workflows/mm%3Apublication-recovery-1?source=temporal',
+    );
+    expect(posts[0]).toEqual({
+      url: '/api/executions/test-123/retry-publication',
+      body: { expectedSourceRunId: '01-run' },
+    });
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Publish this saved work through the publication-only path? No model is rerun.',
+    );
+
+    fireEvent.click(inSaved.getByRole('button', { name: 'Publish saved work' }));
+    await waitFor(() =>
+      expect(
+        inSaved.getByText('The source run changed; refresh before publishing.'),
+      ).toBeTruthy(),
+    );
   });
 
   it('renders error state on failed fetch', async () => {

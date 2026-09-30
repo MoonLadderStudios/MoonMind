@@ -988,6 +988,14 @@ class RemediationApprovalDecisionResponse(BaseModel):
     decision: str
 
 
+class PublicationRecoveryRequest(BaseModel):
+    """Optional precondition for publication-only recovery (#4020)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expectedSourceRunId: str | None = Field(None, max_length=256)
+
+
 class PublicationRecoveryResponse(BaseModel):
     sourceWorkflowId: str
     sourceRunId: str
@@ -18384,6 +18392,11 @@ class ContinueInNewWorkflowRequest(BaseModel):
     bounded_purpose: str | None = Field(
         None, alias="boundedPurpose", max_length=2000
     )
+    # Precondition only: the server still pins the source run. A caller that
+    # displays one run (Saved Results, #4020) fails closed when it changed.
+    expected_source_run_id: str | None = Field(
+        None, alias="expectedSourceRunId", max_length=256
+    )
 
 
 class ContinueInNewWorkflowResponse(BaseModel):
@@ -18482,6 +18495,17 @@ async def continue_in_new_workflow(
             detail={
                 "code": "continuation_source_run_missing",
                 "message": "The source Workflow has no authoritative run to pin.",
+            },
+        )
+    if (
+        payload.expected_source_run_id
+        and payload.expected_source_run_id != source_run_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_source_changed",
+                "message": "The source run changed; refresh before continuing.",
             },
         )
 
@@ -20037,6 +20061,7 @@ def _publication_recovery_contract_from_record(
 )
 async def retry_execution_publication(
     workflow_id: str,
+    request: PublicationRecoveryRequest | None = Body(None),
     service: TemporalExecutionService = Depends(_get_service),
     adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
     user: User = Depends(get_current_user()),
@@ -20047,6 +20072,16 @@ async def retry_execution_publication(
     canonical = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
+    expected_run_id = request.expectedSourceRunId if request is not None else None
+    if expected_run_id and expected_run_id != str(canonical.run_id or ""):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_available",
+                "message": "The source run changed; refresh before publishing.",
+                "reason": "publication_source_changed",
+            },
+        )
     contract = _publication_recovery_contract_from_record(canonical)
     if (
         contract.source_workflow_id != workflow_id

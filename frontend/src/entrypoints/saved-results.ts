@@ -4,16 +4,19 @@
  * Uses only the server's actual selected run/attempt/result and committed
  * artifact references. No second result store, no frontend-invented status,
  * no compute restart. Download reuses the existing authorized artifact
- * download endpoint; Continue reuses the existing publication-free
- * `POST /executions/{workflowId}/continue` fresh-admission path; Publish
- * Saved Work reuses the existing publication-only
+ * download endpoint; Continue reuses the existing continuation client
+ * (`POST /executions/{workflowId}/continue`, fresh admission); Publish Saved
+ * Work reuses the existing publication-only
  * `POST /executions/{workflowId}/retry-publication` path (no model rerun).
  *
  * Preview access never authorizes raw restore/publication: an ArtifactRef is
  * an identifier, not a URL or credential. Raw bytes require
- * `raw_access_allowed === true`; otherwise only metadata-first preview via
- * `default_read_ref` (or the artifact metadata document) is exposed.
+ * `raw_access_allowed === true`; otherwise only a distinct server preview
+ * artifact is exposed.
  */
+
+import type { CapturedEvidence } from '../features/workflow-native-chat/WorkflowTerminalChatActions';
+import { apiErrorMessage } from '../features/workflow-native-chat/WorkflowTerminalChatActions';
 
 export interface SavedResultLinkLike {
   linkType?: string;
@@ -37,6 +40,8 @@ export interface SavedResultArtifactLike {
   download_url?: string | null;
   defaultReadRef?: { artifactId?: string } | null;
   default_read_ref?: { artifactId?: string; artifact_id?: string } | null;
+  previewArtifactRef?: { artifactId?: string } | null;
+  preview_artifact_ref?: { artifactId?: string; artifact_id?: string } | null;
   rawAccessAllowed?: boolean | null;
   raw_access_allowed?: boolean | null;
   metadata?: Record<string, unknown> | null;
@@ -215,17 +220,27 @@ export function canDownloadSavedResultRaw(
   );
 }
 
-function previewArtifactId(artifact: SavedResultArtifactLike): string | null {
-  const ref =
-    artifact.defaultReadRef ?? artifact.default_read_ref ?? null;
-  if (ref && typeof ref === 'object') {
-    const id = text(
-      (ref as Record<string, unknown>).artifactId ??
-        (ref as Record<string, unknown>).artifact_id,
-    );
-    return id || null;
+function refArtifactId(ref: unknown): string {
+  if (!ref || typeof ref !== 'object') {
+    return '';
   }
-  return null;
+  return text(
+    (ref as Record<string, unknown>).artifactId ??
+      (ref as Record<string, unknown>).artifact_id,
+  );
+}
+
+function previewArtifactId(artifact: SavedResultArtifactLike): string | null {
+  // Only a distinct server preview artifact is a safe preview. When raw access
+  // is denied and no preview exists, the server's default_read_ref is the raw
+  // artifact itself, whose download it refuses.
+  const candidates = [
+    refArtifactId(artifact.previewArtifactRef ?? artifact.preview_artifact_ref),
+    refArtifactId(artifact.defaultReadRef ?? artifact.default_read_ref),
+  ];
+  return (
+    candidates.find((id) => id && id !== artifact.artifactId) ?? null
+  );
 }
 
 function joinApiBasePath(apiBase: string, path: string): string {
@@ -246,22 +261,17 @@ export function buildSavedResultDownloadHref(
 export function buildSavedResultPreviewHref(
   apiBase: string,
   artifact: SavedResultArtifactLike,
-): string {
-  // Metadata-first preview: the server's redacted/bounded preview artifact
-  // when default_read_ref is set, otherwise the artifact metadata document.
-  // This never authorizes raw restore/publication and never performs a
-  // credentialed fetch by itself (plain anchor navigation only).
+): string | null {
+  // The server's redacted/bounded preview artifact, or nothing. This never
+  // authorizes raw restore/publication and never performs a credentialed
+  // fetch by itself (plain anchor navigation only).
   const previewId = previewArtifactId(artifact);
-  if (previewId) {
-    return joinApiBasePath(
-      apiBase,
-      `/artifacts/${encodeURIComponent(previewId)}/download`,
-    );
-  }
-  return joinApiBasePath(
-    apiBase,
-    `/artifacts/${encodeURIComponent(artifact.artifactId)}`,
-  );
+  return previewId
+    ? joinApiBasePath(
+        apiBase,
+        `/artifacts/${encodeURIComponent(previewId)}/download`,
+      )
+    : null;
 }
 
 export function savedResultSelectionKey(
@@ -280,106 +290,76 @@ export function shouldApplySavedResultResponse(
   return requestKey === currentKey;
 }
 
-export function savedResultIdempotencyKey(
-  workflowId: string,
-  runId: string,
-  action: 'continue' | 'publish' | 'download',
-  artifactId?: string,
-): string {
-  // Single-user instance/resource key: no human-user partitions.
-  const subject = artifactId ? `:${artifactId}` : ':selection';
-  return `saved-result:${action}:${workflowId}:${runId}${subject}`;
+function stableHash(value: string): string {
+  // FNV-1a (two 32-bit lanes): a stable content fingerprint, not a secret.
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    a = Math.imul(a ^ code, 0x01000193) >>> 0;
+    b = Math.imul(b ^ code, 0x811c9dc5) >>> 0;
+  }
+  return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`;
 }
 
-export function resolveUncertainSavedResultSubmission(input: {
-  pendingOperationId: string;
-  response: {
-    status: number;
-    code?: string | null;
-    operationId?: string | null;
-  } | null;
-}): { reused: boolean; operationId: string } {
-  const { pendingOperationId, response } = input;
-  if (!response) {
-    return { reused: false, operationId: pendingOperationId };
-  }
-  const conflictCodes = new Set([
-    'idempotency_key_conflict',
-    'continuation_idempotency_conflict',
-    'publication_idempotency_key_conflict',
-    'publication_recovery_already_started',
-  ]);
-  // A conflict is a reusable success only when it carries the confirmed
-  // operation; a conflict code alone (for example a changed request digest
-  // under the same key) means the request failed.
-  if (
-    response.status === 409 &&
-    response.code &&
-    conflictCodes.has(response.code) &&
-    text(response.operationId)
-  ) {
-    return { reused: true, operationId: text(response.operationId) };
-  }
-  if (text(response.operationId) === pendingOperationId) {
-    return { reused: true, operationId: pendingOperationId };
-  }
-  return {
-    reused: false,
-    operationId: text(response.operationId) || pendingOperationId,
-  };
-}
-
-export function savedResultErrorMessage(payload: unknown): string {
-  // FastAPI rejections carry either a string `detail` or an object `detail`
-  // with a `message`.
-  if (typeof payload === 'string') {
-    return payload;
-  }
-  if (!payload || typeof payload !== 'object') {
-    return '';
-  }
-  const record = payload as Record<string, unknown>;
-  const detail = record.detail;
-  if (typeof detail === 'string') {
-    return detail;
-  }
-  if (detail && typeof detail === 'object') {
-    const message = text((detail as Record<string, unknown>).message);
-    if (message) {
-      return message;
-    }
-  }
-  return text(record.message);
-}
-
-export function buildContinueInNewWorkflowBody(input: {
-  idempotencyKey: string;
+export function savedResultContinueIdempotencyKey(input: {
+  workflowId: string;
+  runId: string;
+  title: string;
+  instructions: string;
   selectedSourceArtifactRefs: string[];
-  instructions?: string;
-  title?: string | null;
-  initialParameters?: Record<string, unknown>;
-  boundedPurpose?: string | null;
-}): Record<string, unknown> {
-  // The browser authors only new intent plus already-authorized source refs.
-  // Source run, session, host, profile, credential, and workspace ownership
-  // stay server-pinned; they are never authored here.
-  const body: Record<string, unknown> = {
-    idempotencyKey: input.idempotencyKey,
-    selectedSourceArtifactRefs: [...input.selectedSourceArtifactRefs],
+}): string {
+  // Bound to the selected run and the exact authored request: a lost
+  // acknowledgment, reload, or double click resubmits the same key and the
+  // server returns the same continuation; a changed request is a new one.
+  // Single-user instance/resource key: no human-user partitions.
+  const content = JSON.stringify([
+    input.title.trim(),
+    input.instructions.trim(),
+    [...input.selectedSourceArtifactRefs].sort(),
+  ]);
+  return `saved-result:continue:${input.workflowId}:${input.runId}:${stableHash(content)}`;
+}
+
+export interface PublicationRecoveryResult {
+  sourceWorkflowId: string;
+  sourceRunId: string;
+  workflowId: string;
+  runId: string;
+  publicationIdempotencyKey: string;
+}
+
+export async function requestPublicationRecovery(
+  apiBase: string,
+  workflowId: string,
+  options: { expectedSourceRunId?: string } = {},
+): Promise<PublicationRecoveryResult> {
+  // The existing publication-only path. The server derives one deterministic
+  // operation per source contract, so a repeated request returns it again.
+  const init: RequestInit = {
+    method: 'POST',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
   };
-  if (input.title !== undefined && input.title !== null) {
-    body.title = input.title;
+  if (options.expectedSourceRunId) {
+    init.headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
+    init.body = JSON.stringify({ expectedSourceRunId: options.expectedSourceRunId });
   }
-  if (input.instructions !== undefined) {
-    body.instructions = input.instructions;
+  const response = await fetch(
+    joinApiBasePath(
+      apiBase,
+      `/executions/${encodeURIComponent(workflowId)}/retry-publication`,
+    ),
+    init,
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(
+      apiErrorMessage(payload) ||
+        `Publication recovery: ${response.statusText || response.status}`,
+    );
   }
-  if (input.initialParameters !== undefined) {
-    body.initialParameters = { ...input.initialParameters };
-  }
-  if (input.boundedPurpose !== undefined && input.boundedPurpose !== null) {
-    body.boundedPurpose = input.boundedPurpose;
-  }
-  return body;
+  return (await response.json()) as PublicationRecoveryResult;
 }
 
 export interface SavedResultEntry {
@@ -573,6 +553,79 @@ function isTerminalExecution(execution: SavedResultExecutionLike): boolean {
   return ['failed', 'canceled', 'completed', 'no_commit'].includes(outcome);
 }
 
+function recordedStatus(
+  execution: SavedResultExecutionLike,
+  key: 'evidencePublication' | 'workspacePreservation',
+): string | null {
+  // Server-recorded save evidence from the control-stop finalization; absent
+  // evidence stays absent rather than an assumed success.
+  return text(record(auxiliaryOutcomes(execution)[key]).status).toLowerCase() || null;
+}
+
+function normalizedRefId(ref: string): string {
+  // Same normalization as the server's artifact-ref reader.
+  return ref.trim().replace(/^artifact:\/\//, '').replace(/^input\//, '');
+}
+
+export type SavedResultCaptureState =
+  | 'recorded'
+  | 'unavailable'
+  | 'pending'
+  | 'stale';
+
+export interface SavedResultCapture {
+  state: SavedResultCaptureState;
+  itemCount: number;
+  captureManifestRef: string | null;
+  reason: string | null;
+}
+
+function projectCapture(
+  runId: string,
+  evidence: CapturedEvidence | null | undefined,
+  evidenceError: boolean,
+): { capture: SavedResultCapture; authorizedRefs: string[] } {
+  const none = { itemCount: 0, captureManifestRef: null };
+  if (evidenceError) {
+    return {
+      capture: { ...none, state: 'unavailable', reason: 'captured_evidence_unavailable' },
+      authorizedRefs: [],
+    };
+  }
+  if (!evidence) {
+    return { capture: { ...none, state: 'pending', reason: null }, authorizedRefs: [] };
+  }
+  // Captured evidence is authorized for the server's current run. It is only
+  // applied to the exact displayed run; anything else is stale.
+  if (text(evidence.runId) !== runId) {
+    return {
+      capture: { ...none, state: 'stale', reason: 'captured_evidence_other_run' },
+      authorizedRefs: [],
+    };
+  }
+  const items = Array.isArray(evidence.items) ? evidence.items : [];
+  if (!evidence.available || items.length === 0) {
+    return {
+      capture: {
+        ...none,
+        state: 'unavailable',
+        reason: text(evidence.unavailableReason) || 'no_captured_evidence',
+      },
+      authorizedRefs: [],
+    };
+  }
+  const manifest = items.find((item) => item.kind === 'capture_manifest');
+  return {
+    capture: {
+      state: 'recorded',
+      itemCount: items.length,
+      captureManifestRef: manifest ? text(manifest.artifactRef) || null : null,
+      reason: null,
+    },
+    authorizedRefs: items.map((item) => text(item.artifactRef)).filter(Boolean),
+  };
+}
+
 export function projectSavedResults(input: {
   workflowId: string;
   runId: string;
@@ -580,8 +633,9 @@ export function projectSavedResults(input: {
   artifacts: SavedResultArtifactLike[];
   artifactsStale: boolean;
   artifactsError: Error | null;
-  /** Source evidence refs the `/continue` endpoint authorizes. */
-  authorizedContinuationRefs?: string[] | null;
+  /** The `/captured-evidence` response; its refs are what `/continue` authorizes. */
+  capturedEvidence?: CapturedEvidence | null;
+  capturedEvidenceError?: boolean;
   now?: number;
 }): {
   selectedKey: string;
@@ -591,26 +645,48 @@ export function projectSavedResults(input: {
   terminalSource: boolean;
   computeOutcome: string;
   saveOutcome: string;
+  committedCount: number;
+  evidencePublicationOutcome: string | null;
+  workspacePreservationOutcome: string | null;
+  capture: SavedResultCapture;
   publicationOutcome: string;
   cleanupOutcome: string;
 } {
   const selectedKey = savedResultSelectionKey(input.workflowId, input.runId);
   const terminalSource = isTerminalExecution(input.execution);
+  const evidencePublicationOutcome = recordedStatus(
+    input.execution,
+    'evidencePublication',
+  );
+  const { capture, authorizedRefs } = projectCapture(
+    input.runId,
+    input.capturedEvidence,
+    Boolean(input.capturedEvidenceError),
+  );
   const base = {
     selectedKey,
     continuationRefs: [] as string[],
     terminalSource,
     computeOutcome: computeOutcome(input.execution),
+    committedCount: 0,
+    evidencePublicationOutcome,
+    workspacePreservationOutcome: recordedStatus(
+      input.execution,
+      'workspacePreservation',
+    ),
+    capture,
     publicationOutcome: publicationOutcome(input.execution),
     cleanupOutcome: cleanupOutcome(input.execution),
   };
+  // A server-recorded save failure is never masked by listed artifacts.
+  const recordedFailure = evidencePublicationOutcome === 'failed';
 
   if (input.artifactsError) {
     return {
       ...base,
       state: 'unavailable',
       entries: [],
-      saveOutcome: 'unavailable',
+      saveOutcome: recordedFailure ? 'failed' : 'unavailable',
     };
   }
   if (input.artifactsStale) {
@@ -618,7 +694,7 @@ export function projectSavedResults(input: {
       ...base,
       state: 'stale',
       entries: [],
-      saveOutcome: 'stale',
+      saveOutcome: recordedFailure ? 'failed' : 'stale',
     };
   }
   const now = input.now ?? Date.now();
@@ -627,19 +703,34 @@ export function projectSavedResults(input: {
     .map((artifact) => toEntry(artifact, now));
   if (entries.length === 0) {
     const state = terminalSource ? 'unavailable' : 'pending';
-    return { ...base, state, entries: [], saveOutcome: state };
+    return {
+      ...base,
+      state,
+      entries: [],
+      saveOutcome: recordedFailure ? 'failed' : state,
+    };
   }
-  const saveOutcome = entries.some((entry) => entry.complete)
-    ? 'committed'
-    : 'incomplete';
-  const authorized = new Set(input.authorizedContinuationRefs ?? []);
+  const committedCount = entries.filter((entry) => entry.complete).length;
+  // Carry only committed outputs the server authorizes for this run. A
+  // restricted output is never carried: continuation copies raw bytes, and
+  // preview access never authorizes raw restore.
+  const authorizedById = new Map(
+    authorizedRefs.map((ref) => [normalizedRefId(ref), ref] as const),
+  );
+  const continuationRefs = entries
+    .filter((entry) => entry.complete && !entry.restricted && !entry.expired)
+    .map((entry) => authorizedById.get(entry.artifactId))
+    .filter((ref): ref is string => Boolean(ref));
   return {
     ...base,
     state: 'ready',
     entries,
-    continuationRefs: entries
-      .filter((entry) => entry.complete && authorized.has(entry.artifactId))
-      .map((entry) => entry.artifactId),
-    saveOutcome,
+    committedCount,
+    continuationRefs,
+    saveOutcome: recordedFailure
+      ? 'failed'
+      : committedCount > 0
+        ? 'committed'
+        : 'incomplete',
   };
 }

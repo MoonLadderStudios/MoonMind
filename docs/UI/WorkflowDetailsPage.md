@@ -710,6 +710,20 @@ Artifact actions:
 
 For edit-for-rerun flows, unchanged artifact-backed fields reuse their original artifact references. Edited artifact-backed fields create new artifacts with lineage back to the original artifact.
 
+### Saved Results
+
+The Artifacts tab shows a compact **Saved Results** section after the Report section. It is bound to the displayed run and does not need the original host or source credential. The presentation rules are in [ArtifactPresentationContract §11.6](../Artifacts/ArtifactPresentationContract.md#116-saved-result-presentation-workflow-detail-4020).
+
+It contains:
+
+- Separate **Compute**, **Save**, **Publication**, and **Cleanup** cards. They stay visible when saved-result evidence is unavailable, pending, or stale. The Save card shows committed outputs, the recorded evidence and workspace preservation outcomes, and captured-evidence completeness.
+- One row per saved report, non-Git, or repository output, with completeness, exclusions, and retention.
+- Per-row actions. **Preview** opens the server's safe preview artifact. **Download** appears only when raw access is allowed. Restricted outputs without a preview show "Raw restricted; no safe preview". Expired outputs show "Expired" and no links.
+- **Continue working**. This opens an inline form for new instructions and an optional title. It starts a fresh admitted execution from the displayed run through the existing continuation endpoint. The form states how many authorized saved outputs it carries. Continuations already accepted from this run are listed with links.
+- **Publish saved work**. This starts publication-only recovery after confirmation and shows the returned recovery workflow. It is enabled only by the server's `canRetryPublication` capability.
+
+Continue and Publish are disabled when the displayed run is not the execution's current run, and the server rejects a changed run. **Refresh** reloads the result, captured evidence, and continuation queries.
+
 ## Logs section
 
 The logs section is present when:

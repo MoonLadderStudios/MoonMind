@@ -37,6 +37,24 @@ export interface ContinuationIntent {
   idempotencyKey: string;
   instructions: string;
   title?: string;
+  /** Source evidence refs the server already authorizes for this Workflow. */
+  selectedSourceArtifactRefs?: string[];
+  /** Precondition: the run the caller displays. The server still pins it. */
+  expectedSourceRunId?: string;
+}
+
+/** Operator-readable message from a FastAPI string or `{code, message}` detail. */
+export function apiErrorMessage(payload: unknown): string {
+  if (typeof payload === 'string') return payload.trim();
+  if (!payload || typeof payload !== 'object') return '';
+  const record = payload as Record<string, unknown>;
+  const detail = record.detail;
+  if (typeof detail === 'string') return detail.trim();
+  if (detail && typeof detail === 'object') {
+    const message = (detail as Record<string, unknown>).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return typeof record.message === 'string' ? record.message.trim() : '';
 }
 
 function joinApiPath(apiBase: string, path: string): string {
@@ -83,24 +101,63 @@ export async function continueInNewWorkflow(
   workflowId: string,
   intent: ContinuationIntent,
 ): Promise<ContinueInNewWorkflowResult> {
+  // The browser authors only new intent plus already-authorized source refs.
+  // Source run, session, host, profile, credential, and workspace ownership
+  // stay server-pinned.
   const body: Record<string, unknown> = {
     idempotencyKey: intent.idempotencyKey,
     instructions: intent.instructions,
   };
   if (intent.title) body.title = intent.title;
+  if (intent.selectedSourceArtifactRefs?.length) {
+    body.selectedSourceArtifactRefs = [...intent.selectedSourceArtifactRefs];
+  }
+  if (intent.expectedSourceRunId) {
+    body.expectedSourceRunId = intent.expectedSourceRunId;
+  }
   const resp = await fetch(
     joinApiPath(apiBase, `/executions/${encodeURIComponent(workflowId)}/continue`),
     {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body),
     },
   );
   if (!resp.ok) {
-    throw new Error(`continue request failed (${resp.status})`);
+    const payload = await resp.json().catch(() => null);
+    throw new Error(
+      apiErrorMessage(payload) || `continue request failed (${resp.status})`,
+    );
   }
   return (await resp.json()) as ContinueInNewWorkflowResult;
+}
+
+export interface LinkedContinuationSummary {
+  sourceWorkflowId: string;
+  sourceRunId: string;
+  destinationWorkflowId: string;
+  status?: string | null;
+  createdAt?: string | null;
+}
+
+/** Durable continuations created from a Workflow (server relationship rows). */
+export async function fetchLinkedContinuations(
+  apiBase: string,
+  workflowId: string,
+): Promise<LinkedContinuationSummary[]> {
+  const resp = await fetch(
+    joinApiPath(
+      apiBase,
+      `/executions/${encodeURIComponent(workflowId)}/continuations?direction=outbound`,
+    ),
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    throw new Error(`linked continuations request failed (${resp.status})`);
+  }
+  const payload = (await resp.json()) as { items?: LinkedContinuationSummary[] };
+  return Array.isArray(payload.items) ? payload.items : [];
 }
 
 export function continuationWorkflowHref(workflowId: string): string {
