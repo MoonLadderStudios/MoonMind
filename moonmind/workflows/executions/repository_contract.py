@@ -779,9 +779,8 @@ async def ensure_repository_ready(
         if connection.credential.source == "github_resolver":
             raise RepositoryContractError(
                 REPOSITORY_CREDENTIAL_UNAVAILABLE,
-                f"{connection.id} is a retired ambient-resolver connection; "
-                "restart MoonMind so the legacy GitHub credential migration "
-                "records its typed reference",
+                f"{connection.id} is a retired ambient-resolver connection "
+                "record; it needs a typed SecretRef or GitHub App credential",
             )
         if credential_resolver is None:
             raise RepositoryContractError(
