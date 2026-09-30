@@ -204,6 +204,11 @@ services:
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
+      # Settings Operations submits to the standalone deployment controller
+      # installed by deploy/controller/bootstrap.py. Its identity and bearer
+      # secret stay in the read-only deployment state mount (server side
+      # only); the endpoint is reached on deployment-controller-network.
+      - MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller
       # Managed-runtime cleanup is operational by default. The API owns the
       # Temporal schedule state; the agent-runtime worker performs each pass.
       - MOONMIND_AGENT_RUNTIME_STORE=${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}
@@ -281,6 +286,7 @@ services:
     networks:
       - control-plane-network
       - docker-proxy-network
+      - deployment-controller-network
     healthcheck:
       test: [
           "CMD",
@@ -1726,6 +1732,12 @@ networks:
     name: ${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
+    internal: true
+  # Private link from the API to the standalone deployment controller, which
+  # joins it under the `moonmind-controller` alias. Only the API is attached:
+  # agent runtimes never reach the controller endpoint.
+  deployment-controller-network:
+    name: ${MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK:-moonmind_deployment-controller-network}
     internal: true
   sandbox-egress-network:
     name: ${MOONMIND_SANDBOX_EGRESS_NETWORK:-moonmind_sandbox-egress-network}

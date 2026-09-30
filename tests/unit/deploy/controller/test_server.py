@@ -699,3 +699,305 @@ def test_restart_orders_tied_timestamps_by_record_mtime(
     result = server_mod.converge_on_restart(store, applier=applier)
     assert applied == [current["operationId"]]
     assert result["superseded"] == [stale["operationId"]]
+
+
+class _ThreadedHarness:
+    """Serve the app through the production (threaded) HTTP server."""
+
+    def __init__(self, tmp_path, applier):
+        self.server_mod = load("server")
+        self.record = load("record")
+        self.store = self.record.OperationStore(tmp_path / "state")
+        self.app = self.server_mod.build_app(
+            store=self.store, secret="test-secret", applier=applier
+        )
+        self.httpd = self.server_mod.make_http_server("127.0.0.1", 0, self.app)
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    def call(self, method, path, body=None, timeout=10):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=json.dumps(body).encode() if body is not None else None,
+            method=method,
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status, json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode() or "{}")
+
+    def close(self):
+        self.httpd.shutdown()
+        self.thread.join(timeout=10)
+
+
+def test_lost_ack_and_duplicate_submissions_reattach_to_one_writer(
+    controller_path, tmp_path
+):
+    release = threading.Event()
+    applied = []
+    holder = {}
+
+    def slow_applier(operation):
+        applied.append(operation["operationId"])
+        holder["store"].mark_stage(operation["operationId"], stage="applying")
+        assert release.wait(timeout=30)
+        holder["store"].confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    harness = _ThreadedHarness(tmp_path, slow_applier)
+    holder["store"] = harness.store
+    body = {
+        "stack": "moonmind",
+        "desiredImage": "ghcr.io/org/app@sha256:abc",
+        "operationId": "ui-op-1",
+    }
+    first = {}
+
+    def submit_first():
+        first["result"] = harness.call("POST", "/v1/operations", body, timeout=30)
+
+    submitter = threading.Thread(target=submit_first, daemon=True)
+    try:
+        submitter.start()
+        # The caller's own identity is observable while the apply runs: a
+        # client that lost its acknowledgment polls instead of resubmitting.
+        observed = None
+        for _ in range(100):
+            status, observed = harness.call("GET", "/v1/operations/ui-op-1")
+            if status == 200 and observed.get("status") == "applying":
+                break
+            threading.Event().wait(0.05)
+        assert observed and observed["status"] == "applying", observed
+        # A resubmission after a lost acknowledgment, and a duplicate from a
+        # second client with its own id, both reattach to the running apply.
+        status, again = harness.call("POST", "/v1/operations", body)
+        assert (status, again["operationId"]) == (202, "ui-op-1")
+        status, duplicate = harness.call(
+            "POST", "/v1/operations", {**body, "operationId": "host-op-2"}
+        )
+        assert (status, duplicate["operationId"]) == (202, "ui-op-1")
+        # A changed target is new intent: it is refused while the stack is
+        # owned, naming the operation that owns it, and records nothing.
+        status, conflict = harness.call(
+            "POST",
+            "/v1/operations",
+            {"stack": "moonmind", "desiredImage": "ghcr.io/org/app@sha256:def"},
+        )
+        assert status == 409
+        assert conflict == {
+            "error": "stack is owned by another writer",
+            "activeOperationId": "ui-op-1",
+        }
+        release.set()
+        submitter.join(timeout=30)
+        assert first["result"][0] == 202
+        assert first["result"][1]["status"] == "succeeded"
+        assert applied == ["ui-op-1"]
+        assert len(list((tmp_path / "state" / "operations").glob("*.json"))) == 1
+        # After completion the same identity still observes the one result.
+        status, final = harness.call("POST", "/v1/operations", body)
+        assert (status, final["status"], applied) == (202, "succeeded", ["ui-op-1"])
+    finally:
+        release.set()
+        harness.close()
+
+
+def test_operation_id_naming_a_different_request_is_refused(
+    controller_path, tmp_path
+):
+    harness = _ThreadedHarness(tmp_path, lambda operation: None)
+    try:
+        harness.store.begin(
+            stack="moonmind",
+            desired_image="ghcr.io/org/app@sha256:abc",
+            source_revision="",
+            operation_id="op-a",
+        )
+        status, body = harness.call(
+            "POST",
+            "/v1/operations",
+            {
+                "stack": "moonmind",
+                "desiredImage": "ghcr.io/org/app@sha256:def",
+                "operationId": "op-a",
+            },
+        )
+        assert status == 409
+        assert body == {"error": "operation id names a different request"}
+        status, _ = harness.call(
+            "POST",
+            "/v1/operations",
+            {"stack": "moonmind", "desiredImage": "img", "operationId": "../x"},
+        )
+        assert status == 400
+    finally:
+        harness.close()
+
+
+def test_list_operations_is_bounded_newest_first_and_redacted(
+    controller_path, tmp_path
+):
+    harness = _ThreadedHarness(tmp_path, lambda operation: None)
+    try:
+        store = harness.store
+        older = store.begin(
+            stack="moonmind", desired_image="img:1", source_revision="", operation_id="op-1"
+        )
+        store.confirm_installed(older["operationId"], image="img:1")
+        newer = store.begin(
+            stack="moonmind", desired_image="img:2", source_revision="", operation_id="op-2"
+        )
+        store.record_attempt_error(
+            newer["operationId"], error="pull failed: password=hunter2"
+        )
+        store.begin(
+            stack="other", desired_image="img:3", source_revision="", operation_id="op-3"
+        )
+        status, listed = harness.call("GET", "/v1/operations?stack=moonmind&limit=5")
+        assert status == 200
+        assert [op["operationId"] for op in listed["operations"]] == ["op-2", "op-1"]
+        assert "hunter2" not in json.dumps(listed)
+        status, limited = harness.call("GET", "/v1/operations?stack=moonmind&limit=1")
+        assert [op["operationId"] for op in limited["operations"]] == ["op-2"]
+        status, logs = harness.call("GET", "/v1/operations/op-2/logs")
+        assert status == 200
+        assert "hunter2" not in json.dumps(logs)
+        assert logs["errorSummary"].startswith("attempt 1: pull failed")
+    finally:
+        harness.close()
+
+
+def test_default_target_is_derived_from_the_mounted_checkout(
+    controller_path, tmp_path
+):
+    server_mod = load("server")
+    repo = tmp_path / "MoonMind"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    (repo / "site.yaml").write_text("services: {}\n")
+    (repo / ".env").write_text(
+        "COMPOSE_FILE=docker-compose.yaml:site.yaml\nCOMPOSE_PROJECT_NAME=moonmind\n"
+    )
+    commands = []
+
+    class _Runner:
+        def run(self, args, timeout_seconds):
+            commands.append(tuple(args))
+            return {
+                "exit": 0,
+                "output": "api\ndocker-proxy\nsandbox-egress-proxy\npostgres\n",
+            }
+
+    target = server_mod.default_target("moonmind", repo=str(repo), runner=_Runner())
+    assert target == {
+        "project": "moonmind",
+        "projectDir": str(repo),
+        "composeFiles": ["docker-compose.yaml", "site.yaml"],
+        "services": ["api", "postgres"],
+        "envFile": str(repo / ".env"),
+    }
+    assert commands[0][-2:] == ("config", "--services")
+    assert ("--env-file", str(repo / ".env")) == commands[0][
+        commands[0].index("--env-file") : commands[0].index("--env-file") + 2
+    ]
+
+
+def test_default_target_uses_the_override_file_and_refuses_escapes(
+    controller_path, tmp_path
+):
+    import pytest
+
+    server_mod = load("server")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    (repo / "docker-compose.override.yaml").write_text("services: {}\n")
+
+    class _Runner:
+        def run(self, args, timeout_seconds):
+            return {"exit": 0, "output": "api\n"}
+
+    target = server_mod.default_target("moonmind", repo=str(repo), runner=_Runner())
+    assert target["composeFiles"] == [
+        "docker-compose.yaml",
+        "docker-compose.override.yaml",
+    ]
+    assert target["project"] == "moonmind"
+    assert "envFile" not in target
+    (repo / ".env").write_text("COMPOSE_FILE=../outside.yaml\n")
+    with pytest.raises(ValueError):
+        server_mod.default_target("moonmind", repo=str(repo), runner=_Runner())
+    with pytest.raises(ValueError):
+        server_mod.default_target("moonmind", repo=str(tmp_path / "missing"), runner=_Runner())
+
+
+def test_submission_without_target_applies_the_derived_target(
+    controller_path, tmp_path
+):
+    applied = []
+
+    def applier(operation):
+        applied.append(operation["target"])
+
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+    derived = {
+        "project": "moonmind",
+        "projectDir": "/srv/moonmind",
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api"],
+    }
+    app = server_mod.build_app(
+        store=store,
+        secret="test-secret",
+        applier=applier,
+        target_resolver=lambda stack: dict(derived),
+    )
+    httpd = server_mod.make_http_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, created = _post_operation(
+            httpd.server_address[1],
+            {"stack": "moonmind", "desiredImage": "img", "operationId": "ui-1"},
+        )
+        assert status == 202, created
+        assert applied == [derived]
+        assert store.load("ui-1")["target"] == derived
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=10)
+
+
+def test_submission_without_a_derivable_target_is_refused_without_a_record(
+    controller_path, tmp_path
+):
+    server_mod = load("server")
+    record = load("record")
+    store = record.OperationStore(tmp_path / "state")
+
+    def missing(stack):
+        raise ValueError("no deployment checkout is mounted for the controller")
+
+    app = server_mod.build_app(
+        store=store, secret="test-secret", applier=lambda op: None, target_resolver=missing
+    )
+    httpd = server_mod.make_http_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post_operation(
+            httpd.server_address[1], {"stack": "moonmind", "desiredImage": "img"}
+        )
+        assert status == 400
+        assert body["error"].startswith("deployment target could not be derived")
+        assert store.list_open() == []
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=10)

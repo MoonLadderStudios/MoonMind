@@ -219,3 +219,44 @@ def test_unsafe_operation_ids_never_reach_the_filesystem(
         source_revision="abc123",
     )
     assert store.load(op["operationId"])["operationId"] == op["operationId"]
+
+
+def test_begin_with_caller_operation_id_reattaches_after_a_lost_ack(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    op = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+        operation_id="ui-1234",
+    )
+    assert op["operationId"] == "ui-1234"
+    # A terminal failure is still the same operation: resubmitting the same
+    # identity observes it instead of launching a second attempt.
+    for _ in range(record.MAX_AUTO_ATTEMPTS):
+        store.record_attempt_error("ui-1234", error="pull failed")
+    again = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+        operation_id="ui-1234",
+    )
+    assert again["operationId"] == "ui-1234"
+    assert again["status"] == "failed"
+    assert len(list((tmp_path / "operations").glob("*.json"))) == 1
+
+
+def test_begin_refuses_an_unsafe_caller_operation_id(controller_path, tmp_path):
+    import pytest
+
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    with pytest.raises(ValueError):
+        store.begin(
+            stack="moonmind",
+            desired_image="img",
+            source_revision="",
+            operation_id="../escape",
+        )
