@@ -1833,13 +1833,57 @@ include the selected repository. Minimum permission profiles are:
 - Workflow file edits: add `Workflows: Write` when agents may modify
   `.github/workflows/*`.
 
-The GitHub token probe validates the exact selected repository rather than
-classic OAuth scopes. It reports repository, branch, and pull-request endpoint
-access plus a mode-specific permission checklist without exposing the token.
 Fine-grained PATs that are pending organization approval, created for the wrong
 resource owner, excluded from the selected repository, or used for
 multi-organization/outside-collaborator automation can still fail; long-lived
 organization automation should prefer a GitHub App.
+
+Settings does not test this ambient token. The worker preflight probe in
+[ManagedAgentsGit.md](../ManagedAgents/ManagedAgentsGit.md) remains an API for
+that credential chain.
+
+### 27.2.1 Add a Source Control connection
+
+Source Control is a section of Settings → Providers & Secrets. It manages named
+`RepositoryConnection` records through `/api/v1/repository-connections`,
+separately from Provider Profiles.
+
+1. User chooses Add connection and enters a name and a personal access token,
+   optionally allowing publishing (write).
+2. Backend validates only that token (`GET /user`). A rejected, throttled, or
+   unreachable validation saves nothing and reports which of those happened.
+3. Backend creates the Managed Secret `repository-connection-<id>` and the
+   connection in one transaction. The user never enters a SecretRef.
+4. UI clears the token as soon as it submits it, on Cancel, and when admission
+   is lost. Name, ID, and write choice survive a failed submission.
+5. When the save response is lost, UI reloads the saved list and shows the
+   committed connection instead of offering another create. Resubmitting the
+   same draft reuses its request ID, which the backend replays instead of
+   creating a duplicate. An ID in use is a conflict, never an auto-suffixed ID.
+6. The list shows name, the GitHub account observed at validation (or App
+   account and installation), assigned repositories, and state. Zero
+   assignments means the connection reaches no repositories. IDs and revisions
+   are under Advanced details.
+7. Assign verifies `owner/name` through that connection and stores the provider
+   repository ID. Browse repositories lists what the connection can see, in
+   bounded pages; a failed or truncated page is labeled partial and leaves
+   assignments unchanged.
+8. Test connection runs read-only checks with only the selected connection's
+   credential. It uses the requested branch or the repository's actual default
+   branch, rejects unknown modes, takes mode descriptions from the backend, and
+   stops after a rate limit. Authentication, permission, not found, rate
+   limited, and unavailable are reported separately; an outage is never shown
+   as denial. Read checks never mark a write permission as passed. Changing the
+   connection, repository, mode, branch, or token revision makes an earlier
+   result historical, and late responses for superseded inputs are dropped.
+9. Rotate token requires the current token revision and a token for the same
+   GitHub account. A stale revision or different account is refused and the
+   current token stays active.
+10. Remove is available once no repositories are assigned. It tombstones the
+    connection (its ID cannot be reused) and deletes its Managed Secret when the
+    Secrets System finds no other consumer.
+
+A failed list refresh keeps the last loaded connections visible and editable.
 
 ### 27.3 Reset User Override
 
