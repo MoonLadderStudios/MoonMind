@@ -676,8 +676,7 @@ async def test_repo_create_pr_transient_failure_retries_and_adopts_lost_ack(monk
             if failure == 'timeout':
                 raise httpx.ReadTimeout('lost response', request=request)
             return httpx.Response(failure, json={'message': 'temporarily unavailable'})
-        assert request.method == 'PATCH'
-        return httpx.Response(200, json=pr)
+        raise AssertionError(f'adoption must not write: {request.method}')
 
     client_class = httpx.AsyncClient
     with patch('moonmind.workflows.adapters.github_service.httpx.AsyncClient',
@@ -693,4 +692,5 @@ async def test_repo_create_pr_transient_failure_retries_and_adopts_lost_ack(monk
         result = await repo_create_pr_activity(payload)
     assert result['adopted'] is True
     assert result['url'] == pr['html_url']
-    assert calls == ['GET', 'POST', 'GET', 'PATCH']
+    # Adopting the lost-ack PR performs no metadata overwrite (#4018).
+    assert calls == ['GET', 'POST', 'GET']

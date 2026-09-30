@@ -18248,6 +18248,316 @@ def test_retry_publication_stops_before_temporal_when_rollout_disables_admission
     adapter.start_workflow.assert_not_awaited()
 
 
+_SAVED_WORK_MANIFEST = b'{"schemaVersion":"saved-work-manifest/v1"}'
+
+
+class _SavedWorkArtifacts:
+    """Saved-work manifest metadata and bytes as the artifact service returns them."""
+
+    def __init__(
+        self,
+        *,
+        linked_workflow_id: str = "mm:wf-1",
+        content_type: str = "application/vnd.moonmind.saved-work-manifest+json;version=1",
+    ) -> None:
+        self.artifact = SimpleNamespace(artifact_id="art_saved", content_type=content_type)
+        self.links = [SimpleNamespace(workflow_id=linked_workflow_id)]
+        self.principals: list[str] = []
+
+    async def get_metadata(self, *, artifact_id: str, principal: str):
+        assert artifact_id == "art_saved"
+        self.principals.append(principal)
+        return self.artifact, self.links, False, None
+
+    async def read(self, *, artifact_id: str, principal: str):
+        self.principals.append(principal)
+        return self.artifact, _SAVED_WORK_MANIFEST
+
+
+def _lore_connection(projected_repository: str) -> Any:
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryConnection,
+    )
+
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "repository-connection:lore",
+            "provider": "lore",
+            "displayName": "Lore",
+            "endpointRef": "lore://tactics",
+            "allowedOperations": ["read", "write"],
+            "clientPolicy": {
+                "pinnedVersion": "1.0.0",
+                "toolBundleRef": "tool-bundle:lore-1",
+                "executableSha256": "sha256:lore",
+            },
+            "projection": {
+                "provider": "github",
+                "repository": projected_repository,
+                "authority": "review_only",
+                "statusSourceRef": "status:1",
+            },
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "managed", "key": "LORE_KEY"},
+            },
+            "lifecycle": "active",
+            "ownership": {
+                "ownerRef": "owner:ops",
+                "scopeType": "system",
+                "allowedPrincipalRefs": ["owner:ops"],
+            },
+            "hostingService": "lore",
+        }
+    )
+
+
+def _repository_connections(*connections: Any):
+    """The real repository-connection owner over a fresh in-memory database."""
+    from sqlalchemy.pool import StaticPool
+
+    from api_service.db.models import (
+        Base,
+        RepositoryConnectionAuditEvent,
+        RepositoryConnectionRecord,
+    )
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
+
+    async def dependency():
+        engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                lambda sync: Base.metadata.create_all(
+                    sync,
+                    tables=[
+                        RepositoryConnectionRecord.__table__,
+                        RepositoryConnectionAuditEvent.__table__,
+                    ],
+                )
+            )
+        try:
+            sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            async with sessions() as session:
+                service = RepositoryConnectionService(session)
+                for item in connections:
+                    await service.create_connection(
+                        item,
+                        actor_ref="owner:ops",
+                        request_id=f"seed:{item.id}",
+                        principal_ref="owner:ops",
+                        principal_scope=("system", None),
+                    )
+                yield lambda: service
+        finally:
+            await engine.dispose()
+
+    return dependency
+
+
+def _saved_work_app(monkeypatch, artifacts: _SavedWorkArtifacts, *connections: Any):
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    service.describe_execution.return_value = record
+    adapter = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
+    app.dependency_overrides[executions_module._get_saved_work_artifact_service] = (
+        lambda: lambda: artifacts
+    )
+    app.dependency_overrides[
+        executions_module._get_saved_work_repository_connections
+    ] = _repository_connections(*connections)
+    user = _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", True)
+    return app, adapter, record, user
+
+
+_SAVED_WORK_BODY = {
+    "savedWorkRef": "art_saved",
+    "destination": {
+        "repository": "Dest/Repo",
+        "objective": "pr",
+        "baseBranch": "main",
+        "headBranch": "saved/work",
+        "strategy": "additive_import",
+    },
+}
+
+
+def test_saved_work_publication_freezes_one_decision_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+
+    artifacts = _SavedWorkArtifacts()
+    app, adapter, record, user = _saved_work_app(monkeypatch, artifacts)
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+
+    with TestClient(app) as test_client:
+        first = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+        duplicate = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert first.status_code == 201, first.json()
+    assert first.json() == duplicate.json()
+    first_call, second_call = adapter.start_workflow.await_args_list
+    assert first_call.kwargs == second_call.kwargs
+    contract = first_call.kwargs["input_args"]
+    assert first_call.kwargs["workflow_type"] == "MoonMind.PublicationRecoveryV1"
+    assert first_call.kwargs["workflow_id"].startswith(
+        "mm:wf-1:saved-work-publication:"
+    )
+    assert contract["schemaVersion"] == "saved-work-publication-v1"
+    assert contract["savedWorkDigest"] == (
+        "sha256:" + hashlib.sha256(_SAVED_WORK_MANIFEST).hexdigest()
+    )
+    assert contract["admittedPrincipal"] == str(user.id)
+    assert contract["destination"]["expectedBaseSha"] is None
+    # The immutable source creation time keeps a resubmitted candidate identical.
+    assert datetime.fromisoformat(contract["commit"]["timestamp"]) == record.created_at
+    assert contract["pullRequestTitle"] == "Publish saved work from mm:wf-1"
+    assert first.json()["publicationIdempotencyKey"] == (
+        contract["publicationIdempotencyKey"]
+    )
+    assert "token" not in json.dumps(contract).lower()
+    assert first_call.kwargs["memo"]["publication_semantic_context"] == "saved_work"
+    assert set(artifacts.principals) == {str(user.id)}
+
+
+@pytest.mark.parametrize(
+    ("artifacts", "body", "status_code", "code"),
+    [
+        (
+            _SavedWorkArtifacts(linked_workflow_id="mm:other"),
+            _SAVED_WORK_BODY,
+            409,
+            "saved_work_source_mismatch",
+        ),
+        (
+            _SavedWorkArtifacts(content_type="application/json"),
+            _SAVED_WORK_BODY,
+            409,
+            "saved_work_invalid",
+        ),
+        (
+            _SavedWorkArtifacts(),
+            {
+                **_SAVED_WORK_BODY,
+                "destination": {
+                    **_SAVED_WORK_BODY["destination"],
+                    "strategy": "empty_initialization",
+                },
+            },
+            422,
+            "saved_work_publication_invalid",
+        ),
+    ],
+)
+def test_saved_work_publication_rejects_foreign_or_unsupported_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    artifacts: _SavedWorkArtifacts,
+    body: dict[str, Any],
+    status_code: int,
+    code: str,
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, artifacts)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=body
+        )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == code
+    adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "projected",
+    ["Dest/Repo", "https://github.com/dest/repo.git", "git@github.com:DEST/repo"],
+)
+def test_saved_work_publication_refuses_a_lore_review_projection(
+    monkeypatch: pytest.MonkeyPatch, projected: str
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(
+        monkeypatch, _SavedWorkArtifacts(), _lore_connection(projected)
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    # No workflow starts, so nothing can push or open a PR on the projection.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "publication_lore_authoritative"
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_to_an_unprojected_github_repository_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(
+        monkeypatch, _SavedWorkArtifacts(), _lore_connection("dest/other-repo")
+    )
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert response.status_code == 201, response.json()
+    adapter.start_workflow.assert_awaited_once()
+
+
+@pytest.mark.parametrize("objective", ["none", "auto"])
+def test_saved_work_publication_admits_only_explicit_branch_or_pr_objectives(
+    monkeypatch: pytest.MonkeyPatch, objective: str
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    body = {
+        **_SAVED_WORK_BODY,
+        "destination": {**_SAVED_WORK_BODY["destination"], "objective": objective},
+    }
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=body
+        )
+
+    assert response.status_code == 422
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_uses_the_existing_rollout_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "publication_recovery_disabled"
+    adapter.start_workflow.assert_not_awaited()
+
+
 @pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])
 def test_workflow_gate_actions_ignore_malformed_optional_control_stop_fields(
     monkeypatch: pytest.MonkeyPatch,

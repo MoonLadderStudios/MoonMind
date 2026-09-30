@@ -113,26 +113,22 @@ async def test_create_pr_draft_flag_reaches_rest_payload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
-    """MM-680: existing PRs for the same head/base are adopted before create."""
+    """MM-680: existing PRs for the same head/base are adopted before create.
+
+    #4018: adoption is not a metadata update; a later actor's title/body stay.
+    """
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
     existing_pr = {
         "number": 42,
         "html_url": "https://github.com/o/r/pull/42",
+        "title": "Edited by reviewer",
         "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "o/r"}},
         "base": {"ref": "main"},
     }
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=_mock_get_response(200, [existing_pr]))
-    mock_client.patch = AsyncMock(
-        return_value=_mock_response(
-            200,
-            {
-                "html_url": "https://github.com/o/r/pull/42",
-                "head": {"sha": "def456"},
-            },
-        )
-    )
+    mock_client.patch = AsyncMock()
     mock_client.post = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -152,14 +148,275 @@ async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
     assert result.created is False
     assert result.adopted is True
     assert result.url == "https://github.com/o/r/pull/42"
-    assert result.head_sha == "def456"
-    assert "updated existing PR metadata" in result.summary
-    mock_client.patch.assert_awaited_once()
-    assert mock_client.patch.await_args.args == (
-        "https://api.github.com/repos/o/r/pulls/42",
-    )
-    assert mock_client.patch.await_args.kwargs["json"] == {"title": "T", "body": "B"}
+    assert result.head_sha == "abc123"
+    assert "adopted existing PR without metadata update" in result.summary
+    mock_client.patch.assert_not_awaited()
     mock_client.post.assert_not_awaited()
+
+
+def _reconcile_client(response_or_error) -> AsyncMock:
+    mock_client = AsyncMock()
+    if isinstance(response_or_error, Exception):
+        mock_client.get = AsyncMock(side_effect=response_or_error)
+    else:
+        mock_client.get = AsyncMock(return_value=response_or_error)
+    mock_client.patch = AsyncMock()
+    mock_client.post = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
+def _pr(number: int, *, state: str = "open", sha: str = "a" * 40, **extra) -> dict:
+    return {
+        "number": number,
+        "html_url": f"https://github.com/o/r/pull/{number}",
+        "state": state,
+        "draft": False,
+        "merged_at": None,
+        "head": {"ref": "feature", "sha": sha, "repo": {"full_name": "o/r"}},
+        "base": {"ref": "main"},
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("listing", "expected_state", "expected_number"),
+    [
+        ([], "absent", None),
+        ([_pr(7)], "matched", 7),
+        ([_pr(7, sha="b" * 40)], "mismatched", 7),
+        ([_pr(7, draft=True)], "mismatched", 7),
+        ([_pr(7, state="closed")], "closed", 7),
+        (
+            [_pr(7, state="closed", merged_at="2026-09-30T00:00:00Z")],
+            "merged",
+            7,
+        ),
+        (
+            [
+                _pr(8, state="closed"),
+                _pr(9, state="closed", merged_at="2026-09-30T00:00:00Z"),
+            ],
+            "merged",
+            9,
+        ),
+        # A same-named head from another repository is not this operation.
+        (
+            [
+                {
+                    **_pr(7),
+                    "head": {
+                        "ref": "feature",
+                        "sha": "a" * 40,
+                        "repo": {"full_name": "fork/r"},
+                    },
+                }
+            ],
+            "absent",
+            None,
+        ),
+    ],
+)
+async def test_reconcile_pull_request_is_read_only_and_sees_closed_results(
+    listing, expected_state, expected_number
+):
+    mock_client = _reconcile_client(_mock_get_response(200, listing))
+    # "absent" additionally reads the head branch, which holds the candidate.
+    mock_client.get = AsyncMock(
+        side_effect=[_mock_get_response(200, listing), _branch_ref("a" * 40)]
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().reconcile_pull_request(
+            repo="o/r",
+            head="feature",
+            base="main",
+            expected_head_sha="a" * 40,
+            draft=False,
+            github_token="admitted-token",
+        )
+
+    assert result.state == expected_state
+    assert result.number == expected_number
+    params = mock_client.get.await_args_list[0].kwargs["params"]
+    assert params["state"] == "all"
+    assert params["head"] == "o:feature"
+    assert params["base"] == "main"
+    for call in mock_client.get.await_args_list:
+        assert call.kwargs["headers"]["Authorization"].endswith("admitted-token")
+    mock_client.patch.assert_not_awaited()
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("repo", "head", "full_name"),
+    [
+        ("owner/repo", "feature", "Owner/Repo"),
+        ("owner/repo", "Fork-Owner:feature", "fork-owner/repo"),
+    ],
+)
+async def test_reconcile_pull_request_compares_repository_identity_case_insensitively(
+    repo, head, full_name
+):
+    listing = [
+        {
+            **_pr(7),
+            "head": {
+                "ref": "feature",
+                "sha": "a" * 40,
+                "repo": {"full_name": full_name},
+            },
+        }
+    ]
+    mock_client = _reconcile_client(_mock_get_response(200, listing))
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().reconcile_pull_request(
+            repo=repo,
+            head=head,
+            base="main",
+            expected_head_sha="a" * 40,
+            draft=False,
+            github_token="admitted-token",
+        )
+
+    assert result.state == "matched"
+    assert result.number == 7
+    mock_client.post.assert_not_awaited()
+
+
+def _branch_ref(sha: str) -> httpx.Response:
+    return _mock_get_response(
+        200, {"ref": "refs/heads/feature", "object": {"sha": sha, "type": "commit"}}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("head", "branch_response", "expected_state", "expected_retryable", "ref_url"),
+    [
+        (
+            "feature",
+            _branch_ref("a" * 40),
+            "absent",
+            False,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        # Another actor replaced the head after the push: creating now would
+        # open a pull request for that actor's commit.
+        (
+            "feature",
+            _branch_ref("b" * 40),
+            "mismatched",
+            False,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        (
+            "feature",
+            _mock_get_response(404, {"message": "Not Found"}),
+            "unavailable",
+            True,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        (
+            "feature",
+            httpx.ConnectError("unreachable"),
+            "unavailable",
+            True,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        (
+            "fork:feature",
+            _branch_ref("a" * 40),
+            "absent",
+            False,
+            "https://api.github.com/repos/fork/r/git/ref/heads/feature",
+        ),
+    ],
+)
+async def test_reconcile_pull_request_is_absent_only_while_the_head_holds_the_candidate(
+    head, branch_response, expected_state, expected_retryable, ref_url
+):
+    mock_client = _reconcile_client(_mock_get_response(200, []))
+    mock_client.get = AsyncMock(
+        side_effect=[_mock_get_response(200, []), branch_response]
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().reconcile_pull_request(
+            repo="o/r",
+            head=head,
+            base="main",
+            expected_head_sha="a" * 40,
+            draft=False,
+            github_token="admitted-token",
+        )
+
+    assert result.state == expected_state
+    assert result.retryable is expected_retryable
+    assert mock_client.get.await_args_list[1].args[0] == ref_url
+    mock_client.patch.assert_not_awaited()
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pull_request_failed_lookup_is_unavailable_not_absent():
+    response = _mock_get_response(502, {"message": "bad gateway"})
+    mock_client = _reconcile_client(
+        httpx.HTTPStatusError("502", request=response.request, response=response)
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().reconcile_pull_request(
+            repo="o/r",
+            head="feature",
+            base="main",
+            expected_head_sha="a" * 40,
+            draft=False,
+            github_token="admitted-token",
+        )
+
+    assert result.state == "unavailable"
+    assert result.retryable is True
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pull_request_requires_admitted_token(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+    mock_client = _reconcile_client(_mock_get_response(200, []))
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().reconcile_pull_request(
+            repo="o/r",
+            head="feature",
+            base="main",
+            expected_head_sha="a" * 40,
+            draft=False,
+            github_token="",
+        )
+
+    assert result.state == "unavailable"
+    assert result.retryable is False
+    mock_client.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -205,6 +205,23 @@ def describe_output_claim(
     return claim
 
 
+def workspace_content_digest(entries: Sequence[Mapping[str, Any]]) -> str:
+    """Deterministic file-manifest identity recorded as ``fileManifestDigest``.
+
+    Capture computes it over the checkpoint entry list; publication recomputes
+    it over entries rebuilt from the archive to prove they are the same files.
+    """
+    payload = json.dumps(
+        {
+            "schemaVersion": "moonmind-workspace-content/v1",
+            "entries": list(entries),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
 def thin_bundle_is_portable(*, has_baseline_objects: bool) -> bool:
     """Decide whether a bundle/archive may claim source-credential independence.
 

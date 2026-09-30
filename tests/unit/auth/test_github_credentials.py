@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from moonmind.auth import github_credentials
 from moonmind.auth.github_credentials import (
     GitHubCredentialSource,
     resolve_github_credential,
@@ -93,6 +94,42 @@ async def test_missing_credential_returns_redaction_safe_diagnostic(monkeypatch)
     assert resolved.source == GitHubCredentialSource.MISSING
     assert "owner/repo" in resolved.safe_summary
     assert "token" in resolved.safe_summary.lower()
+
+
+async def test_only_an_unreadable_secret_reference_is_retryable(monkeypatch):
+    for key in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        "MOONMIND_GITHUB_TOKEN_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_token_secret_ref", None)
+    monkeypatch.setenv("GITHUB_TOKEN_SECRET_REF", "vault://github")
+
+    async def store_unavailable(_ref):
+        raise RuntimeError("secret store unavailable")
+
+    async def resolved_empty(_ref):
+        return ""
+
+    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", store_unavailable)
+    unreadable = await resolve_github_credential(repo="owner/repo")
+    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", resolved_empty)
+    empty = await resolve_github_credential(repo="owner/repo")
+    monkeypatch.delenv("GITHUB_TOKEN_SECRET_REF")
+    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", store_unavailable)
+    missing = await resolve_github_credential(repo="owner/repo")
+
+    # A reference that could not be read may be a brief outage; configuration
+    # that is empty or absent will not change on retry.
+    assert (unreadable.token, unreadable.retryable) == ("", True)
+    assert unreadable.source == GitHubCredentialSource.UNRESOLVABLE
+    assert (empty.token, empty.retryable) == ("", False)
+    assert (missing.token, missing.retryable) == ("", False)
 
 
 async def test_sync_resolver_uses_all_direct_env_sources_inside_running_loop(monkeypatch):
