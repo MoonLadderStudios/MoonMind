@@ -324,12 +324,21 @@ awaited rather than fire-and-forget when eligible. Save failure retains the sole
 workspace under bounded recovery. None never becomes an implicit remote-push
 exception.
 
-A branch turn whose child succeeded but whose own capture or terminal checkpoint
-failed is not a success, and the child is not launched again. The retained agent
-result keeps the child's successful compute. If the child's finalization owner
-verified a save, the retained agent result and the verification handoff also
-carry that saved checkpoint's durable refs, digests, and commits. The
-`saveCommit` stays `incomplete` with `orphanAction:
+When a branch child succeeds but the branch's own capture or terminal checkpoint
+fails, the child is not launched again. If the child's finalization owner
+verified a complete save (durable checkpoint, archive, and manifest), the branch
+resumes its unfinished checkpoint phase from that save. It calls
+`step_checkpoint.create_v2` with the saved workspace evidence, then hands off the
+turn for verification like any checkpointed success. This needs no sandbox
+capture route or repository credential. New executions take this path under the
+`checkpoint-branch-finalization-save-v1` patch. Unpatched histories replay their
+recorded failed terminal.
+
+If there is no complete verified save, or the checkpoint from that save also
+fails, the turn is not a success. The retained agent result keeps the child's
+successful compute. If a verified save exists, the retained agent result and the
+verification handoff also carry that saved checkpoint's durable refs, digests,
+and commits. The `saveCommit` stays `incomplete` with `orphanAction:
 reconcile-with-finalization-owner` and names that checkpoint as
 `finalizationCheckpoint`. The checkpoint's artifacts are pinned like other
 retained branch evidence. The branch child's sandbox locator uses the same

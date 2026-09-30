@@ -36,7 +36,10 @@ with workflow.unsafe.imports_passed_through():
         AgentRunResult,
     )
     from moonmind.schemas.saved_work_models import commit_saved_work_manifest
-    from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+    from moonmind.schemas.temporal_models import (
+        StepExecutionCheckpointModel,
+        WorkspaceCheckpointEvidenceModel,
+    )
     from moonmind.security.outbound_scan import scan_outbound_text
     from moonmind.workflows.temporal.activity_catalog import (
         ARTIFACTS_TASK_QUEUE,
@@ -51,6 +54,7 @@ CHECKPOINT_BRANCH_ARTIFACT_FLEET_PATCH = "checkpoint-branch-artifact-fleet-v1"
 CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH = (
     "checkpoint-branch-cancellation-terminal-v1"
 )
+CHECKPOINT_BRANCH_FINALIZATION_SAVE_PATCH = "checkpoint-branch-finalization-save-v1"
 
 _RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
@@ -341,6 +345,31 @@ def _safe_saved_workspace_checkpoint(saved: Any) -> dict[str, Any]:
         if isinstance(value, str) and re.fullmatch(pattern, value):
             safe[key] = value
     return safe
+
+
+def _finalization_save_workspace(saved: Any) -> dict[str, Any] | None:
+    """Return the child's verified save as terminal checkpoint workspace evidence.
+
+    The finalization owner captured the same workspace through the canonical
+    archive contract, so its evidence can resume the branch's unfinished
+    checkpoint phase. An unverified or incomplete save resumes nothing.
+    """
+
+    if not _safe_saved_workspace_checkpoint(saved):
+        return None
+    try:
+        workspace = WorkspaceCheckpointEvidenceModel.model_validate(
+            {
+                key: value
+                for key, value in saved.items()
+                if key not in {"checkpointRef", "recoveryEvidence"}
+            }
+        )
+    except ValueError:
+        return None
+    if workspace.kind != "worktree_archive":
+        return None
+    return workspace.model_dump(by_alias=True, mode="json", exclude_none=True)
 
 
 def _artifact_refs_in(value: Any) -> list[str]:
@@ -1524,6 +1553,90 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 )
             )
 
+    async def _create_terminal_checkpoint(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        agent_request: AgentExecutionRequest,
+        result: AgentRunResult,
+        identity: Mapping[str, Any],
+        workspace: Mapping[str, Any],
+        diagnostic_refs: list[str],
+    ) -> dict[str, Any]:
+        step = agent_request.step_execution
+        assert step is not None
+        omnigent_capture = _mapping(result.metadata.get("omnigentCheckpointCapture"))
+        omnigent_capture["workspaceLocator"] = payload["workspaceLocator"]
+        omnigent_capture["instructionRefs"] = [payload["instructionRef"]]
+        return _mapping(
+            await workflow.execute_activity(
+                "step_checkpoint.create_v2",
+                {
+                    "identity": identity,
+                    "boundary": "after_execution",
+                    "taskInputSnapshotRef": payload["instructionRef"],
+                    "workspace": workspace,
+                    "omnigentCheckpointCapture": omnigent_capture,
+                    "createdAt": workflow.now().astimezone(UTC).isoformat(),
+                    "planDigest": step.context_bundle_digest,
+                    "preparedInputRefs": agent_request.input_refs,
+                    "stepOutputs": {
+                        "outputRefs": result.output_refs,
+                        "terminalRef": omnigent_capture.get("terminalRef"),
+                    },
+                    "diagnosticRefs": [
+                        ref for ref in [result.diagnostics_ref, *diagnostic_refs] if ref
+                    ],
+                    "idempotencyKey": (
+                        f"{step.step_execution_id}:checkpoint:after_execution"
+                    ),
+                },
+                task_queue=ARTIFACTS_TASK_QUEUE,
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=5),
+                retry_policy=_RETRY,
+            )
+        )
+
+    async def _resume_from_finalization_save(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        agent_request: AgentExecutionRequest,
+        result: AgentRunResult,
+        identity: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resume the unfinished checkpoint phase from the child's verified save.
+
+        The child's finalization owner already captured and verified this
+        workspace, so its terminal checkpoint needs no second child launch,
+        sandbox route, or repository credential. Without a complete verified
+        save, or when this checkpoint also fails, the caller keeps the
+        save-incomplete terminal for reconciliation.
+        """
+
+        workspace = _finalization_save_workspace(
+            result.metadata.get("savedWorkspaceCheckpoint")
+        )
+        if workspace is None or not workflow.patched(
+            CHECKPOINT_BRANCH_FINALIZATION_SAVE_PATCH
+        ):
+            return None
+        self._phase = "persisting_checkpoint"
+        try:
+            return await self._create_terminal_checkpoint(
+                payload,
+                agent_request=agent_request,
+                result=result,
+                identity=identity,
+                workspace=workspace,
+                diagnostic_refs=[workspace["manifestRef"]],
+            )
+        except Exception as exc:
+            if _is_cancellation_failure(exc):
+                raise
+            return None
+
     async def _persist_cancellation_terminal(
         self, payload: Mapping[str, Any]
     ) -> None:
@@ -1647,94 +1760,68 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 "logicalStepId": step.logical_step_id,
                 "executionOrdinal": step.execution_ordinal,
             }
-            capture = _mapping(
-                await workflow.execute_activity(
-                    "workspace.capture_checkpoint",
-                    {
-                        "identity": identity,
-                        "boundary": "after_execution",
-                        "kind": "worktree_archive",
-                        "workspaceLocator": payload["workspaceLocator"],
-                        "artifactNamespace": (
-                            f"checkpoint-branches/{payload['branchId']}/"
-                            f"{payload['branchTurnId']}"
-                        ),
-                        "idempotencyKey": (
-                            f"{step.step_execution_id}:capture:after_execution"
-                        ),
-                        "baseCommit": payload.get("baseCommit"),
-                        "includeUntracked": True,
-                        "includeIgnoredFiles": False,
-                    },
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    start_to_close_timeout=timedelta(minutes=5),
-                    schedule_to_close_timeout=timedelta(minutes=10),
-                    retry_policy=_RETRY,
-                )
-            )
-            if capture.get("status") != "captured" or not isinstance(
-                capture.get("workspace"), Mapping
-            ):
-                self._phase = "failed"
-                terminal_handoff_started = True
-                self._result = await self._persist_terminal(
-                    payload,
-                    result=result,
-                    outcome="failed",
-                    save_commit={
-                        "status": "incomplete",
-                        "reason": "workspace-capture-failed",
-                        "orphanAction": "reconcile-with-finalization-owner",
-                    },
-                )
-                terminal_handoff_started = False
-                return self._result
-            self._phase = "persisting_checkpoint"
-            omnigent_capture = _mapping(
-                result.metadata.get("omnigentCheckpointCapture")
-            )
-            omnigent_capture["workspaceLocator"] = payload["workspaceLocator"]
-            omnigent_capture["instructionRefs"] = [payload["instructionRef"]]
+            capture: dict[str, Any] = {}
+            capture_exhausted = False
             try:
-                checkpoint = _mapping(
+                capture = _mapping(
                     await workflow.execute_activity(
-                        "step_checkpoint.create_v2",
+                        "workspace.capture_checkpoint",
                         {
                             "identity": identity,
                             "boundary": "after_execution",
-                            "taskInputSnapshotRef": payload["instructionRef"],
-                            "workspace": capture["workspace"],
-                            "omnigentCheckpointCapture": omnigent_capture,
-                            "createdAt": workflow.now().astimezone(UTC).isoformat(),
-                            "planDigest": (
-                                agent_request.step_execution.context_bundle_digest
+                            "kind": "worktree_archive",
+                            "workspaceLocator": payload["workspaceLocator"],
+                            "artifactNamespace": (
+                                f"checkpoint-branches/{payload['branchId']}/"
+                                f"{payload['branchTurnId']}"
                             ),
-                            "preparedInputRefs": agent_request.input_refs,
-                            "stepOutputs": {
-                                "outputRefs": result.output_refs,
-                                "terminalRef": omnigent_capture.get("terminalRef"),
-                            },
-                            "diagnosticRefs": [
-                                ref
-                                for ref in [
-                                    result.diagnostics_ref,
-                                    *capture.get("diagnosticRefs", []),
-                                ]
-                                if ref
-                            ],
                             "idempotencyKey": (
-                                f"{step.step_execution_id}:checkpoint:after_execution"
+                                f"{step.step_execution_id}:capture:after_execution"
                             ),
+                            "baseCommit": payload.get("baseCommit"),
+                            "includeUntracked": True,
+                            "includeIgnoredFiles": False,
                         },
-                        task_queue=ARTIFACTS_TASK_QUEUE,
-                        start_to_close_timeout=timedelta(minutes=2),
-                        schedule_to_close_timeout=timedelta(minutes=5),
+                        task_queue=SANDBOX_TASK_QUEUE,
+                        start_to_close_timeout=timedelta(minutes=5),
+                        schedule_to_close_timeout=timedelta(minutes=10),
                         retry_policy=_RETRY,
                     )
                 )
-            except Exception as checkpoint_exc:
-                if _is_cancellation_failure(checkpoint_exc):
+            except Exception as capture_exc:
+                if _is_cancellation_failure(capture_exc):
                     raise
+                capture_exhausted = True
+            checkpoint: dict[str, Any] | None = None
+            if capture.get("status") == "captured" and isinstance(
+                capture.get("workspace"), Mapping
+            ):
+                self._phase = "persisting_checkpoint"
+                try:
+                    checkpoint = await self._create_terminal_checkpoint(
+                        payload,
+                        agent_request=agent_request,
+                        result=result,
+                        identity=identity,
+                        workspace=capture["workspace"],
+                        diagnostic_refs=capture.get("diagnosticRefs", []),
+                    )
+                except Exception as checkpoint_exc:
+                    if _is_cancellation_failure(checkpoint_exc):
+                        raise
+                    save_failure = "terminal-checkpoint-failed"
+            elif capture_exhausted:
+                save_failure = "save-before-cleanup-failed"
+            else:
+                save_failure = "workspace-capture-failed"
+            if checkpoint is None:
+                checkpoint = await self._resume_from_finalization_save(
+                    payload,
+                    agent_request=agent_request,
+                    result=result,
+                    identity=identity,
+                )
+            if checkpoint is None:
                 self._phase = "failed"
                 terminal_handoff_started = True
                 self._result = await self._persist_terminal(
@@ -1743,7 +1830,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
                     outcome="failed",
                     save_commit={
                         "status": "incomplete",
-                        "reason": "terminal-checkpoint-failed",
+                        "reason": save_failure,
                         "orphanAction": "reconcile-with-finalization-owner",
                     },
                 )
@@ -1808,6 +1895,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
 
 __all__ = [
     "CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH",
+    "CHECKPOINT_BRANCH_FINALIZATION_SAVE_PATCH",
     "MoonMindCheckpointBranchTurnWorkflow",
     "WORKFLOW_NAME",
     "mark_checkpoint_branch_turn_running",
