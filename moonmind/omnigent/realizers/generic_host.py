@@ -1122,20 +1122,24 @@ class GenericOmnigentHostRealizer:
         without ``saved`` -- which the next finalization delivery resumes from
         the retained workspace. It never holds credentials or the provider slot:
         the drained session no longer uses them, and host cleanup never removes
-        the caller-owned workspace.
+        the caller-owned workspace. A binding authority conflict is not a save
+        failure: another owner may be live, so it still stops release.
         """
         try:
             async with asyncio.timeout(_CLEANUP_SAVE_TIMEOUT_SECONDS):
                 return await self._ensure_saved(request, binding), None
         except Exception as exc:  # noqa: BLE001 - recorded; release still proceeds
+            code = str(getattr(exc, "code", "") or "")
+            if code == HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT:
+                raise
             logger.warning(
                 "Generic Omnigent save before cleanup remains pending for %s",
                 binding.bindingId,
                 exc_info=True,
             )
             failure = {"errorType": type(exc).__name__}
-            if getattr(exc, "code", None):
-                failure["code"] = str(exc.code)
+            if code:
+                failure["code"] = code
             return binding, failure
 
     async def _cleanup(

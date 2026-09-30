@@ -417,7 +417,10 @@ async def test_cleanup_report_failure_does_not_block_release():
     assert "cleanupAttestationRef" not in cleaned.attestationRefs
     stored = (await store.get(binding.bindingId)).phaseResults or {}
     assert stored["cleanupSettlement"] == {"status": "not_required"}
-    assert stored["cleanupReport"] == {"status": "failed", "errorType": "ConnectionError"}
+    assert stored["cleanupReport"] == {
+        "status": "failed",
+        "errorType": "ConnectionError",
+    }
 
 
 class _SettledCleanupAuthority:
@@ -431,9 +434,8 @@ class _SettledCleanupAuthority:
         return "canonical-" + session_id
 
     async def claim(self, session_id, *, owner_class):
-        # A settled session has no claim left to grant.
+        # A settled session has no claim left to grant: the result is None.
         self.claims += 1
-        return None
 
     async def complete(self, claim):
         self.completed.append(claim)
@@ -464,12 +466,14 @@ async def test_janitor_converges_on_its_own_already_settled_cleanup_claim():
         state=RuntimeBindingState.cleanup_pending,
         updates={
             "omnigentSessionId": "sess-1",
-            "phaseResults": {"cleanupClaim": {
-                "session_id": claim.session_id,
-                "owner_class": claim.owner_class,
-                "claim_token": claim.claim_token,
-                "generation": claim.generation,
-            }},
+            "phaseResults": {
+                "cleanupClaim": {
+                    "session_id": claim.session_id,
+                    "owner_class": claim.owner_class,
+                    "claim_token": claim.claim_token,
+                    "generation": claim.generation,
+                }
+            },
         },
     )
     order: list[str] = []
@@ -545,3 +549,43 @@ async def test_janitor_save_failure_still_releases_host_credentials_and_capacity
     assert calls["provider"] == 1
     assert order.index("session") < order.index("save") < order.index("host")
     assert order.index("credentials") < order.index("provider")
+
+
+@pytest.mark.asyncio
+async def test_binding_authority_conflict_during_save_still_stops_release():
+    """A pending save is not permission to release a fenced or contended binding."""
+
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key="save-authority-conflict")
+    binding = await _pending_save_binding(store, request)
+    order: list[str] = []
+    calls = _counters()
+
+    async def contended_save(request):
+        raise HarnessPlatformError(
+            "runtime binding revision changed",
+            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+        )
+
+    realizer = _cleanup_realizer(store, order=order, calls=calls, save=contended_save)
+    with pytest.raises(HarnessPlatformError):
+        await realizer._cleanup(
+            request=request,
+            binding=binding,
+            host_lease=None,
+            host_context=None,
+            prepared=None,
+            credential_handles=("credential-handle-1",),
+            acquired=("lease-a",),
+        )
+
+    assert calls["credentials"] == 0
+    assert calls["provider"] == 0
+    stored = await store.get(binding.bindingId)
+    assert stored.state is RuntimeBindingState.cleanup_pending
+    assert "saveFailure" not in (stored.phaseResults or {})
