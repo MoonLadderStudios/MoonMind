@@ -400,16 +400,13 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
         if requested_target:
             profile = PROFILES.get(requested_target)
-            # The policy registry publishes a new version when deployment
-            # state such as the host image changes; a version bump alone is
-            # not a different target. The persisted policy's own execution
-            # profile binding is verified before any lease or host mutation.
-            if (
-                profile is None
-                or profile.harness != plan.payload.harnessId
-                or profile.default_policy_ref.rsplit("@", 1)[0]
-                != plan.payload.launchPolicyRef.rsplit("@", 1)[0]
-            ):
+            # The target's default is a selection fallback, not a restriction
+            # on admitted policies: bootstrap republishes policy versions when
+            # deployment state such as the host image changes, and an admitted
+            # plan may select another policy bound to this target. The selected
+            # policy is checked above and its immutable launch snapshots are
+            # verified before any leases.
+            if profile is None or profile.harness != plan.payload.harnessId:
                 raise HarnessPlatformError(
                     "Codex execution target conflicts with the admitted plan",
                     code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
@@ -839,6 +836,13 @@ class OmnigentProfileBoundExecutionCoordinator:
             requested_target, requested_policy = selection_from_request(
                 request.parameters
             )
+            # An admitted plan already records its selected policy; authored
+            # parameters need not repeat it, so it replaces the target default.
+            admitted_policy_ref = (
+                recorded_plan.payload.launchPolicyRef
+                if recorded_plan is not None
+                else None
+            )
             current_stage = "host_binding_resolution"
             await emit(current_stage, "started")
             binding = await self._hosts.get_binding_for_profile(profile_id)
@@ -867,17 +871,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
             elif requested_target:
                 selected_profile_ref = requested_target
-                selected_policy_ref = requested_policy or PROFILES[
-                    selected_profile_ref
-                ].default_policy_ref
+                selected_policy_ref = (
+                    requested_policy
+                    or admitted_policy_ref
+                    or PROFILES[selected_profile_ref].default_policy_ref
+                )
             else:
                 provider_slug = (
                     "claude" if provider_runtime == "claude_code" else "codex"
                 )
                 selected_profile_ref = f"omnigent-{provider_slug}@1"
-                selected_policy_ref = PROFILES[
-                    selected_profile_ref
-                ].default_policy_ref
+                selected_policy_ref = (
+                    admitted_policy_ref
+                    or PROFILES[selected_profile_ref].default_policy_ref
+                )
             current_stage = "policy_authority_resolution"
             await emit(current_stage, "started")
             try:
