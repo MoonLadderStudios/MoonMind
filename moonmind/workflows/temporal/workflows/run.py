@@ -874,6 +874,13 @@ RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
 RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH = (
     "run-terminal-gate-published-head-feasibility-v1"
 )
+# Runtimes that publish through git (for example Claude Code) record no
+# workspace checkpoint, so a terminal gate identifies their candidate from the
+# accepted remote head. Retained histories that failed closed without a
+# checkpoint keep that recorded failure during replay.
+RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH = (
+    "run-terminal-gate-published-workspace-head-v1"
+)
 RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH = "run-authoritative-pr-requirement-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
@@ -1995,6 +2002,36 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "remaining-work artifact persistence returned no artifact ref"
             )
         return artifact_ref
+
+    async def _persist_published_workspace_head(self) -> str | None:
+        """Persist the accepted remote head as the terminal gate candidate.
+
+        Runtimes that publish through git record no workspace checkpoint. The
+        head the managed push boundary accepted then identifies the exact
+        candidate, so a terminal handoff preserves it instead of failing closed.
+        """
+
+        published_head = self._accepted_published_head()
+        if published_head is None or not workflow.patched(
+            RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH
+        ):
+            return None
+        branch, head_sha = published_head
+        payload = {
+            "schemaVersion": "workspace-head/v1",
+            "kind": "git_remote_head",
+            "repository": self._repo,
+            "branch": branch,
+            "headSha": head_sha,
+            "baseBranch": self._accepted_published_base_branch(),
+            "authority": "accepted_repository_evidence",
+        }
+        artifact_id = await self._write_json_artifact(
+            name="reports/workspace_head.json",
+            payload={key: value for key, value in payload.items() if value},
+            metadata_json={"artifact_kind": "workspace_head"},
+        )
+        return self._bounded_story_loop_artifact_ref(artifact_id)
 
     async def _record_step_execution_manifest(
         self,
@@ -14690,6 +14727,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         terminal_handoff_enabled = workflow.patched(
                             RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH
                         )
+                        if not workspace_head_ref and terminal_handoff_enabled:
+                            workspace_head_ref = (
+                                await self._persist_published_workspace_head()
+                            )
                         if (
                             normalized_gate == "ADDITIONAL_WORK_NEEDED"
                             and terminal_handoff_enabled
