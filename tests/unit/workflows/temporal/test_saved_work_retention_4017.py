@@ -349,6 +349,59 @@ async def test_use_admission_races_delete_without_premature_removal(
             assert second.soft_deleted_count == 1
 
 
+async def test_readmitted_operation_keeps_expired_content_and_refreshes_its_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A long operation outlives expiry and its first TTL; others stay refused."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = _service(session, tmp_path)
+            ids = [
+                (await _complete_artifact(service, principal="owner-1")).artifact_id
+                for _ in range(2)
+            ]
+            first = await service.acquire_saved_work_use(
+                artifact_id=ids[0],
+                principal="owner-1",
+                request_id="publish-1",
+                operation_kind="publication",
+                ttl_seconds=60,
+            )
+            first_expiry = first.expires_at.replace(tzinfo=UTC)
+            for artifact_id in ids:
+                row = await service._repository.get_artifact(artifact_id)
+                row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await service._repository.commit()
+
+            again = await service.acquire_saved_work_use(
+                artifact_id=ids[0],
+                principal="owner-1",
+                request_id="publish-1",
+                operation_kind="publication",
+                ttl_seconds=3600,
+            )
+            assert again.id == first.id
+            assert again.expires_at.replace(tzinfo=UTC) > first_expiry
+            # Another operation, or unclaimed expired content, is still refused.
+            for artifact_id, request_id in ((ids[0], "publish-2"), (ids[1], "publish-1")):
+                with pytest.raises(TemporalArtifactStateError, match="EXPIRED"):
+                    await service.acquire_saved_work_use(
+                        artifact_id=artifact_id,
+                        principal="owner-1",
+                        request_id=request_id,
+                        operation_kind="publication",
+                    )
+
+            assert await service.release_saved_work_operation_uses(
+                principal="owner-1", request_id="publish-1"
+            ) == 1
+            sweep = await service.sweep_lifecycle(
+                principal="service:lifecycle", run_id="after-release"
+            )
+            assert sweep.soft_deleted_count == 2
+
+
 async def test_shared_blob_keeps_logical_ownership_and_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -119,6 +119,21 @@ class PullRequestSelectorResult(BaseModel):
     selector_type: str = Field(..., alias="selectorType")
     reason_code: str = Field(..., alias="reasonCode")
     summary: str
+
+
+class PullRequestReconciliation(BaseModel):
+    """Read-only observation of one head/base publication's PR outcome."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state: Literal[
+        "absent", "matched", "mismatched", "closed", "merged", "unavailable"
+    ]
+    url: str | None = None
+    number: int | None = None
+    head_sha: str | None = Field(None, alias="headSha")
+    retryable: bool = False
+    summary: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -681,6 +696,7 @@ class GitHubService:
         expected_head_ref = head.split(":", 1)[1] if ":" in head else head
         if str(head_data.get("ref") or "") != expected_head_ref:
             return False
+        # GitHub owner/repository identities are case-insensitive.
         if ":" in head:
             expected_repo_owner = head.split(":", 1)[0]
             head_repo = head_data.get("repo")
@@ -689,11 +705,13 @@ class GitHubService:
                 if isinstance(head_repo, Mapping)
                 else ""
             )
-            return bool(full_name) and full_name.startswith(f"{expected_repo_owner}/")
+            return bool(full_name) and full_name.lower().startswith(
+                f"{expected_repo_owner.lower()}/"
+            )
         head_repo = head_data.get("repo")
         if isinstance(head_repo, Mapping):
             full_name = str(head_repo.get("full_name") or "")
-            return full_name == repo
+            return full_name.lower() == repo.lower()
         return False
 
     async def _find_open_pull_request(
@@ -1042,37 +1060,18 @@ class GitHubService:
                             ),
                             head_sha=(existing_pr.get("head") or {}).get("sha"),
                         )
-                    pr_number = existing_pr.get("number")
-                    if pr_number is None:
-                        return CreatePRResult(
-                            url=existing_url or None,
-                            created=False,
-                            adopted=bool(existing_url),
-                            summary=(
-                                "adopted existing PR without metadata update "
-                                "because the PR number was missing: "
-                                f"{existing_url or 'unknown URL'}"
-                            ),
-                            head_sha=(existing_pr.get("head") or {}).get("sha"),
-                        )
-                    update_response = await client.patch(
-                        f"{api_url}/{pr_number}",
-                        headers=headers,
-                        json={"title": title, "body": body},
-                    )
-                    update_response.raise_for_status()
-                    updated_pr = update_response.json()
+                    # Adoption is not a metadata update (#4018): a later
+                    # actor's title/body edits survive. Consumers verify the
+                    # returned head SHA before treating adoption as success.
                     return CreatePRResult(
-                        url=str(updated_pr.get("html_url") or existing_url) or None,
+                        url=existing_url or None,
                         created=False,
-                        adopted=True,
+                        adopted=bool(existing_url),
                         summary=(
-                            "updated existing PR metadata: "
-                            f"{updated_pr.get('html_url') or existing_url}"
+                            "adopted existing PR without metadata update: "
+                            f"{existing_url or 'unknown URL'}"
                         ),
-                        head_sha=(
-                            updated_pr.get("head") or existing_pr.get("head") or {}
-                        ).get("sha"),
+                        head_sha=(existing_pr.get("head") or {}).get("sha"),
                     )
                 response = await client.post(
                     api_url, headers=headers, json=payload
@@ -1131,6 +1130,142 @@ class GitHubService:
                         f" {exc.__class__.__name__}"
                     ),
                 )
+
+    async def reconcile_pull_request(
+        self,
+        *,
+        repo: str,
+        head: str,
+        base: str,
+        expected_head_sha: str,
+        draft: bool,
+        github_token: str,
+    ) -> PullRequestReconciliation:
+        """Observe an operation's PR outcome, including closed/merged, without writes.
+
+        Only the admitted token is used; a missing one is unavailable rather
+        than a reason to resolve ambient credentials. A failed or malformed
+        lookup is never reported as confirmed absence. ``absent`` authorizes
+        a create, so it also requires the head branch to hold
+        ``expected_head_sha``: another actor's commit is never opened as
+        this operation's pull request.
+        """
+
+        token = str(github_token or "").strip()
+        if not token:
+            return PullRequestReconciliation(
+                state="unavailable",
+                summary="admitted GitHub authority is required to reconcile a PR",
+            )
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(
+                    f"https://api.github.com/repos/{repo}/pulls",
+                    headers=self._github_headers(token),
+                    params={
+                        "state": "all",
+                        "head": self._head_query_for_repo(repo=repo, head=head),
+                        "base": base,
+                        "per_page": 30,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return PullRequestReconciliation(
+                state="unavailable",
+                retryable=True,
+                summary=f"GitHub PR reconciliation failed: {exc.__class__.__name__}",
+            )
+        if not isinstance(data, list):
+            return PullRequestReconciliation(
+                state="unavailable",
+                retryable=True,
+                summary="GitHub PR reconciliation returned an unexpected payload",
+            )
+        matching = [
+            item
+            for item in data
+            if isinstance(item, Mapping)
+            and self._pull_request_matches_head_base(
+                item, repo=repo, head=head, base=base
+            )
+        ]
+
+        def observed(item: Mapping[str, Any], state: str) -> PullRequestReconciliation:
+            number = item.get("number")
+            return PullRequestReconciliation(
+                state=state,
+                url=str(item.get("html_url") or "") or None,
+                number=number if isinstance(number, int) else None,
+                headSha=str((item.get("head") or {}).get("sha") or "") or None,
+                summary=f"{state} pull request {item.get('html_url') or ''}".strip(),
+            )
+
+        open_items = [item for item in matching if item.get("state") == "open"]
+        if open_items:
+            item = open_items[0]
+            head_sha = str((item.get("head") or {}).get("sha") or "")
+            if (
+                len(open_items) == 1
+                and head_sha == expected_head_sha
+                and bool(item.get("draft")) == bool(draft)
+                and item.get("html_url")
+            ):
+                return observed(item, "matched")
+            return observed(item, "mismatched")
+        merged = [item for item in matching if item.get("merged_at")]
+        if merged:
+            return observed(merged[0], "merged")
+        if matching:
+            return observed(matching[0], "closed")
+        return await self._reconcile_absent_head(
+            repo=repo, head=head, expected_head_sha=expected_head_sha, token=token
+        )
+
+    async def _reconcile_absent_head(
+        self, *, repo: str, head: str, expected_head_sha: str, token: str
+    ) -> PullRequestReconciliation:
+        from urllib.parse import quote
+
+        owner, separator, branch = head.partition(":")
+        if not separator:
+            owner, branch = repo.partition("/")[0], head
+        branch_repo = f"{owner}/{repo.partition('/')[2]}"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(
+                    f"https://api.github.com/repos/{branch_repo}/git/ref/heads/"
+                    f"{quote(branch, safe='/')}",
+                    headers=self._github_headers(token),
+                )
+                if response.status_code == 404:
+                    # A just-pushed head may not be visible yet; never create
+                    # without it, and let a bounded retry reconcile again.
+                    return PullRequestReconciliation(
+                        state="unavailable",
+                        retryable=True,
+                        summary="the head branch is not visible on GitHub",
+                    )
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return PullRequestReconciliation(
+                state="unavailable",
+                retryable=True,
+                summary=f"GitHub head branch lookup failed: {exc.__class__.__name__}",
+            )
+        target = data.get("object") if isinstance(data, Mapping) else None
+        tip = str((target if isinstance(target, Mapping) else {}).get("sha") or "")
+        if tip != expected_head_sha:
+            return PullRequestReconciliation(
+                state="mismatched",
+                headSha=tip or None,
+                summary="the head branch no longer holds the expected commit",
+            )
+        return PullRequestReconciliation(
+            state="absent", summary="no pull request exists for this head and base"
+        )
 
     async def resolve_pull_request_selector(
         self,
@@ -3154,4 +3289,5 @@ __all__ = [
     "GitHubService",
     "MergePRResult",
     "PullRequestReadinessResult",
+    "PullRequestReconciliation",
 ]

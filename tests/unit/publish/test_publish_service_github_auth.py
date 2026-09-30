@@ -171,6 +171,55 @@ async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_
     assert not any(call["command"][:3] == ["gh", "pr", "create"] for call in calls)
 
 
+@pytest.mark.parametrize(
+    ("adopted_head", "published"),
+    [("c" * 40, True), ("d" * 40, False), (None, False)],
+)
+async def test_publish_pr_accepts_only_verified_adoption(
+    monkeypatch, tmp_path: Path, adopted_head, published
+):
+    """#4018: an adopted PR counts only when it carries the pushed head."""
+    monkeypatch.setenv("GITHUB_TOKEN", "publish-token")
+
+    async def _run(command, **kwargs):
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return SimpleNamespace(stdout=" M file.py\n")
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return SimpleNamespace(stdout="c" * 40 + "\n")
+        return SimpleNamespace(stdout="")
+
+    async def _create_pr(**kwargs):
+        return SimpleNamespace(
+            created=False,
+            adopted=True,
+            url="https://github.com/owner/repo/pull/7",
+            head_sha=adopted_head,
+            summary="adopted existing PR without metadata update",
+        )
+
+    arguments = {
+        "job_id": uuid4(),
+        "instruction": "make change",
+        "publish_mode": "pr",
+        "publish_base_branch": "main",
+        "runtime_mode": "codex",
+        "repo_dir": tmp_path,
+        "run_command": _run,
+        "repo": "owner/repo",
+    }
+    service = PublishService(github_create_pull_request=_create_pr)
+    if not published:
+        with pytest.raises(RuntimeError, match="adopted pull request head"):
+            await service.publish(**arguments)
+        return
+    result = await service.publish(**arguments)
+
+    assert result is not None
+    assert result.status == "published"
+    assert result.pr_url == "https://github.com/owner/repo/pull/7"
+    assert result.head_sha == "c" * 40
+
+
 async def test_publish_pr_gh_fallback_injects_explicit_token_without_repo(
     monkeypatch, tmp_path: Path
 ):

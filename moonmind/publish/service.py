@@ -19,6 +19,14 @@ from moonmind.security.outbound_scan import (
     scan_outbound_bundle,
 )
 from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.publish import saved_candidate
+from moonmind.publish.saved_candidate import (
+    CandidatePushOutcome,
+    PullRequestOutcome,
+    SavedCandidate,
+    SavedContent,
+    SavedPublicationAdmission,
+)
 from moonmind.utils.cli import verify_cli_is_executable
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.publish.sanitization import (
@@ -69,6 +77,7 @@ class PublishResult:
 _PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
 _PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 def push_env_from_bound_credential(
@@ -163,10 +172,12 @@ class PublishService:
         git_binary: str = "git",
         gh_binary: str = "gh",
         github_create_pull_request: Callable[..., Awaitable[Any]] | None = None,
+        github_service: Any | None = None,
     ) -> None:
         self._git_binary = git_binary
         self._gh_binary = gh_binary
         self._github_create_pull_request = github_create_pull_request
+        self._github_service = github_service
 
     @staticmethod
     def _extract_first_instruction_sentence(instruction: str) -> str | None:
@@ -502,8 +513,23 @@ class PublishService:
                 github_token=token,
             )
             if not getattr(result, "created", False):
-                summary = getattr(result, "summary", "GitHub create PR failed.")
-                raise RuntimeError(str(summary))
+                if not getattr(result, "adopted", False):
+                    summary = getattr(result, "summary", "GitHub create PR failed.")
+                    raise RuntimeError(str(summary))
+                # Adoption is success only for the head this publisher pushed;
+                # an unverified adopted flag is not publication evidence.
+                if head_sha is None:
+                    head_result = await run_command(
+                        [self._git_binary, "rev-parse", "HEAD"],
+                        cwd=repo_dir,
+                    )
+                    head_sha = str(head_result.stdout or "").strip() or None
+                adopted_head = str(getattr(result, "head_sha", "") or "").strip()
+                if not head_sha or adopted_head != head_sha:
+                    raise RuntimeError(
+                        "adopted pull request head does not match the published "
+                        "branch head"
+                    )
             url = getattr(result, "url", None)
             return PublishResult(
                 mode=publish_mode,
@@ -580,18 +606,152 @@ class PublishService:
             remote_verified=remote_verified,
         )
 
+    async def prepare_saved_candidate(
+        self,
+        *,
+        admission: SavedPublicationAdmission,
+        content: SavedContent,
+        workspace: Path,
+        github_token: str | None = None,
+        bound_credential: Any | None = None,
+        remote_url: str | None = None,
+        persisted_head_sha: str | None = None,
+    ) -> SavedCandidate:
+        """Build one admitted saved-work candidate without original-source lookup.
+
+        Only the admitted destination authority (explicit token or bound
+        credential) is used; process-environment tokens, host Git config, and
+        hooks never reach the contained workspace. ``remote_url`` defaults to
+        the GitHub remote of ``admission.repository``. ``persisted_head_sha``
+        rebuilds an already persisted candidate and rejects any difference.
+        """
+
+        token = saved_candidate.admitted_token(
+            github_token=github_token, bound_credential=bound_credential
+        )
+        return await saved_candidate.prepare_candidate(
+            git_binary=self._git_binary,
+            admission=admission,
+            content=content,
+            workspace=Path(workspace),
+            token=token,
+            remote_url=remote_url
+            or saved_candidate.github_remote_url(admission.repository),
+            persisted_head_sha=persisted_head_sha,
+        )
+
+    async def observe_destination_branch(
+        self,
+        *,
+        workspace: Path,
+        repository: str,
+        branch: str,
+        github_token: str | None = None,
+        bound_credential: Any | None = None,
+        remote_url: str | None = None,
+    ) -> str | None:
+        """Read the destination branch tip once so it can be admitted.
+
+        ``None`` is confirmed absence; an unreadable remote raises a retryable
+        ``PUBLICATION_DESTINATION_UNAVAILABLE`` instead of reporting absence.
+        """
+
+        token = saved_candidate.admitted_token(
+            github_token=github_token, bound_credential=bound_credential
+        )
+        return await saved_candidate.observe_branch(
+            git_binary=self._git_binary,
+            workspace=Path(workspace),
+            branch=branch,
+            token=token,
+            remote_url=remote_url or saved_candidate.github_remote_url(repository),
+        )
+
+    async def push_candidate(
+        self,
+        *,
+        repo_dir: Path,
+        repository: str,
+        head_branch: str,
+        candidate_sha: str,
+        base_sha: str | None,
+        expected_remote_sha: str | None,
+        github_token: str | None = None,
+        bound_credential: Any | None = None,
+        remote_url: str | None = None,
+    ) -> CandidatePushOutcome:
+        """Push a persisted candidate under its admitted remote expectation.
+
+        The push effect is reconciled against the remote head before and after
+        every attempt, scanned by the existing outbound push scan, and only
+        reported as pushed after exact remote-head verification.
+        """
+
+        token = saved_candidate.admitted_token(
+            github_token=github_token, bound_credential=bound_credential
+        )
+
+        async def scan(
+            workspace: Path, head: str, base: str | None, env: dict[str, str]
+        ) -> None:
+            await self._scan_git_push_before_publish(
+                repo_dir=workspace, branch_name=head, base_ref=base, env=env
+            )
+
+        return await saved_candidate.push_candidate(
+            git_binary=self._git_binary,
+            repo_dir=Path(repo_dir),
+            head_branch=head_branch,
+            candidate_sha=candidate_sha,
+            base_sha=base_sha,
+            expected_remote_sha=expected_remote_sha,
+            token=token,
+            remote_url=remote_url or saved_candidate.github_remote_url(repository),
+            scan=scan,
+        )
+
+    async def publish_pull_request(
+        self,
+        *,
+        repository: str,
+        head_branch: str,
+        base_branch: str,
+        candidate_sha: str,
+        draft: bool,
+        title: str,
+        body: str,
+        github_token: str | None = None,
+        bound_credential: Any | None = None,
+    ) -> PullRequestOutcome:
+        """Record the PR effect separately from the push, reconciling first."""
+
+        token = saved_candidate.admitted_token(
+            github_token=github_token, bound_credential=bound_credential
+        )
+        return await saved_candidate.publish_pull_request(
+            github=self._github_service or GitHubService(),
+            repository=repository,
+            head_branch=head_branch,
+            base_branch=base_branch,
+            candidate_sha=candidate_sha,
+            draft=draft,
+            title=title,
+            body=body,
+            token=token,
+        )
+
     async def _scan_git_push_before_publish(
         self,
         *,
         repo_dir: Path,
         branch_name: str,
-        base_ref: str,
+        base_ref: str | None,
         env: dict[str, str],
     ) -> None:
         if not resolve_high_security_mode():
             return
 
-        if base_ref.startswith("origin/"):
+        if base_ref and base_ref.startswith("origin/"):
             with contextlib.suppress(Exception):
                 await self._read_git_text_for_scan(
                     repo_dir=repo_dir,
@@ -599,7 +759,9 @@ class PublishService:
                     timeout=30,
                     args=["fetch", "origin", base_ref.removeprefix("origin/")],
                 )
-        commit_range = f"{base_ref}..{branch_name}"
+        # A root commit (empty-destination initialization) scans its full tree.
+        commit_range = f"{base_ref}..{branch_name}" if base_ref else branch_name
+        diff_range = [commit_range] if base_ref else [_EMPTY_TREE_SHA, branch_name]
         try:
             commit_metadata = await self._read_git_text_for_scan(
                 repo_dir=repo_dir,
@@ -618,7 +780,7 @@ class PublishService:
                 repo_dir=repo_dir,
                 env=env,
                 timeout=15,
-                args=["diff", "--name-only", "-z", commit_range],
+                args=["diff", "--name-only", "-z", *diff_range],
             )
             # NUL-separated output preserves exact pathnames (whitespace,
             # newlines, or otherwise quoted names); never strip entries.
@@ -658,7 +820,7 @@ class PublishService:
                             "diff",
                             "--no-ext-diff",
                             "--text",
-                            commit_range,
+                            *diff_range,
                             "--",
                             changed_file,
                         ],
