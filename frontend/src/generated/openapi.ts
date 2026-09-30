@@ -5193,7 +5193,7 @@ export interface components {
             /** Tools */
             tools?: string[];
             capture?: components["schemas"]["CaptureDefaults"];
-            rag?: components["schemas"]["RagDefaults"];
+            rag?: components["schemas"]["RagDefaults"] | null;
             continuations?: components["schemas"]["ContinuationDefaults"];
             publish?: components["schemas"]["PublishDefaults"];
             /** Policyref */
@@ -10336,7 +10336,7 @@ export interface components {
             capture: components["schemas"]["CapturePolicy"];
             checkpoint: components["schemas"]["CheckpointPolicy"];
             remediation: components["schemas"]["RemediationPolicy"];
-            rag: components["schemas"]["RagPolicy"];
+            rag?: components["schemas"]["RagPolicy"] | null;
             approvals: components["schemas"]["ApprovalPolicy"];
             retention: components["schemas"]["RetentionPolicy"];
             rollout: components["schemas"]["RolloutPolicy"];
@@ -11516,7 +11516,13 @@ export interface components {
             /** Updatedat */
             updatedAt?: string | null;
         };
-        /** RagDefaults */
+        /**
+         * RagDefaults
+         * @description Retired native retrieval defaults (MoonLadderStudios/MoonMind#4103).
+         *
+         *     Decoded only so versions persisted before retirement stay readable with
+         *     their recorded digests; new authoring must not carry it.
+         */
         RagDefaults: {
             /** Initial */
             initial?: {
@@ -11531,7 +11537,14 @@ export interface components {
             /** Maxlatencyms */
             maxLatencyMs?: number | null;
         };
-        /** RagPolicy */
+        /**
+         * RagPolicy
+         * @description Retired native retrieval section (MoonLadderStudios/MoonMind#4103).
+         *
+         *     Decoded only so versions persisted before retirement stay readable with
+         *     their recorded digests. New versions must not carry it; see
+         *     :func:`reject_retired_policy_sections`.
+         */
         RagPolicy: {
             /** Initialscope */
             initialScope: string;

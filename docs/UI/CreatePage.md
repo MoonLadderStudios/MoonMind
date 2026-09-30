@@ -263,11 +263,11 @@ A binding error identifies the workflow repository/branch or selected PR control
 
 Static conflicts are rejected before parent launch, issue creation, or child enqueue. Dynamic discovery failures are reported as blocked/partial outcomes with exact accepted child links, not disguised as full batch success.
 
-## Context Retrieval Controls
+## Advanced Controls
 
-Context retrieval/RAG authoring remains advanced. Guided mode uses deployment policy. Its disclosure appears only in Advanced mode alongside optional Skill inputs, required capabilities, worker routing, Priority, and Max Attempts.
+Advanced mode shows optional Skill inputs, required capabilities, worker routing, Priority, and Max Attempts. Hidden controls cannot retain invisible authored values: while hidden, submission uses their defaults.
 
-Hidden controls cannot retain invisible authored policy. While hidden, submission uses the unauthored retrieval default. Reconstructing a source with authored `rag`/`followUpRetrieval` enables Advanced mode so that policy stays visible. Turning Advanced off explicitly clears that authoring rather than resurrecting it later. The server always re-clamps values to deployment ceilings.
+MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103), so Create has no context-retrieval/RAG controls in either mode. Edit and rerun never resubmit an inherited `rag` or `followUpRetrieval` value; the server rejects an explicit retired value with an actionable error. Supply context through explicit attachments, artifact refs, or scoped workspace access.
 
 This disclosure rule does not clear or hide the single repository/branch/publishing intent. Those remain ordinary visible context, not optional per-step overrides.
 

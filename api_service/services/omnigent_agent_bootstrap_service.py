@@ -172,7 +172,6 @@ def build_bootstrap_document(
             "runtimeId": provider_runtime_id,
         },
         "publish": {"mode": "none"},
-        "rag": {"followUp": {}, "initial": {}},
         "requiredCapabilities": list(_BOOTSTRAP_REQUIRED_CAPABILITIES),
         "schemaVersion": "moonmind.omnigent-agent-profile.v1",
         "skills": [],

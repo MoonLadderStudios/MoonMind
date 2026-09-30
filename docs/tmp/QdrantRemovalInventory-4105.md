@@ -24,6 +24,8 @@ implementation, not native vector).
 
 ## B. Authoring surfaces — owned by #4105 (this change)
 
+Superseded by #4103 for the frontend rows below: `ContextRetrievalControls`, `contextRetrievalAuthoring.ts`, the entrypoint disclosures, and the remediation-draft `contextRetrieval` field were deleted. `buildEditParametersPatch` still strips inherited and submitted `rag` / `followUpRetrieval`.
+
 | Consumer | Disposition | Notes |
 |---|---|---|
 | `frontend/src/lib/contextRetrievalAuthoring.ts` | retain-without-vector | `compile…` returns `{}`; `hasAuthored…` false (no draft/hidden persistence); `parse…` kept for historical reads; new `hasRetiredRetrievalParameters` surfaces “resubmit without” guidance. |

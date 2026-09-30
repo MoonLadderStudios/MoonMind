@@ -7,7 +7,7 @@ from difflib import unified_diff
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -20,7 +20,11 @@ from api_service.services.omnigent_policies import (
     validate_policy,
 )
 from api_service.services.settings_catalog import has_settings_permission
-from moonmind.omnigent.policies import PolicyDocument, PolicyState
+from moonmind.omnigent.policies import (
+    PolicyDocument,
+    PolicyState,
+    reject_retired_policy_sections,
+)
 
 router = APIRouter(prefix="/api/omnigent/policies", tags=["Omnigent Policies"])
 
@@ -33,11 +37,19 @@ class CreatePolicy(BaseModel):
     document: PolicyDocument
     clone_source_ref: str | None = Field(None, alias="cloneSourceRef")
 
+    _reject_retired_sections = field_validator("document")(
+        reject_retired_policy_sections
+    )
+
 
 class NewVersion(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     expected_parent_ref: str = Field(alias="expectedParentRef")
     document: PolicyDocument
+
+    _reject_retired_sections = field_validator("document")(
+        reject_retired_policy_sections
+    )
 
 
 class Transition(BaseModel):
