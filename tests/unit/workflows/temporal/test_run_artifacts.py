@@ -5357,21 +5357,41 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("recovery_handoff_enabled", "expect_create_pr"),
-    [(False, False), (True, True)],
+    ("recovery_handoff_enabled", "terminal_handoff_enabled", "expect_create_pr"),
+    [(False, False, False), (True, False, True), (True, True, True)],
 )
 async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_draft(
     monkeypatch: pytest.MonkeyPatch,
     recovery_handoff_enabled: bool,
+    terminal_handoff_enabled: bool,
     expect_create_pr: bool,
 ) -> None:
-    """A skipped normal handoff must not suppress the recovery draft."""
+    """A skipped normal handoff must not suppress the recovery draft.
+
+    The pushed candidate carries no workspace checkpoint (as with runtimes that
+    publish through git rather than worktree archives), so the terminal handoff
+    must identify the candidate from the accepted remote head.
+    """
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "MoonLadderStudios/MoonMind"
     workflow._publish_status = "not_required"
     workflow._publish_reason = "Earlier issue update required no PR output."
     create_pr_payload: dict[str, object] | None = None
+    created_artifacts: dict[str, dict[str, object]] = {}
+    remote_head_observations: list[dict[str, object]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> str:
+        artifact_id = f"art_{len(created_artifacts) + 1}"
+        created_artifacts[artifact_id] = {"name": name, "payload": payload}
+        return artifact_id
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
 
     async def fake_execute_activity(
         activity_type: str,
@@ -5379,6 +5399,14 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
         **_kwargs: object,
     ) -> object:
         nonlocal create_pr_payload
+        if activity_type == "publication_recovery.observe":
+            remote_head_observations.append(dict(payload or {}))
+            return {
+                "authoritative": True,
+                "authorityAvailable": True,
+                "remoteBranchExists": True,
+                "remoteHeadSha": "abc123",
+            }
         if activity_type == "repo.create_pr":
             create_pr_payload = dict(payload or {})
             return {
@@ -5535,6 +5563,13 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
         enabled_patches.add(
             run_workflow_module.RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH
         )
+    if terminal_handoff_enabled:
+        enabled_patches.update(
+            {
+                run_workflow_module.RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH,
+                run_workflow_module.RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH,
+            }
+        )
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
@@ -5548,6 +5583,43 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
         },
         plan_ref="art_plan_1",
     )
+
+    if terminal_handoff_enabled:
+        assert remote_head_observations == [
+            {
+                "contract": {
+                    "intent": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "headRef": "partial-work",
+                        "baseRef": "main",
+                    },
+                    "continuation": {"expectedHeadSha": "abc123"},
+                }
+            }
+        ]
+        control_stop = workflow._workflow_control_stop
+        assert control_stop is not None
+        head_ref = control_stop["workspaceHeadRef"]
+        head_artifact = created_artifacts[head_ref.removeprefix("artifact://")]
+        assert head_artifact["name"] == "reports/workspace_head.json"
+        assert head_artifact["payload"] == {
+            "schemaVersion": "workspace-head/v1",
+            "kind": "git_remote_head",
+            "repository": "MoonLadderStudios/MoonMind",
+            "branch": "partial-work",
+            "headSha": "abc123",
+            "baseBranch": "main",
+            "authority": "accepted_repository_evidence",
+            "remoteVerified": True,
+        }
+        remaining_work = created_artifacts[
+            control_stop["remainingWorkRef"].removeprefix("artifact://")
+        ]
+        assert remaining_work["payload"]["workspaceHeadRef"] == head_ref
+        assert control_stop["metrics"]["candidatePreserved"] is True
+        assert control_stop["auxiliaryOutcomes"]["workspacePreservation"] == {
+            "status": "preserved"
+        }
 
     if not expect_create_pr:
         assert create_pr_payload is None

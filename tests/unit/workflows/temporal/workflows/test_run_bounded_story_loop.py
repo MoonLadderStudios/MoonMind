@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH,
     RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+    RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH,
     MoonMindRunWorkflow,
 )
 
@@ -125,6 +126,70 @@ async def test_terminal_remaining_work_reuses_authoritative_verifier_artifact(
     )
 
     assert ref == "artifact://verification/final"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "observation",
+    [
+        pytest.param(
+            {
+                "authoritative": True,
+                "authorityAvailable": True,
+                "remoteBranchExists": True,
+                "remoteHeadSha": "def456",
+                "conflictingEvidence": True,
+            },
+            id="branch-moved",
+        ),
+        pytest.param(
+            {
+                "authoritative": True,
+                "authorityAvailable": True,
+                "remoteBranchExists": False,
+            },
+            id="branch-deleted",
+        ),
+        pytest.param(
+            {
+                "authoritative": False,
+                "authorityAvailable": True,
+                "transientAbsenceOnly": True,
+            },
+            id="github-unavailable",
+        ),
+    ],
+)
+async def test_published_workspace_head_requires_unchanged_remote_tip(
+    monkeypatch: pytest.MonkeyPatch,
+    observation: dict[str, Any],
+) -> None:
+    """Accepted push evidence is historical; only the current tip is preserved."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["acceptedPublishedHead"] = {
+        "branch": "partial-work",
+        "headSha": "abc123",
+        "baseBranch": "main",
+    }
+
+    async def fake_execute_activity(activity_type: str, *_args: Any, **_kwargs: Any):
+        assert activity_type == "publication_recovery.observe"
+        return observation
+
+    async def unexpected_write(**_kwargs: Any) -> str:
+        raise AssertionError("an unverified head must not be recorded as preserved")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_TERMINAL_GATE_PUBLISHED_WORKSPACE_HEAD_PATCH,
+    )
+    monkeypatch.setattr(workflow, "_write_json_artifact", unexpected_write)
+
+    assert await workflow._persist_published_workspace_head() is None
 
 
 def test_terminal_handoff_side_effects_have_replay_patch_boundary() -> None:
