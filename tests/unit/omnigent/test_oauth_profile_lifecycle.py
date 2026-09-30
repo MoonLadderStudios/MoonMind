@@ -1104,6 +1104,8 @@ async def test_runtime_preflight_uses_stock_runner_environment_constructor() -> 
 
     async def run(*args, **_kwargs):
         calls.append(args)
+        if any("gh repo view" in arg for arg in args):
+            return 0, '{"nameWithOwner":"owner/repo","viewerPermission":"WRITE"}', ""
         return 0, "ready", ""
 
     runtime._run = run  # type: ignore[method-assign]
@@ -1120,7 +1122,7 @@ async def test_runtime_preflight_uses_stock_runner_environment_constructor() -> 
 
     assert result["status"] == "ready"
     runner_calls = [call for call in calls if "python" in call]
-    assert len(runner_calls) == 6
+    assert len(runner_calls) == 5
     assert all(
         "from omnigent.host.connect import _build_runner_env" in call[5]
         for call in runner_calls

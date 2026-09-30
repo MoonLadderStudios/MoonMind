@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, call
@@ -10,10 +11,71 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 from moonmind.omnigent.mounted_tool_preflight import (
-    _digest_check_command,
     MountedToolPreflightError,
+    _digest_check_command,
+    preflight_github_access,
     preflight_mounted_tools,
 )
+
+
+@pytest.mark.asyncio
+async def test_repository_access_does_not_require_unrelated_account_probe():
+    calls = []
+
+    async def runner(command):
+        calls.append(command)
+        if "gh auth status" in command:
+            return 1, "", "account endpoint temporarily unavailable"
+        if command.startswith("gh repo view"):
+            return (
+                0,
+                json.dumps(
+                    {"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}
+                ),
+                "",
+            )
+        return 0, "", ""
+
+    result = await preflight_mounted_tools(
+        required_capabilities=("gh",),
+        repository="owner/repo",
+        mutation_required=True,
+        host_runner=runner,
+        runner_runner=runner,
+    )
+    assert result["status"] == "ready"
+    assert sum("gh repo view" in command for command in calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_remote_timeout_is_recovered_in_place(monkeypatch):
+    attempts = 0
+
+    async def runner(command):
+        nonlocal attempts
+        if command.startswith("gh repo view"):
+            attempts += 1
+            if attempts == 1:
+                raise TimeoutError()
+            return (
+                0,
+                json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "READ"}),
+                "",
+            )
+        return 0, "", ""
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", AsyncMock()
+    )
+    result = await preflight_mounted_tools(
+        required_capabilities=("gh",),
+        repository="owner/repo",
+        mutation_required=False,
+        host_runner=runner,
+        runner_runner=runner,
+    )
+    assert attempts == 3
+    assert result["probes"][4]["error"] == "command timed out"
 
 
 def test_digest_probe_executes_against_mounted_executable(tmp_path: Path) -> None:
@@ -56,7 +118,13 @@ async def test_gh_probes_host_and_exact_runner_with_mutation_permission() -> Non
     def make_runner(boundary: str):
         async def runner(command: str) -> tuple[int, str, str]:
             calls.append((boundary, command))
-            return 0, "ok", ""
+            return (
+                0,
+                json.dumps(
+                    {"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}
+                ),
+                "",
+            )
 
         return runner
 
@@ -69,11 +137,14 @@ async def test_gh_probes_host_and_exact_runner_with_mutation_permission() -> Non
     )
 
     assert result["status"] == "ready"
-    assert [boundary for boundary, _ in calls] == ["host"] * 6 + ["runner"] * 6
+    assert [boundary for boundary, _ in calls] == ["host"] * 5 + ["runner"] * 5
     assert any("command -v gh" in command for _, command in calls)
-    assert any("gh auth status" in command for _, command in calls)
+    assert any(
+        "gh auth token --hostname github.com >/dev/null" == command
+        for _, command in calls
+    )
     assert any("viewerPermission" in command for _, command in calls)
-    permission_commands = [command for _, command in calls if "--jq .viewerPermission" in command]
+    permission_commands = [command for _, command in calls if "gh repo view" in command]
     assert len(permission_commands) == 2
     assert all(command.count("gh repo view") == 1 for command in permission_commands)
 
@@ -107,12 +178,20 @@ async def test_runner_auth_failure_is_stable_bounded_and_redacted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def host_runner(_command: str) -> tuple[int, str, str]:
-        return 0, "ok", ""
+        return (
+            0,
+            json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}),
+            "",
+        )
 
     async def runner_runner(command: str) -> tuple[int, str, str]:
-        if command == "gh auth status":
+        if command.startswith("gh auth token"):
             return 1, "", "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456"
-        return 0, "ok", ""
+        return (
+            0,
+            json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}),
+            "",
+        )
 
     sleep = AsyncMock()
     monkeypatch.setattr(
@@ -128,7 +207,7 @@ async def test_runner_auth_failure_is_stable_bounded_and_redacted(
         )
 
     assert raised.value.code == "github_auth_unavailable"
-    assert sleep.await_count == 3
+    assert sleep.await_count == 0
     serialized = str(raised.value.evidence)
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in serialized
     assert len(serialized) < 4096
@@ -146,10 +225,18 @@ async def test_remote_probe_recovers_without_replacing_authority(
             repository_attempts += 1
             if repository_attempts < 3:
                 return 1, "", "temporary provider connection failure"
-        return 0, "ok", ""
+        return (
+            0,
+            json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}),
+            "",
+        )
 
     async def runner_runner(_command: str) -> tuple[int, str, str]:
-        return 0, "ok", ""
+        return (
+            0,
+            json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}),
+            "",
+        )
 
     sleep = AsyncMock()
     monkeypatch.setattr(
@@ -177,3 +264,96 @@ async def test_remote_probe_recovers_without_replacing_authority(
         "failed",
         "ready",
     ]
+
+
+@pytest.mark.parametrize(
+    "payload,mutation",
+    [
+        ({"nameWithOwner": "other/repo", "viewerPermission": "ADMIN"}, False),
+        ({"nameWithOwner": "owner/repo", "viewerPermission": "READ"}, True),
+        ({}, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_repository_identity_and_requested_permission_fail_closed(
+    payload, mutation
+):
+    runner = AsyncMock(side_effect=[(0, "", ""), (0, json.dumps(payload), "")])
+    with pytest.raises(
+        MountedToolPreflightError, match="matching repository|write permission"
+    ):
+        await preflight_github_access(
+            repository="owner/repo",
+            boundaries={"runner": runner},
+            mutation_required=mutation,
+        )
+    assert runner.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "HTTP 401: Bad credentials",
+        "HTTP 403: Forbidden",
+        "HTTP 404: Not Found",
+        "HTTP 429: rate limit exceeded",
+    ],
+)
+@pytest.mark.asyncio
+async def test_permanent_rejection_and_rate_limits_do_not_tight_loop(
+    error, monkeypatch
+):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    runner = AsyncMock(side_effect=[(0, "", ""), (1, "", error)])
+    with pytest.raises(MountedToolPreflightError, match=error):
+        await preflight_github_access(
+            repository="owner/repo", boundaries={"runner": runner}
+        )
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transient_exhaustion_retains_all_redacted_attempts(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+
+    async def runner(command):
+        if command.startswith("gh auth token"):
+            return 0, "", ""
+        return (
+            1,
+            "",
+            "HTTP 503: unavailable Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+        )
+
+    with pytest.raises(MountedToolPreflightError, match="after 4 attempt") as raised:
+        await preflight_github_access(
+            repository="owner/repo", boundaries={"opencode_shell": runner}
+        )
+    assert len(raised.value.evidence["probes"]) == 5
+    assert sleep.await_count == 3
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(raised.value)
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(raised.value.evidence)
+
+
+@pytest.mark.asyncio
+async def test_repository_free_projection_only_checks_local_credential():
+    runner = AsyncMock(return_value=(0, "", ""))
+    result = await preflight_github_access(repository="", boundaries={"host": runner})
+    runner.assert_awaited_once_with("gh auth token --hostname github.com >/dev/null")
+    assert all(item["probe"] == "authentication" for item in result["probes"])
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_not_retried(monkeypatch):
+    import asyncio
+
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    runner = AsyncMock(side_effect=[(0, "", ""), asyncio.CancelledError()])
+    with pytest.raises(asyncio.CancelledError):
+        await preflight_github_access(
+            repository="owner/repo", boundaries={"runner": runner}
+        )
+    sleep.assert_not_awaited()
