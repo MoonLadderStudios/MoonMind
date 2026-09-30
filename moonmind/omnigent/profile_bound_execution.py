@@ -400,11 +400,10 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
         if requested_target:
             profile = PROFILES.get(requested_target)
-            if (
-                profile is None
-                or profile.harness != plan.payload.harnessId
-                or profile.default_policy_ref != plan.payload.launchPolicyRef
-            ):
+            # The target's default is a selection fallback, not a restriction
+            # on admitted policies. The selected policy is checked above and
+            # its immutable launch snapshots are verified before any leases.
+            if profile is None or profile.harness != plan.payload.harnessId:
                 raise HarnessPlatformError(
                     "Codex execution target conflicts with the admitted plan",
                     code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
