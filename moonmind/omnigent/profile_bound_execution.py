@@ -836,6 +836,13 @@ class OmnigentProfileBoundExecutionCoordinator:
             requested_target, requested_policy = selection_from_request(
                 request.parameters
             )
+            # An admitted plan already records its selected policy; authored
+            # parameters need not repeat it, so it replaces the target default.
+            admitted_policy_ref = (
+                recorded_plan.payload.launchPolicyRef
+                if recorded_plan is not None
+                else None
+            )
             current_stage = "host_binding_resolution"
             await emit(current_stage, "started")
             binding = await self._hosts.get_binding_for_profile(profile_id)
@@ -864,17 +871,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
             elif requested_target:
                 selected_profile_ref = requested_target
-                selected_policy_ref = requested_policy or PROFILES[
-                    selected_profile_ref
-                ].default_policy_ref
+                selected_policy_ref = (
+                    requested_policy
+                    or admitted_policy_ref
+                    or PROFILES[selected_profile_ref].default_policy_ref
+                )
             else:
                 provider_slug = (
                     "claude" if provider_runtime == "claude_code" else "codex"
                 )
                 selected_profile_ref = f"omnigent-{provider_slug}@1"
-                selected_policy_ref = PROFILES[
-                    selected_profile_ref
-                ].default_policy_ref
+                selected_policy_ref = (
+                    admitted_policy_ref
+                    or PROFILES[selected_profile_ref].default_policy_ref
+                )
             current_stage = "policy_authority_resolution"
             await emit(current_stage, "started")
             try:

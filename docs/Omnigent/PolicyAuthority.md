@@ -55,8 +55,9 @@ For an admitted Codex execution plan, the selected launch policy is authoritativ
 the execution target's built-in default is only a selection fallback. Dispatch
 checks the requested policy against the plan and the target's harness against
 the admitted harness, without requiring the selected policy to equal that
-default. Policy and effective-launch snapshot digests remain mandatory before
-lease acquisition or host mutation.
+default. A request that omits the policy selection launches the admitted policy
+rather than the target default. Policy and effective-launch snapshot digests
+remain mandatory before lease acquisition or host mutation.
 
 Stable diagnostics cover invalid images, unavailable host/backend, missing
 egress, unsafe mounts, unsupported workspace, incompatible profile,
