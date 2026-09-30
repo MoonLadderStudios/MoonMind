@@ -1382,6 +1382,103 @@ def test_context_sections_keep_tracking_lists_contextual(heading):
     assert declared_prerequisites(body, REPOSITORY) == [(REPOSITORY, 10)]
 
 
+# Minimized from epic #4103 (workflow mm:38fb4c1a-…-2026-09-30T06:58:48Z): its
+# child owners are paragraphs that lead with issue references, so search
+# selected the parent while #4114 still owned open work and the assessment
+# could only report BLOCKED.
+_PARAGRAPH_CHILD_EPIC_BODY = (
+    "## Target and scope\n\nFinish the removal using current code.\n\n"
+    "## Remaining responsibility owners\n\n"
+    "#4105–#4107 retain any real admission gaps. Do not reopen completed "
+    "work. #4111 owns only remaining image evidence. #4112/#4113 own leftover "
+    "consumers. #4114 adds missing real startup checks through existing CI.\n\n"
+    "#4187 owns Manifest retirement. Its #4188–#4193 children provide tests.\n\n"
+    "## Related work\n\n#4200 is background only.\n\n"
+    "## Repository completion\n\n"
+    "- [ ] Remaining children have evidence-backed dispositions.\n\n"
+    "#4115 retains live retirement; #4189 retains separate rollout obligations. "
+    "The epic mentions #4300 mid-sentence without owning it.\n"
+)
+
+
+def test_epic_paragraphs_led_by_issue_references_declare_children():
+    assert declared_prerequisites(
+        _PARAGRAPH_CHILD_EPIC_BODY, REPOSITORY, parent_epic=True
+    ) == [
+        (REPOSITORY, 4105),
+        (REPOSITORY, 4106),
+        (REPOSITORY, 4107),
+        (REPOSITORY, 4111),
+        (REPOSITORY, 4112),
+        (REPOSITORY, 4113),
+        (REPOSITORY, 4114),
+        (REPOSITORY, 4187),
+        (REPOSITORY, 4115),
+    ]
+
+
+def test_non_epic_paragraphs_led_by_issue_references_stay_contextual():
+    """Ordinary issues divide scope with siblings in prose; that is not a child."""
+    assert declared_prerequisites(_PARAGRAPH_CHILD_EPIC_BODY, REPOSITORY) == []
+
+
+@pytest.mark.asyncio
+async def test_search_skips_epic_while_a_paragraph_child_is_open(activity_boundary):
+    epic = issue(
+        4103,
+        title="[Epic] Finish native vector removal",
+        body=_PARAGRAPH_CHILD_EPIC_BODY,
+        labels=[{"name": "epic"}],
+    )
+    activity_boundary.pages[:] = [[epic]]
+    activity_boundary.detail.update(epic)
+    for number in (4105, 4106, 4107, 4111, 4112, 4113, 4115, 4187):
+        activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/{number}"] = (
+            issue(number, state="closed")
+        )
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/4114"] = issue(
+        4114
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert result.completion_disposition == "idle"
+    activity_boundary.artifact_service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_epic_prose_naming_a_peer_epic_does_not_block_selection_or_preflight(
+    activity_boundary,
+):
+    """Open epics #3825 and #3925 name each other in prose; neither is a child.
+
+    Reading those as children would make both parents permanently unselectable.
+    A tracking list remains the way to declare an epic as a child.
+    """
+    epic = issue(
+        3825,
+        body="## Coordination\n\n#3925 coordinates actual removal.\n",
+        labels=[{"name": "epic"}],
+    )
+    activity_boundary.pages[:] = [[epic]]
+    activity_boundary.detail.update(epic)
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/3925"] = issue(
+        3925, labels=[{"name": "epic"}]
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert result.completion_disposition != "idle"
+    preflight = await activity_boundary.execute(
+        "github.check_issue_blockers", {"repository": REPOSITORY, "issueNumber": 3825}
+    )
+    assert preflight.outputs["decision"] == "continue"
+
+
 def test_prose_checkboxes_outside_child_sections_declare_nothing():
     """Acceptance checklists mentioning issues mid-sentence are not children."""
     body = (
