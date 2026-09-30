@@ -15,11 +15,16 @@ from moonmind.workflows.temporal.runtime.cleanup import (
     ManagedRuntimeCleanupConfig,
     ManagedRuntimeCleanupDecision,
     ManagedRuntimeWorkspaceJanitor,
+    SavedWorkProbe,
+    SavedWorkState,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecordStore,
+)
 
 NOW = datetime(2026, 6, 27, 12, 0, tzinfo=UTC)
 OLD = NOW - timedelta(days=45)
@@ -114,6 +119,7 @@ def _janitor(
     *,
     dry_run: bool = True,
     docker_state: DockerReferenceState | None = None,
+    saved_work_probe: SavedWorkProbe | None = None,
 ) -> ManagedRuntimeWorkspaceJanitor:
     return ManagedRuntimeWorkspaceJanitor(
         run_store=run_store,
@@ -122,6 +128,7 @@ def _janitor(
         docker_reference_provider=(
             None if docker_state is None else lambda: docker_state
         ),
+        saved_work_probe=saved_work_probe,
         now=lambda: NOW,
     )
 
@@ -935,10 +942,156 @@ def test_sandbox_workspaces_are_separate_owners_and_unsaved_work_survives_restar
         }
         assert sandbox not in by_path
         assert records not in by_path
-        assert by_path[pending] == "skipped_ambiguous_owner"
+        # No finalization owner recorded a retention decision: the sole copy
+        # is kept past retention and reported as such, not silently counted.
+        assert by_path[pending] == "retained_past_retention"
+        assert result.retained_past_retention == 1
         assert (pending / "repo" / "result.txt").read_text() == (
             "unsaved candidate bytes"
         )
         assert (records / f"{'b' * 24}.json").exists()
 
     assert not finished.exists()
+
+
+def test_sandbox_retention_follows_the_finalization_owner_decision_across_restart(
+    tmp_path: Path,
+) -> None:
+    """MoonLadderStudios/MoonMind#4016: bounded retention for generic-host workspaces.
+
+    The finalization owner's persisted decision drives the janitor. A verified
+    save whose objects #4017 still reports available and unused is reclaimed
+    after retention and grace. A pending save, an expired or quarantined saved
+    copy, or a copy that cannot be verified keeps the workspace as the only
+    recoverable copy, reported explicitly on every pass after a restart. Live
+    use (a saved-work use claim or an existing-workspace grant) protects it.
+    """
+
+    root = tmp_path / "agent_jobs"
+    sandbox = root / "temporal_sandbox"
+    store = SandboxWorkspaceRecordStore(root)
+    refs = {
+        name: {
+            "checkpointRef": f"artifact://art_{name}_checkpoint",
+            "archiveRef": f"artifact://art_{name}_archive",
+            "manifestRef": f"artifact://art_{name}_manifest",
+        }
+        for name in ("saved", "recent", "expired", "used", "granted")
+    }
+    cases = {
+        "saved": (refs["saved"], OLD),
+        "recent": (refs["recent"], RECENT),
+        "expired": (refs["expired"], OLD),
+        "used": (refs["used"], OLD),
+        "granted": (refs["granted"], OLD),
+        "pending": (None, RECENT),
+        "stale-pending": (None, OLD),
+    }
+    paths = {}
+    for name, (saved_refs, recorded_at) in cases.items():
+        workspace_id = name.replace("-", "_").ljust(24, "0")
+        path = sandbox / workspace_id
+        (path / "repo").mkdir(parents=True)
+        (path / "repo" / "result.txt").write_text(f"{name} candidate bytes")
+        _touch_old(path)
+        store.record_retention_decision(
+            workspace_id,
+            saved_refs=saved_refs,
+            save_failure=None if saved_refs else {"errorType": "TimeoutError"},
+            recorded_at=recorded_at,
+        )
+        paths[name] = path
+
+    class _Grant:
+        grant_id = "grant-1"
+        mode = "read_only"
+        grantee_workflow_id = "mm:reader"
+        expected_generation = 1
+        # Grant lifetimes are enforced against the wall clock by their store.
+        expires_at = datetime.now(UTC) + timedelta(days=1)
+
+    store.claim_existing_workspace(paths["granted"].name, _Grant())
+    probed: list[str] = []
+
+    def probe(ref: str) -> SavedWorkState:
+        probed.append(ref)
+        if ref == refs["expired"]["archiveRef"]:
+            return SavedWorkState(availability="expired")
+        return SavedWorkState(
+            availability="available",
+            in_use=ref == refs["used"]["checkpointRef"],
+        )
+
+    for _restart in range(2):
+        result = _janitor(
+            root,
+            *_stores(root),
+            dry_run=False,
+            saved_work_probe=probe,
+        ).run()
+        by_path = {
+            Path(d.path): (d.classification, d.reason)
+            for d in result.decisions
+            if d.kind == "workspace"
+        }
+        if _restart == 0:
+            assert by_path[paths["saved"]][0] == "deleted"
+        else:
+            assert paths["saved"] not in by_path
+        assert by_path[paths["recent"]][0] == "protected_recent"
+        assert by_path[paths["expired"]] == (
+            "retained_past_retention",
+            "saved copy is expired; kept as the only recoverable copy",
+        )
+        assert by_path[paths["used"]][0] == "protected_active"
+        assert by_path[paths["granted"]][0] == "protected_active"
+        assert by_path[paths["pending"]] == (
+            "protected_pending_save",
+            "finalization save is pending; kept as the only recoverable copy",
+        )
+        assert by_path[paths["stale-pending"]] == (
+            "retained_past_retention",
+            "finalization save is pending; kept as the only recoverable copy",
+        )
+        assert result.retained_pending_save == 1
+        assert result.retained_past_retention == 2
+        summary = result.to_dict()
+        assert summary["retainedPendingSave"] == 1
+        assert summary["retainedPastRetention"] == 2
+
+    assert not paths["saved"].exists()
+    for name in ("recent", "expired", "used", "granted", "pending", "stale-pending"):
+        assert (paths[name] / "repo" / "result.txt").read_text() == (
+            f"{name} candidate bytes"
+        )
+    # Every object the saved decision names is checked before deletion.
+    assert set(refs["saved"].values()) <= set(probed)
+
+
+def test_sandbox_saved_copy_is_never_reclaimed_without_saved_work_evidence(
+    tmp_path: Path,
+) -> None:
+    """Without a #4017 probe the janitor cannot verify the saved copy still exists."""
+
+    root = tmp_path / "agent_jobs"
+    workspace = root / "temporal_sandbox" / ("c" * 24)
+    (workspace / "repo").mkdir(parents=True)
+    _touch_old(workspace)
+    SandboxWorkspaceRecordStore(root).record_retention_decision(
+        "c" * 24,
+        saved_refs={
+            "checkpointRef": "artifact://art_c_checkpoint",
+            "archiveRef": "artifact://art_c_archive",
+            "manifestRef": "artifact://art_c_manifest",
+        },
+        recorded_at=OLD,
+    )
+
+    result = _janitor(root, *_stores(root), dry_run=False).run()
+
+    (decision,) = [d for d in result.decisions if d.kind == "workspace"]
+    assert decision.classification == "retained_past_retention"
+    assert decision.reason == (
+        "saved copy cannot be verified; kept as the only recoverable copy"
+    )
+    assert workspace.exists()

@@ -589,3 +589,435 @@ async def test_binding_authority_conflict_during_save_still_stops_release():
     stored = await store.get(binding.bindingId)
     assert stored.state is RuntimeBindingState.cleanup_pending
     assert "saveFailure" not in (stored.phaseResults or {})
+
+
+async def _saved_work_attempt(root, gateway, name: str) -> AgentExecutionRequest:
+    """A generic-host attempt with real unpublished work in its sandbox workspace."""
+
+    import hashlib
+    import subprocess
+
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecord,
+        SandboxWorkspaceRecordStore,
+    )
+
+    workflow_id = f"{name}-workflow"
+    step_id = f"{workflow_id}:run:implement:execution:1"
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    workspace = root / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+
+    def git(*args):
+        subprocess.check_call(["git", "-C", str(workspace), *args])
+
+    git("init", "-q")
+    git("config", "user.name", "Qualification")
+    git("config", "user.email", "qualification@example.invalid")
+    (workspace / "file.txt").write_text("original\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    (workspace / "file.txt").write_text(f"{name} uncommitted candidate\n")
+    SandboxWorkspaceRecordStore(root).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo")
+    )
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": workflow_id,
+            "idempotencyKey": f"{name}-attempt",
+            "parameters": {"publishMode": "none"},
+            "workspaceSpec": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": workspace_id,
+                    "relativePath": "repo",
+                },
+            },
+            "stepExecution": {
+                "workflowId": workflow_id,
+                "runId": "run",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+                "stepExecutionId": step_id,
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        }
+    )
+    input_payload = f'{{"objective":"{name}"}}'.encode()
+    plan_payload = f'{{"steps":["{name}"]}}'.encode()
+    input_ref = await gateway.write_bytes(
+        request=request, name="input", payload=input_payload,
+        content_type="application/json", link_type="input",
+    )
+    plan_ref = await gateway.write_bytes(
+        request=request, name="plan", payload=plan_payload,
+        content_type="application/json", link_type="input",
+    )
+    plan_digest = hashlib.sha256(plan_payload).hexdigest()
+    return request.model_copy(
+        update={
+            "step_execution": request.step_execution.model_copy(
+                update={
+                    "omnigent_execution_plan": OmnigentExecutionPlanBinding(
+                        planRef="omnigent-execution-plan:sha256:" + plan_digest,
+                        planDigest="sha256:" + plan_digest,
+                        planArtifactRef=plan_ref,
+                        taskInputSnapshotRef=input_ref,
+                        taskInputSnapshotDigest="sha256:"
+                        + hashlib.sha256(input_payload).hexdigest(),
+                    ),
+                }
+            )
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_janitor_reclaims_only_verified_saves_after_cleanup_and_restart(
+    tmp_path, monkeypatch
+):
+    """MoonLadderStudios/MoonMind#4016: bounded retention of sandbox workspaces.
+
+    Real cleanup saves one drained attempt through the canonical archive and
+    artifact storage; the other attempt's save fails because durable storage
+    is unavailable, yet both release their capacity. Each finalization owner
+    persists its retention decision beside the workspace owner record. The
+    real janitor, reading #4017 availability and use protection from the same
+    artifact store, keeps both inside retention, then reclaims only the
+    verified save after retention and grace. The pending sole copy is kept and
+    reported across restarts. The reclaimed workspace is still usable: its
+    finalization owner restores it from the saved checkpoint alone, without a
+    provider turn or GitHub lookup.
+    """
+
+    import subprocess
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db import models
+    from moonmind.omnigent import workspace_publication
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows import get_temporal_artifact_repository
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactService,
+        read_saved_work_protection,
+    )
+    from moonmind.workflows.temporal.runtime.cleanup import (
+        ManagedRuntimeCleanupConfig,
+        ManagedRuntimeWorkspaceJanitor,
+        SavedWorkState,
+    )
+    from moonmind.workflows.temporal.runtime.managed_session_store import (
+        ManagedSessionStore,
+    )
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecordStore,
+    )
+
+    def no_github(*args, **kwargs):
+        raise AssertionError("save-only finalization must not look up GitHub")
+
+    monkeypatch.setattr(workspace_publication, "resolve_github_credential", no_github)
+    monkeypatch.setattr(workspace_publication, "GitHubService", no_github)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'saved.sqlite'}")
+    async with engine.begin() as connection:
+        for table in (
+            models.TemporalArtifact.__table__,
+            models.TemporalArtifactLink.__table__,
+            models.TemporalArtifactPin.__table__,
+            models.TemporalArtifactUseClaim.__table__,
+            models.TemporalArtifactDeletionIntent.__table__,
+        ):
+            await connection.run_sync(table.create)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "blobs")),
+    )
+    root = tmp_path / "agent_jobs"
+    gateway = TemporalOmnigentArtifactGateway(session_factory=sessions)
+    saving = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
+    storage_down = OmnigentWorkspacePublicationService(root, artifact_gateway=None)
+    store = InMemoryStableRuntimeBindingStore()
+
+    async def clean(request, publisher):
+        binding = await store.create_initial(
+            execution_plan_ref=request.step_execution.omnigent_execution_plan.plan_ref,
+            idempotency_key=request.idempotency_key,
+            provider_leases={},
+        )
+        sink = RuntimeBindingSessionAuthoritySink(store, binding)
+        await sink.record_phase(
+            "workspace",
+            request.model_dump(
+                by_alias=True, mode="json", exclude_none=True,
+                include={
+                    "agent_kind", "agent_id", "correlation_id", "idempotency_key",
+                    "step_execution",
+                },
+            ) | {"workspaceSpec": dict(request.workspace_spec)},
+        )
+        await sink.record_phase(
+            "compute",
+            AgentRunResult(summary="verified compute").model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
+        )
+        calls = _counters()
+        realizer = _cleanup_realizer(store, order=[], calls=calls)
+        realizer._workspace_publisher = publisher
+        cleaned, _ = await realizer._cleanup(
+            request=request,
+            binding=sink.binding,
+            host_lease=None,
+            host_context=None,
+            prepared=None,
+            credential_handles=(),
+            acquired=("provider-lease",),
+        )
+        assert cleaned.state is RuntimeBindingState.cleaned
+        assert calls["provider"] == 1
+        return cleaned
+
+    saved_request = await _saved_work_attempt(root, gateway, "saved")
+    pending_request = await _saved_work_attempt(root, gateway, "pending")
+    saved_binding = await clean(saved_request, saving)
+    pending_binding = await clean(pending_request, storage_down)
+    saved_id = saved_request.workspace_spec["workspaceLocator"]["workspaceId"]
+    pending_id = pending_request.workspace_spec["workspaceLocator"]["workspaceId"]
+    saved_root = root / "temporal_sandbox" / saved_id
+    pending_root = root / "temporal_sandbox" / pending_id
+
+    records = SandboxWorkspaceRecordStore(root)
+    saved_receipt = saved_binding.phaseResults["saved"]
+    assert records.read_retention_decision(saved_id)["savedRefs"] == {
+        key: saved_receipt[key] for key in ("checkpointRef", "archiveRef", "manifestRef")
+    }
+    pending_decision = records.read_retention_decision(pending_id)
+    assert pending_decision["decision"] == "save_pending"
+    assert pending_decision["saveFailure"] == pending_binding.phaseResults["saveFailure"]
+    assert "saved" not in pending_binding.phaseResults
+
+    loop = asyncio.get_running_loop()
+
+    async def saved_work_state(ref: str) -> SavedWorkState:
+        async with sessions() as session:
+            availability, in_use = await read_saved_work_protection(
+                get_temporal_artifact_repository(session), ref
+            )
+        return SavedWorkState(availability=availability, in_use=in_use)
+
+    def probe(ref: str) -> SavedWorkState:
+        return asyncio.run_coroutine_threadsafe(saved_work_state(ref), loop).result(30)
+
+    async def janitor_pass(now: datetime) -> dict:
+        # A fresh janitor per pass is a worker restart: only persisted state
+        # carries the decision.
+        janitor = ManagedRuntimeWorkspaceJanitor(
+            run_store=ManagedRunStore(root / "managed_runs"),
+            session_store=ManagedSessionStore(root / "managed_sessions"),
+            config=ManagedRuntimeCleanupConfig(
+                dry_run=False,
+                runtime_store_root=root,
+                artifact_root=root / "artifacts",
+                lock_path=root / ".janitor.lock",
+            ),
+            saved_work_probe=probe,
+            now=lambda: now,
+        )
+        result = await asyncio.to_thread(janitor.run)
+        return {
+            Path(decision.path).name: decision.classification
+            for decision in result.decisions
+            if decision.kind == "workspace"
+        }
+
+    now = datetime.now(UTC)
+    assert await janitor_pass(now) == {
+        saved_id: "protected_recent",
+        pending_id: "protected_pending_save",
+    }
+    after_retention = now + timedelta(days=11)
+    assert await janitor_pass(after_retention) == {
+        saved_id: "deleted",
+        pending_id: "retained_past_retention",
+    }
+    assert await janitor_pass(after_retention) == {
+        pending_id: "retained_past_retention",
+    }
+    assert not saved_root.exists()
+    assert (pending_root / "repo" / "file.txt").read_text() == (
+        "pending uncommitted candidate\n"
+    )
+
+    recovery = object.__new__(GenericOmnigentHostRealizer)
+    recovery._runtime_bindings = store
+    recovery._workspace_publisher = saving
+    result = await recovery._reconcile_finalization(saved_request, saved_binding)
+
+    assert result.failure_class is None
+    assert result.metadata["savedWorkspaceCheckpoint"]["checkpointRef"] == (
+        saved_receipt["checkpointRef"]
+    )
+    restored = saved_root / "repo"
+
+    def restored_log():
+        return subprocess.check_output(
+            ["git", "-C", str(restored), "log", "--format=%s"], text=True
+        ).split()
+
+    assert (restored / "file.txt").read_text() == "saved uncommitted candidate\n"
+    assert restored_log() == ["base"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_janitor_recovery_records_pending_save_for_the_retained_workspace(
+    tmp_path,
+):
+    """Stale-binding recovery persists the same decision in-band cleanup does.
+
+    With durable storage down, recovery still releases the host, credentials,
+    and capacity, and records the workspace as pending its save. The workspace
+    janitor then keeps and reports it as the only recoverable copy.
+    """
+
+    import hashlib
+
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+    from moonmind.workflows.temporal.runtime.cleanup import (
+        ManagedRuntimeCleanupConfig,
+        ManagedRuntimeWorkspaceJanitor,
+    )
+    from moonmind.workflows.temporal.runtime.managed_session_store import (
+        ManagedSessionStore,
+    )
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecord,
+        SandboxWorkspaceRecordStore,
+    )
+
+    root = tmp_path / "agent_jobs"
+    workflow_id = "recovered-workflow"
+    step_id = f"{workflow_id}:run:implement:execution:1"
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    workspace = root / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    (workspace / "result.txt").write_text("unsaved candidate bytes")
+    records = SandboxWorkspaceRecordStore(root)
+    records.ensure(SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo"))
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": workflow_id,
+            "idempotencyKey": "recovered-attempt",
+            "workspaceSpec": {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": workspace_id,
+                    "relativePath": "repo",
+                },
+            },
+            "stepExecution": {
+                "workflowId": workflow_id,
+                "runId": "run",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+                "stepExecutionId": step_id,
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        }
+    )
+    store = InMemoryStableRuntimeBindingStore()
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "7" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    await sink.record_phase(
+        "workspace",
+        request.model_dump(by_alias=True, mode="json", exclude_none=True)
+        | {"workspaceSpec": dict(request.workspace_spec)},
+    )
+    binding = await store.update(
+        sink.binding.bindingId,
+        expected_revision=sink.binding.revision,
+        expected_fencing_generation=sink.binding.fencingGeneration,
+        updates={"hostLeaseRef": "host-lease-1"},
+    )
+    calls = _counters()
+    realizer = _cleanup_realizer(store, order=[], calls=calls)
+    realizer._workspace_publisher = OmnigentWorkspacePublicationService(
+        root, artifact_gateway=None
+    )
+    lease = SimpleNamespace(
+        leaseRef="host-lease-1",
+        status="ready",
+        generation=1,
+        launchGeneration=1,
+        cleanupHandle={"kind": "host", "containerName": "host-1"},
+    )
+
+    async def get_lease(ref):
+        return lease
+
+    async def claim_cleanup(ref, *, expected_generation):
+        return lease
+
+    async def mark_cleaned(ref, *, expected_generation):
+        return SimpleNamespace(**{**vars(lease), "status": "cleaned"})
+
+    realizer._host_leases = SimpleNamespace(
+        get=get_lease, claim_cleanup=claim_cleanup, mark_cleaned=mark_cleaned
+    )
+
+    await realizer.reconcile(binding.executionPlanRef, binding.bindingId)
+
+    stored = await store.get(binding.bindingId)
+    assert stored.state is RuntimeBindingState.cleaned
+    assert calls["host"] == 1
+    assert calls["credentials"] == 1
+    assert calls["provider"] == 1
+    decision = records.read_retention_decision(workspace_id)
+    assert decision["decision"] == "save_pending"
+    assert decision["saveFailure"] == stored.phaseResults["saveFailure"]
+    assert decision["saveFailure"]["code"] == "WORKSPACE_SAVE_UNAVAILABLE"
+    result = ManagedRuntimeWorkspaceJanitor(
+        run_store=ManagedRunStore(root / "managed_runs"),
+        session_store=ManagedSessionStore(root / "managed_sessions"),
+        config=ManagedRuntimeCleanupConfig(
+            dry_run=False,
+            runtime_store_root=root,
+            artifact_root=root / "artifacts",
+            lock_path=root / ".janitor.lock",
+        ),
+    ).run()
+    assert [
+        (decision.classification, decision.reason)
+        for decision in result.decisions
+        if decision.kind == "workspace"
+    ] == [
+        (
+            "protected_pending_save",
+            "finalization save is pending; kept as the only recoverable copy",
+        )
+    ]
+    assert (workspace / "result.txt").read_text() == "unsaved candidate bytes"

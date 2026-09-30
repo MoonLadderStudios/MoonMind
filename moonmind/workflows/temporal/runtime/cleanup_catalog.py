@@ -152,11 +152,14 @@ MANAGED_RUNTIME_CLEANUP_CATALOG = ManagedRuntimeCleanupCatalog(
             lifecycle="retained-state",
             candidate_source=(
                 "${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/workspaces/*",
+                "${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/temporal_sandbox/*",
                 "${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/${agent_run_id}",
             ),
             truth_source=(
                 "ManagedRunStore all records",
                 "ManagedSessionStore all records",
+                "sandbox finalization retention decisions and workspace grants",
+                "saved-work artifact availability and use claims",
                 "Docker active containers and volume mounts",
                 "canonical managed-runtime filesystem layout",
             ),
@@ -164,6 +167,10 @@ MANAGED_RUNTIME_CLEANUP_CATALOG = ManagedRuntimeCleanupCatalog(
                 "every referencing run is terminal",
                 "every referencing session is terminal",
                 "no referencing record has activeTurnId",
+                (
+                    "an unowned sandbox workspace has a verified save whose "
+                    "objects are available and unused"
+                ),
                 "newest owner activity is older than workspace retention and grace",
                 "no live Docker resource references the session or workspace",
             ),
@@ -188,6 +195,8 @@ MANAGED_RUNTIME_CLEANUP_CATALOG = ManagedRuntimeCleanupCatalog(
                 "skipped_recent",
                 "skipped_unsafe_path",
                 "skipped_ambiguous_owner",
+                "retained_pending_save",
+                "retained_past_retention",
             ),
         ),
         ManagedRuntimeCleanupResourceClass(

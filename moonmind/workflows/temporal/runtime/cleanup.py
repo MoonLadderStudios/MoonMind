@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -26,12 +27,18 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecordStore,
+)
 
 #: Runtime-root children whose immediate children are separate ownership roots.
 #: ``temporal_sandbox`` holds one attempt-owned workspace per child, beside the
 #: ``.workspace_records`` owner store, which is never a workspace candidate.
 _PER_OWNER_PARENTS = ("workspaces", "temporal_sandbox")
+_SANDBOX_PARENT = "temporal_sandbox"
 _SANDBOX_OWNER_RECORDS = ".workspace_records"
+#: A sandbox workspace renamed for deletion keeps its owner's workspace id.
+_QUARANTINED_NAME = re.compile(r"\.gc-[0-9a-f]{32}-(?P<name>.+)")
 
 ManagedRuntimeCandidateKind = Literal[
     "workspace",
@@ -50,6 +57,8 @@ ManagedRuntimeCleanupClassification = Literal[
     "budget_exhausted",
     "skipped_unsafe_path",
     "skipped_ambiguous_owner",
+    "protected_pending_save",
+    "retained_past_retention",
     "error",
 ]
 
@@ -83,6 +92,18 @@ _MAX_REPORTED_UNREADABLE_RECORDS = 20
 _MAX_REPORTED_CLEANUP_ERRORS = 20
 
 _FALSEY = frozenset({"", "0", "false", "no", "off"})
+
+
+@dataclass(frozen=True)
+class SavedWorkState:
+    """#4017 evidence for one durable object a saved workspace decision names."""
+
+    availability: str
+    in_use: bool = False
+
+
+#: Reads one saved object's #4017 availability and live use protection.
+SavedWorkProbe = Callable[[str], SavedWorkState]
 
 
 def _bounded_cleanup_errors(errors: Sequence[str]) -> tuple[str, ...]:
@@ -233,6 +254,8 @@ class ManagedRuntimeCleanupResult:
     unreadable_owner_records: int
     delete_budget_exhausted: int
     errors: tuple[str, ...]
+    retained_pending_save: int = 0
+    retained_past_retention: int = 0
     metrics: dict[str, int] = field(default_factory=dict)
     candidate_samples: tuple[ManagedRuntimeCleanupSample, ...] = ()
     deleted_samples: tuple[ManagedRuntimeCleanupSample, ...] = ()
@@ -260,6 +283,8 @@ class ManagedRuntimeCleanupResult:
             "skippedUnreadableOwner": self.skipped_unreadable_owner,
             "unreadableOwnerRecords": self.unreadable_owner_records,
             "deleteBudgetExhausted": self.delete_budget_exhausted,
+            "retainedPendingSave": self.retained_pending_save,
+            "retainedPastRetention": self.retained_past_retention,
             "errors": list(_bounded_cleanup_errors(self.errors)),
             "metrics": dict(self.metrics),
             "candidateSamples": [
@@ -312,6 +337,7 @@ class ManagedRuntimeWorkspaceJanitor:
         session_store: ManagedSessionStore,
         config: ManagedRuntimeCleanupConfig | None = None,
         docker_reference_provider: DockerReferenceProvider | None = None,
+        saved_work_probe: SavedWorkProbe | None = None,
         progress_callback: CleanupProgressCallback | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -319,6 +345,7 @@ class ManagedRuntimeWorkspaceJanitor:
         self._session_store = session_store
         self._config = config or ManagedRuntimeCleanupConfig.from_env()
         self._docker_reference_provider = docker_reference_provider
+        self._saved_work_probe = saved_work_probe
         self._progress_callback = progress_callback
         self._now = now or (lambda: datetime.now(tz=UTC))
         self._unreadable_protected_paths: frozenset[Path] = frozenset()
@@ -808,11 +835,15 @@ class ManagedRuntimeWorkspaceJanitor:
                 and not candidate.run_records
                 and not candidate.session_records
             ):
-                return self._decision(
-                    candidate,
-                    "skipped_ambiguous_owner",
-                    "no durable owner records reference candidate",
-                )
+                if self._sandbox_workspace_id(candidate) is None:
+                    return self._decision(
+                        candidate,
+                        "skipped_ambiguous_owner",
+                        "no durable owner records reference candidate",
+                    )
+                hold = self._sandbox_retention_hold(candidate)
+                if hold is not None:
+                    return hold
             if docker_state.failed:
                 return self._decision(
                     candidate,
@@ -1025,9 +1056,130 @@ class ManagedRuntimeWorkspaceJanitor:
                 )
         except OSError:
             return None
+        recorded_at = self._sandbox_decision_recorded_at(candidate)
+        if recorded_at is not None:
+            timestamps.append(recorded_at)
         if not timestamps:
             return None
         return max(_ensure_aware(ts) for ts in timestamps)
+
+    def _sandbox_workspace_id(
+        self, candidate: ManagedRuntimeCleanupCandidate
+    ) -> str | None:
+        """Return the sandbox workspace id an unowned candidate root belongs to."""
+
+        if candidate.kind != "workspace" or candidate.run_records or (
+            candidate.session_records
+        ):
+            return None
+        root = candidate.ownership_root
+        if root is None or root.parent != (
+            self._config.runtime_store_root / _SANDBOX_PARENT
+        ):
+            return None
+        name = root.name
+        while quarantined := _QUARANTINED_NAME.fullmatch(name):
+            name = quarantined.group("name")
+        return name
+
+    def _sandbox_decision_recorded_at(
+        self, candidate: ManagedRuntimeCleanupCandidate
+    ) -> datetime | None:
+        workspace_id = self._sandbox_workspace_id(candidate)
+        if workspace_id is None:
+            return None
+        try:
+            decision = SandboxWorkspaceRecordStore(
+                self._config.runtime_store_root
+            ).read_retention_decision(workspace_id)
+        except (OSError, ValueError):
+            return None
+        if decision is None:
+            return None
+        return datetime.fromisoformat(str(decision["recordedAt"]))
+
+    def _sandbox_retention_hold(
+        self, candidate: ManagedRuntimeCleanupCandidate
+    ) -> ManagedRuntimeCleanupDecision | None:
+        """Apply the finalization owner's persisted decision to its workspace.
+
+        Returns ``None`` for a verified save, so the ordinary retention, grace,
+        budget, and rescan rules decide deletion. Once retention has elapsed,
+        that requires #4017 to report every saved object available and unused.
+        Every other workspace is the only recoverable copy: it is kept and
+        reported, never deleted.
+        """
+
+        workspace_id = self._sandbox_workspace_id(candidate)
+        assert workspace_id is not None
+        store = SandboxWorkspaceRecordStore(self._config.runtime_store_root)
+        try:
+            decision = store.read_retention_decision(workspace_id)
+            granted = store.has_live_grant(workspace_id)
+        except (OSError, ValueError) as exc:
+            return self._decision(
+                candidate,
+                "protected_unreadable_owner",
+                f"sandbox retention decision is unreadable: {exc}",
+            )
+        if granted:
+            return self._decision(
+                candidate, "protected_active", "live existing-workspace grant"
+            )
+        newest = self._newest_activity(candidate)
+        retained_for = max(self._config.workspace_retention, self._config.grace)
+        expired = newest is not None and self._now() - newest >= retained_for
+        if decision is None:
+            sole_copy = "no finalization retention decision"
+        elif decision["decision"] == "save_pending":
+            sole_copy = "finalization save is pending"
+        elif not expired:
+            # Inside retention the ordinary gates keep it; verify the saved
+            # copy only when deletion becomes possible.
+            return None
+        else:
+            states: list[SavedWorkState] = []
+            if self._saved_work_probe is not None:
+                try:
+                    states = [
+                        self._saved_work_probe(str(ref))
+                        for ref in decision["savedRefs"].values()
+                    ]
+                except Exception:  # noqa: BLE001 - unverifiable saves keep the copy
+                    states = []
+            if any(state.in_use for state in states):
+                return self._decision(
+                    candidate, "protected_active", "live saved-work use claim"
+                )
+            unavailable = [
+                state.availability
+                for state in states
+                if state.availability != "available"
+            ]
+            if states and not unavailable:
+                return None
+            sole_copy = (
+                f"saved copy is {unavailable[0]}"
+                if unavailable
+                else "saved copy cannot be verified"
+            )
+        if expired:
+            return self._decision(
+                candidate,
+                "retained_past_retention",
+                f"{sole_copy}; kept as the only recoverable copy",
+                newest,
+            )
+        if decision is None:
+            return self._decision(
+                candidate, "skipped_ambiguous_owner", sole_copy, newest
+            )
+        return self._decision(
+            candidate,
+            "protected_pending_save",
+            f"{sole_copy}; kept as the only recoverable copy",
+            newest,
+        )
 
     def _retention_for(self, kind: ManagedRuntimeCandidateKind) -> timedelta | None:
         if kind == "artifact":
@@ -1084,6 +1236,10 @@ class ManagedRuntimeWorkspaceJanitor:
                 if fresh.kind == candidate.kind and fresh.path == candidate.path:
                     if self._has_active_owner(fresh) or self._has_live_docker_reference(
                         fresh, docker_state
+                    ):
+                        return True
+                    if self._sandbox_workspace_id(fresh) is not None and (
+                        self._sandbox_retention_hold(fresh) is not None
                     ):
                         return True
                     newest = self._newest_activity(fresh)
@@ -1197,6 +1353,7 @@ class ManagedRuntimeWorkspaceJanitor:
                     "protected_recent",
                     "protected_shared",
                     "protected_unreadable_owner",
+                    "protected_pending_save",
                 }
             ),
             eligible_roots=sum(1 for d in decisions if d.classification == "eligible"),
@@ -1241,6 +1398,12 @@ class ManagedRuntimeWorkspaceJanitor:
             unreadable_owner_records=unreadable_owner_records,
             delete_budget_exhausted=sum(
                 1 for d in decisions if d.classification == "budget_exhausted"
+            ),
+            retained_pending_save=sum(
+                1 for d in decisions if d.classification == "protected_pending_save"
+            ),
+            retained_past_retention=sum(
+                1 for d in decisions if d.classification == "retained_past_retention"
             ),
             errors=tuple(all_errors),
             metrics=metrics,
@@ -1288,6 +1451,7 @@ def cleanup_managed_runtime_files(
     session_store: ManagedSessionStore,
     config: ManagedRuntimeCleanupConfig | None = None,
     docker_reference_provider: DockerReferenceProvider | None = None,
+    saved_work_probe: SavedWorkProbe | None = None,
     progress_callback: CleanupProgressCallback | None = None,
 ) -> ManagedRuntimeCleanupResult:
     """Run one managed-runtime retained cleanup pass."""
@@ -1296,6 +1460,7 @@ def cleanup_managed_runtime_files(
         session_store=session_store,
         config=config,
         docker_reference_provider=docker_reference_provider,
+        saved_work_probe=saved_work_probe,
         progress_callback=progress_callback,
     ).run()
 

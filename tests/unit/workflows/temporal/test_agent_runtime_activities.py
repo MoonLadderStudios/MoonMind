@@ -6073,6 +6073,128 @@ async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
     assert result["candidateSamples"][0]["reason"] == "dry-run would delete"
 
 
+async def test_agent_runtime_cleanup_reads_saved_work_retention_from_artifact_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4016: the production janitor reads #4017 evidence.
+
+    A generic-host workspace whose finalization owner recorded a verified save
+    is reclaimable only while the artifact store still reports every saved
+    object available. An expired saved copy leaves the workspace as the only
+    recoverable copy, which the pass retains and reports.
+    """
+
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db import base as db_base
+    from api_service.db import models
+    from moonmind.workflows import get_temporal_artifact_repository
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactService,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'artifacts.db'}")
+    async with engine.begin() as connection:
+        for table in (
+            models.TemporalArtifact.__table__,
+            models.TemporalArtifactLink.__table__,
+            models.TemporalArtifactPin.__table__,
+            models.TemporalArtifactUseClaim.__table__,
+            models.TemporalArtifactDeletionIntent.__table__,
+        ):
+            await connection.run_sync(table.create)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    @asynccontextmanager
+    async def session_context():
+        async with sessions() as session:
+            yield session
+
+    monkeypatch.setattr(db_base, "get_async_session_context", session_context)
+    async with sessions() as session:
+        service = TemporalArtifactService(
+            get_temporal_artifact_repository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "blobs"),
+        )
+        refs = {}
+        for name in ("available", "expired"):
+            artifact, _upload = await service.create(
+                principal="service:omnigent-generic-host",
+                content_type="application/octet-stream",
+                retention_class=models.TemporalArtifactRetentionClass.STANDARD,
+            )
+            await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="service:omnigent-generic-host",
+                payload=f"{name} saved archive".encode(),
+                content_type="application/octet-stream",
+            )
+            refs[name] = f"artifact://{artifact.artifact_id}"
+        expired = await session.get(
+            models.TemporalArtifact, refs["expired"].removeprefix("artifact://")
+        )
+        expired.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await session.commit()
+
+    runtime_root = tmp_path / "agent_jobs"
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    records = SandboxWorkspaceRecordStore(runtime_root)
+    workspaces = {}
+    for name, ref in refs.items():
+        workspace_id = name.ljust(24, "0")
+        workspace = runtime_root / "temporal_sandbox" / workspace_id
+        (workspace / "repo").mkdir(parents=True)
+        os.utime(workspace, (old.timestamp(), old.timestamp()))
+        records.record_retention_decision(
+            workspace_id,
+            saved_refs={
+                "checkpointRef": refs["available"],
+                "archiveRef": ref,
+                "manifestRef": refs["available"],
+            },
+            recorded_at=old,
+        )
+        workspaces[name] = str(workspace)
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+    activities = TemporalAgentRuntimeActivities(
+        run_store=ManagedRunStore(runtime_root / "managed_runs")
+    )
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": True,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 30,
+                "artifactRetentionDays": 30,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    by_path = {
+        sample["path"]: (sample["classification"], sample["reason"])
+        for sample in result["candidateSamples"]
+    }
+    assert by_path[workspaces["available"]] == ("eligible", "dry-run would delete")
+    assert by_path[workspaces["expired"]] == (
+        "retained_past_retention",
+        "saved copy is expired; kept as the only recoverable copy",
+    )
+    assert result["retainedPastRetention"] == 1
+    await engine.dispose()
+
+
 async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_references(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6325,6 +6447,7 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
         session_store: ManagedSessionStore,
         config: Any,
         docker_reference_provider: Any,
+        saved_work_probe: Any,
         progress_callback: Any,
     ) -> _CleanupResult:
         cleanup_calls.append(
@@ -6333,6 +6456,7 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
                 "session_store_root": session_store.store_root,
                 "runtime_store_root": config.runtime_store_root,
                 "docker_reference_provider": docker_reference_provider,
+                "saved_work_probe": saved_work_probe,
                 "progress_callback": progress_callback,
             }
         )
@@ -6381,6 +6505,7 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
     assert cleanup_call["session_store_root"] == tmp_path / "managed_sessions"
     assert cleanup_call["runtime_store_root"] == tmp_path
     assert cleanup_call["docker_reference_provider"] is None
+    assert callable(cleanup_call["saved_work_probe"])
     assert callable(cleanup_call["progress_callback"])
     assert heartbeat_payloads == [
         {

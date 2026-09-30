@@ -19,6 +19,11 @@ from moonmind.schemas.workspace_locator_models import (
 )
 
 
+_RETENTION_DECISION_VERSION = "retention-v1"
+#: Durable objects a verified save must name before its workspace is reclaimable.
+_SAVED_REF_KEYS = ("checkpointRef", "archiveRef", "manifestRef")
+
+
 @dataclass(frozen=True)
 class SandboxWorkspaceRecord:
     """Durable owner evidence for a sandbox workspace identity."""
@@ -404,6 +409,102 @@ class SandboxWorkspaceRecordStore:
                 WORKSPACE_AUTHORITY_MISMATCH,
                 "existing-workspace grant release failed",
             ) from exc
+
+    def has_live_grant(self, workspace_id: str) -> bool:
+        """Return whether an unexpired existing-workspace grant still uses it.
+
+        An unreadable claim fails closed: it may belong to a live consumer.
+        """
+
+        claims = self._claims_dir(workspace_id)
+        if not claims.is_dir():
+            return False
+        for path in claims.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return True
+            if not isinstance(payload, dict) or not self._claim_is_expired(payload):
+                return True
+        return False
+
+    def _retention_decision_path(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.retention.json").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace retention decision escapes its authority",
+            )
+        return candidate
+
+    def record_retention_decision(
+        self,
+        workspace_id: str,
+        *,
+        saved_refs: Mapping[str, str] | None,
+        save_failure: Mapping[str, Any] | None = None,
+        recorded_at: datetime | None = None,
+    ) -> None:
+        """Persist the finalization owner's release decision for a workspace.
+
+        ``saved`` names the verified durable objects that make the local copy
+        reclaimable after retention; ``save_pending`` keeps the workspace as
+        the only recoverable copy. The decision survives worker restarts and
+        is replaced atomically when a later save completes.
+        """
+
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._retention_decision_path(workspace_id)
+        decision: dict[str, Any] = {
+            "version": _RETENTION_DECISION_VERSION,
+            "decision": "saved" if saved_refs else "save_pending",
+            "recordedAt": (recorded_at or datetime.now(tz=UTC)).isoformat(),
+        }
+        if saved_refs:
+            decision["savedRefs"] = dict(saved_refs)
+        if save_failure:
+            decision["saveFailure"] = dict(save_failure)
+        partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
+        descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(decision, sort_keys=True))
+        os.replace(partial, path)
+
+    def read_retention_decision(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the finalization owner's release decision, if one was recorded."""
+
+        path = self._retention_decision_path(workspace_id)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            valid = (
+                isinstance(payload, dict)
+                and payload.get("version") == _RETENTION_DECISION_VERSION
+                and payload.get("decision") in {"saved", "save_pending"}
+                and datetime.fromisoformat(str(payload.get("recordedAt")))
+                and (
+                    payload["decision"] != "saved"
+                    or (
+                        isinstance(payload.get("savedRefs"), dict)
+                        and all(
+                            str(payload["savedRefs"].get(key) or "")
+                            for key in _SAVED_REF_KEYS
+                        )
+                    )
+                )
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace retention decision is invalid",
+            ) from exc
+        if not valid:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace retention decision is invalid",
+            )
+        return payload
 
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)

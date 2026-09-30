@@ -1004,7 +1004,11 @@ class GenericOmnigentHostRealizer:
             )
             compute = result.model_dump(by_alias=True, mode="json", exclude_none=True)
             await sink.record_phase("compute", compute)
-        return await self._finish_owned_execution(bound, sink, AgentRunResult.model_validate(compute))
+        result = await self._finish_owned_execution(bound, sink, AgentRunResult.model_validate(compute))
+        # A cleaned binding has no consumer left; a save completed here
+        # releases the workspace it previously kept as the only copy.
+        self._record_retention_decision(sink.binding, request=bound)
+        return result
 
     async def _interrupted_admission_result(self, request, binding):
         """Issue readmission authority only after fenced, pre-session cleanup."""
@@ -1142,6 +1146,46 @@ class GenericOmnigentHostRealizer:
                 failure["code"] = code
             return binding, failure
 
+    def _record_retention_decision(
+        self,
+        binding: StableRuntimeBinding,
+        *,
+        request: AgentExecutionRequest | None = None,
+        save_failure: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist this owner's workspace release decision once no consumer remains.
+
+        A verified save lets janitors reclaim the workspace after retention;
+        otherwise it stays the only recoverable copy. A failure to record the
+        decision keeps the workspace retained and never holds release.
+        """
+        phases = binding.phaseResults or {}
+        receipt = phases.get("workspace")
+        if not receipt:
+            return
+        try:
+            bound = (
+                request
+                if request is not None
+                else AgentExecutionRequest.model_validate(receipt)
+            )
+            locator = (receipt.get("workspaceSpec") or {}).get("workspaceLocator")
+            if locator:
+                bound = bound.model_copy(update={"workspace_spec": {
+                    **(bound.workspace_spec or {}), "workspaceLocator": locator,
+                }})
+            self._workspace_publisher.record_retention_decision(
+                bound,
+                saved=phases.get("saved"),
+                save_failure=save_failure or phases.get("saveFailure"),
+            )
+        except Exception:  # noqa: BLE001 - the workspace stays retained and reported
+            logger.warning(
+                "Could not record the workspace retention decision for %s",
+                binding.bindingId,
+                exc_info=True,
+            )
+
     async def _cleanup(
         self,
         *,
@@ -1233,6 +1277,10 @@ class GenericOmnigentHostRealizer:
             item.model_dump(by_alias=True, mode="json")
             for item in await self._credentials.cleanup_all(credential_handles)
         ]
+        # The session, host, and credentials no longer use the workspace.
+        self._record_retention_decision(
+            binding, request=request, save_failure=save_failure
+        )
         settlement = await self._complete_canonical_cleanup(cleanup_claim)
         cleanup_evidence["canonicalCleanup"] = settlement
         evidence_ref: str | None = None
@@ -1730,6 +1778,7 @@ class GenericOmnigentHostRealizer:
             )
         await self._host_runtime.cleanup_authorities(binding.cleanupAuthorityRefs)
         await self._credentials.cleanup_all(cleanup_handles)
+        self._record_retention_decision(binding, save_failure=save_failure)
         await self._complete_canonical_cleanup(cleanup_claim)
         await self._provider_leases.release_from_binding(binding.providerLeases)
         await self._runtime_bindings.update(
