@@ -14,9 +14,13 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.host_ports import HostLaunchSpec
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
-from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
 from moonmind.omnigent.host_services.github_credentials import (
     github_repository_from_request,
+)
+from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
+from moonmind.omnigent.mounted_tool_preflight import (
+    MountedToolPreflightError,
+    preflight_github_access,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import (
@@ -1058,52 +1062,6 @@ class DockerOmnigentHostAttestor:
                         HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
                     ),
                 )
-            code, _out, _err = await self._backend.run(
-                [
-                    "docker",
-                    "exec",
-                    launch_result["containerName"],
-                    "gh",
-                    "auth",
-                    "status",
-                    "--hostname",
-                    "github.com",
-                ],
-                timeout_seconds=30.0,
-                check=False,
-            )
-            if code != 0:
-                raise HarnessPlatformError(
-                    "GitHub CLI authentication failed on the exact host",
-                    code=(
-                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                    ),
-                )
-            code, _out, _err = await _run_exact_host_runner_command(
-                backend=self._backend,
-                container_name=launch_result["containerName"],
-                argv=["gh", "auth", "status", "--hostname", "github.com"],
-            )
-            if code != 0:
-                raise HarnessPlatformError(
-                    "GitHub CLI authentication failed in the exact runner environment",
-                    code=(
-                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                    ),
-                )
-            if plan.payload.harnessId == "opencode-native":
-                code, _out, _err = await _run_exact_host_opencode_command(
-                    backend=self._backend,
-                    container_name=launch_result["containerName"],
-                    argv=["gh", "auth", "status", "--hostname", "github.com"],
-                )
-                if code != 0:
-                    raise HarnessPlatformError(
-                        "GitHub CLI authentication failed in the OpenCode shell environment",
-                        code=(
-                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                        ),
-                    )
             expected_helper = "!/home/app/.omnigent/moonmind/bin/gh auth git-credential"
             code, observed, _err = await self._backend.run(
                 [
@@ -1126,72 +1084,89 @@ class DockerOmnigentHostAttestor:
                     ),
                 )
             repository = github_repository_from_request(request)
-            repository_authorized: bool | None = None
-            repository_permission: str | None = None
-            if repository:
-                code, observed, _err = await self._backend.run(
+
+            async def host_runner(command: str):
+                return await self._backend.run(
                     [
                         "docker",
                         "exec",
                         launch_result["containerName"],
-                        "gh",
-                        "repo",
-                        "view",
-                        repository,
-                        "--json",
-                        "nameWithOwner,viewerPermission",
-                        "--jq",
-                        "[.nameWithOwner, .viewerPermission] | @tsv",
+                        "/bin/sh",
+                        "-ceu",
+                        command,
                     ],
                     timeout_seconds=30.0,
                     check=False,
                 )
-                parts = observed.strip().split("\t", 1)
-                observed_repository = parts[0] if parts else ""
-                repository_permission = parts[1] if len(parts) == 2 else None
-                repository_authorized = code == 0 and (
-                    observed_repository.casefold() == repository.casefold()
-                )
-                if not repository_authorized:
-                    raise HarnessPlatformError(
-                        "GitHub credential cannot access the admitted repository",
-                        code=(
-                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                        ),
-                    )
-                code, runner_observed, _err = await _run_exact_host_runner_command(
+
+            async def runner_runner(command: str):
+                return await _run_exact_host_runner_command(
                     backend=self._backend,
                     container_name=launch_result["containerName"],
-                    argv=[
-                        "gh",
-                        "repo",
-                        "view",
-                        repository,
-                        "--json",
-                        "nameWithOwner,viewerPermission",
-                        "--jq",
-                        "[.nameWithOwner, .viewerPermission] | @tsv",
-                    ],
+                    argv=["/bin/sh", "-ceu", command],
                 )
-                runner_parts = runner_observed.strip().split("\t", 1)
-                runner_repository = runner_parts[0] if runner_parts else ""
-                if code != 0 or runner_repository.casefold() != repository.casefold():
-                    raise HarnessPlatformError(
-                        "GitHub credential cannot access the admitted repository "
-                        "from the exact runner environment",
-                        code=(
-                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                        ),
+
+            async def opencode_runner(command: str):
+                return await _run_exact_host_opencode_command(
+                    backend=self._backend,
+                    container_name=launch_result["containerName"],
+                    argv=["/bin/sh", "-ceu", command],
+                )
+
+            boundaries = {"host": host_runner, "runner": runner_runner}
+            if plan.payload.harnessId == "opencode-native":
+                boundaries["opencode_shell"] = opencode_runner
+            try:
+                access = await preflight_github_access(
+                    repository=repository,
+                    boundaries=boundaries,
+                )
+            except MountedToolPreflightError as exc:
+                # Keep bounded, redacted attempts in durable diagnostics even
+                # when the host never qualifies and no session can start.
+                detail = str(exc)
+                try:
+                    failure_ref = await self._artifacts.write_json(
+                        request=request,
+                        name="github-access-preflight-failure.json",
+                        payload=exc.evidence,
+                        link_type="evidence.github_access",
                     )
+                    detail += f" (diagnosticsRef: {failure_ref})"
+                except Exception:  # noqa: BLE001 -- Preserve the original access failure.
+                    logging.getLogger(__name__).warning(
+                        "Could not persist GitHub preflight evidence; original failure: %s",
+                        exc,
+                    )
+                raise HarnessPlatformError(
+                    detail,
+                    code=HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH,
+                ) from exc
+            repository_probe = next(
+                (
+                    item
+                    for item in access["probes"]
+                    if item["probe"] == "repository_access"
+                    and item["status"] == "ready"
+                ),
+                None,
+            )
+            permission = (
+                repository_probe.get("repositoryPermission")
+                if repository_probe is not None
+                else None
+            )
             github_mount_evidence = {
                 "targetPath": target,
                 "accessMode": "read-only",
-                "authenticated": True,
+                "credentialAvailable": True,
+                "authenticated": True if repository else None,
                 "repository": repository or None,
-                "repositoryAuthorized": repository_authorized,
-                "repositoryPermission": repository_permission,
+                "repositoryAuthorized": True if repository else None,
+                "repositoryPermission": permission,
                 "gitCredentialHelperConfigured": True,
                 "secretValueRecorded": False,
+                "preflight": access,
             }
         credential_mount_evidence: list[dict[str, Any]] = []
         for handle in credential_handles:

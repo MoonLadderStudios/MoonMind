@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shlex
-from urllib.parse import urlparse
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from moonmind.utils.logging import redact_sensitive_text
-
 
 CommandRunner = Callable[..., Awaitable[tuple[int, str, str]]]
 MAX_EVIDENCE_CHARS = 512
@@ -79,37 +79,129 @@ def _digest_check_command(executable: str, digests: Sequence[str]) -> str:
     )
 
 
-def _gh_probes(repository: str, *, mutation_required: bool) -> tuple[Probe, ...]:
-    repo = _repository_name(repository)
-    quoted_repo = shlex.quote(repo)
+def _github_access_probes(repository: str) -> tuple[Probe, ...]:
+    # Token lookup is local and its value must never cross the command boundary.
+    # Account-status probes add unrelated user/scope API calls and turn provider
+    # outages into misleading "invalid credential" errors. Prove the requested
+    # repository operation instead, once per execution environment.
     probes = [
-        Probe("manifest", _trusted_gh_digest_checks(), "tool_manifest_mismatch"),
-        Probe("lookup", "command -v gh", "tool_not_visible_in_login_shell"),
-        Probe("version", "gh --version", "tool_manifest_mismatch"),
         Probe(
             "authentication",
-            "gh auth status",
+            "gh auth token --hostname github.com >/dev/null",
             "github_auth_unavailable",
-            remote=True,
-        ),
-        Probe(
-            "repository_access",
-            f"gh repo view {quoted_repo} --json nameWithOwner,viewerPermission",
-            "github_repository_unauthorized",
-            remote=True,
         ),
     ]
-    if mutation_required:
+    if repository:
         probes.append(
             Probe(
-                "mutation_permission",
-                f"case \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" in "
-                "ADMIN|MAINTAIN|WRITE) true;; *) false;; esac",
+                "repository_access",
+                f"gh repo view {shlex.quote(_repository_name(repository))} "
+                "--json nameWithOwner,viewerPermission",
                 "github_repository_unauthorized",
                 remote=True,
             )
         )
     return tuple(probes)
+
+
+_TRANSIENT_GITHUB_FAILURE = re.compile(
+    r"HTTP 5\d\d|(?:connection|network) (?:reset|refused|unreachable|failure)|"
+    r"temporary (?:failure|provider connection failure)|"
+    r"no such host|i/o timeout|TLS handshake timeout|command timed out|unexpected EOF",
+    re.IGNORECASE,
+)
+
+
+async def _run_probes(
+    probes: Sequence[Probe],
+    boundaries: Mapping[str, CommandRunner],
+    *,
+    repository: str,
+    mutation_required: bool,
+) -> dict[str, Any]:
+    evidence: list[dict[str, Any]] = []
+    for boundary, command_runner in boundaries.items():
+        for probe in probes:
+            max_attempts = REMOTE_PROBE_MAX_ATTEMPTS if probe.remote else 1
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    rc, stdout, stderr = await command_runner(probe.command)
+                except TimeoutError:
+                    rc, stdout, stderr = 124, "", "command timed out"
+                retryable = (
+                    rc != 0
+                    and probe.remote
+                    and bool(_TRANSIENT_GITHUB_FAILURE.search(stderr or stdout))
+                )
+                if rc == 0 and probe.name == "repository_access":
+                    try:
+                        result = json.loads(stdout)
+                    except (TypeError, ValueError):
+                        result = None
+                    if (
+                        not isinstance(result, dict)
+                        or str(result.get("nameWithOwner", "")).casefold()
+                        != _repository_name(repository).casefold()
+                    ):
+                        rc, stderr = (
+                            1,
+                            "GitHub returned no matching repository identity",
+                        )
+                    elif mutation_required and result.get("viewerPermission") not in {
+                        "ADMIN",
+                        "MAINTAIN",
+                        "WRITE",
+                    }:
+                        rc, stderr = (
+                            1,
+                            "GitHub credential lacks repository write permission",
+                        )
+                item = {
+                    "boundary": boundary,
+                    "probe": probe.name,
+                    "attempt": attempt,
+                    "status": "ready" if rc == 0 else "failed",
+                }
+                if stdout:
+                    item["output"] = _bounded(stdout)
+                if stderr and rc != 0:
+                    item["error"] = _bounded(stderr)
+                if rc == 0 and probe.name == "repository_access":
+                    item["repositoryPermission"] = result.get("viewerPermission")
+                evidence.append(item)
+                if rc == 0:
+                    break
+                if retryable and attempt < max_attempts:
+                    await asyncio.sleep(REMOTE_PROBE_RETRY_DELAYS_SECONDS[attempt - 1])
+                    continue
+                detail = _bounded(stderr or stdout) or f"exit {rc}, no output"
+                raise MountedToolPreflightError(
+                    f"GitHub preflight failed during {boundary} {probe.name} "
+                    f"after {attempt} attempt(s): {detail}",
+                    code=probe.failure_code,
+                    evidence={"tool": "gh", "phase": probe.name, "probes": evidence},
+                )
+    return {"status": "ready", "tool": "gh", "probes": evidence}
+
+
+async def preflight_github_access(
+    *,
+    repository: str,
+    boundaries: Mapping[str, CommandRunner],
+    mutation_required: bool = False,
+) -> dict[str, Any]:
+    """Check projected credentials and requested access on the existing host.
+
+    A repository-free tool projection proves only local credential availability;
+    it does not claim remote authorization. Transport retries never rematerialize
+    credentials, replace the host, or change repository authority.
+    """
+    return await _run_probes(
+        _github_access_probes(repository),
+        boundaries,
+        repository=repository,
+        mutation_required=mutation_required,
+    )
 
 
 async def preflight_mounted_tools(
@@ -126,36 +218,22 @@ async def preflight_mounted_tools(
     if "gh" not in capabilities:
         return {"status": "not_required", "boundaries": []}
 
-    evidence: list[dict[str, Any]] = []
-    for boundary, command_runner in (("host", host_runner), ("runner", runner_runner)):
-        for probe in _gh_probes(repository, mutation_required=mutation_required):
-            max_attempts = REMOTE_PROBE_MAX_ATTEMPTS if probe.remote else 1
-            for attempt in range(1, max_attempts + 1):
-                rc, stdout, stderr = await command_runner(probe.command)
-                item = {
-                    "boundary": boundary,
-                    "probe": probe.name,
-                    "attempt": attempt,
-                    "status": "ready" if rc == 0 else "failed",
-                }
-                if stdout:
-                    item["output"] = _bounded(stdout)
-                if stderr and rc != 0:
-                    item["error"] = _bounded(stderr)
-                evidence.append(item)
-                if rc == 0:
-                    break
-                if attempt < max_attempts:
-                    await asyncio.sleep(
-                        REMOTE_PROBE_RETRY_DELAYS_SECONDS[attempt - 1]
-                    )
-                    continue
-                raise MountedToolPreflightError(
-                    f"Mounted gh preflight failed during {boundary} {probe.name}",
-                    code=probe.failure_code,
-                    evidence={"tool": "gh", "phase": probe.name, "probes": evidence},
-                )
-    return {"status": "ready", "tool": "gh", "probes": evidence}
+    repository = _repository_name(repository)
+    return await _run_probes(
+        (
+            Probe("manifest", _trusted_gh_digest_checks(), "tool_manifest_mismatch"),
+            Probe("lookup", "command -v gh", "tool_not_visible_in_login_shell"),
+            Probe("version", "gh --version", "tool_manifest_mismatch"),
+            *_github_access_probes(repository),
+        ),
+        {"host": host_runner, "runner": runner_runner},
+        repository=repository,
+        mutation_required=mutation_required,
+    )
 
 
-__all__ = ["MountedToolPreflightError", "preflight_mounted_tools"]
+__all__ = [
+    "MountedToolPreflightError",
+    "preflight_github_access",
+    "preflight_mounted_tools",
+]

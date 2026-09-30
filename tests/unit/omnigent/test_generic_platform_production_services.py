@@ -2046,8 +2046,9 @@ async def test_writer_ref_rejects_unqualified_same_repo_fallback(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("github_failure", [None, "denied", "diagnostics_unavailable"])
 async def test_sha_drift_replay_advances_digest_through_full_handoff(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, github_failure
 ) -> None:
     """Minimized replay of an escaped stale-digest dispatch failure.
 
@@ -2243,6 +2244,11 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
         "deniedConnectionCount": 0,
     }
 
+    github_attempts = []
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", AsyncMock()
+    )
+
     class ReplayAttestBackend:
         async def inspect_container(self, container_name: str):
             assert container_name == container
@@ -2256,6 +2262,11 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
                         "RW": False,
                     },
                     {"Name": "skill-vol", "Destination": "/skills", "RW": False},
+                    {
+                        "Name": "github-vol",
+                        "Destination": "/run/mm-credentials/github",
+                        "RW": False,
+                    },
                 ],
             }
 
@@ -2317,6 +2328,27 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
                 )
             assert command[:2] == ["docker", "exec"]
             rest = command[3:]
+            if "gh" in rest and "status" in rest:
+                return 1, "", "account endpoint temporarily unavailable"
+            if any("gh repo view" in str(arg) for arg in rest):
+                github_attempts.append(command)
+                if github_failure:
+                    return (
+                        1,
+                        "",
+                        "HTTP 401: Bad credentials Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+                    )
+                if len(github_attempts) == 1:
+                    return 1, "", "dial tcp: temporary failure in name resolution"
+                return (
+                    0,
+                    json.dumps(
+                        {"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}
+                    ),
+                    "",
+                )
+            if "credential.helper" in rest:
+                return 0, "!/home/app/.omnigent/moonmind/bin/gh auth git-credential", ""
             if rest == ["/opt/venv/bin/omnigent", "--version"]:
                 return 0, "omnigent 0.13.1 (built 2026-09-14T00:00:00Z)\n", ""
             if rest == ["opencode", "--version"]:
@@ -2328,6 +2360,11 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
             self.payloads: list[dict[str, object]] = []
 
         async def write_json(self, **kwargs):
+            if (
+                github_failure == "diagnostics_unavailable"
+                and kwargs["name"] == "github-access-preflight-failure.json"
+            ):
+                raise OSError("artifact store unavailable")
             self.payloads.append(kwargs["payload"])
             return f"artifact:{kwargs['name']}"
 
@@ -2386,6 +2423,10 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
                 "deliveryRef": "skill-delivery:sha256:" + "1" * 64,
             },
             "toolAttachments": [],
+            "githubCredentialAttachment": {
+                "sourceRef": "github-vol",
+                "targetPath": "/run/mm-credentials/github",
+            },
             "stateAttachment": {
                 "kind": "volume",
                 "sourceRef": "state-vol",
@@ -2395,8 +2436,11 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
             "labels": dict(egress_labels),
         }
     )
-    attestations = await attestor.attest(
-        request=_request(),
+    github_request = _request().model_copy(
+        update={"workspace_spec": {"repository": "owner/repo"}}
+    )
+    attestation_call = attestor.attest(
+        request=github_request,
         plan=attest_plan,
         spec=spec,
         host_class=host_class,
@@ -2409,6 +2453,23 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
         credential_handles=[],
         egress_attestation=egress_attestation,
     )
+    if github_failure:
+        with pytest.raises(HarnessPlatformError, match="HTTP 401") as raised:
+            await attestation_call
+        assert (
+            raised.value.code
+            == HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH
+        )
+        assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(raised.value)
+        assert len(github_attempts) == 1
+        if github_failure == "denied":
+            assert "diagnosticsRef:" in str(raised.value)
+            assert any(
+                payload.get("phase") == "repository_access"
+                for payload in attestor._artifacts.payloads
+            )
+        return
+    attestations = await attestation_call
     evidence = next(
         payload
         for payload in attestor._artifacts.payloads
@@ -2420,6 +2481,8 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
     assert evidence["expectedImageRef"] == stale
     assert evidence["omnigentBuildDigest"] == current_build
     assert evidence["expectedOmnigentBuildDigest"] == stale_build
+    assert evidence["githubCredentialMount"]["repositoryAuthorized"] is True
+    assert len(github_attempts) == 3
 
     # 5. Attested retry validation consumes the drifted evidence.
     harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
