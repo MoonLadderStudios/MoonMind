@@ -603,6 +603,13 @@ def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> 
     compute = steps["Compute changed files"]
     assert compute["id"] == "changed-files"
     assert '>> "$GITHUB_OUTPUT"' in compute["run"]
+    # Manual and scheduled runs resolve the default-branch merge base so
+    # they validate an exact diff instead of always blocking as unknown.
+    assert compute["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert ".merge_base_commit.sha" in compute["run"]
+    assert "compute_changed_files.sh /tmp/changed-files.txt $base_sha" in (
+        compute["run"]
+    )
     assert steps["Validate AgentSession deployment safety"]["if"] == (
         "steps.changed-files.outputs.resolution == 'known'"
     )

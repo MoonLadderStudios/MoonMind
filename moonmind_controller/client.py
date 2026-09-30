@@ -282,6 +282,26 @@ def submit_operation(
         raise RuntimeError("Controller returned an unreadable response.") from exc
     if not isinstance(parsed, dict):
         raise RuntimeError("Controller returned an unreadable response.")
+    # An accepted POST answers with the stored record, which can belong to
+    # another unfinished operation or be this operation's exhausted record.
+    if operation_id and parsed.get("operationId") != operation_id:
+        raise ControllerBusyError(
+            f"Controller holds operation {parsed.get('operationId')!r}, "
+            f"not {operation_id!r}; this submission was not applied."
+        )
+    if parsed.get("status") == "failed":
+        raise ControllerFailedError(
+            f"Controller operation {operation_id!r} failed: "
+            f"{parsed.get('lastError') or 'see controller status'}"
+        )
+    if wait_for_terminal and parsed.get("status") != "installed":
+        return wait_for_terminal_operation(
+            operation_id,
+            base_url=base_url,
+            secret=resolved_secret,
+            poll_interval=poll_interval,
+            poll_timeout=poll_timeout,
+        )
     return parsed
 
 

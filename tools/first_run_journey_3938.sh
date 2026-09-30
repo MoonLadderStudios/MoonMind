@@ -13,7 +13,12 @@
 # Fresh: tools/single_user_journey_checks.py reads the settings/preset
 # catalogs, submits one task with the dashboard's default repository as a
 # deferred start (and redelivers it), attaches an artifact, dispatches a
-# recurring definition, and saves a preset; the browser opens the built
+# recurring definition, and saves a preset; the vector_free phase then
+# proves the running candidate is vector-free at its live boundaries
+# (MoonLadderStudios/MoonMind#4114: live /healthz and /openapi.json carry
+# no vector backend, and one task-envelope request with an explicit
+# retired vector requirement is rejected with 422 and creates no
+# execution); the browser opens the built
 # dashboard on that work; the workflow worker restarts; the browser cancels
 # the deferred task from its workflow page and the API must report it
 # canceled; a synthetic credential is bound through an instance setting;
@@ -192,11 +197,17 @@ record_provenance() {
 }
 
 bring_up() {
+  local attempts="${1:-1}" attempt=1
   echo "Bringing up $PROJECT_NAME on $MOONMIND_IMAGE..." | redact
-  if ! compose up -d --wait --wait-timeout 600 2>&1 | redact | tail -n 40; then
-    echo "Error: compose up failed for $MOONMIND_IMAGE." >&2
-    exit 1
-  fi
+  until compose up -d --wait --wait-timeout 600 2>&1 | redact | tail -n 40; do
+    if (( attempt >= attempts )); then
+      echo "Error: compose up failed for $MOONMIND_IMAGE." >&2
+      exit 1
+    fi
+    compose ps 2>&1 | redact > "$LOG_DIR/compose-ps-wait-$attempt.log"
+    echo "compose up --wait reported an unhealthy service on $MOONMIND_IMAGE; waiting again ($attempt/$attempts)..." | redact
+    attempt=$((attempt + 1))
+  done
   local healthy=0
   for _ in $(seq 1 60); do
     if curl -fsS "$API_BASE/healthz" > "$LOG_DIR/healthz.json" 2>/dev/null; then
@@ -293,6 +304,10 @@ restart_workflow_worker() {
 fresh_journey() {
   local label="$1"
   checks populate "$label"
+  # MoonLadderStudios/MoonMind#4114: vector-free boundary proof on the
+  # candidate instance (fresh installs and the post-upgrade candidate;
+  # never on the pre-upgrade old release, which predates retirement).
+  checks vector_free "$label"
   browser "$label"
   restart_workflow_worker
   cancel_from_dashboard "$label"
@@ -308,7 +323,12 @@ if [[ "$MODE" == "fresh" ]]; then
 else
   prepare_upgrade_source
   export MOONMIND_IMAGE="$UPGRADE_FROM"
-  bring_up
+  # The old release predates #4483: a transient Temporal RESOURCE_EXHAUSTED
+  # during release-routing startup restarts its workflow worker group once,
+  # and its 30s healthcheck interval can report unhealthy before the restarted
+  # workers are observed ready. Wait again rather than fail on a release that
+  # recovers on its own; the candidate still gets a single wait.
+  bring_up 3
   checks populate before-upgrade
   cancel_from_dashboard before-upgrade
   checks credential before-upgrade

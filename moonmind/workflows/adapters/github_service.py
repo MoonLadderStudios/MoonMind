@@ -244,21 +244,7 @@ class GitHubService:
         """
         from urllib.parse import quote
 
-        active = connection if connection is not None else self._connection
-        headers: dict[str, str]
-        if (
-            active is not None
-            and str(getattr(getattr(active, "credential", None), "source", "") or "")
-            == "github_app"
-        ):
-            headers = await self.bound_app_headers_for_connection(
-                active, repository=repository
-            )
-        else:
-            token, error = await self.resolve_github_token(repo=repository)
-            if not token:
-                raise ValueError(error or "Repository target read requires authorized GitHub access")
-            headers = self._github_headers(token)
+        headers = await self._repository_reader_headers(repository, connection)
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             if not ref:
                 response = await client.get(f"https://api.github.com/repos/{repository}", headers=headers)
@@ -280,6 +266,45 @@ class GitHubService:
             if not revision or not tree:
                 raise ValueError("Repository target read returned incomplete commit/tree identity")
             return {"ref": ref, "revision": revision, "contentDigest": f"git-tree:{tree}"}
+
+    async def commit_is_ancestor(
+        self,
+        repository: str,
+        ancestor: str,
+        descendant: str,
+        *,
+        connection: Any | None = None,
+    ) -> bool:
+        """Report whether ``descendant`` contains ``ancestor`` in its history."""
+
+        headers = await self._repository_reader_headers(repository, connection)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/compare/{ancestor}...{descendant}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            status = response.json().get("status")
+        if status not in {"ahead", "identical", "behind", "diverged"}:
+            raise ValueError("Repository reader returned an unknown comparison status")
+        return status in {"ahead", "identical"}
+
+    async def _repository_reader_headers(
+        self, repository: str, connection: Any | None
+    ) -> dict[str, str]:
+        active = connection if connection is not None else self._connection
+        if (
+            active is not None
+            and str(getattr(getattr(active, "credential", None), "source", "") or "")
+            == "github_app"
+        ):
+            return await self.bound_app_headers_for_connection(
+                active, repository=repository
+            )
+        token, error = await self.resolve_github_token(repo=repository)
+        if not token:
+            raise ValueError(error or "Repository target read requires authorized GitHub access")
+        return self._github_headers(token)
 
     # -- helpers ----------------------------------------------------------
 
@@ -2725,6 +2750,7 @@ class GitHubService:
         repo: str,
         label: str,
         color: str = "0e8a16",
+        description: str = "",
         github_token: str | None = None,
     ) -> dict[str, Any]:
         """Create one missing canonical label with authorized scope only."""
@@ -2744,7 +2770,11 @@ class GitHubService:
                 response = await client.post(
                     f"https://api.github.com/repos/{repo}/labels",
                     headers=headers,
-                    json={"name": label, "color": color},
+                    json={
+                        "name": label,
+                        "color": color,
+                        **({"description": description} if description else {}),
+                    },
                 )
                 response.raise_for_status()
                 return {"ready": True, "reasonCode": "created", "summary": f"Created label {label} in {repo}."}

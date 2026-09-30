@@ -237,6 +237,80 @@ async def test_mutable_server_fails_closed_without_live_compose_evidence(
 
 
 @pytest.mark.asyncio
+async def test_unobservable_docker_keeps_observed_provenance_of_an_immutable_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Docker outage is unknown evidence, not a changed image.
+
+    A deployment update that stopped docker-proxy left bootstrap unable to
+    inspect anything; persisting ``buildDigest: null`` for the same immutable
+    digest made every Claude and Codex launch fail Host Class admission until
+    a later pass happened to observe it again. The labels and binary of an
+    immutable digest cannot change, so the prior observation stands while the
+    server judgment itself stays unavailable.
+    """
+
+    from moonmind.omnigent.bootstrap import store
+
+    previous = _state(
+        details={
+            "hostImageProvenance": {
+                HOST_REF: {"buildDigest": BUILD_DIGEST, "version": "0.12.0"}
+            },
+            "opencodeHostCompatibility": {
+                "status": "ready",
+                "failureCode": None,
+                "serverImageRef": SERVER_REF,
+                "hostImageRef": HOST_REF,
+            },
+        }
+    )
+
+    async def running_server(_image, _env):
+        return None
+
+    async def resolve_image(image_env, tag_env, ref_env, env=None):
+        del tag_env, env
+        if ref_env in {
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+            "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        }:
+            return HOST_REF, "sha256:" + "2" * 64
+        return None, None
+
+    async def unobservable(_image_ref):
+        return None
+
+    async def run(cmd, timeout=30):
+        del cmd, timeout
+        return 1, "", "Cannot connect to the Docker daemon"
+
+    monkeypatch.setattr(
+        image_resolution, "_resolve_running_server_image", running_server
+    )
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve_image)
+    monkeypatch.setattr(image_resolution, "_image_build_identity", unobservable)
+    monkeypatch.setattr(image_resolution, "_image_omnigent_version", unobservable)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: previous)
+
+    resolved = await image_resolution.resolve_omnigent_images(
+        {
+            "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+            "OMNIGENT_IMAGE_TAG": "latest",
+        }
+    )
+
+    assert resolved.details["hostImageProvenance"] == {
+        HOST_REF: {"buildDigest": BUILD_DIGEST, "version": "0.12.0"}
+    }
+    # The server judgment is not fabricated from the retained host evidence.
+    assert resolved.details["opencodeHostCompatibility"]["failureCode"] == (
+        "omnigent_server_build_unavailable"
+    )
+
+
+@pytest.mark.asyncio
 async def test_running_server_resolution_selects_the_compose_repository_digest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

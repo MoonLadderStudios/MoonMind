@@ -2359,6 +2359,69 @@ async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     assert result.summary is not None
     assert "pr-resolver reported status 'failed'" in result.summary
     assert "manual_review" in result.summary
+    # The failure is the Skill's validated verdict, so the parent must not
+    # retry it as a generic runtime failure.
+    assert result.metadata["prResolverTerminalVerdictApplied"] is True
+
+
+async def test_fetch_result_keeps_runtime_failure_beside_a_resolver_verdict(
+    tmp_path: Path,
+):
+    """A specific runtime failure is not relabeled as the Skill's verdict.
+
+    The artifact is still reported, but the parent needs to know the failure
+    it sees is the runtime's, so its bounded retry stays available.
+    """
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "blocked",\n'
+            '  "final_reason": "deferred_comments",\n'
+            '  "next_step": "manual_review"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-runtime-failure-beside-verdict",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="failed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+            failure_class="execution_error",
+            error_message="Model stream disconnected before completion",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-runtime-failure-beside-verdict",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-runtime-failure-beside-verdict", pr_resolver_expected=True
+    )
+
+    assert result.failure_class == "execution_error"
+    assert "reported status 'blocked'" not in (result.summary or "")
+    assert result.metadata["mergeAutomationDisposition"] == "manual_review"
+    assert "prResolverTerminalVerdictApplied" not in result.metadata
 
 async def test_fetch_result_treats_pr_resolver_reenter_gate_as_continuation(
     tmp_path: Path,

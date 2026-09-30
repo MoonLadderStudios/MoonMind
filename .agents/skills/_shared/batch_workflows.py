@@ -567,6 +567,7 @@ def _child_idempotency_key(
     ref: str,
     target_kind: str,
     target_slug: str,
+    inputs_digest: str,
 ) -> str | None:
     scope = _text(batch_scope)
     if not scope:
@@ -577,7 +578,29 @@ def _child_idempotency_key(
         ref=ref,
         target_kind=target_kind,
         target_slug=target_slug,
+        inputs_digest=inputs_digest,
     )
+
+
+def _canonical_digest(value: Any) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# Provider-observed issue snapshots are re-read on every invocation and change
+# while the child runs (for example its own in-progress label). Identity stays
+# bound through ``github_issue_ref``/``jira_issue_key`` and the key's ``ref``.
+_ISSUE_SNAPSHOT_INPUTS = ("github_issue", "jira_issue")
+
+
+def _child_intent_digest(payload: dict[str, Any]) -> str:
+    task = dict(payload.get("task") or {})
+    task["inputs"] = {
+        name: value
+        for name, value in (task.get("inputs") or {}).items()
+        if name not in _ISSUE_SNAPSHOT_INPUTS
+    }
+    return _canonical_digest({**payload, "task": task})
 
 
 def build_child_request(
@@ -715,6 +738,7 @@ def build_child_request(
         ref=ref,
         target_kind=config.target_kind,
         target_slug=config.target_slug,
+        inputs_digest=_child_intent_digest(payload_dict),
     )
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
@@ -739,10 +763,15 @@ def build_child_requests(
     inherit_runtime_from_caller: bool = False,
     default_repository: str | None = None,
 ) -> tuple[list[ChildSubmission], list[SkippedTarget]]:
-    """Build child requests, capped at ``max_workflows`` resolved targets."""
+    """Build child requests, capped at ``max_workflows`` resolved targets.
+
+    Targets that build an identical child request are one child: the first is
+    submitted and each repeat is skipped as ``duplicate_target``.
+    """
 
     submissions: list[ChildSubmission] = []
     skipped: list[SkippedTarget] = []
+    seen_requests: set[str] = set()
 
     limit = max(0, int(max_workflows))
     capped = targets[:limit]
@@ -768,6 +797,11 @@ def build_child_requests(
         if request is None:
             skipped.append(SkippedTarget(ref=ref, reason="unsupported_target"))
             continue
+        request_digest = _canonical_digest(request)
+        if request_digest in seen_requests:
+            skipped.append(SkippedTarget(ref=ref, reason="duplicate_target"))
+            continue
+        seen_requests.add(request_digest)
         submissions.append(
             ChildSubmission(
                 queue_request=request,
@@ -1317,6 +1351,7 @@ def _submit_issue_jobs_gated(
                 "executionId": workflow_id,
                 "targetRef": submission.ref,
                 "idempotencyKey": idempotency_key,
+                "status": owned[workflow_id],
             }
         )
     return created, errors, blocked
@@ -1707,13 +1742,8 @@ def _submit_repository_child(
     )
     if status == "admission_lost":
         return None, "admission_unconfirmed: child missing immediately after queueing", None
-    if status == "unknown":
-        return (
-            None,
-            "admission_unconfirmed: child verification returned unknown; "
-            "preserved for bounded reconciliation instead of counting as queued",
-            None,
-        )
+    # The POST receipt's workflowId proves acceptance; an unavailable
+    # read-back leaves it accepted but unobserved ("unknown"), never rejected.
     return workflow_id, None, status
 
 
@@ -2204,7 +2234,7 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                 # as queued and fill the gate with finished children.
                 entry_status = (
                     owned_status
-                    if owned_status in {"succeeded", "failed", "canceled"}
+                    if owned_status in {"succeeded", "failed", "canceled", "unknown"}
                     else "queued"
                 )
                 per_target.append(
@@ -2422,7 +2452,9 @@ def main(argv: list[str] | None = None) -> int:
         inherit_runtime_from_caller=inherit_from_caller,
         default_repository=batch_repository,
     )
-        skipped = list(skipped)
+        # A repeated target is the same child, not another requested one.
+        duplicates = [item for item in skipped if item.reason == "duplicate_target"]
+        skipped = [item for item in skipped if item.reason != "duplicate_target"]
         created, errors, capacity_blocked = _submit_issue_jobs_gated(
         submissions,
         max_concurrency=int(args.max_concurrency),
@@ -2446,6 +2478,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(failed, indent=2))
         return 2 if isinstance(exc, BatchInputError) else 1
 
+    # An idempotent rerun can resolve to an existing child that already ended
+    # unsuccessfully; that observed outcome is not newly queued work.
+    live = [item for item in created if item["status"] not in {"failed", "canceled"}]
+    requested = len(targets) - len(duplicates)
     payload = {
         **base_result,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -2464,17 +2500,20 @@ def main(argv: list[str] | None = None) -> int:
         },
         "status": (
             "no_op" if not targets else
-            "queued" if len(created) == len(targets) and not errors and not skipped else
-            "partial_failure" if created else "failed"
+            "queued" if len(live) == requested and not errors and not skipped else
+            "partial_failure" if live else "failed"
         ),
-        "requested": len(targets),
+        "requested": requested,
         "created": len(created),
         "queued": created,
         "skipped": [{"ref": item.ref, "reason": item.reason} for item in skipped],
+        "duplicates": [
+            {"ref": item.ref, "reason": item.reason} for item in duplicates
+        ],
         "errors": errors,
         "failure": (
-            {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if created else "BATCH_FANOUT_FAILED"}
-            if errors or skipped else None
+            {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if live else "BATCH_FANOUT_FAILED"}
+            if errors or skipped or len(live) < len(created) else None
         ),
     }
     if payload["created"] == 0:

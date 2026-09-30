@@ -39,6 +39,7 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     get_or_create_installation_id,
     new_attempt_id,
     reconcile_uncertain_creation,
+    redact_comment_body,
     render_attempt_comment,
     resolve_installation_id,
 )
@@ -106,6 +107,10 @@ GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
 GITHUB_FINALIZE_FAILED_ATTEMPT_TOOL_NAME = "github.finalize_failed_attempt"
 GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
+# People, not automation, must finish an issue carrying this label: its
+# remaining work needs Windows, special hardware, or another action no Linux
+# container can perform. Selection skips it until a person removes the label.
+GITHUB_MANUAL_ONLY_LABEL = "manual-only"
 # The status tool runs inside a 60-second activity. One fetch plus the targeted
 # label operations and optional comment must leave enough time for the activity
 # to classify results.
@@ -192,6 +197,23 @@ STORY_JIRA_CREATE_ACTIONS = frozenset(
         STORY_JIRA_ACTION_CREATE_ISSUE,
         "create",
         "create_jira_issue",
+    }
+)
+STORY_JIRA_REMAINING_WORK_ACTIONS = frozenset(
+    {STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE}
+)
+STORY_JIRA_KNOWN_ACTIONS = frozenset(
+    STORY_JIRA_SKIP_ACTIONS
+    | STORY_JIRA_BLOCK_ACTIONS
+    | STORY_JIRA_CREATE_ACTIONS
+    | STORY_JIRA_REMAINING_WORK_ACTIONS
+)
+STORY_IMPLEMENTATION_KNOWN_STATUSES = frozenset(
+    {
+        STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED,
+        STORY_IMPLEMENTATION_STATUS_PARTIALLY_IMPLEMENTED,
+        STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE,
+        "not_implemented",
     }
 )
 _ACCEPTANCE_HEADING_RE = re.compile(
@@ -730,17 +752,36 @@ def _story_implementation_status(story: Mapping[str, Any]) -> str:
         or story.get("status")
     )
 
-def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
+def _explicit_issue_creation_action(story: Mapping[str, Any]) -> str:
     issue_creation = _story_issue_creation(story)
-    action = _normalized_story_token(
+    return _normalized_story_token(
         issue_creation.get("action")
         or story.get("issueCreationAction")
         or story.get("issue_creation_action")
         or story.get("jiraCreationAction")
         or story.get("jira_creation_action")
     )
+
+
+def _normalize_issue_creation_action(action: str) -> str:
+    """Map an explicit creation action onto the existing wire values.
+
+    ``manual_review`` stays a decodable wire value for non-mutating
+    suspension: unknown or unsupported actions suspend as
+    ``manual_review`` instead of failing or silently creating work.
+    """
+    normalized = _normalized_story_token(action)
+    if not normalized:
+        return ""
+    if normalized in STORY_JIRA_KNOWN_ACTIONS:
+        return normalized
+    return STORY_JIRA_ACTION_MANUAL_REVIEW
+
+
+def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
+    action = _explicit_issue_creation_action(story)
     if action:
-        return action
+        return _normalize_issue_creation_action(action)
     status = _story_implementation_status(story)
     if status == STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED:
         return STORY_JIRA_ACTION_SKIP
@@ -748,7 +789,41 @@ def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
         return STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE
     if status == STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE:
         return STORY_JIRA_ACTION_MANUAL_REVIEW
+    if status and status not in STORY_IMPLEMENTATION_KNOWN_STATUSES:
+        return STORY_JIRA_ACTION_MANUAL_REVIEW
     return STORY_JIRA_ACTION_CREATE_ISSUE
+
+
+def _continuation_for_reconciliation_block(
+    *,
+    reason: str,
+    missing_input: str = "",
+) -> dict[str, Any]:
+    """Report who owns a reconciliation block and what unblocks it.
+
+    Recoverable evidence gaps stay automation-owned with the specific
+    missing input. Only genuine user decisions or explicit holds are
+    human-owned.
+    """
+    normalized_reason = _string(reason).lower()
+    if any(
+        marker in normalized_reason
+        for marker in (
+            "operator hold",
+            "user decision",
+            "explicit hold",
+            "human approval",
+        )
+    ):
+        owner = "human"
+    else:
+        owner = "automation"
+    continuation: dict[str, Any] = {"owner": owner}
+    if missing_input:
+        continuation["missingInput"] = missing_input
+    if reason:
+        continuation["reason"] = _string(reason)
+    return continuation
 
 def _story_issue_creation_reason(story: Mapping[str, Any]) -> str:
     issue_creation = _story_issue_creation(story)
@@ -910,9 +985,26 @@ def _reconcile_stories_for_issue_creation(
             status == STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE
             and action not in STORY_JIRA_CREATE_ACTIONS
         ):
-            blocked.append(
-                _story_reconciliation_record(story, index=index, action=action)
+            blocked_record = _story_reconciliation_record(
+                story, index=index, action=action
             )
+            explicit_action = _explicit_issue_creation_action(story)
+            if explicit_action and explicit_action not in STORY_JIRA_KNOWN_ACTIONS:
+                missing_input = (
+                    f"issueCreation.action '{explicit_action}' is not a "
+                    "supported creation action"
+                )
+            else:
+                missing_input = _string(
+                    blocked_record.get("reason")
+                ) or "implementation evidence for the blocked story"
+            blocked_record["continuation"] = (
+                _continuation_for_reconciliation_block(
+                    reason=_string(blocked_record.get("reason")),
+                    missing_input=missing_input,
+                )
+            )
+            blocked.append(blocked_record)
             continue
         if (
             action == STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE
@@ -929,6 +1021,12 @@ def _reconcile_stories_for_issue_creation(
                     "reason",
                     "Partially implemented stories require remainingWork before "
                     "issue creation can safely narrow the issue scope.",
+                )
+                blocked_record["continuation"] = (
+                    _continuation_for_reconciliation_block(
+                        reason=_string(blocked_record.get("reason")),
+                        missing_input="remainingWork",
+                    )
                 )
                 blocked.append(blocked_record)
                 continue
@@ -993,6 +1091,191 @@ def _is_canonical_source_path(path: str) -> bool:
     if normalized.startswith("docs/tmp/") or "/docs/tmp/" in normalized:
         return False
     return normalized.startswith("docs/") or "/docs/" in normalized
+
+
+BREAKDOWN_SOURCE_KIND_EXPLICIT_FILE = "explicit-file"
+BREAKDOWN_SOURCE_KIND_TRUSTED_ISSUE = "trusted-issue"
+BREAKDOWN_SOURCE_KIND_INLINE = "inline"
+BREAKDOWN_SOURCE_KIND_IMPERATIVE = "imperative"
+BREAKDOWN_SOURCE_KIND_AMBIGUOUS = "ambiguous-source"
+
+_AMBIGUOUS_SOURCE_RESOLUTION_STATUSES = frozenset(
+    {"ambiguous", "invalid_candidates", "invalid_explicit_path"}
+)
+
+
+def _resolve_breakdown_source_kind(selection: Mapping[str, Any]) -> str:
+    """Classify the selected breakdown source by meaning and authority.
+
+    The owning document authority and the selected input kind decide the
+    result, not just a ``docs/`` path prefix: an explicit file path, a
+    trusted issue brief, inline instructions, imperative input describing
+    actionable outcomes, or an ambiguous selection across candidates.
+    """
+    if not isinstance(selection, Mapping):
+        return BREAKDOWN_SOURCE_KIND_INLINE
+    source = selection.get("source")
+    source_mapping = dict(source) if isinstance(source, Mapping) else {}
+    source_class = _breakdown_source_document_class(selection)
+    for container in (selection, source_mapping):
+        resolution = container.get("sourceResolution") or container.get(
+            "source_resolution"
+        )
+        if isinstance(resolution, Mapping):
+            status = _string(
+                resolution.get("status") or resolution.get("sourceStatus")
+            ).lower()
+            if status in _AMBIGUOUS_SOURCE_RESOLUTION_STATUSES:
+                return BREAKDOWN_SOURCE_KIND_AMBIGUOUS
+    candidates: list[Any] = []
+    for container in (selection, source_mapping):
+        for key in ("sourceCandidates", "source_candidates", "candidates"):
+            items = _list(container.get(key))
+            if items:
+                candidates = items
+                break
+        if candidates:
+            break
+    if len(candidates) > 1:
+        return BREAKDOWN_SOURCE_KIND_AMBIGUOUS
+    if source_class == "imperative-input":
+        return BREAKDOWN_SOURCE_KIND_IMPERATIVE
+    source_issue_key = _string(
+        selection.get("sourceIssueKey")
+        or selection.get("source_issue_key")
+        or selection.get("source_issue")
+        or source_mapping.get("sourceIssueKey")
+        or source_mapping.get("source_issue_key")
+    )
+    source_path = _string(
+        source_mapping.get("referencePath")
+        or source_mapping.get("reference_path")
+        or source_mapping.get("path")
+    ) or _breakdown_source_path(selection)
+    if source_issue_key and not source_path:
+        return BREAKDOWN_SOURCE_KIND_TRUSTED_ISSUE
+    if source_path:
+        return BREAKDOWN_SOURCE_KIND_EXPLICIT_FILE
+    return BREAKDOWN_SOURCE_KIND_INLINE
+
+
+def _require_unambiguous_breakdown_source(payload: Any) -> None:
+    """Fail fast when the selected breakdown source is ambiguous.
+
+    Consumed by the story issue-creation paths so an unresolved
+    multi-candidate selection raises an actionable source-resolution
+    error instead of decomposing an arbitrary candidate.
+    """
+    if not isinstance(payload, Mapping):
+        return
+    if _resolve_breakdown_source_kind(payload) != BREAKDOWN_SOURCE_KIND_AMBIGUOUS:
+        return
+    raise ValueError(
+        "Ambiguous breakdown source: multiple candidate documents were "
+        "selected with no explicit source. Choose one source document or "
+        "provide explicit sourceResolution before breakdown."
+    )
+
+
+def _filter_pending_stories_by_receipts(
+    stories: Sequence[Mapping[str, Any]],
+    issue_mappings: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split requested stories into pending work and existing receipts.
+
+    Reconciles a partial creation run through its existing issue mappings
+    before retry: stories with a matching receipt keep their original
+    issue identity and saved work, while only unfinished effects are
+    returned for continuation. No new ledger is created and no re-search
+    for a different target occurs.
+    """
+    receipts: dict[str, dict[str, Any]] = {}
+    receipts_by_index: dict[int, dict[str, Any]] = {}
+    for mapping in issue_mappings:
+        if not isinstance(mapping, Mapping):
+            continue
+        receipt = dict(mapping)
+        story_id = _string(receipt.get("storyId") or receipt.get("story_id"))
+        if story_id and story_id not in receipts:
+            receipts[story_id] = receipt
+        if story_id:
+            # A receipt with a stable story ID is only valid for that story.
+            # Positional fallback stays reserved for legacy receipts without
+            # a stable ID so a changed breakdown cannot claim a mismatched
+            # receipt by retained position.
+            continue
+        for key in ("storyIndex", "story_index"):
+            raw_index = receipt.get(key)
+            try:
+                index = int(raw_index) if raw_index is not None else 0
+            except (TypeError, ValueError):
+                continue
+            if index > 0 and index not in receipts_by_index:
+                receipts_by_index[index] = receipt
+
+    pending: list[dict[str, Any]] = []
+    already_created: list[dict[str, Any]] = []
+    for index, story in enumerate(stories, start=1):
+        if not isinstance(story, Mapping):
+            continue
+        story_id = _story_id(story, index=index)
+        receipt = receipts.get(story_id) or receipts_by_index.get(index)
+        if receipt is not None:
+            already_created.append(dict(receipt))
+        else:
+            pending.append(dict(story))
+    return pending, already_created
+
+
+def _ordered_partial_mappings(
+    *,
+    eligible_stories: Sequence[Mapping[str, Any]],
+    resumed_mappings: Sequence[Mapping[str, Any]],
+    new_mappings: Sequence[Mapping[str, Any]],
+    new_created: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Combine resumed and newly created mappings in eligible-story order.
+
+    Used when creation stops partway so the partial result keeps each
+    completed story's stable ID-linked receipt for the retry instead of
+    only raw provider objects.
+    """
+    resumed_by_id = {
+        _string(item.get("storyId") or item.get("story_id")): dict(item)
+        for item in resumed_mappings
+        if isinstance(item, Mapping)
+        and _string(item.get("storyId") or item.get("story_id"))
+    }
+    new_by_id = {
+        _string(item.get("storyId") or item.get("story_id")): dict(item)
+        for item in new_mappings
+        if isinstance(item, Mapping)
+        and _string(item.get("storyId") or item.get("story_id"))
+    }
+    created_by_id: dict[str, dict[str, Any]] = {}
+    for mapping_item, created_item in zip(new_mappings, new_created):
+        if not isinstance(mapping_item, Mapping) or not isinstance(
+            created_item, Mapping
+        ):
+            continue
+        sid = _string(mapping_item.get("storyId") or mapping_item.get("story_id"))
+        if sid and sid not in created_by_id:
+            created_by_id[sid] = dict(created_item)
+    combined_mappings: list[dict[str, Any]] = []
+    combined_created: list[dict[str, Any]] = []
+    for eligible_index, eligible_story in enumerate(eligible_stories, start=1):
+        if not isinstance(eligible_story, Mapping):
+            continue
+        eligible_id = _story_id(eligible_story, index=eligible_index)
+        if eligible_id in resumed_by_id:
+            combined_mappings.append(resumed_by_id[eligible_id])
+            combined_created.append(dict(resumed_by_id[eligible_id]))
+        elif eligible_id in new_by_id:
+            combined_mappings.append(new_by_id[eligible_id])
+            combined_created.append(
+                created_by_id.get(eligible_id, new_by_id[eligible_id])
+            )
+    return combined_mappings, combined_created
 
 
 def _source_reference_requires_claim_ids(
@@ -2404,11 +2687,13 @@ def _fallback_result(
     inputs: Mapping[str, Any],
     story_count: int = 0,
     created: Sequence[Mapping[str, Any]] = (),
+    issue_mappings: Sequence[Mapping[str, Any]] = (),
     dependency_mode: str = "",
 ) -> ToolResult:
     branch = _string(inputs.get("targetBranch") or inputs.get("branch"))
     base_ref = _string(inputs.get("startingBranch") or inputs.get("baseBranch"))
     created_issues = [dict(issue) for issue in created]
+    mapping_list = [dict(item) for item in issue_mappings if isinstance(item, Mapping)]
     story_output: dict[str, Any] = {
         "mode": "docs_tmp",
         "status": "fallback",
@@ -2419,11 +2704,12 @@ def _fallback_result(
     if dependency_mode and dependency_mode != JIRA_DEPENDENCY_MODE_NONE:
         story_output["dependencyMode"] = dependency_mode
     jira_output: dict[str, Any] = {}
-    if created_issues:
-        story_output["createdCount"] = len(created_issues)
+    if created_issues or mapping_list:
+        story_output["createdCount"] = len(created_issues or mapping_list)
         jira_output = {
-            "createdCount": len(created_issues),
+            "createdCount": len(created_issues or mapping_list),
             "createdIssues": created_issues,
+            "issueMappings": mapping_list,
             "partial": True,
         }
     return ToolResult(
@@ -2887,6 +3173,7 @@ async def create_jira_issues_from_stories(
         or previous_story_output.get("storyBreakdownJson")
     )
     parsed_story_payload = _parse_story_breakdown_payload(raw_story_payload)
+    _require_unambiguous_breakdown_source(parsed_story_payload)
     breakdown_source_path = _breakdown_source_path(parsed_story_payload)
     breakdown_source_document_class = _breakdown_source_document_class(
         parsed_story_payload
@@ -2918,6 +3205,7 @@ async def create_jira_issues_from_stories(
                 if inspect.isawaitable(artifact_payload):
                     artifact_payload = await artifact_payload  # type: ignore[assignment]
                 parsed_payload = _parse_story_breakdown_payload(artifact_payload)
+                _require_unambiguous_breakdown_source(parsed_payload)
                 breakdown_source_path = _breakdown_source_path(parsed_payload)
                 breakdown_source_document_class = _breakdown_source_document_class(
                     parsed_payload
@@ -3010,6 +3298,7 @@ async def create_jira_issues_from_stories(
                 if inspect.isawaitable(fetched):
                     fetched = await fetched  # type: ignore[assignment]
                 fetched_payload = _parse_story_breakdown_payload(fetched)
+                _require_unambiguous_breakdown_source(fetched_payload)
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
                 breakdown_source_document_class = _breakdown_source_document_class(
                     fetched_payload
@@ -3054,6 +3343,15 @@ async def create_jira_issues_from_stories(
             blocked_stories=blocked_stories,
             partial_stories_adjusted=partial_stories_adjusted,
         )
+
+    eligible_stories = list(stories)
+    prior_issue_receipts = _issue_mappings_from_inputs(inputs, context=_context)
+    resumed_issue_mappings: list[dict[str, Any]] = []
+    if prior_issue_receipts:
+        pending_stories, resumed_issue_mappings = _filter_pending_stories_by_receipts(
+            eligible_stories, prior_issue_receipts
+        )
+        stories = pending_stories
 
     if not project_key:
         reason = (
@@ -3257,15 +3555,56 @@ async def create_jira_issues_from_stories(
                 )
             )
     except Exception as exc:
+        partial_mappings, partial_created = _ordered_partial_mappings(
+            eligible_stories=eligible_stories,
+            resumed_mappings=resumed_issue_mappings,
+            new_mappings=issue_mappings,
+            new_created=created,
+        )
         if fallback_on_failure:
             return _fallback_result(
                 reason=f"Jira issue creation failed: {exc}",
                 inputs=inputs,
                 story_count=len(stories),
-                created=created,
+                created=partial_created or created,
+                issue_mappings=partial_mappings or issue_mappings,
                 dependency_mode=dependency_mode,
             )
+        if partial_mappings:
+            setattr(exc, "partial_issue_mappings", partial_mappings)
+            setattr(exc, "partial_created_issues", partial_created or created)
         raise
+
+    if resumed_issue_mappings:
+        _resumed_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): dict(item)
+            for item in resumed_issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _new_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): item
+            for item in issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _created_by_id: dict[str, dict[str, Any]] = {}
+        for _mapping_item, _created_item in zip(issue_mappings, created):
+            _sid = _string(_mapping_item.get("storyId") or _mapping_item.get("story_id"))
+            if _sid and _sid not in _created_by_id:
+                _created_by_id[_sid] = _created_item
+        _combined_mappings: list[dict[str, Any]] = []
+        _combined_created: list[dict[str, Any]] = []
+        for _eligible_index, _eligible_story in enumerate(eligible_stories, start=1):
+            _eligible_id = _story_id(_eligible_story, index=_eligible_index)
+            if _eligible_id in _resumed_by_id:
+                _combined_mappings.append(_resumed_by_id[_eligible_id])
+                _combined_created.append(dict(_resumed_by_id[_eligible_id]))
+            elif _eligible_id in _new_by_id:
+                _combined_mappings.append(_new_by_id[_eligible_id])
+                _combined_created.append(
+                    _created_by_id.get(_eligible_id, _new_by_id[_eligible_id])
+                )
+        issue_mappings = _combined_mappings
+        created = _combined_created
 
     link_results, dependency_chain_complete = await _create_dependency_links(
         service=service,
@@ -3287,7 +3626,7 @@ async def create_jira_issues_from_stories(
                 "mode": "jira",
                 "status": story_status,
                 "storyCount": original_story_count,
-                "eligibleStoryCount": len(stories),
+                "eligibleStoryCount": len(eligible_stories),
                 "createdCount": len(created),
                 "dependencyMode": dependency_mode,
                 "skippedStories": skipped_stories,
@@ -3492,6 +3831,7 @@ async def create_github_issues_from_stories(
         or previous_story_output.get("storyBreakdownJson")
     )
     parsed_story_payload = _parse_story_breakdown_payload(raw_story_payload)
+    _require_unambiguous_breakdown_source(parsed_story_payload)
     breakdown_source_path = _breakdown_source_path(parsed_story_payload)
     breakdown_source_document_class = _breakdown_source_document_class(
         parsed_story_payload
@@ -3522,6 +3862,7 @@ async def create_github_issues_from_stories(
             if inspect.isawaitable(artifact_payload):
                 artifact_payload = await artifact_payload  # type: ignore[assignment]
             parsed_payload = _parse_story_breakdown_payload(artifact_payload)
+            _require_unambiguous_breakdown_source(parsed_payload)
             breakdown_source_path = _breakdown_source_path(parsed_payload)
             breakdown_source_document_class = _breakdown_source_document_class(
                 parsed_payload
@@ -3569,6 +3910,7 @@ async def create_github_issues_from_stories(
             if inspect.isawaitable(fetched):
                 fetched = await fetched  # type: ignore[assignment]
             fetched_payload = _parse_story_breakdown_payload(fetched)
+            _require_unambiguous_breakdown_source(fetched_payload)
             breakdown_source_path = _breakdown_source_path(fetched_payload)
             breakdown_source_document_class = _breakdown_source_document_class(
                 fetched_payload
@@ -3592,6 +3934,15 @@ async def create_github_issues_from_stories(
             partial_stories_adjusted=partial_stories_adjusted,
         )
 
+    eligible_stories = list(stories)
+    prior_issue_receipts = _github_issue_mappings_from_inputs(inputs, context=_context)
+    resumed_issue_mappings: list[dict[str, Any]] = []
+    if prior_issue_receipts:
+        pending_stories, resumed_issue_mappings = _filter_pending_stories_by_receipts(
+            eligible_stories, prior_issue_receipts
+        )
+        stories = pending_stories
+
     missing_claim_ids = _missing_source_claim_story_ids(
         stories,
         fallback_path=breakdown_source_path,
@@ -3608,42 +3959,85 @@ async def create_github_issues_from_stories(
     service = github_service_factory()
     created: list[dict[str, Any]] = []
     issue_mappings: list[dict[str, Any]] = []
-    for index, story in enumerate(stories, start=1):
-        summary = _story_summary(story, index=index)
-        result = await service.create_issue(
-            repo=repository,
-            title=summary,
-            body=_story_description_with_source(
-                story,
-                fallback_source_path=breakdown_source_path,
-            ),
-            labels=_github_labels(
-                story=story,
-                github_payload=github_payload,
-            ),
-            github_token=None,
-        )
-        issue_result = (
-            result.model_dump(by_alias=True)
-            if hasattr(result, "model_dump")
-            else dict(result)
-        )
-        if not bool(issue_result.get("created")):
-            raise ValueError(
-                _string(issue_result.get("summary"))
-                or "GitHub issue creation failed."
+    try:
+        for index, story in enumerate(stories, start=1):
+            summary = _story_summary(story, index=index)
+            result = await service.create_issue(
+                repo=repository,
+                title=summary,
+                body=_story_description_with_source(
+                    story,
+                    fallback_source_path=breakdown_source_path,
+                ),
+                labels=_github_labels(
+                    story=story,
+                    github_payload=github_payload,
+                ),
+                github_token=None,
             )
-        created.append(issue_result)
-        issue_mappings.append(
-            _github_issue_mapping(
-                story=story,
-                issue=issue_result,
-                repository=repository,
-                index=index,
-                summary=summary,
-                fallback_source_path=breakdown_source_path,
+            issue_result = (
+                result.model_dump(by_alias=True)
+                if hasattr(result, "model_dump")
+                else dict(result)
             )
+            if not bool(issue_result.get("created")):
+                raise ValueError(
+                    _string(issue_result.get("summary"))
+                    or "GitHub issue creation failed."
+                )
+            created.append(issue_result)
+            issue_mappings.append(
+                _github_issue_mapping(
+                    story=story,
+                    issue=issue_result,
+                    repository=repository,
+                    index=index,
+                    summary=summary,
+                    fallback_source_path=breakdown_source_path,
+                )
+            )
+    except Exception as exc:
+        partial_mappings, partial_created = _ordered_partial_mappings(
+            eligible_stories=eligible_stories,
+            resumed_mappings=resumed_issue_mappings,
+            new_mappings=issue_mappings,
+            new_created=created,
         )
+        if partial_mappings:
+            setattr(exc, "partial_issue_mappings", partial_mappings)
+            setattr(exc, "partial_created_issues", partial_created or created)
+        raise
+
+    if resumed_issue_mappings:
+        _resumed_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): dict(item)
+            for item in resumed_issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _new_by_id = {
+            _string(item.get("storyId") or item.get("story_id")): item
+            for item in issue_mappings
+            if _string(item.get("storyId") or item.get("story_id"))
+        }
+        _created_by_id: dict[str, dict[str, Any]] = {}
+        for _mapping_item, _created_item in zip(issue_mappings, created):
+            _sid = _string(_mapping_item.get("storyId") or _mapping_item.get("story_id"))
+            if _sid and _sid not in _created_by_id:
+                _created_by_id[_sid] = _created_item
+        _combined_mappings: list[dict[str, Any]] = []
+        _combined_created: list[dict[str, Any]] = []
+        for _eligible_index, _eligible_story in enumerate(eligible_stories, start=1):
+            _eligible_id = _story_id(_eligible_story, index=_eligible_index)
+            if _eligible_id in _resumed_by_id:
+                _combined_mappings.append(_resumed_by_id[_eligible_id])
+                _combined_created.append(dict(_resumed_by_id[_eligible_id]))
+            elif _eligible_id in _new_by_id:
+                _combined_mappings.append(_new_by_id[_eligible_id])
+                _combined_created.append(
+                    _created_by_id.get(_eligible_id, _new_by_id[_eligible_id])
+                )
+        issue_mappings = _combined_mappings
+        created = _combined_created
 
     partial = bool(blocked_stories)
     story_status = "github_partial" if partial else "github_created"
@@ -3654,7 +4048,7 @@ async def create_github_issues_from_stories(
                 "mode": "github",
                 "status": story_status,
                 "storyCount": original_story_count,
-                "eligibleStoryCount": len(stories),
+                "eligibleStoryCount": len(eligible_stories),
                 "createdCount": len(created),
                 "dependencyMode": "none",
                 "dependencyCount": 0,
@@ -5226,7 +5620,10 @@ def _github_blockers_from_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]
     labels = [str(label).strip().lower() for label in issue.get("labels") or []]
     blockers: list[dict[str, Any]] = []
     for label in labels:
-        if label in {"blocked", "status: blocked", "status/blocked"} or label.startswith("blocked:"):
+        if (
+            label in {"blocked", "status: blocked", "status/blocked", GITHUB_MANUAL_ONLY_LABEL}
+            or label.startswith("blocked:")
+        ):
             blockers.append({"source": "label", "label": label, "statusKnown": False, "done": False})
     body = _string(issue.get("body"))
     match = re.search(r"(?im)^#+\s*block(?:ed|ers|ing)\b(?P<section>.*?)(?:^#+\s|\Z)", body, flags=re.DOTALL)
@@ -5301,6 +5698,18 @@ async def check_github_issue_blockers(
             },
         )
     issue = _github_issue_payload(issue_data, repository)
+    if assessment_verdict != "FULLY_IMPLEMENTED":
+        manual_only = _manual_only_declaration(await _assessment_payload(inputs, _context))
+        if manual_only is not None:
+            return await _mark_github_issue_manual_only(
+                repository=repository,
+                issue_number=issue_number,
+                issue=issue,
+                manual_only=manual_only,
+                context=_context,
+                service=github_service_factory(),
+                assessment_output=assessment_output,
+            )
     # This is the completion gate, not the start gate: it holds acceptance and
     # closure while a declared completion dependency is still open, even though
     # selection admits the issue's independently useful implementation work.
@@ -5344,6 +5753,138 @@ async def check_github_issue_blockers(
             **assessment_output,
         },
     )
+
+
+async def _assessment_payload(
+    inputs: Mapping[str, Any], context: Mapping[str, Any] | None
+) -> Mapping[str, Any] | None:
+    """The assessment handoff itself, preferring its durable ref."""
+    ref = _assessment_artifact_ref(inputs, context)
+    if ref:
+        payload = await _read_json_artifact_by_ref(ref, context)
+        if payload is not None:
+            return payload
+    path = _string(inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path"))
+    if path:
+        return _local_json_artifact_from_path(artifact_path=path, inputs=inputs, context=context)
+    return None
+
+
+def _manual_only_declaration(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Read the assessment's judgment that no unmet requirement is container work.
+
+    Only a complete declaration counts: the person taking over needs both the
+    reason and the actions, so anything less leaves the issue to automation.
+    Its text is posted on the issue, so it is redacted like attempt comments.
+    """
+    raw = payload.get("manualOnly") if isinstance(payload, Mapping) else None
+    if not isinstance(raw, Mapping):
+        return None
+    reason = raw.get("reason").strip() if isinstance(raw.get("reason"), str) else ""
+    actions = [
+        action.strip()
+        for action in _list(raw.get("manualActions"))
+        if isinstance(action, str) and action.strip()
+    ]
+    if not reason or not actions:
+        return None
+    return {
+        "reason": redact_comment_body(reason[:1000]),
+        "manualActions": [redact_comment_body(action[:500]) for action in actions[:20]],
+    }
+
+
+async def _mark_github_issue_manual_only(
+    *,
+    repository: str,
+    issue_number: int,
+    issue: Mapping[str, Any],
+    manual_only: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    service: GitHubService,
+    assessment_output: Mapping[str, Any],
+) -> ToolResult:
+    """Hand the issue to people and end this run without implementation.
+
+    The label keeps automatic selection away until a person removes it, and the
+    comment says why and what to do. A retried call reuses both writes.
+    """
+    issue_ref = f"{repository}#{issue_number}"
+    outputs: dict[str, Any] = {
+        "issueRef": issue_ref,
+        # A caller that ignores the idle disposition still stops here.
+        "decision": "blocked",
+        "manualOnly": dict(manual_only),
+        "blockingIssues": [
+            {"source": "manual_only", "label": GITHUB_MANUAL_ONLY_LABEL, "statusKnown": True, "done": False}
+        ],
+        "summary": f"Marked {issue_ref} manual-only: {manual_only['reason']}",
+        **assessment_output,
+    }
+    labels = {str(label).strip().lower() for label in issue.get("labels") or []}
+    if GITHUB_MANUAL_ONLY_LABEL in labels:
+        return ToolResult(status="COMPLETED", outputs=outputs, completion_disposition="idle")
+    try:
+        owner = claim_owner(context)
+    except ValueError:
+        owner = ""
+    marker = f"<!-- moonmind-manual-only {owner} -->" if owner else "<!-- moonmind-manual-only -->"
+
+    async def explained() -> bool | None:
+        listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+        if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+            return None
+        return any(marker in str(comment.get("body") or "") for comment in listed["comments"])
+
+    def stopped(summary: str) -> ToolResult:
+        # Never label without the explanation: the label alone would hide the
+        # issue from automation with no word on why or what a person must do.
+        return ToolResult(status="FAILED", outputs={**outputs, "summary": summary})
+
+    found = await explained()
+    if found is None:
+        return stopped(f"Could not read {issue_ref} comments before marking it manual-only.")
+    if not found:
+        body = "\n".join([
+            f"MoonMind marked this issue `{GITHUB_MANUAL_ONLY_LABEL}`: its remaining work "
+            "cannot be done by automation running in a Linux container.",
+            "",
+            f"**Why:** {manual_only['reason']}",
+            "",
+            "**Manual actions:**",
+            *(f"- {action}" for action in manual_only["manualActions"]),
+            "",
+            f"Automatic issue selection skips this issue while the `{GITHUB_MANUAL_ONLY_LABEL}` "
+            "label is present. Remove the label once the manual work is done or when "
+            "automation should try again.",
+            "",
+            marker,
+        ])
+        created = await service.create_issue_comment(
+            repo=repository, issue_number=issue_number, body=body
+        )
+        if not created.get("ok"):
+            # A lost response is unknown, not failure: reconcile by the marker.
+            if created.get("reasonCode") != "outcome_unknown" or not await explained():
+                return stopped(
+                    f"Could not post the manual-only explanation on {issue_ref}: "
+                    f"{created.get('summary') or 'comment create failed'}"
+                )
+    await service.ensure_lifecycle_label(
+        repo=repository,
+        label=GITHUB_MANUAL_ONLY_LABEL,
+        color="5319e7",
+        description="Needs Windows, special hardware, or other work outside a Linux container",
+    )
+    added = await service.add_issue_labels(
+        repo=repository, issue_number=issue_number, labels=[GITHUB_MANUAL_ONLY_LABEL]
+    )
+    if not added.get("ok"):
+        return ToolResult(status="FAILED", outputs={
+            **outputs,
+            "summary": f"Could not label {issue_ref} manual-only: {added.get('summary') or 'label add failed'}",
+        })
+    return ToolResult(status="COMPLETED", outputs=outputs, completion_disposition="idle")
 
 
 async def resolve_pull_request_target(
@@ -6088,7 +6629,8 @@ async def _validate_post_merge_issue_handoff(
     """Validate an actual merge, independently of assessment/verification prose.
 
     Only the existing merge-automation Activity supplies this handoff. The
-    remote merge must be for its exact tracked head and current target revision.
+    remote merge must be for its exact tracked head, and the completion target
+    must still contain that merge. Later merges onto the target are expected.
     """
     if pull_request.get("repo") != repository:
         return "The merged pull request repository does not match the issue"
@@ -6101,20 +6643,30 @@ async def _validate_post_merge_issue_handoff(
         return reason
     if pr.get("number") != pull_request.get("number"):
         return "The merged pull request does not match the tracked pull request number"
-    if pr.get("merged") is not True or pr.get("state") != "closed" or not pr.get("merge_commit_sha"):
+    merge_commit = _string(pr.get("merge_commit_sha"))
+    if pr.get("merged") is not True or pr.get("state") != "closed" or not merge_commit:
         return "GitHub has not confirmed the exact candidate was merged"
+    # Workspaces record their publish base as a remote-tracking name
+    # ("origin/main"); the remote branch is its short name.
     base_branch = _string(pull_request.get("baseBranch"))
+    for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+        base_branch = base_branch.removeprefix(prefix)
     try:
         target = await service.read_repository_target(
             repository, expected_ref or (f"refs/heads/{base_branch}" if base_branch else "")
         )
-    except Exception:
-        return "Re-read the merged completion target through the authorized repository reader"
-    if (
-        target.get("ref") != f"refs/heads/{_mapping(pr.get('base')).get('ref', '')}"
-        or target.get("revision") != pr.get("merge_commit_sha")
-    ):
-        return "The completion target changed after merge; verify its current content before finalizing the issue"
+        if target.get("ref") != f"refs/heads/{_mapping(pr.get('base')).get('ref', '')}":
+            return "The pull request merged into a different branch than the completion target"
+        contained = target.get("revision") == merge_commit or await service.commit_is_ancestor(
+            repository, merge_commit, _string(target.get("revision"))
+        )
+    except Exception as exc:
+        return (
+            "Re-read the merged completion target through the authorized repository "
+            f"reader ({type(exc).__name__})"
+        )
+    if not contained:
+        return "The completion target no longer contains the merge; verify its current content before finalizing the issue"
     return None
 
 
