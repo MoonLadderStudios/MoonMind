@@ -722,7 +722,7 @@ def build_app(
                         lock_mod.StackLock(store.state_dir, operation["stack"]).acquire()
                     )
                     try:
-                        operation = store.begin_retry(operation_id)
+                        store.begin_retry(operation_id)
                     except RuntimeError:
                         # Constant body: retry-budget internals never reach the response.
                         return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
