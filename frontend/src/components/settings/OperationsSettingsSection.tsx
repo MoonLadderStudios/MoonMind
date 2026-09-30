@@ -114,6 +114,32 @@ const DeploymentActionSchema = z
     afterSummary: z.string().optional().nullable(),
     beforeBuildId: z.string().optional().nullable(),
     afterBuildId: z.string().optional().nullable(),
+    owner: z.enum(['controller', 'workflow']).optional().nullable(),
+    operationId: z.string().optional().nullable(),
+    installedImage: z.string().optional().nullable(),
+    errorSummary: z.string().optional().nullable(),
+    attempts: z
+      .array(
+        z.object({
+          attempt: z.number(),
+          error: z.string(),
+          at: z.string().optional().nullable(),
+        }),
+      )
+      .optional()
+      .default([]),
+    attemptGroup: z.number().optional().nullable(),
+    verification: z
+      .array(
+        z.object({
+          name: z.string(),
+          status: z.string(),
+          detail: z.string().optional().nullable(),
+        }),
+      )
+      .optional()
+      .default([]),
+    retryAllowed: z.boolean().optional().default(false),
     rollbackEligibility: z
       .object({
         eligible: z.boolean(),
@@ -165,9 +191,28 @@ const DeploymentStackStateSchema = z
     currentImage: DeploymentCurrentImageSchema.default({ evidence: 'unavailable' }),
     latestAction: DeploymentActionSchema.optional().nullable(),
     recentActions: z.array(DeploymentActionSchema).optional().default([]),
+    controller: z
+      .object({
+        installed: z.boolean(),
+        reachable: z.boolean(),
+        message: z.string().optional().nullable(),
+      })
+      .optional()
+      .default({ installed: false, reachable: false }),
     policy: DeploymentPolicySchema,
   })
   .passthrough();
+
+const DeploymentUpdateResultSchema = z
+  .object({
+    deploymentUpdateRunId: z.string(),
+    operationId: z.string().optional().nullable(),
+    owner: z.enum(['controller', 'workflow']).optional().nullable(),
+    status: z.string(),
+  })
+  .passthrough();
+
+type DeploymentUpdateResult = z.infer<typeof DeploymentUpdateResultSchema>;
 
 const ImageTargetsSchema = z
   .object({
@@ -198,6 +243,9 @@ export interface WorkerPauseConfig {
 }
 
 const DEPLOYMENT_STACK = 'moonmind';
+// Ordinary bounded reads while a controller operation is still in progress.
+const DEPLOYMENT_ACTIVE_POLL_MS = 5_000;
+const ACTIVE_DEPLOYMENT_STATUSES = new Set(['QUEUED', 'RUNNING']);
 
 const DEFAULT_UPDATE_OPTIONS = {
   mode: 'changed_services',
@@ -252,6 +300,56 @@ function currentVersionLabel(buildId: string | null | undefined): string {
   return value ? `v${value}` : 'Unavailable';
 }
 
+function ControllerOperationDetails({ action }: { action: DeploymentAction }) {
+  const failedChecks = action.verification.filter(
+    (check) => String(check.status).toLowerCase() !== 'passed',
+  );
+  return (
+    <div className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-400">
+      <div className="break-all font-mono">Operation {action.operationId}</div>
+      <div className="break-all">
+        Requested: <span className="font-mono">{action.requestedImage || 'unknown'}</span>
+      </div>
+      <div className="break-all">
+        Installed:{' '}
+        <span className="font-mono">{action.installedImage || 'not confirmed'}</span>
+      </div>
+      {action.errorSummary ? (
+        <div className="break-words text-rose-700 dark:text-rose-400">
+          Error: {action.errorSummary}
+        </div>
+      ) : null}
+      {failedChecks.map((check) => (
+        <div key={check.name} className="break-words text-amber-700 dark:text-amber-300">
+          Verification {check.status}: {check.name}
+          {check.detail ? ` (${check.detail})` : ''}
+        </div>
+      ))}
+      {action.attempts.length || action.verification.length ? (
+        <details>
+          <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-300">
+            Controller logs
+          </summary>
+          <ul className="mt-1 space-y-1">
+            {action.attempts.map((attempt) => (
+              <li key={`attempt-${attempt.attempt}`} className="break-words font-mono">
+                Attempt {attempt.attempt}
+                {attempt.at ? ` · ${attempt.at}` : ''}: {attempt.error}
+              </li>
+            ))}
+            {action.verification.map((check) => (
+              <li key={`check-${check.name}`} className="break-words font-mono">
+                {check.name}: {check.status}
+                {check.detail ? ` · ${check.detail}` : ''}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -275,8 +373,30 @@ function Metric({
   );
 }
 
+function deploymentResultNotice(result: DeploymentUpdateResult, verb: string): string {
+  if (result.owner === 'controller' && result.operationId) {
+    return `Deployment ${verb} accepted by the controller: operation ${result.operationId} (${formatStatusLabel(result.status, 'UNKNOWN')})`;
+  }
+  return `Deployment ${verb} queued: ${result.deploymentUpdateRunId}`;
+}
+
+async function deploymentErrorMessage(response: Response): Promise<string> {
+  const errorPayload = await response.json().catch(() => ({}));
+  const detail = errorPayload?.detail;
+  const message =
+    typeof detail?.message === 'string'
+      ? detail.message
+      : typeof detail === 'string'
+        ? detail
+        : `Server error: ${response.status}`;
+  return typeof detail?.activeOperationId === 'string'
+    ? `${message} (active operation ${detail.activeOperationId})`
+    : message;
+}
+
 function deploymentActionKey(action: DeploymentAction): string {
   return String(
+    action.operationId ||
     action.id ||
       action.runId ||
       action.runDetailUrl ||
@@ -479,6 +599,14 @@ export function OperationsSettingsSection({
       }
       return DeploymentStackStateSchema.parse(await response.json());
     },
+    refetchInterval: (query) =>
+      query.state.data?.recentActions.some(
+        (action) =>
+          action.owner === 'controller' &&
+          ACTIVE_DEPLOYMENT_STATUSES.has(String(action.status || '').toUpperCase()),
+      )
+        ? DEPLOYMENT_ACTIVE_POLL_MS
+        : false,
   });
 
   const {
@@ -587,16 +715,9 @@ export function OperationsSettingsSection({
         }),
       });
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        const detail =
-          typeof errorPayload.detail?.message === 'string'
-            ? errorPayload.detail.message
-            : typeof errorPayload.detail === 'string'
-              ? errorPayload.detail
-              : `Server error: ${response.status}`;
-        throw new Error(detail);
+        throw new Error(await deploymentErrorMessage(response));
       }
-      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+      return DeploymentUpdateResultSchema.parse(await response.json());
     },
     onSuccess: (result) => {
       if (!result) {
@@ -604,7 +725,7 @@ export function OperationsSettingsSection({
       }
       setUpdateNotice({
         level: 'ok',
-        text: `Deployment update queued: ${result.deploymentUpdateRunId}`,
+        text: deploymentResultNotice(result, 'update'),
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
@@ -664,16 +785,9 @@ export function OperationsSettingsSection({
         }),
       });
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        const detail =
-          typeof errorPayload.detail?.message === 'string'
-            ? errorPayload.detail.message
-            : typeof errorPayload.detail === 'string'
-              ? errorPayload.detail
-              : `Server error: ${response.status}`;
-        throw new Error(detail);
+        throw new Error(await deploymentErrorMessage(response));
       }
-      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+      return DeploymentUpdateResultSchema.parse(await response.json());
     },
     onSuccess: (result) => {
       if (!result) {
@@ -681,7 +795,7 @@ export function OperationsSettingsSection({
       }
       setRollbackNotice({
         level: 'ok',
-        text: `Deployment rollback queued: ${result.deploymentUpdateRunId}`,
+        text: deploymentResultNotice(result, 'rollback'),
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
@@ -690,6 +804,38 @@ export function OperationsSettingsSection({
         level: 'error',
         text: mutationError.message,
       });
+    },
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (operationId: string) => {
+      const confirmation = [
+        'Retry deployment operation?',
+        `Operation: ${operationId}`,
+        'The controller starts a fresh bounded attempt for the same target and keeps the earlier errors.',
+        'Services may restart during this operation.',
+      ].join('\n');
+      if (!window.confirm(confirmation)) {
+        return null;
+      }
+      const response = await fetch(
+        `/api/v1/operations/deployment/operations/${encodeURIComponent(operationId)}/retry`,
+        { method: 'POST', headers: { Accept: 'application/json' } },
+      );
+      if (!response.ok) {
+        throw new Error(await deploymentErrorMessage(response));
+      }
+      return DeploymentUpdateResultSchema.parse(await response.json());
+    },
+    onSuccess: (result) => {
+      if (!result) {
+        return;
+      }
+      setRollbackNotice({ level: 'ok', text: deploymentResultNotice(result, 'retry') });
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
+    },
+    onError: (mutationError: Error) => {
+      setRollbackNotice({ level: 'error', text: mutationError.message });
     },
   });
 
@@ -769,6 +915,9 @@ export function OperationsSettingsSection({
     });
   };
 
+  const controllerUnavailable = Boolean(
+    deploymentState?.controller.installed && !deploymentState.controller.reachable,
+  );
   const latestAction = deploymentState?.latestAction;
   const latestActionSummary = latestAction
     ? [
@@ -894,6 +1043,27 @@ export function OperationsSettingsSection({
                 Build metadata unavailable for this image.
               </p>
             ) : null}
+            {controllerUnavailable ? (
+              <div
+                role="alert"
+                className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300"
+              >
+                {deploymentState?.controller.message ||
+                  'The deployment controller is unavailable.'}{' '}
+                The dashboard cannot submit updates until it answers; the host command{' '}
+                <code>./tools/update-moonmind.sh</code> remains usable.
+              </div>
+            ) : deploymentState?.controller.installed ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Updates run in the standalone deployment controller, which keeps a local
+                recovery record.
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {deploymentState?.controller.message ||
+                  'The standalone deployment controller is not installed.'}
+              </p>
+            )}
 
             <form
               className="space-y-4 rounded-2xl border border-slate-200 p-5 dark:border-slate-800"
@@ -928,7 +1098,9 @@ export function OperationsSettingsSection({
 
               <button
                 type="submit"
-                disabled={deploymentMutation.isPending || !canInvokeOperations}
+                disabled={
+                  deploymentMutation.isPending || !canInvokeOperations || controllerUnavailable
+                }
                 className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
               >
                 Update MoonMind
@@ -983,6 +1155,9 @@ export function OperationsSettingsSection({
                           {action.completedAt || action.startedAt || '-'}
                           {action.operator ? ` · ${action.operator}` : ''}
                         </div>
+                        {action.owner === 'controller' ? (
+                          <ControllerOperationDetails action={action} />
+                        ) : null}
                         <div className="mt-3 flex flex-wrap gap-3">
                           {action.runDetailUrl ? (
                             <a
@@ -1007,6 +1182,20 @@ export function OperationsSettingsSection({
                             >
                               Raw command log
                             </a>
+                          ) : null}
+                          {action.retryAllowed && action.operationId ? (
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+                              disabled={
+                                !canInvokeOperations ||
+                                retryMutation.isPending ||
+                                controllerUnavailable
+                              }
+                              onClick={() => retryMutation.mutate(String(action.operationId))}
+                            >
+                              Retry operation
+                            </button>
                           ) : null}
                           {action.rollbackEligibility?.eligible &&
                           action.rollbackEligibility.targetImage ? (

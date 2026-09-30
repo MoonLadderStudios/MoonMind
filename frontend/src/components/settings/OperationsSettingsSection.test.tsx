@@ -563,6 +563,192 @@ describe('OperationsSettingsSection deployment update card', () => {
     });
     expect(await within(card).findByText(/deployment rollback queued/i)).toBeTruthy();
   });
+
+  const failedControllerAction = {
+    id: 'ctl-ui-1',
+    kind: 'update',
+    status: 'FAILED',
+    owner: 'controller',
+    operationId: 'ui-1',
+    requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260507.2470',
+    installedImage: null,
+    resolvedDigest: null,
+    startedAt: '2026-05-07T18:00:00Z',
+    completedAt: '2026-05-07T18:03:00Z',
+    runDetailUrl: null,
+    logsArtifactUrl: null,
+    errorSummary: 'attempt 1: pull failed: manifest unknown (latest attempt 3: pull failed)',
+    attempts: [
+      { attempt: 1, error: 'pull failed: manifest unknown', at: '2026-05-07T18:01:00Z' },
+      { attempt: 3, error: 'pull failed', at: '2026-05-07T18:03:00Z' },
+    ],
+    attemptGroup: 1,
+    verification: [
+      { name: 'operator-access:http://localhost:7000', status: 'failed', detail: 'health check failed' },
+    ],
+    retryAllowed: true,
+    rollbackEligibility: null,
+  };
+
+  function mockControllerState(
+    controller: { installed: boolean; reachable: boolean; message?: string | null },
+    extra: (url: string, init?: RequestInit) => Promise<Response> | null = () => null,
+  ) {
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      const handled = extra(url, init);
+      if (handled) {
+        return handled;
+      }
+      if (url === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/v1/operations/codex/shards') {
+        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...stackState,
+            controller,
+            latestAction: failedControllerAction,
+            recentActions: [failedControllerAction, recentAction],
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
+    });
+  }
+
+  it('shows the controller operation target, installed state, original error, and logs', async () => {
+    mockControllerState({ installed: true, reachable: true, message: null });
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(await within(card).findByText('Operation ui-1')).toBeTruthy();
+    expect(within(card).getByText(/updates run in the standalone deployment controller/i)).toBeTruthy();
+    expect(within(card).getByText('not confirmed')).toBeTruthy();
+    expect(
+      within(card).getByText(/Error: attempt 1: pull failed: manifest unknown/),
+    ).toBeTruthy();
+    expect(within(card).getByText(/Verification failed: operator-access/)).toBeTruthy();
+    expect(within(card).getByText('Controller logs')).toBeTruthy();
+    expect(within(card).getByText(/Attempt 1 · 2026-05-07T18:01:00Z: pull failed: manifest unknown/)).toBeTruthy();
+    // Historical workflow-backed updates remain readable beside it.
+    expect(within(card).getByRole('link', { name: /run detail/i }).getAttribute('href')).toBe(
+      '/workflows/depupd_recent',
+    );
+  });
+
+  it('requests the controller retry for a failed operation', async () => {
+    mockControllerState({ installed: true, reachable: true }, (url, init) =>
+      url === '/api/v1/operations/deployment/operations/ui-1/retry' && init?.method === 'POST'
+        ? Promise.resolve({
+            ok: true,
+            status: 202,
+            json: async () => ({
+              deploymentUpdateRunId: 'ctl-ui-1',
+              operationId: 'ui-1',
+              owner: 'controller',
+              taskId: null,
+              workflowId: null,
+              status: 'RUNNING',
+            }),
+          } as Response)
+        : null,
+    );
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    fireEvent.click(await within(card).findByRole('button', { name: /retry operation/i }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Retry deployment operation?'));
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            String(url) === '/api/v1/operations/deployment/operations/ui-1/retry' &&
+            init?.method === 'POST',
+        ),
+      ).toBe(true);
+    });
+    expect(
+      await within(card).findByText(/retry accepted by the controller: operation ui-1/i),
+    ).toBeTruthy();
+  });
+
+  it('reports an unreachable controller and does not offer dashboard submission', async () => {
+    mockControllerState({
+      installed: true,
+      reachable: false,
+      message: 'The deployment controller is unavailable: controller endpoint is unreachable.',
+    });
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    const alert = await within(card).findByRole('alert');
+    expect(alert.textContent).toContain('controller endpoint is unreachable');
+    expect(alert.textContent).toContain('./tools/update-moonmind.sh');
+    const submit = within(card).getByRole('button', { name: /update moonmind/i }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    const retry = within(card).getByRole('button', { name: /retry operation/i }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+  });
+
+  it('names the controller operation that accepted a submitted update', async () => {
+    mockControllerState({ installed: true, reachable: true }, (url) =>
+      url === '/api/v1/operations/deployment/update'
+        ? Promise.resolve({
+            ok: true,
+            status: 202,
+            json: async () => ({
+              deploymentUpdateRunId: 'ctl-ui-2',
+              operationId: 'ui-2',
+              owner: 'controller',
+              taskId: null,
+              workflowId: null,
+              status: 'RUNNING',
+            }),
+          } as Response)
+        : null,
+    );
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    fireEvent.click(await within(card).findByRole('button', { name: /update moonmind/i }));
+    expect(
+      await within(card).findByText(/update accepted by the controller: operation ui-2 \(running\)/i),
+    ).toBeTruthy();
+  });
+
+  it('reports a busy controller with the operation that owns the stack', async () => {
+    mockControllerState({ installed: true, reachable: true }, (url) =>
+      url === '/api/v1/operations/deployment/update'
+        ? Promise.resolve({
+            ok: false,
+            status: 409,
+            json: async () => ({
+              detail: {
+                code: 'deployment_controller_busy',
+                message: 'Another deployment operation owns this stack.',
+                activeOperationId: 'host-9',
+              },
+            }),
+          } as Response)
+        : null,
+    );
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    fireEvent.click(await within(card).findByRole('button', { name: /update moonmind/i }));
+    expect(
+      await within(card).findByText(/owns this stack\. \(active operation host-9\)/i),
+    ).toBeTruthy();
+  });
   it.each([
     ['accepted', 'pending', 'Pause requested; confirmation pending'],
     ['unknown', 'unknown', 'Pause partially confirmed'],
