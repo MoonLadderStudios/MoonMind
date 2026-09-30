@@ -13,6 +13,7 @@ from temporalio.exceptions import (
     ApplicationError,
     is_cancelled_exception,
 )
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.activity_catalog import (
@@ -38,6 +39,8 @@ _RETRY_POLICY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=5,
 )
+# Effect Activities get one attempt each; the workflow starts the retries.
+_ONE_ATTEMPT = RetryPolicy(maximum_attempts=1)
 
 
 # Saved-work rejections that mean the admitted decision no longer applies.
@@ -59,10 +62,18 @@ def _activity_failure(exc: ActivityError) -> tuple[str, str]:
     """Classify an exhausted or rejected saved-publication Activity."""
 
     cause = exc.cause
-    code = str(getattr(cause, "type", "") or "").strip()
+    if isinstance(cause, TemporalTimeoutError):
+        kind = cause.type.name.lower() if cause.type is not None else "unknown"
+        return "unavailable", f"publication_activity_timeout:{kind}"
+    code = str(cause.type or "").strip() if isinstance(cause, ApplicationError) else ""
     if isinstance(cause, ApplicationError) and cause.non_retryable and code:
         return ("conflict" if code in _SAVED_WORK_CONFLICT_CODES else "rejected"), code
     return "unavailable", code or "publication_activity_unavailable"
+
+
+def _retryable(exc: ActivityError) -> bool:
+    cause = exc.cause
+    return not (isinstance(cause, ApplicationError) and cause.non_retryable)
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -79,7 +90,12 @@ class MoonMindPublicationRecoveryWorkflow:
         return {"phase": self._phase, "result": self._result}
 
     async def _activity(
-        self, name: str, payload: Mapping[str, Any], *, task_queue: str
+        self,
+        name: str,
+        payload: Mapping[str, Any],
+        *,
+        task_queue: str,
+        retry_policy: RetryPolicy = _RETRY_POLICY,
     ) -> dict[str, Any]:
         result = await workflow.execute_activity(
             name,
@@ -87,12 +103,17 @@ class MoonMindPublicationRecoveryWorkflow:
             task_queue=task_queue,
             start_to_close_timeout=timedelta(minutes=5),
             schedule_to_close_timeout=timedelta(minutes=15),
-            retry_policy=_RETRY_POLICY,
+            retry_policy=retry_policy,
         )
         return _payload(result)
 
     async def _to_completion(
-        self, name: str, payload: Mapping[str, Any], *, task_queue: str
+        self,
+        name: str,
+        payload: Mapping[str, Any],
+        *,
+        task_queue: str,
+        retry_policy: RetryPolicy = _RETRY_POLICY,
     ) -> dict[str, Any]:
         """Run one saved-work Activity to its real outcome despite cancellation.
 
@@ -103,7 +124,9 @@ class MoonMindPublicationRecoveryWorkflow:
         """
 
         step = asyncio.ensure_future(
-            self._activity(name, payload, task_queue=task_queue)
+            self._activity(
+                name, payload, task_queue=task_queue, retry_policy=retry_policy
+            )
         )
         while True:
             try:
@@ -112,6 +135,44 @@ class MoonMindPublicationRecoveryWorkflow:
                 if step.cancelled():
                     raise
                 self._cancellation = self._cancellation or exc
+
+    async def _effect(
+        self, name: str, payload: Mapping[str, Any], *, task_queue: str
+    ) -> dict[str, Any]:
+        """Run one remote-effect Activity; a cancellation starts no new attempt.
+
+        A Temporal retry would still start after the workflow is cancelled and
+        could perform the first real effect, so the workflow starts each
+        attempt itself under the same bounded backoff. The running attempt
+        always finishes; once cancellation is requested, its failure is final.
+        """
+
+        delay = _RETRY_POLICY.initial_interval
+        attempt = 1
+        while True:
+            try:
+                return await self._to_completion(
+                    name, payload, task_queue=task_queue, retry_policy=_ONE_ATTEMPT
+                )
+            except ActivityError as exc:
+                if (
+                    is_cancelled_exception(exc)
+                    or not _retryable(exc)
+                    or attempt >= _RETRY_POLICY.maximum_attempts
+                ):
+                    raise
+                if self._cancellation is None:
+                    try:
+                        await workflow.sleep(delay)
+                    except asyncio.CancelledError as cancelled:
+                        self._cancellation = cancelled
+                if self._cancellation is not None:
+                    raise
+            attempt += 1
+            delay = min(
+                delay * _RETRY_POLICY.backoff_coefficient,
+                _RETRY_POLICY.maximum_interval or delay,
+            )
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -240,9 +301,10 @@ class MoonMindPublicationRecoveryWorkflow:
         The prepare Activity admits the destination once and persists the exact
         candidate before any effect; a later run of the same operation reuses
         that decision. Push and pull request are separate Activities, so a PR
-        retry never repeats a confirmed push. Cancellation stops further
-        effects but never abandons one in flight or its durable record. No
-        agent, verifier, or model Activity is reachable from this path.
+        retry never repeats a confirmed push. Cancellation starts no further
+        effect or effect attempt but never abandons one in flight or its
+        durable record. No agent, verifier, or model Activity is reachable
+        from this path.
         """
 
         try:
@@ -267,7 +329,11 @@ class MoonMindPublicationRecoveryWorkflow:
             self._phase = "optional_workspace_restoration"
             prepared = await self._to_completion(
                 "publication_recovery.saved_work_prepare",
-                {**request, "destinationWorkflowId": info.workflow_id},
+                {
+                    **request,
+                    "destinationWorkflowId": info.workflow_id,
+                    "destinationRunId": info.run_id,
+                },
                 task_queue=AGENT_RUNTIME_TASK_QUEUE,
             )
             if (prepared.get("candidate") or {}).get("noChange"):
@@ -275,7 +341,7 @@ class MoonMindPublicationRecoveryWorkflow:
             elif self._cancellation is None:
                 self._phase = "publication_operation"
                 in_flight = "push"
-                push = await self._to_completion(
+                push = await self._effect(
                     "publication_recovery.saved_work_push",
                     {**request, "prepared": prepared},
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
@@ -287,7 +353,7 @@ class MoonMindPublicationRecoveryWorkflow:
                     outcome, reason = "published", str(push.get("reasonCode") or "")
                 elif self._cancellation is None:
                     in_flight = "pullRequest"
-                    pull_request = await self._to_completion(
+                    pull_request = await self._effect(
                         "publication_recovery.saved_work_pull_request",
                         {**request, "prepared": prepared, "push": push},
                         task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -305,8 +371,10 @@ class MoonMindPublicationRecoveryWorkflow:
                 self._cancellation = self._cancellation or exc
                 code = "publication_cancelled"
             else:
-                outcome, reason = _activity_failure(exc)
-                code = reason
+                failure, code = _activity_failure(exc)
+                # A retryable failure is final only because of the cancellation.
+                if self._cancellation is None or not _retryable(exc):
+                    outcome, reason = failure, code
             # An effect Activity that returned no result is unconfirmed: the
             # next attempt reconciles the remote before acting again.
             if in_flight == "push":
