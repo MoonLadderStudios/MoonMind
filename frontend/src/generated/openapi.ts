@@ -1309,6 +1309,161 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repository-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List named repository connections for Source Control Settings */
+        get: operations["list_repository_connections_api_v1_repository_connections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/pat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a named connection from a personal access token
+         * @description Validate the candidate, then save its secret and connection atomically.
+         *
+         *     A retried request that already committed returns the committed
+         *     connection without calling GitHub again; a reused ID is a conflict,
+         *     never a suffixed new record.
+         */
+        post: operations["create_pat_connection_api_v1_repository_connections_pat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a connection's personal access token
+         * @description Replace the token for the same GitHub account, fenced by revision.
+         */
+        post: operations["rotate_pat_connection_api_v1_repository_connections__connection_id__rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assign a repository verified through the selected connection */
+        post: operations["assign_repository_api_v1_repository_connections__connection_id__assignments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}/assignments/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove one repository assignment */
+        post: operations["remove_repository_assignment_api_v1_repository_connections__connection_id__assignments_remove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Discover repositories visible to the selected connection
+         * @description Bounded discovery; partial pages are reported, never treated as denial.
+         */
+        get: operations["discover_connection_repositories_api_v1_repository_connections__connection_id__repositories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Connection: read-only probe with the selected connection */
+        post: operations["probe_repository_connection_api_v1_repository_connections__connection_id__probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a connection and the token it created
+         * @description Delete an unassigned connection, then its now-unreferenced secret.
+         *
+         *     The internal Managed Secret is removed only when the Secrets System's
+         *     complete consumer inventory proves nothing else references it.
+         */
+        delete: operations["remove_repository_connection_api_v1_repository_connections__connection_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/github/events": {
         parameters: {
             query?: never;
@@ -6777,6 +6932,58 @@ export interface components {
             /** Resultrefs */
             resultRefs?: string[];
         };
+        /** ConnectionProbeRequest */
+        ConnectionProbeRequest: {
+            /** Repo */
+            repo: string;
+            /** Mode */
+            mode: string;
+            /** Basebranch */
+            baseBranch?: string | null;
+        };
+        /** ConnectionProbeResponse */
+        ConnectionProbeResponse: {
+            /** Connectionid */
+            connectionId: string;
+            /** Policyrevision */
+            policyRevision: number;
+            /** Credentialrevision */
+            credentialRevision: number;
+            /** Secretrevision */
+            secretRevision?: number | null;
+            /** Repo */
+            repo: string;
+            /** Mode */
+            mode: string;
+            /** Repositoryaccessible */
+            repositoryAccessible?: boolean | null;
+            /** Defaultbranchaccessible */
+            defaultBranchAccessible?: boolean | null;
+            /** Pullrequestaccessible */
+            pullRequestAccessible?: boolean | null;
+            /** Resolvedbranch */
+            resolvedBranch?: string | null;
+            /** Branchsource */
+            branchSource?: ("requested" | "remote_default") | null;
+            /**
+             * Writeverified
+             * @default false
+             */
+            writeVerified: boolean;
+            /** Permissionchecklist */
+            permissionChecklist: components["schemas"]["ProbeChecklistItem"][];
+            /** Diagnostics */
+            diagnostics: components["schemas"]["ProbeDiagnostic"][];
+            /** Limitations */
+            limitations: string[];
+        };
+        /** ConnectionRemovalResponse */
+        ConnectionRemovalResponse: {
+            /** Connectionid */
+            connectionId: string;
+            /** Credentialremoved */
+            credentialRemoved: boolean | null;
+        };
         /** ContainerJobAccepted */
         ContainerJobAccepted: {
             /**
@@ -7771,6 +7978,20 @@ export interface components {
              * @constant
              */
             status: "QUEUED";
+        };
+        /** DiscoveredRepository */
+        DiscoveredRepository: {
+            /** Providerrepoid */
+            providerRepoId: string;
+            /** Fullname */
+            fullName: string;
+            /** Defaultbranch */
+            defaultBranch?: string | null;
+            /**
+             * Private
+             * @default false
+             */
+            private: boolean;
         };
         /** EligibleProviderProfile */
         EligibleProviderProfile: {
@@ -10303,6 +10524,58 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * PatConnectionSetupRequest
+         * @description Protected PAT setup submission.
+         *
+         *     Non-token fields default so a missing field can never make request
+         *     validation echo the submitted body (and its token) back; the handler
+         *     checks them instead.
+         */
+        PatConnectionSetupRequest: {
+            /**
+             * Requestid
+             * @default
+             */
+            requestId: string;
+            /**
+             * Connectionid
+             * @default
+             */
+            connectionId: string;
+            /**
+             * Displayname
+             * @default
+             */
+            displayName: string;
+            /**
+             * Token
+             * Format: password
+             * @default
+             */
+            token: string;
+            /** Allowedoperations */
+            allowedOperations?: ("read" | "write")[];
+        };
+        /**
+         * PatRotationRequest
+         * @description Protected rotation submission (same echo-safe shape as setup).
+         */
+        PatRotationRequest: {
+            /**
+             * Requestid
+             * @default
+             */
+            requestId: string;
+            /**
+             * Token
+             * Format: password
+             * @default
+             */
+            token: string;
+            /** Expectedsecretrevision */
+            expectedSecretRevision?: number | null;
+        };
+        /**
          * PinArtifactRequest
          * @description Request body for explicit artifact pinning.
          */
@@ -10843,6 +11116,50 @@ export interface components {
             expires_at: string;
             /** Required Headers */
             required_headers?: {
+                [key: string]: string;
+            };
+        };
+        /** ProbeChecklistItem */
+        ProbeChecklistItem: {
+            /** Permission */
+            permission: string;
+            /** Level */
+            level: string;
+            /** Required */
+            required: boolean;
+            /** Status */
+            status: string;
+        };
+        /** ProbeDiagnostic */
+        ProbeDiagnostic: {
+            /** Operation */
+            operation: string;
+            /** Kind */
+            kind: string;
+            /** Httpstatus */
+            httpStatus?: number | null;
+            /** Message */
+            message?: string | null;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+        };
+        /** ProbeModeView */
+        ProbeModeView: {
+            /** Mode */
+            mode: string;
+            /** Label */
+            label: string;
+            /** Description */
+            description: string;
+            /** Requiredpermissions */
+            requiredPermissions: {
+                [key: string]: string;
+            };
+            /** Optionalpermissions */
+            optionalPermissions: {
                 [key: string]: string;
             };
         };
@@ -12612,6 +12929,100 @@ export interface components {
             maxActions: number;
             /** Autonomous */
             autonomous: boolean;
+        };
+        /** RepositoryAssignmentRemoveRequest */
+        RepositoryAssignmentRemoveRequest: {
+            /** Requestid */
+            requestId: string;
+            /** Providerrepoid */
+            providerRepoId: string;
+            /**
+             * Repository
+             * @default
+             */
+            repository: string;
+        };
+        /** RepositoryAssignmentRequest */
+        RepositoryAssignmentRequest: {
+            /** Requestid */
+            requestId: string;
+            /** Repository */
+            repository: string;
+            /** Operations */
+            operations?: ("read" | "write")[];
+            /** Expectedrevision */
+            expectedRevision?: number | null;
+        };
+        /** RepositoryAssignmentView */
+        RepositoryAssignmentView: {
+            /** Repository */
+            repository: string;
+            /** Providerrepoid */
+            providerRepoId?: string | null;
+            /** Operations */
+            operations: string[];
+            /** Revision */
+            revision: number;
+        };
+        /** RepositoryConnectionListResponse */
+        RepositoryConnectionListResponse: {
+            /** Items */
+            items: components["schemas"]["RepositoryConnectionView"][];
+            /** Probemodes */
+            probeModes: components["schemas"]["ProbeModeView"][];
+        };
+        /**
+         * RepositoryConnectionView
+         * @description Operator-facing projection of one named connection (no secret refs).
+         */
+        RepositoryConnectionView: {
+            /** Id */
+            id: string;
+            /** Displayname */
+            displayName: string;
+            /**
+             * Credentialkind
+             * @enum {string}
+             */
+            credentialKind: "pat" | "github_app" | "other";
+            /** Account */
+            account?: string | null;
+            /** Installation */
+            installation?: string | null;
+            /** Endpoint */
+            endpoint: string;
+            /** Lifecycle */
+            lifecycle: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "no_repositories" | "disabled" | "credential_unavailable";
+            /** Statesummary */
+            stateSummary: string;
+            /** Allowedoperations */
+            allowedOperations: string[];
+            /** Assignments */
+            assignments: components["schemas"]["RepositoryAssignmentView"][];
+            /** Policyrevision */
+            policyRevision: number;
+            /** Credentialrevision */
+            credentialRevision: number;
+            /** Secretrevision */
+            secretRevision?: number | null;
+        };
+        /** RepositoryDiscoveryResponse */
+        RepositoryDiscoveryResponse: {
+            /** Connectionid */
+            connectionId: string;
+            /** Repositories */
+            repositories: components["schemas"]["DiscoveredRepository"][];
+            /** Complete */
+            complete: boolean;
+            /** Pagesread */
+            pagesRead: number;
+            /** Diagnostics */
+            diagnostics: components["schemas"]["ProbeDiagnostic"][];
         };
         /**
          * RescheduleExecutionRequest
@@ -16771,6 +17182,263 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubAppCallbackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_repository_connections_api_v1_repository_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryConnectionListResponse"];
+                };
+            };
+        };
+    };
+    create_pat_connection_api_v1_repository_connections_pat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatConnectionSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryConnectionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_pat_connection_api_v1_repository_connections__connection_id__rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatRotationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryConnectionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_repository_api_v1_repository_connections__connection_id__assignments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryAssignmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryConnectionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_repository_assignment_api_v1_repository_connections__connection_id__assignments_remove_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryAssignmentRemoveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryConnectionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_connection_repositories_api_v1_repository_connections__connection_id__repositories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_repository_connection_api_v1_repository_connections__connection_id__probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionProbeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionProbeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_repository_connection_api_v1_repository_connections__connection_id__delete: {
+        parameters: {
+            query: {
+                requestId: string;
+            };
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionRemovalResponse"];
                 };
             };
             /** @description Validation Error */
