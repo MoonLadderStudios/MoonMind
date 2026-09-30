@@ -18227,6 +18227,46 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
         ] is True
 
 
+def test_retry_publication_rejects_a_changed_expected_source_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MoonLadderStudios/MoonMind#4020: Saved Results binds Publish Saved Work to
+    # the run it displays. A newer run must not be published from a historical
+    # selection.
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    record = _publication_recovery_record()
+    service.describe_execution.return_value = record
+    adapter = AsyncMock()
+    adapter.start_workflow.return_value = WorkflowStartResult(
+        workflow_id="publication-recovery-1",
+        run_id="publication-run-1",
+    )
+    app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", True)
+
+    with TestClient(app) as test_client:
+        stale = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication",
+            json={"expectedSourceRunId": "older-run"},
+        )
+        adapter.start_workflow.assert_not_awaited()
+        current = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication",
+            json={"expectedSourceRunId": record.run_id},
+        )
+
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "publication_retry_not_available"
+    assert stale.json()["detail"]["reason"] == "publication_source_changed"
+    assert current.status_code == 201
+    assert current.json()["sourceRunId"] == record.run_id
+    assert adapter.start_workflow.await_count == 1
+
+
 def test_retry_publication_stops_before_temporal_when_rollout_disables_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

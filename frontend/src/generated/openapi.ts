@@ -7025,6 +7025,8 @@ export interface components {
             selectedSourceArtifactRefs?: string[];
             /** Boundedpurpose */
             boundedPurpose?: string | null;
+            /** Expectedsourcerunid */
+            expectedSourceRunId?: string | null;
         };
         /**
          * ContinueInNewWorkflowResponse
@@ -11467,6 +11469,14 @@ export interface components {
             credentialSource: string;
             /** Materializationmode */
             materializationMode: string;
+        };
+        /**
+         * PublicationRecoveryRequest
+         * @description Optional precondition for publication-only recovery (#4020).
+         */
+        PublicationRecoveryRequest: {
+            /** Expectedsourcerunid */
+            expectedSourceRunId?: string | null;
         };
         /** PublicationRecoveryResponse */
         PublicationRecoveryResponse: {
@@ -18929,7 +18939,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PublicationRecoveryRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             201: {

@@ -492,6 +492,50 @@ async def test_continue_rejects_unauthorized_evidence(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_continue_rejects_a_changed_expected_source_run(monkeypatch) -> None:
+    # MoonLadderStudios/MoonMind#4020: Saved Results binds Continue to the run it
+    # displays. The server still pins the source; a stale selection fails closed
+    # before any reservation or create side effect.
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    await _seed_canonical(sessions, owner_id=str(user.id))
+    _patch_collaborators(monkeypatch)
+    service = _FakeService()
+
+    with pytest.raises(HTTPException) as excinfo:
+        async with sessions() as session:
+            await ex.continue_in_new_workflow(
+                workflow_id="mm:source",
+                payload=_payload(expectedSourceRunId="run-0"),
+                service=service,  # type: ignore[arg-type]
+                session=session,
+                user=user,
+                _submit_enabled=None,
+            )
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["code"] == "continuation_source_changed"
+    assert service.create_calls == []
+    async with sessions() as session:
+        reservations = (
+            await session.execute(WorkflowLinkedContinuationRecord.__table__.select())
+        ).all()
+    assert reservations == []
+
+    async with sessions() as session:
+        result = await ex.continue_in_new_workflow(
+            workflow_id="mm:source",
+            payload=_payload(expectedSourceRunId="run-1"),
+            service=service,  # type: ignore[arg-type]
+            session=session,
+            user=user,
+            _submit_enabled=None,
+        )
+    assert result.source_run_id == "run-1"
+    assert len(service.create_calls) == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_continue_conflicts_on_reused_key_with_changed_request(
     monkeypatch,
 ) -> None:
