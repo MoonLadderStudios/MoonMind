@@ -223,6 +223,10 @@ async def test_reconcile_pull_request_is_read_only_and_sees_closed_results(
     listing, expected_state, expected_number
 ):
     mock_client = _reconcile_client(_mock_get_response(200, listing))
+    # "absent" additionally reads the head branch, which holds the candidate.
+    mock_client.get = AsyncMock(
+        side_effect=[_mock_get_response(200, listing), _branch_ref("a" * 40)]
+    )
 
     with patch(
         "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
@@ -239,12 +243,130 @@ async def test_reconcile_pull_request_is_read_only_and_sees_closed_results(
 
     assert result.state == expected_state
     assert result.number == expected_number
-    params = mock_client.get.await_args.kwargs["params"]
+    params = mock_client.get.await_args_list[0].kwargs["params"]
     assert params["state"] == "all"
     assert params["head"] == "o:feature"
     assert params["base"] == "main"
-    headers = mock_client.get.await_args.kwargs["headers"]
-    assert headers["Authorization"].endswith("admitted-token")
+    for call in mock_client.get.await_args_list:
+        assert call.kwargs["headers"]["Authorization"].endswith("admitted-token")
+    mock_client.patch.assert_not_awaited()
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("repo", "head", "full_name"),
+    [
+        ("owner/repo", "feature", "Owner/Repo"),
+        ("owner/repo", "Fork-Owner:feature", "fork-owner/repo"),
+    ],
+)
+async def test_reconcile_pull_request_compares_repository_identity_case_insensitively(
+    repo, head, full_name
+):
+    listing = [
+        {
+            **_pr(7),
+            "head": {
+                "ref": "feature",
+                "sha": "a" * 40,
+                "repo": {"full_name": full_name},
+            },
+        }
+    ]
+    mock_client = _reconcile_client(_mock_get_response(200, listing))
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().reconcile_pull_request(
+            repo=repo,
+            head=head,
+            base="main",
+            expected_head_sha="a" * 40,
+            draft=False,
+            github_token="admitted-token",
+        )
+
+    assert result.state == "matched"
+    assert result.number == 7
+    mock_client.post.assert_not_awaited()
+
+
+def _branch_ref(sha: str) -> httpx.Response:
+    return _mock_get_response(
+        200, {"ref": "refs/heads/feature", "object": {"sha": sha, "type": "commit"}}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("head", "branch_response", "expected_state", "expected_retryable", "ref_url"),
+    [
+        (
+            "feature",
+            _branch_ref("a" * 40),
+            "absent",
+            False,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        # Another actor replaced the head after the push: creating now would
+        # open a pull request for that actor's commit.
+        (
+            "feature",
+            _branch_ref("b" * 40),
+            "mismatched",
+            False,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        (
+            "feature",
+            _mock_get_response(404, {"message": "Not Found"}),
+            "unavailable",
+            True,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        (
+            "feature",
+            httpx.ConnectError("unreachable"),
+            "unavailable",
+            True,
+            "https://api.github.com/repos/o/r/git/ref/heads/feature",
+        ),
+        (
+            "fork:feature",
+            _branch_ref("a" * 40),
+            "absent",
+            False,
+            "https://api.github.com/repos/fork/r/git/ref/heads/feature",
+        ),
+    ],
+)
+async def test_reconcile_pull_request_is_absent_only_while_the_head_holds_the_candidate(
+    head, branch_response, expected_state, expected_retryable, ref_url
+):
+    mock_client = _reconcile_client(_mock_get_response(200, []))
+    mock_client.get = AsyncMock(
+        side_effect=[_mock_get_response(200, []), branch_response]
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().reconcile_pull_request(
+            repo="o/r",
+            head=head,
+            base="main",
+            expected_head_sha="a" * 40,
+            draft=False,
+            github_token="admitted-token",
+        )
+
+    assert result.state == expected_state
+    assert result.retryable is expected_retryable
+    assert mock_client.get.await_args_list[1].args[0] == ref_url
     mock_client.patch.assert_not_awaited()
     mock_client.post.assert_not_awaited()
 

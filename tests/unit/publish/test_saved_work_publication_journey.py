@@ -153,6 +153,7 @@ class Provider:
         self.creates: list[dict[str, Any]] = []
         self.tokens: list[str] = []
         self.unavailable_reads = 0
+        self.rate_limited_creates = 0
 
     async def reconcile(self, **kwargs: Any) -> PullRequestReconciliation:
         self.tokens.append(kwargs["github_token"])
@@ -172,11 +173,26 @@ class Provider:
                 url=pr["url"],
                 headSha=pr["sha"],
             )
+        # Like the adapter, absence is reported only while the head holds
+        # the candidate, so a create never targets another actor's commit.
+        tip = git(
+            self.remote,
+            "for-each-ref",
+            "--format=%(objectname)",
+            f"refs/heads/{kwargs['head']}",
+        )
+        if tip != kwargs["expected_head_sha"]:
+            return PullRequestReconciliation(state="mismatched", headSha=tip or None)
         return PullRequestReconciliation(state="absent")
 
     async def create(self, **kwargs: Any) -> CreatePRResult:
         self.tokens.append(kwargs["github_token"])
         self.creates.append(kwargs)
+        if self.rate_limited_creates:
+            self.rate_limited_creates -= 1
+            return CreatePRResult(
+                created=False, retryable=True, retryAfterSeconds=61, summary="HTTP 429"
+            )
         sha = git(self.remote, "rev-parse", f"refs/heads/{kwargs['head']}")
         url = f"https://github.com/{REPOSITORY}/pull/{len(self.pull_requests) + 1}"
         self.pull_requests.append(
@@ -208,6 +224,8 @@ class Journey:
     calls: list[str] = field(default_factory=list)
     git_commands: list[list[str]] = field(default_factory=list)
     authority_source: str = "GITHUB_TOKEN_SECRET_REF"
+    authority_outages: int = 0
+    sleeps: list[Any] = field(default_factory=list)
     hooks: dict[str, Callable[[int], Awaitable[None]]] = field(default_factory=dict)
     after: dict[str, Callable[[int], Awaitable[None]]] = field(default_factory=dict)
     attempts: dict[str, int] = field(default_factory=dict)
@@ -335,6 +353,15 @@ async def journey(
 
         async def resolve(explicit_token=None, *, repo=None):
             assert repo == REPOSITORY and explicit_token is None
+            if state.authority_outages:
+                state.authority_outages -= 1
+                return ResolvedGitHubCredential(
+                    source=GitHubCredentialSource.UNRESOLVABLE,
+                    sourceName=state.authority_source,
+                    repo=repo,
+                    diagnostic="GitHub credential reference could not be resolved.",
+                    retryable=True,
+                )
             return ResolvedGitHubCredential(
                 token=DESTINATION_TOKEN,
                 source=GitHubCredentialSource.SECRET_REF_ENV,
@@ -421,7 +448,8 @@ async def journey(
                         )
             raise AssertionError(f"{name} exhausted retries")
 
-        async def no_wait(_duration: Any, **_kwargs: Any) -> None:
+        async def no_wait(duration: Any, **_kwargs: Any) -> None:
+            state.sleeps.append(duration)
             await asyncio.sleep(0)
 
         if emulate_temporal:
@@ -649,6 +677,53 @@ async def test_push_success_then_pr_failure_retries_only_the_pr(tmp_path, monkey
         assert len(state.pushes()) == 1
         assert len(state.provider.creates) == 1
         assert state.provider.creates[0]["draft"] is True
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_pr_create_waits_for_the_provider_delay(
+    tmp_path, monkeypatch
+):
+    from datetime import timedelta
+
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        state.provider.rate_limited_creates = 1
+        result = await state.run(
+            state.contract(
+                objective="pr", baseBranch="main", strategy="additive_import"
+            )
+        )
+
+        assert result["outcome"] == "published"
+        assert result["pullRequest"]["status"] == "created"
+        # The retry waits for GitHub's cooldown, not the shorter 2 s backoff.
+        assert state.sleeps == [timedelta(seconds=61)]
+        assert len(state.provider.creates) == 2
+        assert len(state.provider.pull_requests) == 1
+        assert len(state.pushes()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_transient_authority_outage_is_retried_before_publication(
+    tmp_path, monkeypatch
+):
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+    ) as state:
+        # The destination's secret reference cannot be read once.
+        state.authority_outages = 1
+        result = await state.run(
+            state.contract(
+                objective="pr", baseBranch="main", strategy="additive_import"
+            )
+        )
+
+        assert result["outcome"] == "published"
+        assert state.attempts["publication_recovery.saved_work_prepare"] == 2
+        assert len(state.pushes()) == 1
+        assert len(state.provider.creates) == 1
+        assert await state.use_claims() == []
 
 
 @pytest.mark.asyncio

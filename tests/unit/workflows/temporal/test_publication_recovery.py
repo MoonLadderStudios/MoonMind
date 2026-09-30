@@ -475,8 +475,15 @@ def test_action_projection_requires_complete_unambiguous_contract() -> None:
     )
 
 
-def _recovery_provider(monkeypatch, *, state: str, retryable: bool = False) -> dict:
+def _recovery_provider(
+    monkeypatch, *, state: str, retryable: bool = False, create_result=None
+) -> dict:
     """#4018: the recovery PR effect goes through the existing publisher."""
+    from moonmind.auth import github_credentials
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
     from moonmind.workflows.adapters.github_service import (
         CreatePRResult,
         GitHubService,
@@ -486,8 +493,13 @@ def _recovery_provider(monkeypatch, *, state: str, retryable: bool = False) -> d
     seen: dict = {"tokens": [], "creates": []}
 
     async def resolve(explicit_token=None, *, repo=None):
-        assert repo == "MoonLadderStudios/MoonMind"
-        return "destination-token", None
+        assert repo == "MoonLadderStudios/MoonMind" and explicit_token is None
+        return ResolvedGitHubCredential(
+            token="destination-token",
+            source=GitHubCredentialSource.SECRET_REF_ENV,
+            sourceName="GITHUB_TOKEN_SECRET_REF",
+            repo=repo,
+        )
 
     async def reconcile(self, **kwargs):
         seen["tokens"].append(kwargs["github_token"])
@@ -500,14 +512,14 @@ def _recovery_provider(monkeypatch, *, state: str, retryable: bool = False) -> d
 
     async def create(self, **kwargs):
         seen["creates"].append(kwargs)
-        return CreatePRResult(
+        return create_result or CreatePRResult(
             created=True,
             url="https://github.com/MoonLadderStudios/MoonMind/pull/10",
             headSha="a" * 40,
             summary="created",
         )
 
-    monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(resolve))
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
     monkeypatch.setattr(GitHubService, "reconcile_pull_request", reconcile)
     monkeypatch.setattr(GitHubService, "create_pull_request", create)
     return seen
@@ -581,16 +593,88 @@ async def test_recovery_publish_unavailable_reconciliation_retries_without_creat
     from temporalio.exceptions import ApplicationError
 
     from moonmind.workflows.temporal.activity_runtime import (
-        TemporalActivityRuntimeError,
         TemporalIntegrationActivities,
     )
 
     seen = _recovery_provider(monkeypatch, state="unavailable", retryable=True)
 
-    with pytest.raises(TemporalActivityRuntimeError) as exc:
+    with pytest.raises(ApplicationError) as exc:
         await TemporalIntegrationActivities().publication_recovery_publish(
             {"contract": _contract_payload()}
         )
 
-    assert not isinstance(exc.value, ApplicationError)
+    # Temporal retries it; the retry reconciles the same head/base first.
+    assert exc.value.non_retryable is False
+    assert exc.value.type == "PUBLICATION_PULL_REQUEST_UNAVAILABLE"
+    assert exc.value.next_retry_delay is None
     assert seen["creates"] == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_publish_rate_limited_create_retries_after_the_provider_delay(
+    monkeypatch,
+) -> None:
+    from datetime import timedelta
+
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.workflows.adapters.github_service import CreatePRResult
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    seen = _recovery_provider(
+        monkeypatch,
+        state="absent",
+        create_result=CreatePRResult(
+            created=False, retryable=True, retryAfterSeconds=61, summary="HTTP 429"
+        ),
+    )
+
+    with pytest.raises(ApplicationError) as exc:
+        await TemporalIntegrationActivities().publication_recovery_publish(
+            {"contract": _contract_payload()}
+        )
+
+    assert exc.value.non_retryable is False
+    assert exc.value.next_retry_delay == timedelta(seconds=61)
+    assert len(seen["creates"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_recovery_publish_retries_only_an_unreadable_authority_reference(
+    monkeypatch, retryable
+) -> None:
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.auth import github_credentials
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    seen = _recovery_provider(monkeypatch, state="absent")
+
+    async def unresolved(explicit_token=None, *, repo=None):
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName="GITHUB_TOKEN_SECRET_REF",
+            repo=repo,
+            diagnostic="GitHub credential reference could not be resolved.",
+            retryable=retryable,
+        )
+
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", unresolved)
+
+    with pytest.raises(ApplicationError) as exc:
+        await TemporalIntegrationActivities().publication_recovery_publish(
+            {"contract": _contract_payload()}
+        )
+
+    assert exc.value.type == "PUBLICATION_AUTHORITY_UNAVAILABLE"
+    assert exc.value.non_retryable is (not retryable)
+    assert seen["tokens"] == [] and seen["creates"] == []

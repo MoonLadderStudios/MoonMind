@@ -30,6 +30,10 @@ class ResolvedGitHubCredential(BaseModel):
     source_name: str | None = Field(None, alias="sourceName")
     repo: str | None = None
     diagnostic: str | None = None
+    # A configured reference that could not be read (for example during a
+    # brief secret-store outage) may resolve on retry; missing or empty
+    # configuration will not.
+    retryable: bool = False
 
     @property
     def resolved(self) -> bool:
@@ -130,6 +134,7 @@ async def resolve_github_credential(
                     f"GitHub credential reference from {env_name} could not be resolved"
                     + (f" for {repo}." if repo else ".")
                 ),
+                retryable=True,
             )
         token = str(token or "").strip()
         if token:
@@ -168,6 +173,7 @@ async def resolve_github_credential(
                     "GitHub credential reference from settings could not be resolved"
                     + (f" for {repo}." if repo else ".")
                 ),
+                retryable=True,
             )
         token = str(token or "").strip()
         if token:
@@ -204,6 +210,7 @@ async def resolve_github_credential(
                     f"GitHub credential reference from {env_name} could not be resolved"
                     + (f" for {repo}." if repo else ".")
                 ),
+                retryable=True,
             )
         token = str(token or "").strip()
         if token:
