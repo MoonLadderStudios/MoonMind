@@ -271,6 +271,10 @@ class SavedContent:
     digest: str
     baseline_commit: str | None = None
     excluded_paths: tuple[str, ...] = ()
+    # Deletions recorded by capture's exact-baseline delta. ``None`` infers
+    # them from the recorded baseline tree; a recorded delta is authoritative,
+    # so a path absent from the snapshot but never recorded as deleted stays.
+    recorded_deletions: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,7 +575,13 @@ async def _baseline_operations(
     for path in sorted(set(recorded) | set(saved)):
         old, new, current = recorded.get(path), saved.get(path), destination.get(path)
         # Capture exclusion is never evidence of deletion.
-        if new is None and _is_excluded(path, content.excluded_paths):
+        if new is None and (
+            _is_excluded(path, content.excluded_paths)
+            or (
+                content.recorded_deletions is not None
+                and path not in content.recorded_deletions
+            )
+        ):
             continue
         if old == new or current == new:
             continue
@@ -592,8 +602,14 @@ async def prepare_candidate(
     workspace: Path,
     token: str,
     remote_url: str,
+    persisted_head_sha: str | None = None,
 ) -> SavedCandidate:
-    """Build the admitted candidate commit in a fresh contained workspace."""
+    """Build the admitted candidate commit in a fresh contained workspace.
+
+    ``persisted_head_sha`` rebuilds an already persisted candidate: the base is
+    fetched by its admitted commit rather than the branch's current tip, and
+    the rebuilt commit must be byte-identical to the persisted one.
+    """
 
     mapped = _verified_entries(admission, content)
     workspace = Path(workspace)
@@ -611,7 +627,9 @@ async def prepare_candidate(
     base_sha: str | None = None
     destination: dict[str, tuple[str, str]] = {}
     if admission.strategy == "empty_initialization":
-        refs = await git.remote_refs()
+        # A rebuild relies on the emptiness confirmed at admission; its push
+        # lease still requires the head branch to be absent or hold this commit.
+        refs = {} if persisted_head_sha else await git.remote_refs()
         if refs is None:
             raise SavedPublicationError(
                 "PUBLICATION_DESTINATION_UNAVAILABLE",
@@ -626,19 +644,22 @@ async def prepare_candidate(
             )
     else:
         base_ref = f"refs/heads/{admission.base_branch}"
-        refs = await git.remote_refs(base_ref)
-        if refs is None:
-            raise SavedPublicationError(
-                "PUBLICATION_DESTINATION_UNAVAILABLE",
-                "destination base could not be observed",
-                retryable=True,
-            )
-        if refs.get(base_ref) != admission.expected_base_sha:
-            raise SavedPublicationError(
-                "PUBLICATION_STALE_EXPECTATION",
-                "destination base differs from the admitted expectation",
-                details=(f"{base_ref}:{refs.get(base_ref) or 'absent'}",),
-            )
+        source = f"+{admission.expected_base_sha}:refs/moonmind/destination-base"
+        if not persisted_head_sha:
+            refs = await git.remote_refs(base_ref)
+            if refs is None:
+                raise SavedPublicationError(
+                    "PUBLICATION_DESTINATION_UNAVAILABLE",
+                    "destination base could not be observed",
+                    retryable=True,
+                )
+            if refs.get(base_ref) != admission.expected_base_sha:
+                raise SavedPublicationError(
+                    "PUBLICATION_STALE_EXPECTATION",
+                    "destination base differs from the admitted expectation",
+                    details=(f"{base_ref}:{refs.get(base_ref) or 'absent'}",),
+                )
+            source = f"+{base_ref}:refs/moonmind/destination-base"
         depth = () if admission.strategy == "baseline_delta" else ("--depth=1",)
         fetched = await git.run(
             "fetch",
@@ -646,7 +667,7 @@ async def prepare_candidate(
             "--quiet",
             *depth,
             remote_url,
-            f"+{base_ref}:refs/moonmind/destination-base",
+            source,
             network=True,
         )
         if fetched.returncode != 0:
@@ -730,6 +751,11 @@ async def prepare_candidate(
     )
     decision = admission.decision_digest()
     if tree == base_tree:
+        if persisted_head_sha and persisted_head_sha != base_sha:
+            raise SavedPublicationError(
+                "PUBLICATION_CANDIDATE_MISMATCH",
+                "rebuilt saved content no longer differs from its admitted base",
+            )
         return SavedCandidate(
             head_sha=base_sha,
             base_sha=base_sha,
@@ -751,6 +777,12 @@ async def prepare_candidate(
             env=admission.commit.git_env(),
         )
     ).text
+    if persisted_head_sha and head != persisted_head_sha:
+        raise SavedPublicationError(
+            "PUBLICATION_CANDIDATE_MISMATCH",
+            "rebuilt candidate differs from the persisted candidate",
+            details=(f"persisted:{persisted_head_sha}", f"rebuilt:{head}"),
+        )
     await git.checked("update-ref", "refs/moonmind/candidate", head)
     return SavedCandidate(
         head_sha=head,
@@ -761,6 +793,30 @@ async def prepare_candidate(
         no_change=False,
         decision_digest=decision,
     )
+
+
+async def observe_branch(
+    *,
+    git_binary: str,
+    workspace: Path,
+    branch: str,
+    token: str,
+    remote_url: str,
+) -> str | None:
+    """Observe one destination branch tip once; ``None`` means confirmed absent."""
+
+    ref = f"refs/heads/{_branch_name(branch, 'branch')}"
+    git = _ContainedGit(
+        git_binary=git_binary, workspace=Path(workspace), token=token, remote_url=remote_url
+    )
+    refs = await git.remote_refs(ref)
+    if refs is None:
+        raise SavedPublicationError(
+            "PUBLICATION_DESTINATION_UNAVAILABLE",
+            "destination branch could not be observed",
+            retryable=True,
+        )
+    return refs.get(ref)
 
 
 async def push_candidate(
@@ -934,6 +990,7 @@ __all__ = [
     "SavedPublicationError",
     "admitted_token",
     "github_remote_url",
+    "observe_branch",
     "prepare_candidate",
     "publish_pull_request",
     "push_candidate",

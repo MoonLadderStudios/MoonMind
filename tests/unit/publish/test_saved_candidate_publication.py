@@ -7,6 +7,7 @@ fixture that records reconciliation reads and create calls; no live GitHub.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import os
 import subprocess
@@ -450,6 +451,28 @@ async def test_same_baseline_applies_recorded_delta_onto_advanced_destination(tm
     assert candidate.base_sha == advanced
 
 
+async def test_recorded_delta_is_the_only_deletion_evidence(tmp_path):
+    remote, _writer, baseline = _destination(
+        tmp_path,
+        {"a.txt": "baseline a\n", "gone.txt": "deleted\n", "unlisted.txt": "kept\n"},
+    )
+    # unlisted.txt is absent from the snapshot (e.g. an exclusion the bounded
+    # manifest list truncated) but capture never recorded deleting it.
+    content = dataclasses.replace(
+        _saved(tmp_path, {"a.txt": "saved a\n"}, baseline=baseline),
+        recorded_deletions=("gone.txt",),
+    )
+    admission = _admission(strategy="baseline_delta", expectedBaseSha=baseline)
+
+    candidate = await _prepare(tmp_path, admission, content, remote)
+
+    assert candidate.deleted_paths == ("gone.txt",)
+    assert _tree_files(tmp_path / "publication", candidate.head_sha) == {
+        "a.txt": "saved a",
+        "unlisted.txt": "kept",
+    }
+
+
 async def test_same_baseline_rejects_destination_changes_to_the_same_paths(tmp_path):
     remote, writer, baseline = _destination(tmp_path, {"a.txt": "baseline a\n"})
     advanced = _commit_files(writer, {"a.txt": "another writer\n"}, "advance")
@@ -679,6 +702,77 @@ async def test_restart_rebuilds_the_identical_candidate_and_reconciles(tmp_path,
     assert rebuilt.head_sha == first.head_sha
     assert retried.status == "reconciled"
     assert len(_pushes(git_calls)) == 1
+
+
+async def test_persisted_candidate_rebuilds_on_its_admitted_base_after_the_base_moves(
+    tmp_path, git_calls
+):
+    remote, writer, base = _destination(tmp_path, {"keep.txt": "keep\n"})
+    admission = _admission(expectedBaseSha=base, objective="branch")
+    content = _saved(tmp_path, {"n.txt": "n\n"})
+    persisted = await _prepare(tmp_path, admission, content, remote, "prepare")
+    _commit_files(writer, {"other.txt": "another writer\n"}, "advance")
+    git("push", "-q", "origin", "main", cwd=writer)
+
+    # A fresh admission would now be stale; the persisted decision is not.
+    with pytest.raises(SavedPublicationError) as stale:
+        await _prepare(tmp_path, admission, content, remote, "fresh")
+    rebuilt = await PublishService().prepare_saved_candidate(
+        admission=admission,
+        content=content,
+        workspace=tmp_path / "rebuild",
+        github_token=ADMITTED,
+        remote_url=str(remote),
+        persisted_head_sha=persisted.head_sha,
+    )
+    pushed = await _push(tmp_path, admission, rebuilt, remote, "rebuild")
+
+    assert stale.value.code == "PUBLICATION_STALE_EXPECTATION"
+    assert rebuilt.head_sha == persisted.head_sha
+    assert rebuilt.base_sha == base
+    assert pushed.status == "pushed"
+    assert git("rev-parse", "refs/heads/saved/publication", cwd=remote) == persisted.head_sha
+
+
+async def test_rebuild_rejects_a_candidate_that_differs_from_the_persisted_one(tmp_path):
+    remote, _writer, base = _destination(tmp_path, {"keep.txt": "keep\n"})
+    admission = _admission(expectedBaseSha=base, objective="branch")
+
+    with pytest.raises(SavedPublicationError) as exc:
+        await PublishService().prepare_saved_candidate(
+            admission=admission,
+            content=_saved(tmp_path, {"n.txt": "n\n"}),
+            workspace=tmp_path / "rebuild",
+            github_token=ADMITTED,
+            remote_url=str(remote),
+            persisted_head_sha="e" * 40,
+        )
+
+    assert exc.value.code == "PUBLICATION_CANDIDATE_MISMATCH"
+    assert "refs/heads/saved/publication" not in _remote_refs(remote)
+
+
+async def test_destination_branch_is_observed_once_without_treating_failure_as_absence(
+    tmp_path,
+):
+    remote, _writer, base = _destination(tmp_path, {"keep.txt": "keep\n"})
+    (tmp_path / "observe").mkdir()
+
+    async def observe(branch, url):
+        return await PublishService().observe_destination_branch(
+            workspace=tmp_path / "observe",
+            repository="dest-owner/dest-repo",
+            branch=branch,
+            github_token=ADMITTED,
+            remote_url=str(url),
+        )
+
+    assert await observe("main", remote) == base
+    assert await observe("absent", remote) is None
+    with pytest.raises(SavedPublicationError) as exc:
+        await observe("main", tmp_path / "missing.git")
+    assert exc.value.code == "PUBLICATION_DESTINATION_UNAVAILABLE"
+    assert exc.value.retryable is True
 
 
 async def _publish_pr(provider, candidate, admission):

@@ -330,6 +330,26 @@ In managed `branch` publication, the shared Omnigent publication boundary passes
 
 Before pushing, reject hard-protected `main`, `master`, detached `HEAD`, and unknown Git branch states, as well as applicable repository/provider protection. For PR mode the separate work branch is pushed, never the authored base. A refused push is an explicit publication blocker, not successful publication or a mere warning that permits downstream handoff.
 
+### Publish Saved Work
+
+Saved work (a committed `saved-work-manifest/v1`) can be published later without its original source PAT, workspace, or another model run. `POST /api/executions/{workflowId}/retry-publication` with a saved-work body (`savedWorkRef`, `destination`, optional PR title/body and commit message) admits one decision: the manifest must be readable by the operator and linked to that execution, and its digest, destination, objective (`branch`, `pr`, `draft_pr`), application strategy, and optional base/head expectations are frozen into the contract. Omitting the body keeps the recorded publication-recovery contract path. Both paths share the publication-recovery rollout admission and the `MoonMind.PublicationRecoveryV1` workflow.
+
+The saved-work path runs only publication Activities on the existing publisher (`moonmind/publish`):
+
+1. **Prepare** claims a `publication` use of the saved work, verifies the manifest, snapshot archive, file manifest, and recorded delta against their digests, and materializes them into a fresh owned directory. It observes the destination base once if no expectation was supplied, then builds a deterministic candidate commit. The admission and candidate identity are stored in workflow history before any effect.
+2. **Push** rebuilds the candidate on the admitted base, requires the persisted SHA, and pushes with the admitted head expectation as the only lease. It verifies the exact remote head. A lost acknowledgment reconciles instead of pushing again.
+3. **Pull request** (PR objectives only) reconciles the same head and base before creating anything. It adopts an open PR only when that PR's head is the candidate, and never edits the PR's metadata. A closed, merged, or mismatched PR blocks publication instead of creating another one. PR retries never repeat the push.
+
+Application strategies:
+
+- `baseline_delta` applies the recorded delta onto a destination that contains the saved baseline. Only the recorded delta's deletions delete files.
+- `additive_import` keeps destination-only files and surfaces conflicts instead of overwriting.
+- `empty_initialization` requires a confirmed-empty destination.
+
+Lore destinations stay with their authoritative owner. Destination authority comes from the deployment's GitHub credential resolution for the destination repository. Its redaction-safe source is part of the admission, so a changed connection invalidates the persisted decision.
+
+The terminal `saved-work-publication-result.json` records the push and PR outcomes separately with the saved-work digest. Conflict, cancellation, and failure leave the saved artifacts and the source execution untouched. Cleanup releases only the publication's own use claim and temporary directories.
+
 ## 8. Pull Request Creation and Metadata
 
 For GitHub, managed PR publication uses the admitted hosting API client and repository authority. A qualified CLI transport may implement the same operation under the same selected identity; it is not a credential fallback. Unsupported provider/transport/mode combinations fail before work depends on them.

@@ -2342,6 +2342,10 @@ export interface paths {
         /**
          * Retry Execution Publication
          * @description Start or reconcile exactly one publication-only linked workflow.
+         *
+         *     Without a body this resumes the execution's recorded publication recovery
+         *     contract. With a saved-work body it publishes that immutable saved result
+         *     to a newly admitted destination through the same workflow and publisher.
          */
         post: operations["retry_execution_publication_api_executions__workflow_id__retry_publication_post"];
         delete?: never;
@@ -12863,6 +12867,54 @@ export interface components {
             relativePath: string;
         };
         /**
+         * SavedWorkPublicationDestination
+         * @description The destination, objective, and application policy one request admits.
+         */
+        SavedWorkPublicationDestination: {
+            /** Repository */
+            repository: string;
+            /**
+             * Objective
+             * @enum {string}
+             */
+            objective: "branch" | "pr" | "draft_pr";
+            /** Basebranch */
+            baseBranch?: string | null;
+            /** Headbranch */
+            headBranch: string;
+            /**
+             * Strategy
+             * @enum {string}
+             */
+            strategy: "baseline_delta" | "additive_import" | "empty_initialization";
+            /** Pathprefix */
+            pathPrefix?: string | null;
+            /**
+             * Authorizeddeletions
+             * @default []
+             */
+            authorizedDeletions: string[];
+            /** Expectedbasesha */
+            expectedBaseSha?: string | null;
+            /** Expectedheadsha */
+            expectedHeadSha?: string | null;
+        };
+        /**
+         * SavedWorkPublicationRequest
+         * @description Publish one immutable saved result to a newly admitted destination.
+         */
+        SavedWorkPublicationRequest: {
+            /** Savedworkref */
+            savedWorkRef: string;
+            destination: components["schemas"]["SavedWorkPublicationDestination"];
+            /** Pullrequesttitle */
+            pullRequestTitle?: string | null;
+            /** Pullrequestbody */
+            pullRequestBody?: string | null;
+            /** Commitmessage */
+            commitMessage?: string | null;
+        };
+        /**
          * ScheduleCreatedResponse
          * @description Response returned when a recurring schedule is created from the create endpoint.
          */
@@ -18929,7 +18981,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SavedWorkPublicationRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             201: {

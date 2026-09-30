@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -302,8 +302,12 @@ from moonmind.workflows.executions.runtime_inheritance import (
 from moonmind.workflows.temporal.publication_recovery import (
     PublicationRecoveryContract,
     PublicationRecoveryRolloutPolicy,
+    SavedWorkPublicationContract,
+    SavedWorkPublicationDestination,
     publication_action_eligibility,
     publication_recovery_workflow_id,
+    saved_work_publication_operation_key,
+    saved_work_publication_workflow_id,
 )
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.services.control_stop_continuation import (
@@ -995,6 +999,18 @@ class PublicationRecoveryResponse(BaseModel):
     runId: str
     publicationIdempotencyKey: str
     rolloutGeneration: str
+
+
+class SavedWorkPublicationRequest(BaseModel):
+    """Publish one immutable saved result to a newly admitted destination."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    savedWorkRef: str = Field(..., min_length=1, max_length=500)
+    destination: SavedWorkPublicationDestination
+    pullRequestTitle: str | None = Field(None, max_length=256)
+    pullRequestBody: str | None = Field(None, max_length=20_000)
+    commitMessage: str | None = Field(None, max_length=2_000)
 
 class RemediationCheckpointBranchRepairRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -20030,6 +20046,190 @@ def _publication_recovery_contract_from_record(
         ) from exc
 
 
+_SAVED_WORK_AUTHORITY_REF = "github:repository-default"
+
+
+async def _get_saved_work_artifact_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> Callable[[], Any]:
+    """Open the artifact service only for a saved-work publication request."""
+    return lambda: get_temporal_artifact_service(session)
+
+
+def _saved_work_publication_error(
+    status_code: int, code: str, message: str
+) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+    )
+
+
+async def _admit_saved_work_publication(
+    *,
+    canonical: TemporalExecutionCanonicalRecord,
+    request: SavedWorkPublicationRequest,
+    user: User,
+    artifact_service: Any,
+) -> SavedWorkPublicationContract:
+    """Verify saved-work ownership and freeze one publication decision (#4018).
+
+    The saved result must be a readable saved-work manifest linked to this
+    execution. Its digest, the destination policy, and a deterministic commit
+    identity are frozen so duplicate submissions map to one operation and a
+    retry rebuilds the same candidate. No credential enters the contract.
+    """
+
+    from moonmind.omnigent.git_identity import resolve_git_identity
+    from moonmind.publish.saved_candidate import SavedPublicationError
+    from moonmind.publish.saved_work_source import (
+        SAVED_WORK_MANIFEST_CONTENT_TYPE,
+        saved_work_artifact_id,
+    )
+
+    principal = _execution_principal(user)
+    try:
+        artifact_id = saved_work_artifact_id(request.savedWorkRef)
+        artifact, links, _pinned, _policy = await artifact_service.get_metadata(
+            artifact_id=artifact_id, principal=principal
+        )
+        _artifact, manifest_bytes = await artifact_service.read(
+            artifact_id=artifact_id, principal=principal
+        )
+    except SavedPublicationError as exc:
+        raise _saved_work_publication_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "saved_work_invalid", str(exc)
+        ) from exc
+    except (TemporalArtifactNotFoundError, TemporalArtifactAuthorizationError) as exc:
+        raise _saved_work_publication_error(
+            status.HTTP_404_NOT_FOUND,
+            "saved_work_not_found",
+            "Saved work was not found for this execution.",
+        ) from exc
+    except TemporalArtifactStateError as exc:
+        raise _saved_work_publication_error(
+            status.HTTP_409_CONFLICT,
+            "saved_work_unavailable",
+            "Saved work is not available for publication.",
+        ) from exc
+    if str(getattr(artifact, "content_type", "")) != SAVED_WORK_MANIFEST_CONTENT_TYPE:
+        raise _saved_work_publication_error(
+            status.HTTP_409_CONFLICT,
+            "saved_work_invalid",
+            "The referenced artifact is not a saved-work manifest.",
+        )
+    if not any(
+        str(getattr(link, "workflow_id", "") or "") == canonical.workflow_id
+        for link in links
+    ):
+        raise _saved_work_publication_error(
+            status.HTTP_409_CONFLICT,
+            "saved_work_source_mismatch",
+            "Saved work does not belong to this execution.",
+        )
+    destination = request.destination
+    saved_work_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+    git_name, git_email = resolve_git_identity()
+    # The source execution's creation time is immutable, so a resubmitted
+    # decision rebuilds the byte-identical candidate instead of a new commit.
+    created_at = canonical.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    default_title = f"Publish saved work from {canonical.workflow_id}"
+    try:
+        return SavedWorkPublicationContract(
+            sourceWorkflowId=canonical.workflow_id,
+            sourceRunId=str(canonical.run_id or ""),
+            savedWorkRef=request.savedWorkRef,
+            savedWorkDigest=saved_work_digest,
+            admittedPrincipal=principal,
+            destination=destination,
+            githubAuthorityRef=_SAVED_WORK_AUTHORITY_REF,
+            commit={
+                "message": request.commitMessage or default_title,
+                "authorName": git_name,
+                "authorEmail": git_email,
+                "timestamp": created_at,
+            },
+            pullRequestTitle=(
+                None
+                if destination.objective == "branch"
+                else request.pullRequestTitle or default_title
+            ),
+            pullRequestBody=request.pullRequestBody
+            or (
+                f"Saved work `{saved_work_digest}` from `{canonical.workflow_id}`, "
+                "published without another model run."
+            ),
+            publicationIdempotencyKey=saved_work_publication_operation_key(
+                saved_work_digest=saved_work_digest,
+                destination=destination,
+                github_authority_ref=_SAVED_WORK_AUTHORITY_REF,
+            ),
+        )
+    except ValueError as exc:
+        raise _saved_work_publication_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "saved_work_publication_invalid",
+            str(exc),
+        ) from exc
+
+
+async def _start_saved_work_publication(
+    *,
+    canonical: TemporalExecutionCanonicalRecord,
+    request: SavedWorkPublicationRequest,
+    user: User,
+    adapter: TemporalClientAdapter,
+    artifact_service: Any,
+) -> PublicationRecoveryResponse:
+    contract = await _admit_saved_work_publication(
+        canonical=canonical,
+        request=request,
+        user=user,
+        artifact_service=artifact_service(),
+    )
+    policy = _publication_recovery_policy()
+    reason = policy.admission_reason(
+        repository=contract.destination.repository,
+        owner_id=_owner_id(user),
+        mode=contract.destination.objective,
+    )
+    if reason is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_admitted",
+                "message": "Publication is not admitted by current rollout policy.",
+                "reason": reason,
+            },
+        )
+    started = await adapter.start_workflow(
+        workflow_type="MoonMind.PublicationRecoveryV1",
+        workflow_id=saved_work_publication_workflow_id(contract),
+        input_args=contract.model_dump(mode="json", by_alias=True),
+        memo={
+            "source_workflow_id": contract.source_workflow_id,
+            "source_run_id": contract.source_run_id,
+            "publication_idempotency_key": contract.publication_idempotency_key,
+            "publication_recovery_generation": policy.generation,
+            "publication_semantic_context": "saved_work",
+            "publication_recovery_phase": "contract_validation",
+            "publication_no_implementation_rerun": True,
+            "publication_no_verification_rerun": True,
+            "saved_work_digest": contract.saved_work_digest,
+        },
+    )
+    return PublicationRecoveryResponse(
+        sourceWorkflowId=contract.source_workflow_id,
+        sourceRunId=contract.source_run_id,
+        workflowId=started.workflow_id,
+        runId=started.run_id,
+        publicationIdempotencyKey=contract.publication_idempotency_key,
+        rolloutGeneration=policy.generation,
+    )
+
+
 @router.post(
     "/{workflow_id}/retry-publication",
     response_model=PublicationRecoveryResponse,
@@ -20037,16 +20237,31 @@ def _publication_recovery_contract_from_record(
 )
 async def retry_execution_publication(
     workflow_id: str,
+    saved_work: SavedWorkPublicationRequest | None = Body(None),
     service: TemporalExecutionService = Depends(_get_service),
     adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
+    artifact_service: Callable[[], Any] = Depends(_get_saved_work_artifact_service),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> PublicationRecoveryResponse:
-    """Start or reconcile exactly one publication-only linked workflow."""
+    """Start or reconcile exactly one publication-only linked workflow.
+
+    Without a body this resumes the execution's recorded publication recovery
+    contract. With a saved-work body it publishes that immutable saved result
+    to a newly admitted destination through the same workflow and publisher.
+    """
 
     canonical = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
+    if saved_work is not None:
+        return await _start_saved_work_publication(
+            canonical=canonical,
+            request=saved_work,
+            user=user,
+            adapter=adapter,
+            artifact_service=artifact_service,
+        )
     contract = _publication_recovery_contract_from_record(canonical)
     if (
         contract.source_workflow_id != workflow_id
