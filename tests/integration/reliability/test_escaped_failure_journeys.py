@@ -43,6 +43,7 @@ from api_service.services.omnigent_policies import (
     seed_bootstrap_policies,
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.config.settings import settings
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
@@ -313,9 +314,9 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
         return_value=manifest["preparedCommitSha"]
     )
 
-    async def resolved_github_credential(*, repo: str) -> SimpleNamespace:
+    async def resolved_github_credential(*, repo: str) -> ResolvedGitHubCredential:
         assert repo == manifest["repository"]
-        return SimpleNamespace(resolved=True, safe_summary="resolved")
+        return ResolvedGitHubCredential(token="replay-token", source="direct_env")
 
     monkeypatch.setattr(
         "moonmind.auth.github_credentials.resolve_github_credential",
@@ -324,7 +325,7 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
 
     # The replay records no repository connection, so the default derives
     # from the deployment's GitHub declaration (MoonLadderStudios/MoonMind#4023).
-    async def no_recorded_connection(connection_ref: str) -> None:
+    async def no_recorded_connection(connection_ref: str, **_kwargs: object) -> None:
         assert connection_ref == "repository-connection:git-default"
         return None
 

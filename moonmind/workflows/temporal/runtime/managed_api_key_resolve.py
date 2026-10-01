@@ -8,7 +8,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, NamedTuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -26,6 +26,9 @@ from moonmind.auth.resolvers import (
 #: Principal under which launches read the deployment's recorded repository
 #: connections. A single-user instance admits its own runtime at system scope.
 _LAUNCH_CONNECTION_PRINCIPAL = "system:managed-runtime-launch"
+#: Managed-secret slugs that declare the deployment's GitHub credential, in the
+#: precedence migration ``391_legacy_github_cred_4023`` records.
+_DEPLOYMENT_GITHUB_SECRET_SLUGS: tuple[str, ...] = ("GITHUB_TOKEN", "GITHUB_PAT")
 # Registry endpoint this module's GHCR pull credentials are bound to. Returned
 # credentials must only be presented to this endpoint (or its exact image /
 # repository scope); never to arbitrary endpoints derived from image strings,
@@ -75,13 +78,19 @@ def _normalize_secret_ref_input(
         raise ValueError(f"{field_name} is empty")
     return stripped
 
-async def load_repository_connection_for_launch(connection_ref: str) -> Any:
+async def load_repository_connection_for_launch(
+    connection_ref: str, *, repository: str | None = None
+) -> Any:
     """Return the recorded repository connection, or ``None`` when none exists.
 
     A database failure propagates so callers can tell an unreadable record
     from an absent one, and a deleted or disabled connection raises
     ``RepositoryRouteError``: only true absence may select the deployment
-    declaration.
+    declaration. A recorded connection other than the default admits only a
+    ``repository`` it has a verified assignment for, and only that
+    assignment's operations. The default is the classified legacy exception:
+    it maps the deployment's pre-#4023 credential, whose scope predates
+    assignments.
     """
 
     from api_service.db.base import async_session_maker
@@ -90,18 +99,31 @@ async def load_repository_connection_for_launch(connection_ref: str) -> Any:
         RepositoryConnectionService,
     )
     from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
         REPOSITORY_DENIED,
         RepositoryRouteError,
     )
 
     async with async_session_maker() as session:
-        connection = await RepositoryConnectionService(session).get_connection(
+        service = RepositoryConnectionService(session)
+        connection = await service.get_connection(
             connection_ref,
             principal_ref=_LAUNCH_CONNECTION_PRINCIPAL,
             principal_scope=("system", None),
         )
         if connection is not None:
-            return connection
+            if connection_ref == DEFAULT_GIT_CONNECTION_REF:
+                return connection
+            assignment = await service.launch_assignment(connection, repository)
+            return connection.model_copy(
+                update={
+                    "allowed_operations": tuple(
+                        operation
+                        for operation in connection.allowed_operations
+                        if operation in assignment.operations
+                    )
+                }
+            )
         deleted = (
             await session.execute(
                 select(RepositoryConnectionRecord.connection_id).where(
@@ -117,6 +139,32 @@ async def load_repository_connection_for_launch(connection_ref: str) -> Any:
         return None
 
 
+async def load_active_managed_github_secret_slug() -> str | None:
+    """Return the first active ``GITHUB_TOKEN``/``GITHUB_PAT`` managed secret.
+
+    Reads presence only, never a value. A database failure propagates so an
+    unreadable store is not mistaken for no secret.
+    """
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import ManagedSecret, SecretStatus
+
+    async with async_session_maker() as session:
+        active = set(
+            (
+                await session.execute(
+                    select(ManagedSecret.slug).where(
+                        ManagedSecret.slug.in_(_DEPLOYMENT_GITHUB_SECRET_SLUGS),
+                        ManagedSecret.status == SecretStatus.ACTIVE,
+                    )
+                )
+            ).scalars()
+        )
+    return next(
+        (slug for slug in _DEPLOYMENT_GITHUB_SECRET_SLUGS if slug in active), None
+    )
+
+
 def _repository_connections_dir() -> Path:
     runtime_root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
     return Path(
@@ -130,17 +178,18 @@ def _repository_connections_dir() -> Path:
 async def select_git_connection_for_launch(
     connection_ref: str,
     *,
+    repository: str | None = None,
     connections_dir: Path | None = None,
     client_policy: Any | None = None,
 ) -> Any:
     """Return exactly the Git connection a launch selected (#4023).
 
-    A recorded connection is authoritative; given ``client_policy`` it takes
-    the deployment's Git client, because the deployment owns its client and
-    the record owns authority. Without a record, an explicit reference may
-    name a deployment-owned connection file, and the default reference
-    returns ``None``: it derives from the deployment's declared GitHub
-    configuration. An unreadable, deleted, disabled, or non-Git record and an
+    A recorded connection is authoritative for the ``repository`` it is
+    assigned; given ``client_policy`` it takes the deployment's Git client,
+    because the deployment owns its client and the record owns authority.
+    Without a record, an explicit reference may name a deployment-owned
+    connection file, and the default reference returns ``None``: it derives
+    from the deployment's declared GitHub configuration. An unreadable, deleted, disabled, or non-Git record and an
     unrecorded explicit reference raise ``RepositoryContractError``; no other
     connection is substituted.
     """
@@ -154,7 +203,9 @@ async def select_git_connection_for_launch(
     )
 
     try:
-        recorded = await load_repository_connection_for_launch(connection_ref)
+        recorded = await load_repository_connection_for_launch(
+            connection_ref, repository=repository
+        )
     except asyncio.CancelledError:
         raise
     except RepositoryRouteError as exc:
@@ -197,30 +248,63 @@ async def select_git_connection_for_launch(
     )
 
 
+class SelectedGitHubAccess(NamedTuple):
+    """One read of a launch's selected Git connection and its credential.
+
+    ``connection`` is ``None`` for the unrecorded default, which derives from
+    the deployment's GitHub declaration.
+    """
+
+    connection: Any | None
+    credential: Any
+
+
+async def select_github_access_for_launch(
+    connection_ref: str,
+    *,
+    repository: str | None = None,
+    connections_dir: Path | None = None,
+    client_policy: Any | None = None,
+) -> SelectedGitHubAccess:
+    """Select a launch's Git connection and read only its credential, once.
+
+    Selection raises as :func:`select_git_connection_for_launch` does. A
+    selected source that fails yields an unresolved credential carrying its
+    correction, never another credential.
+    """
+
+    from moonmind.auth.github_credentials import (
+        resolve_connection_github_credential,
+        resolve_deployment_github_credential,
+    )
+
+    connection = await select_git_connection_for_launch(
+        connection_ref,
+        repository=repository,
+        connections_dir=connections_dir,
+        client_policy=client_policy,
+    )
+    if connection is None:
+        credential = await resolve_deployment_github_credential(repo=repository)
+    else:
+        credential = await resolve_connection_github_credential(
+            connection, repo=repository
+        )
+    return SelectedGitHubAccess(connection=connection, credential=credential)
+
+
 async def resolve_selected_github_credential_for_launch(
     connection_ref: str,
     *,
     repo: str | None = None,
     connections_dir: Path | None = None,
 ) -> Any:
-    """Resolve only the credential of the Git connection a launch selected.
+    """Resolve only the credential of the Git connection a launch selected."""
 
-    Selection raises as :func:`select_git_connection_for_launch` does. A
-    selected source that fails yields an unresolved result carrying its
-    correction, never another credential.
-    """
-
-    from moonmind.auth.github_credentials import (
-        resolve_connection_github_credential,
-        resolve_github_credential,
+    access = await select_github_access_for_launch(
+        connection_ref, repository=repo, connections_dir=connections_dir
     )
-
-    connection = await select_git_connection_for_launch(
-        connection_ref, connections_dir=connections_dir
-    )
-    if connection is None:
-        return await resolve_github_credential(repo=repo)
-    return await resolve_connection_github_credential(connection, repo=repo)
+    return access.credential
 
 
 async def resolve_default_github_connection_credential(
@@ -239,7 +323,7 @@ async def resolve_default_github_connection_credential(
         GitHubCredentialSource,
         ResolvedGitHubCredential,
         resolve_connection_github_credential,
-        resolve_github_credential,
+        resolve_deployment_github_credential,
     )
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
@@ -281,7 +365,7 @@ async def resolve_default_github_connection_credential(
             retryable=True,
         )
     if connection is None:
-        return await resolve_github_credential(repo=repo)
+        return await resolve_deployment_github_credential(repo=repo)
     return await resolve_connection_github_credential(connection, repo=repo)
 
 
@@ -910,9 +994,11 @@ __all__ = [
     "BrokenSecretRef",
     "GHCR_REGISTRY",
     "SecretRefLaunchBlockedError",
+    "SelectedGitHubAccess",
     "assert_managed_secret_refs_active_for_launch",
     "build_github_credential_descriptor_for_launch",
     "inspect_managed_secret_refs_for_launch",
+    "load_active_managed_github_secret_slug",
     "load_repository_connection_for_launch",
     "resolve_default_github_connection_credential",
     "resolve_ghcr_pull_credentials_for_launch",
@@ -920,4 +1006,5 @@ __all__ = [
     "resolve_managed_api_key_reference",
     "resolve_selected_github_credential_for_launch",
     "select_git_connection_for_launch",
+    "select_github_access_for_launch",
 ]

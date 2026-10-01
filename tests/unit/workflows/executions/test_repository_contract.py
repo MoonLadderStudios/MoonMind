@@ -193,7 +193,9 @@ async def test_unknown_capability_fails_closed() -> None:
 
 @pytest.mark.asyncio
 async def test_derived_default_connection_reads_the_deployment_declaration() -> None:
-    resolver = AsyncMock(return_value=object())
+    resolver = AsyncMock(
+        return_value=ResolvedGitHubCredential(token="declared", source="direct_env")
+    )
     connection = reconcile_default_git_connection(client_policy=_policy())
     with patch(
         "moonmind.auth.github_credentials.resolve_github_credential", resolver

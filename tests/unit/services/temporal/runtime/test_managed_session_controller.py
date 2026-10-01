@@ -56,15 +56,23 @@ _production_connection_loader = (
 
 @pytest.fixture(autouse=True)
 def _no_recorded_repository_connections(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unit tests have no database: no repository connection is recorded."""
+    """Unit tests have no database: no connection or GitHub secret is recorded."""
 
-    async def _absent(_connection_ref: str):
+    async def _absent(_connection_ref: str, **_kwargs: object):
+        return None
+
+    async def _no_secret() -> None:
         return None
 
     monkeypatch.setattr(
         managed_api_key_resolve_module,
         "load_repository_connection_for_launch",
         _absent,
+    )
+    monkeypatch.setattr(
+        managed_api_key_resolve_module,
+        "load_active_managed_github_secret_slug",
+        _no_secret,
     )
 
 

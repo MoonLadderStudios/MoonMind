@@ -39,15 +39,23 @@ from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
 
 @pytest.fixture(autouse=True)
 def _no_recorded_repository_connections(monkeypatch):
-    """Unit tests have no database: no repository connection is recorded."""
+    """Unit tests have no database: no connection or GitHub secret is recorded."""
 
-    async def _absent(_connection_ref: str):
+    async def _absent(_connection_ref: str, **_kwargs):
+        return None
+
+    async def _no_secret():
         return None
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
         "load_repository_connection_for_launch",
         _absent,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_active_managed_github_secret_slug",
+        _no_secret,
     )
 
 
@@ -1597,14 +1605,8 @@ async def test_launch_seeds_github_git_auth_before_initial_clone(
     store_root = tmp_path / "store"
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(store_root))
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example")
-
-    async def _fake_resolve(*args, **kwargs):
-        return token
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
-        _fake_resolve,
-    )
+    # The unrecorded default connection derives from the deployment declaration.
+    monkeypatch.setenv("GITHUB_TOKEN", token)
 
     class _FakeProcess:
         pid = 779
@@ -5432,7 +5434,7 @@ def _recorded_connection(
 def _record_connections(monkeypatch, connections: dict[str, RepositoryConnection]):
     loaded: list[str] = []
 
-    async def _load(connection_ref: str):
+    async def _load(connection_ref: str, **_kwargs):
         loaded.append(connection_ref)
         return connections.get(connection_ref)
 
@@ -5442,6 +5444,16 @@ def _record_connections(monkeypatch, connections: dict[str, RepositoryConnection
         _load,
     )
     return loaded
+
+
+async def _request_github_token(
+    launcher: ManagedRuntimeLauncher, request: AgentExecutionRequest
+) -> str | None:
+    """The token a launch of ``request`` would carry, from one selection read."""
+
+    return await launcher._selected_github_token(
+        request, await launcher._select_request_github_access(request)
+    )
 
 
 def _capture_launch_env(monkeypatch) -> dict[str, str]:
@@ -5640,7 +5652,7 @@ async def test_explicit_recorded_connection_is_selected_among_several(
     request = _git_target_request("repository-connection:team-b")
 
     resolved = await launcher._ensure_repository_ready_for_launch(request, None)
-    token = await launcher._resolve_request_github_token(request)
+    token = await _request_github_token(launcher, request)
 
     assert resolved is not None
     assert resolved.connection_ref == "repository-connection:team-b"
@@ -5674,7 +5686,7 @@ async def test_unreadable_connection_record_blocks_instead_of_using_default(
 ):
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
 
-    async def _unreadable(_connection_ref: str):
+    async def _unreadable(_connection_ref: str, **_kwargs):
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(
@@ -5759,7 +5771,7 @@ async def test_recorded_schedule_target_reads_the_migrated_default_connection(
     launcher = _ready_launcher(tmp_path)
 
     resolved = await launcher._ensure_repository_ready_for_launch(request, None)
-    token = await launcher._resolve_request_github_token(request)
+    token = await _request_github_token(launcher, request)
 
     assert resolved is not None
     assert resolved.connection_ref == "repository-connection:git-default"
@@ -5808,7 +5820,7 @@ async def test_deleted_default_connection_blocks_instead_of_deriving_it(
 
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
 
-    async def _deleted(connection_ref: str):
+    async def _deleted(connection_ref: str, **_kwargs):
         raise RepositoryRouteError(REPOSITORY_DENIED, f"{connection_ref} was deleted")
 
     monkeypatch.setattr(
@@ -5826,3 +5838,127 @@ async def test_deleted_default_connection_blocks_instead_of_deriving_it(
         )
 
     assert "was deleted" in str(excinfo.value)
+
+
+def _clear_deployment_github_env(monkeypatch) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    for name in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN",
+        "GITHUB_TOKEN_SECRET_REF",
+        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        "MOONMIND_GITHUB_TOKEN_REF",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_legacy_repository_launch_stops_when_the_default_credential_fails(
+    tmp_path, monkeypatch
+):
+    """A recorded bare-repository request fails closed, as targets and sessions do."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.delenv("SELECTED_GITHUB_PAT", raising=False)
+    _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": "SELECTED_GITHUB_PAT"},
+                },
+            )
+        },
+    )
+    launcher = _ready_launcher(tmp_path)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ) as excinfo:
+        await launcher.launch(
+            run_id="run-legacy-default-4023",
+            request=_make_request(
+                workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+            ),
+            profile=_make_profile(command_template=["echo", "hello"]),
+        )
+
+    assert "env://SELECTED_GITHUB_PAT" in str(excinfo.value)
+    assert "ambient-token-A" not in str(excinfo.value)
+    assert not (tmp_path / "workspaces").exists()
+
+
+@pytest.mark.asyncio
+async def test_legacy_repository_request_without_github_configuration_is_anonymous(
+    tmp_path, monkeypatch
+):
+    _clear_deployment_github_env(monkeypatch)
+    launcher = _ready_launcher(tmp_path)
+
+    token = await _request_github_token(
+        launcher,
+        _make_request(workspace_spec={"repository": "MoonLadderStudios/MoonMind"}),
+    )
+
+    assert token is None
+
+
+@pytest.mark.asyncio
+async def test_launch_uses_one_read_of_the_selected_connection_and_credential(
+    tmp_path, monkeypatch
+):
+    """Readiness and the runtime receive the same credential read (#4023)."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    loaded = _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:team-b": _recorded_connection(
+                "repository-connection:team-b",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": "TEAM_B_PAT"},
+                },
+            )
+        },
+    )
+    reads: list[str] = []
+
+    async def _rotating_secret(ref: str, **_kwargs) -> str:
+        # Every read observes the next rotation of the selected secret.
+        reads.append(ref)
+        return f"team-b-token-{len(reads)}"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_managed_api_key_reference",
+        _rotating_secret,
+    )
+    captured_env = _capture_launch_env(monkeypatch)
+    launcher = _ready_launcher(tmp_path)
+    workspace = tmp_path / "workspaces" / "run-one-read-4023" / "repo"
+    (workspace / ".git").mkdir(parents=True)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-one-read-4023",
+        request=_git_target_request("repository-connection:team-b"),
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    assert loaded == ["repository-connection:team-b"]
+    assert reads == ["env://TEAM_B_PAT"]
+    assert captured_env["GITHUB_TOKEN"] == "team-b-token-1"
