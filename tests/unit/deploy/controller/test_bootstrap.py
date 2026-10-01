@@ -245,11 +245,84 @@ def test_bootstrap_start_creates_a_missing_api_network_before_up(
             "com.docker.compose.project=repo",
             "--label",
             "com.docker.compose.network=deployment-controller-network",
-            "moonmind_deployment-controller-network",
+            "repo_deployment-controller-network",
         )
     ]
     kinds = [kind for kind, _ in calls]
     assert kinds.index("compose") > kinds.index("run")
+
+
+@pytest.mark.parametrize(
+    ("dirname", "env", "argv", "expected"),
+    [
+        ("MoonMind", {}, [], "moonmind_deployment-controller-network"),
+        ("moonmind-b", {}, [], "moonmind-b_deployment-controller-network"),
+        (
+            "MoonMind",
+            {"COMPOSE_PROJECT_NAME": "site"},
+            [],
+            "site_deployment-controller-network",
+        ),
+        (
+            "MoonMind",
+            {},
+            ["--target-project", "flagged"],
+            "flagged_deployment-controller-network",
+        ),
+        (
+            "MoonMind",
+            {"MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK": "pinned"},
+            [],
+            "pinned",
+        ),
+    ],
+)
+def test_bootstrap_default_link_network_follows_the_compose_project(
+    controller_path, tmp_path, dirname, env, argv, expected
+):
+    """Independent deployments never share the controller alias network."""
+    bootstrap = load("bootstrap")
+    repo = tmp_path / dirname
+    repo.mkdir()
+    state = tmp_path / "state"
+    assert (
+        bootstrap.main(
+            ["install", "--state-dir", str(state), "--repo", str(repo), *argv],
+            env=env,
+        )
+        == 0
+    )
+    assert bootstrap.load_identity(state)["targetNetwork"] == expected
+    rendered = (state / "controller-compose.yaml").read_text()
+    assert f"name: {expected}\n    external: true" in rendered
+
+
+def test_bootstrap_passes_the_recorded_target_project_to_the_controller(
+    controller_path, tmp_path
+):
+    """A `-p` deployment's project reaches the controller's derived target."""
+    bootstrap = load("bootstrap")
+    repo = tmp_path / "MoonMind"
+    repo.mkdir()
+    state = tmp_path / "state"
+    assert (
+        bootstrap.main(
+            [
+                "install",
+                "--state-dir",
+                str(state),
+                "--repo",
+                str(repo),
+                "--target-project",
+                "my-instance",
+            ],
+            env={},
+        )
+        == 0
+    )
+    assert bootstrap.load_identity(state)["targetProject"] == "my-instance"
+    rendered = (state / "controller-compose.yaml").read_text()
+    assert 'MOONMIND_CONTROLLER_TARGET_PROJECT: "my-instance"' in rendered
 
 
 def test_only_trusted_deployment_services_join_the_controller_link(controller_path):
@@ -267,7 +340,8 @@ def test_only_trusted_deployment_services_join_the_controller_link(controller_pa
     assert link["internal"] is True
     # Compose names the network from the same setting bootstrap resolves.
     assert link["name"] == (
-        f"${{{bootstrap.TARGET_NETWORK_SETTING}:-{bootstrap.DEFAULT_TARGET_NETWORK}}}"
+        f"${{{bootstrap.TARGET_NETWORK_SETTING}:-"
+        f"${{COMPOSE_PROJECT_NAME:-moonmind}}_{bootstrap.TARGET_NETWORK_KEY}}}"
     )
     attached = sorted(
         name

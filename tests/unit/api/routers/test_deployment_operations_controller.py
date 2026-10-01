@@ -459,3 +459,75 @@ def test_controller_endpoint_is_resolved_only_from_an_installed_controller(
     )
     explicit = resolve({**env, "MOONMIND_CONTROLLER_URL": "http://controller.test:1/"})
     assert explicit.base_url == "http://controller.test:1"
+
+
+def test_retry_of_a_non_failed_operation_is_refused_by_the_controller(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    controller = controller_factory()
+    client, temporal = _client()
+    submitted = client.post("/api/v1/operations/deployment/update", json=_update())
+    assert submitted.status_code == 202, submitted.text
+    operation_id = submitted.json()["operationId"]
+    assert submitted.json()["status"] == "SUCCEEDED"
+
+    retried = client.post(
+        f"/api/v1/operations/deployment/operations/{operation_id}/retry"
+    )
+    assert retried.status_code == 409, retried.text
+    assert retried.json()["detail"]["code"] == "deployment_controller_conflict"
+    # The confirmed installation is never re-applied through Retry.
+    assert controller.applied == [operation_id]
+    assert controller.store.load(operation_id)["attemptGroup"] == 1
+    assert temporal.calls == []
+
+
+def test_current_image_is_the_newest_installation_the_controller_confirmed(
+    controller_factory: Callable[..., InProcessController],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The transitional updater's last desired state names an older image.
+    legacy_state = tmp_path / "desired-state.json"
+    legacy_state.write_text(
+        json.dumps(
+            {
+                "stack": "moonmind",
+                "imageRepository": IMAGE_REPOSITORY,
+                "requestedReference": "20260425.1234",
+                "createdAt": "2026-04-25T18:04:00Z",
+            }
+        )
+    )
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(legacy_state))
+    monkeypatch.delenv("MOONMIND_IMAGE", raising=False)
+    monkeypatch.delenv("MOONMIND_IMAGE_REQUESTED", raising=False)
+    installed = "sha256:" + "b" * 64
+    broken = "sha256:" + "c" * 64
+
+    def apply(controller: InProcessController, operation: dict) -> None:
+        if operation["desired"]["image"] == _desired(broken):
+            controller.store.record_attempt_error(
+                operation["operationId"], error="pull failed: manifest unknown"
+            )
+            raise controller.engine.StageError("pull", 1, "manifest unknown")
+        controller.store.confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    controller_factory(apply)
+    client, _temporal = _client()
+
+    first = client.post("/api/v1/operations/deployment/update", json=_update(installed))
+    assert first.json()["status"] == "SUCCEEDED", first.text
+    # A newer request that never installed must not become the current image.
+    failed = client.post("/api/v1/operations/deployment/update", json=_update(broken))
+    assert failed.json()["status"] == "FAILED", failed.text
+
+    state = _stack(client)
+    assert state["latestAction"]["status"] == "FAILED"
+    current = state["currentImage"]
+    assert current["evidence"] == "controller"
+    assert current["deployedImage"] == _desired(installed)
+    assert current["resolvedDigest"] == installed
+    assert current["repository"] == IMAGE_REPOSITORY

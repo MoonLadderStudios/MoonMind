@@ -309,8 +309,19 @@ class OperationStore:
         return self._write(operation)
 
     def begin_retry(self, operation_id: str) -> dict:
-        """Start a fresh bounded attempt group; prior diagnostics are kept."""
+        """Start a fresh bounded attempt group for a failed operation.
+
+        Only ``failed`` is retryable: succeeded/partially verified records
+        already installed their image, open ones are owned by a writer or
+        restart recovery, and superseded ones are stale intent that must
+        never be recreated over a newer target. Prior diagnostics are kept.
+        """
         operation = self.load(operation_id)
+        if operation.get("status") != "failed":
+            raise RuntimeError(
+                f"Only a failed operation can be retried (status "
+                f"{operation.get('status')!r}); submit a new operation instead."
+            )
         if operation.get("attemptGroup", 1) >= MAX_ATTEMPT_GROUPS:
             raise RuntimeError(
                 "Retry budget exhausted for this operation; start a new "

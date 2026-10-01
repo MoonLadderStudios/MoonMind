@@ -22,6 +22,7 @@ from api_service.services.deployment_operations import (
     DeploymentUpdateSubmission,
     RollbackEligibilityDecision,
     RollbackImageTarget,
+    current_image_from_controller,
     mutable_references,
     resolve_current_deployment_image,
 )
@@ -105,7 +106,9 @@ class DeploymentCurrentImageModel(BaseModel):
     resolved_digest: str | None = Field(None, alias="resolvedDigest")
     source_run_id: str | None = Field(None, alias="sourceRunId")
     updated_at: str | None = Field(None, alias="updatedAt")
-    evidence: Literal["desired_state", "environment", "policy", "unavailable"]
+    evidence: Literal[
+        "controller", "desired_state", "environment", "policy", "unavailable"
+    ]
 
 
 class DeploymentPolicyModel(BaseModel):
@@ -565,13 +568,16 @@ def _stack_state(
     recent_actions: tuple[DeploymentRecentAction, ...],
 ) -> DeploymentStackStateResponse:
     action_models = [_recent_action_model(action) for action in recent_actions]
+    # A controller-confirmed installation is the current image; the legacy
+    # desired state and environment describe only pre-controller updates.
+    current_image = current_image_from_controller(
+        controller.actions, policy
+    ) or resolve_current_deployment_image(policy)
     return DeploymentStackStateResponse(
         stack=policy.stack,
         project_name=policy.project_name,
         build_id=resolve_moonmind_build_id(),
-        current_image=_current_image_model(
-            resolve_current_deployment_image(policy)
-        ),
+        current_image=_current_image_model(current_image),
         latest_action=action_models[0] if action_models else None,
         recent_actions=action_models,
         controller=DeploymentControllerModel(

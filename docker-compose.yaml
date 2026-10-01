@@ -1748,9 +1748,11 @@ networks:
     internal: true
   # Private link from the API and the deployment-control worker to the
   # standalone deployment controller, which joins it under the
-  # `moonmind-controller` alias. Agent runtimes are never attached.
+  # `moonmind-controller` alias. Agent runtimes are never attached. The name
+  # follows the Compose project so independent deployments on one host never
+  # share the alias; deploy/controller/bootstrap.py derives the same name.
   deployment-controller-network:
-    name: ${MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK:-moonmind_deployment-controller-network}
+    name: ${MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK:-${COMPOSE_PROJECT_NAME:-moonmind}_deployment-controller-network}
     internal: true
   sandbox-egress-network:
     name: ${MOONMIND_SANDBOX_EGRESS_NETWORK:-moonmind_sandbox-egress-network}

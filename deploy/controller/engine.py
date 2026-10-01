@@ -229,19 +229,24 @@ def observe_services(
     *,
     timeout_seconds: int = 60,
 ) -> dict:
-    """Observe which selected services are running after an apply.
+    """Observe which selected services are up after an apply.
 
-    Read-only: runs ``docker compose ps`` and reports each selected service
-    as running only when Compose lists it in the ``running`` state. An
-    unparsable or failed observation raises :class:`CommandError` so the
-    caller records an explicit verification gap instead of success.
+    Read-only: runs ``docker compose ps --all`` and reports a selected
+    service as up when a service container is ``running``, or ``exited``
+    with exit code 0. Docker restarts ``always``/``unless-stopped``
+    containers instead of leaving them exited, so a clean exit is a
+    run-to-completion service (``init-db``) that finished; a non-zero exit
+    stays a failure. One-off ``compose run`` containers are not service
+    evidence. An unparsable or failed observation raises
+    :class:`CommandError` so the caller records an explicit verification
+    gap instead of success.
     """
     import json as _json
 
     targets = [s for s in services if s]
     if not targets:
         raise ValueError("Refusing a service observation with no services.")
-    command = (*base, "ps", "--format", "json", *targets)
+    command = (*base, "ps", "--all", "--format", "json", *targets)
     result = run_command(runner, command, timeout_seconds=timeout_seconds)
     if int(result.get("exit", 0)) != 0:
         raise CommandError(
@@ -268,13 +273,34 @@ def observe_services(
                 continue
             if isinstance(item, dict):
                 records.append(item)
-    observed = {name: False for name in targets}
+    running: set[str] = set()
+    completed: set[str] = set()
     for item in records:
         service = str(item.get("Service") or "")
+        if service not in targets or _is_one_off(item):
+            continue
         state = str(item.get("State") or "").lower()
-        if service in observed and state == "running":
-            observed[service] = True
-    return {"services": observed}
+        if state == "running":
+            running.add(service)
+        elif state == "exited" and str(item.get("ExitCode")) == "0":
+            completed.add(service)
+    completed -= running
+    observed = {name: name in running or name in completed for name in targets}
+    return {"services": observed, "completed": sorted(completed)}
+
+
+def _is_one_off(item: Mapping[str, Any]) -> bool:
+    """True for a ``compose run`` container (Labels is a string or mapping)."""
+    labels = item.get("Labels")
+    if isinstance(labels, Mapping):
+        value = labels.get("com.docker.compose.oneoff", "")
+    else:
+        value = ""
+        for pair in str(labels or "").split(","):
+            key, _, raw = pair.partition("=")
+            if key.strip() == "com.docker.compose.oneoff":
+                value = raw
+    return str(value).strip().lower() == "true"
 
 
 def pre_apply_checks(
@@ -314,15 +340,23 @@ def post_apply_checks(
     services_running: Mapping[str, bool],
     dispatch_ok: bool | None,
     operator_access: Mapping[str, str] | None = None,
+    completed_services: Sequence[str] = (),
 ) -> dict:
     """Verify after apply. Failed/unavailable mandatory checks stay explicit."""
     checks = []
+    completed = set(completed_services)
     for service, running in services_running.items():
+        if not running:
+            detail = "not running (or exited non-zero) after apply"
+        elif service in completed:
+            detail = "completed (exit 0)"
+        else:
+            detail = "running"
         checks.append(
             {
                 "name": f"service:{service}",
                 "status": "passed" if running else "failed",
-                "detail": "running" if running else "not running after apply",
+                "detail": detail,
             }
         )
     if dispatch_ok is None:

@@ -29,7 +29,7 @@ from moonmind.workflows.skills.deployment_tools import (
 )
 
 CurrentImageEvidence = Literal[
-    "desired_state", "environment", "policy", "unavailable"
+    "controller", "desired_state", "environment", "policy", "unavailable"
 ]
 
 
@@ -639,6 +639,41 @@ def _current_image_from_record(
         source_run_id=str(record.get("sourceRunId") or "").strip() or None,
         updated_at=str(record.get("createdAt") or "").strip() or None,
         evidence=evidence,
+    )
+
+
+def current_image_from_controller(
+    actions: tuple[DeploymentRecentAction, ...],
+    policy: DeploymentStackPolicy,
+) -> DeploymentCurrentImage | None:
+    """Return the newest installation the controller confirmed, if any.
+
+    Once a deployment installs the controller it is the only update owner,
+    and it records ``installed`` only for a confirmed apply (append-only), so
+    a newer failed or superseded request never replaces it. Ordered by
+    confirmation time because an explicit Retry can confirm an older
+    operation last.
+    """
+
+    confirmed = [
+        action
+        for action in actions
+        if action.owner == "controller" and action.installed_image
+    ]
+    if not confirmed:
+        return None
+    newest = max(confirmed, key=lambda action: action.completed_at or "")
+    installed = str(newest.installed_image)
+    repository, reference, digest = _split_image_reference(installed)
+    return DeploymentCurrentImage(
+        requested_image=newest.requested_image or installed,
+        deployed_image=installed,
+        repository=repository or policy.repository,
+        reference=reference,
+        resolved_digest=digest,
+        source_run_id=newest.operation_id,
+        updated_at=newest.completed_at,
+        evidence="controller",
     )
 
 
