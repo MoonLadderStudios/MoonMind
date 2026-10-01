@@ -25,6 +25,43 @@ from moonmind.workflows.executions.execution_contract import (
 )
 
 
+@pytest.mark.parametrize("target", ["2771", "https://github.com/owner/repo/pull/2771"])
+def test_existing_pr_coordinator_retains_resolution_with_local_publish_none(target):
+    canonical = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "owner/repo",
+            "task": {
+                "instructions": "Resolve PR #2771 on its existing branch.",
+                "publish": {
+                    "mode": "none",
+                    "mergeAutomation": {"enabled": True, "pullRequest": target},
+                },
+            },
+        },
+    )
+    assert canonical["workflow"]["publish"]["mode"] == "none"
+    assert canonical["workflow"]["publish"]["mergeAutomation"]["pullRequest"] == target
+
+
+@pytest.mark.parametrize(
+    "automation",
+    [{}, {"enabled": False, "pullRequest": "2771"}],
+)
+def test_existing_pr_local_publish_none_requires_a_resolution_owner(automation):
+    with pytest.raises(WorkflowContractError, match="resolve-PR objectives"):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload={
+                "repository": "owner/repo",
+                "task": {
+                    "instructions": "Resolve PR #2771 on its existing branch.",
+                    "publish": {"mode": "none", "mergeAutomation": automation},
+                },
+            },
+        )
+
+
 def test_recorded_legacy_decoder_is_separate_from_new_submission_validation() -> None:
     legacy = {
         "repository": "owner/repo",

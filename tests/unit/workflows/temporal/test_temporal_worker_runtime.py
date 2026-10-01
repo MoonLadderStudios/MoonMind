@@ -102,8 +102,12 @@ def test_publish_mode_agent_instructions_distinguish_auto_none_and_managed() -> 
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
 @pytest.mark.parametrize("step_count", [1, 2])
 @pytest.mark.parametrize("publish", [{}, {"mode": "none"}])
-def test_batch_coordinator_publish_scope_survives_parent_and_child_planning(
-    runtime, step_count, publish,
+@pytest.mark.asyncio
+async def test_batch_coordinator_publish_scope_survives_parent_and_child_planning(
+    runtime,
+    step_count,
+    publish,
+    tmp_path,
 ) -> None:
     """Replay the incident through normalization, planning, and portable child authoring."""
     import runpy
@@ -111,6 +115,12 @@ def test_batch_coordinator_publish_scope_survives_parent_and_child_planning(
 
     from moonmind.workflows.executions.execution_contract import (
         build_canonical_workflow_view,
+    )
+    from moonmind.workflows.temporal.workflows.merge_gate import (
+        build_resolver_run_request,
+    )
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_MERGE_AUTOMATION_RESOLVER_SELECTION_PATCH,
     )
 
     repo_root = Path(__file__).resolve().parents[4]
@@ -160,15 +170,80 @@ def test_batch_coordinator_publish_scope_survives_parent_and_child_planning(
             batch_scope=incident["incidentWorkflowId"],
             inherit_runtime_from_caller=True,
         )
-        child = build_canonical_workflow_view(
-            job_type=child_request["type"], payload=child_request["payload"],
+        async with _template_db(tmp_path) as session_maker:
+            async with session_maker() as session:
+                expanded = await _expand_preset_for_child_run(
+                    session=session,
+                    initial_parameters=child_request["payload"],
+                )
+                await session.commit()
+        adopted = build_canonical_workflow_view(
+            job_type=child_request["type"],
+            payload=expanded,
         )
-        child_plan = planner(inputs=child, parameters={}, snapshot=snapshot)
-        child_inputs = child_plan["nodes"][0]["inputs"]
-        assert child_inputs["publishMode"] == incident["childPublishMode"]
-        assert child_inputs["runtime"] == runtime_config
-        assert child_inputs["startingBranch"] == pr["headRefName"]
-        assert "commit, push, or merge only when required by the selected skill" in child_inputs["instructions"]
+        child_plan = planner(inputs=adopted, parameters={}, snapshot=snapshot)
+        coordinator_inputs = child_plan["nodes"][0]["inputs"]
+        assert coordinator_inputs["publishMode"] == "none"
+        assert {
+            key: adopted["workflow"]["runtime"][key] for key in runtime_config
+        } == runtime_config
+        assert (
+            child_plan["nodes"][0]["tool"]["name"]
+            == "github.resolve_pull_request_target"
+        )
+
+        owner = MoonMindUserWorkflow()
+        owner._repo = incident["repository"]
+        owner._publish_context.update({"branch": pr["headRefName"], "baseRef": "main"})
+        owner._workflow_patch_enabled = lambda patch: (
+            patch == RUN_MERGE_AUTOMATION_RESOLVER_SELECTION_PATCH
+        )
+        gate = owner._build_merge_gate_start_payload(
+            parameters=adopted,
+            pull_request_url=f"https://github.com/{incident['repository']}/pull/{pr['number']}",
+            head_sha="qualified-current-head",
+            parent_workflow_id="adoption-owner",
+            parent_run_id="adoption-run",
+        )
+        assert gate is not None
+        assert (
+            gate["mergeAutomationConfig"]["gate"]["github"]["automatedReview"]
+            == "disabled"
+        )
+        resolver_request = build_resolver_run_request(
+            parent_workflow_id="durable-gate",
+            pull_request=gate["pullRequest"],
+            jira_issue_key=None,
+            merge_method=gate["mergeAutomationConfig"]["resolver"]["mergeMethod"],
+            resolver_template=gate["resolverTemplate"],
+        )
+        resolver_plan = planner(
+            inputs=resolver_request["initial_parameters"],
+            parameters={},
+            snapshot=snapshot,
+        )
+        resolver_inputs = resolver_plan["nodes"][0]["inputs"]
+        assert resolver_inputs["publishMode"] == incident["childPublishMode"]
+        assert resolver_inputs["runtime"] == runtime_config
+        assert resolver_inputs["branch"] == pr["headRefName"]
+        assert resolver_request["initial_parameters"]["workspaceSpec"] == {
+            "repository": incident["repository"],
+            "branch": pr["headRefName"],
+            "startingBranch": "main",
+            "targetBranch": pr["headRefName"],
+        }
+        assert resolver_inputs["inputs"]["maxIterations"] == 5
+        assert resolver_inputs["inputs"]["mergeMethod"] == "squash"
+        assert (
+            "commit, push, or merge only when required by the selected skill"
+            in resolver_inputs["instructions"]
+        )
+        assert (
+            resolver_request["initial_parameters"]["task"]["skill"]["args"][
+                "returnToGate"
+            ]
+            is True
+        )
 
 
 def test_local_publish_scope_preserves_explicit_user_child_restriction() -> None:

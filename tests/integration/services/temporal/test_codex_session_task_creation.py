@@ -383,9 +383,23 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
             pr_number=1337,
             branch="codex/session-child-task",
         )
-        assert body["payload"]["task"]["skill"]["name"] == "pr-resolver"
-        assert "version" not in body["payload"]["task"]["skill"]
-        assert body["payload"]["task"]["inputs"]["pr"] == "1337"
+        template = body["payload"]["task"]["taskTemplate"]
+        assert template["slug"] == "pr-review-resolve"
+        assert "version" not in template
+        assert body["payload"]["task"]["inputs"] == {
+            "repository": "MoonLadderStudios/MoonMind",
+            "pull_request": "1337",
+            "review_provider": "none",
+            "finish_with_pr_resolver": True,
+            "merge_method": "squash",
+            "max_iterations": 3,
+        }
+        assert body["payload"]["task"]["runtime"] == {
+            "mode": "codex_cli",
+            "model": "gpt-5.4",
+            "effort": "high",
+            "executionProfileRef": "codex_default",
+        }
     finally:
         await asyncio.to_thread(server.shutdown)
         await asyncio.to_thread(server.server_close)
