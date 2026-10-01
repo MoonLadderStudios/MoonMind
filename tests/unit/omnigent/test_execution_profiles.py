@@ -175,6 +175,27 @@ def test_codex_launch_uses_the_shared_tool_owning_host_image(monkeypatch) -> Non
     assert launch["hostImageRef"] == shared_ref
 
 
+def test_codex_launch_fails_closed_without_the_shared_host_image(monkeypatch) -> None:
+    """The upstream host lacks the MoonMind tools, so it is never a fallback."""
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_IMAGE_REF", "example.test/upstream-host@sha256:" + "5" * 64
+    )
+    monkeypatch.delenv("OMNIGENT_SHARED_HOST_IMAGE_REF", raising=False)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+
+    with pytest.raises(OmnigentOAuthHostError) as error:
+        compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex-oauth",
+        )
+
+    assert error.value.code == "OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE"
+    assert "OMNIGENT_SHARED_HOST_IMAGE_REF" in str(error.value)
+
+
 def test_workflow_cannot_supply_host_or_credential_authority() -> None:
     with pytest.raises(OmnigentOAuthHostError) as error:
         selection_from_request({"omnigent": {"session": {"hostId": "manual"}}})

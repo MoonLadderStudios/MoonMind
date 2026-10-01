@@ -855,6 +855,13 @@ async def test_codex_bootstrap_policies_launch_the_shared_tool_owning_host_image
         assert original.document_json["host"]["hostImageRef"] == upstream_host_digest
         assert await bootstrap_policies_ready(session) is True
 
+        # Until the shared image resolves, Codex defaults are not launchable.
+        monkeypatch.setattr(
+            "moonmind.omnigent.bootstrap.store.load_resolved_state", lambda: None
+        )
+        monkeypatch.delenv("OMNIGENT_SHARED_HOST_IMAGE_REF", raising=False)
+        assert await bootstrap_policies_ready(session) is False
+
 
 @pytest.mark.asyncio
 async def test_dynamic_opencode_child_resolves_bootstrapped_policy(

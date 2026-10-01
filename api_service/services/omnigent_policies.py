@@ -1939,7 +1939,14 @@ async def bootstrap_policies_ready(session: AsyncSession) -> bool:
     """Return whether every built-in policy has immutable active authority."""
 
     service = OmnigentPolicyService(session)
-    for definition in _bootstrap_policy_definitions():
+    definitions = _bootstrap_policy_definitions()
+    # Codex and Claude launch only the shared host image; their defaults are
+    # not launchable until the deployment has resolved it.
+    if any(
+        definition.host_image_kind == "shared" for definition in definitions
+    ) and not resolved_shared_bootstrap_image_ref():
+        return False
+    for definition in definitions:
         policy_id = definition.policy_id
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None or policy.default_version is None:
