@@ -287,12 +287,21 @@ class GenericOmnigentHostRealizer:
                     # binding. Its owner is still running, so no janitor will
                     # reclaim the host an interrupted attempt launched for it:
                     # this execution drains it through the cleanup below.
-                    binding = prior
-                    (
-                        credential_handles,
-                        host_lease,
-                        host_context,
-                    ) = await self._bound_cleanup_resources(binding)
+                    # Cleanup must see every persisted resource, or it would
+                    # mark the binding cleaned while its host lease still
+                    # counts; on a partial load the binding stays recoverable.
+                    try:
+                        resources = await self._bound_cleanup_resources(prior)
+                    except Exception:
+                        logger.warning(
+                            "Could not load cleanup resources for binding %s "
+                            "after its provider lease was lost",
+                            prior.bindingId,
+                            exc_info=True,
+                        )
+                    else:
+                        binding = prior
+                        credential_handles, host_lease, host_context = resources
                 raise
             finally:
                 # The observed wait covers capacity queueing and any provider
