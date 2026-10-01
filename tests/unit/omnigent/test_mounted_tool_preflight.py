@@ -410,10 +410,9 @@ async def test_persistent_rate_limit_is_reported_as_transient_with_original_erro
     assert raised.value.code == "github_rate_limited"
     assert raised.value.transient is True
     assert "API rate limit exceeded" in str(raised.value)
-    assert sleep.await_count == 2
-    assert all(
-        wait.args[0] <= 3600.0 for wait in sleep.await_args_list
-    ), sleep.await_args_list
+    # One bounded in-place wait, well inside the launch activity's budget;
+    # longer outages are left to the parent's fresh Step Execution.
+    sleep.assert_awaited_once_with(900.0)
 
 
 @pytest.mark.asyncio
