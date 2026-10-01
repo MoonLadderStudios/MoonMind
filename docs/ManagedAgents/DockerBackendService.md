@@ -730,7 +730,7 @@ configuration, in precedence order: the `MOONMIND_GHCR_PULL_*_SECRET_REF` (or
 managed-secret slug pair read coherently in one store session.
 
 When none of those is configured, the deployment's own GitHub credential
-(`GITHUB_TOKEN` / `GITHUB_PAT`, needing `read:packages`) authenticates the pull
+(the `repository-connection:git-default` connection, needing `read:packages`) authenticates the pull
 through a GitHub username lookup, rather than downgrading to an anonymous pull
 that a private package denies. This deliberately reverses that part of
 MoonLadderStudios/MoonMind#4012: requiring a separately provisioned registry

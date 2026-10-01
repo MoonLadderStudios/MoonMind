@@ -2803,11 +2803,20 @@ def build_canonical_workflow_view(
     required.append(target_runtime)
     repository_raw = canonical.get("repository")
     if isinstance(repository_raw, str):
+        # New input compiles through the authoring compiler, which selects
+        # the default connection for an omitted reference. The frozen
+        # history decoder serves recorded histories only (#4023).
         git_node = workflow_node.get("git")
         git_mapping = git_node if isinstance(git_node, Mapping) else {}
-        repository_target = decode_legacy_repository_history_v1(
-            repository_raw,
-            _clean_optional_str(git_mapping.get("startingBranch")),
+        repository_target = compile_repository_target(
+            {
+                "provider": "git",
+                "repository": {"name": repository_raw},
+                "branch": {
+                    "name": _clean_optional_str(git_mapping.get("startingBranch"))
+                    or "main"
+                },
+            }
         )
     else:
         repository_target = (
