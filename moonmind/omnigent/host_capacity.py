@@ -218,7 +218,7 @@ class GenericHostCapacityAdmission:
     ) -> tuple[int, int]:
         """Count active hosts and in-window launches inside ``session``."""
 
-        from sqlalchemy import func, select
+        from sqlalchemy import func, or_, select
 
         from api_service.db.models import OmnigentHostLeaseRecordV2
 
@@ -232,7 +232,21 @@ class GenericHostCapacityAdmission:
             .where(
                 OmnigentHostLeaseRecordV2.status.in_(
                     ACTIVE_HOST_LEASE_STATUSES
-                )
+                ),
+                # An expired lease is already reclaimable, so it must not also
+                # spend capacity. `list_recoverable` treats expiry as the end
+                # of a lease's authority; counting it here too let one
+                # abandoned host hold every queued run in `awaiting_slot`
+                # forever, because its owner never returned to release it.
+                # The realizer renews `expires_at` on each heartbeat, so a
+                # host still being driven always carries a future expiry and
+                # is never freed from under itself. A row with no recorded
+                # expiry stays counted: an unknown deadline is not evidence
+                # of a free slot.
+                or_(
+                    OmnigentHostLeaseRecordV2.expires_at.is_(None),
+                    OmnigentHostLeaseRecordV2.expires_at > observed_at,
+                ),
             )
         )
         recent = await session.execute(

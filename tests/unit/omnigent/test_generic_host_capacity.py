@@ -11,8 +11,18 @@ limits are enforced directly by Docker.
 
 from __future__ import annotations
 
-import pytest
+from datetime import UTC, datetime, timedelta
 
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.db.models import (
+    Base,
+    OmnigentHostBindingRecordV2,
+    OmnigentHostLeaseRecordV2,
+)
 from moonmind.omnigent.host_capacity import (
     ACTIVE_HOST_LEASE_STATUSES,
     LIMITING_LAYER_COLD_LAUNCH_RATE,
@@ -55,9 +65,9 @@ def test_aggregate_ceiling_admits_exactly_capacity_hosts(host_capacity: int) -> 
     """The ceiling is the same rule at every size; there is no special case."""
 
     for active in range(host_capacity):
-        assert _decision(
-            active_hosts=active, host_capacity=host_capacity
-        ).admitted is True
+        assert (
+            _decision(active_hosts=active, host_capacity=host_capacity).admitted is True
+        )
 
     refused = _decision(active_hosts=host_capacity, host_capacity=host_capacity)
     assert refused.admitted is False
@@ -102,7 +112,9 @@ def test_waiting_reasons_name_the_layer_without_identity() -> None:
         active_hosts=1, recent_cold_launches=2, host_capacity=8, cold_launch_burst=2
     )
 
-    assert f"missing_condition={LIMITING_LAYER_HOST_CAPACITY}" in host_full.waiting_reason
+    assert (
+        f"missing_condition={LIMITING_LAYER_HOST_CAPACITY}" in host_full.waiting_reason
+    )
     assert (
         f"missing_condition={LIMITING_LAYER_COLD_LAUNCH_RATE}"
         in launch_full.waiting_reason
@@ -346,9 +358,7 @@ async def test_a_lease_row_in_the_window_is_launch_evidence_at_any_status() -> N
     assert decision.limiting_layer == LIMITING_LAYER_COLD_LAUNCH_RATE
     # The launch-window count must not filter on status: a short-lived failure
     # moves to cleanup_pending/cleaned and would otherwise stop being evidence.
-    window_query = next(
-        stmt for stmt in session.statements if "created_at" in stmt
-    )
+    window_query = next(stmt for stmt in session.statements if "created_at" in stmt)
     assert "status" not in window_query
 
 
@@ -497,17 +507,14 @@ async def test_a_caller_without_a_binding_cannot_claim_a_reservation(
 def test_missing_empty_and_whitespace_resolve_to_single_host() -> None:
     assert generic_host_capacity(env={}) == 1
     assert generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: ""}) == 1
-    assert (
-        generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: "   "}) == 1
-    )
+    assert generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: "   "}) == 1
     assert OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY == 1
 
 
 @pytest.mark.parametrize("raw", ["1", "2", "8", "16"])
 def test_explicit_positive_values_round_trip_unchanged(raw: str) -> None:
-    assert (
-        generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: raw})
-        == int(raw)
+    assert generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: raw}) == int(
+        raw
     )
 
 
@@ -550,6 +557,139 @@ async def test_lowered_ceiling_preserves_already_allocated_work() -> None:
 
     assert owned.admitted is True
     assert owned.limiting_layer is None
+
+
+@pytest_asyncio.fixture()
+async def lease_session_factory(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/host_capacity.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    yield maker
+    await engine.dispose()
+
+
+async def _add_host_lease(
+    session_factory,
+    *,
+    lease_id: str,
+    status: str,
+    expires_at,
+) -> None:
+    async with session_factory() as session:
+        session.add(
+            OmnigentHostBindingRecordV2(
+                binding_id=f"binding-{lease_id}",
+                host_class_ref="omnigent-opencode@1",
+                launch_policy_ref="omnigent-on-demand@5",
+                harness_id="opencode-native",
+                harness_implementation_ref="harness-impl",
+                provider_profile_refs_json=[],
+            )
+        )
+        session.add(
+            OmnigentHostLeaseRecordV2(
+                lease_id=lease_id,
+                binding_id=f"binding-{lease_id}",
+                host_class_ref="omnigent-opencode@1",
+                runtime_binding_id=f"runtime-binding-{lease_id}",
+                generation=1,
+                host_lease_generation=1,
+                status=status,
+                heartbeat_at=datetime.now(UTC),
+                expires_at=expires_at,
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_expired_host_lease_does_not_spend_host_capacity(
+    lease_session_factory,
+) -> None:
+    """An abandoned host must stop consuming a slot once its lease expires.
+
+    Counting only ``status`` let a host whose execution died without releasing
+    its lease keep every queued omnigent run in ``awaiting_slot`` forever: the
+    generic host layer reported itself full against a container nothing was
+    driving. ``list_recoverable`` already treats ``expires_at`` as reclaimable,
+    so capacity accounting has to agree with it or a single dead host wedges the
+    whole runtime.
+    """
+
+    now = datetime.now(UTC)
+    await _add_host_lease(
+        lease_session_factory,
+        lease_id="abandoned",
+        status="ready",
+        expires_at=now - timedelta(minutes=5),
+    )
+    admission = GenericHostCapacityAdmission(
+        session_factory=lease_session_factory,
+        host_capacity=1,
+        cold_launch_burst=8,
+        cold_launch_window_seconds=30,
+    )
+
+    decision = await admission.evaluate()
+
+    assert decision.active_hosts == 0
+    assert decision.admitted is True
+
+
+@pytest.mark.asyncio
+async def test_live_host_lease_still_spends_host_capacity(
+    lease_session_factory,
+) -> None:
+    """Honouring expiry must not hand a second host to a running execution.
+
+    The realizer renews ``expires_at`` on every heartbeat, so a host that is
+    still being driven always carries a future expiry.
+    """
+
+    await _add_host_lease(
+        lease_session_factory,
+        lease_id="live",
+        status="ready",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    admission = GenericHostCapacityAdmission(
+        session_factory=lease_session_factory,
+        host_capacity=1,
+        cold_launch_burst=8,
+        cold_launch_window_seconds=30,
+    )
+
+    decision = await admission.evaluate()
+
+    assert decision.active_hosts == 1
+    assert decision.admitted is False
+    assert decision.limiting_layer == LIMITING_LAYER_HOST_CAPACITY
+
+
+@pytest.mark.asyncio
+async def test_host_lease_without_an_expiry_still_spends_host_capacity(
+    lease_session_factory,
+) -> None:
+    """An unknown expiry is not evidence of a free slot; it stays counted."""
+
+    await _add_host_lease(
+        lease_session_factory,
+        lease_id="undated",
+        status="ready",
+        expires_at=None,
+    )
+    admission = GenericHostCapacityAdmission(
+        session_factory=lease_session_factory,
+        host_capacity=1,
+        cold_launch_burst=8,
+        cold_launch_window_seconds=30,
+    )
+
+    decision = await admission.evaluate()
+
+    assert decision.active_hosts == 1
+    assert decision.admitted is False
 
 
 def test_full_agent_host_does_not_consume_container_job_slot() -> None:
