@@ -201,7 +201,6 @@ const readyOmnigentCatalog = {
       providerId: 'openai',
       runtimeId: 'codex_cli',
       busy: false,
-      queueWhenBusy: true,
     },
   ],
   ineligibleProviderProfiles: [],
