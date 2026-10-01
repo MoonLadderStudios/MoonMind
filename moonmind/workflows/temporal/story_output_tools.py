@@ -5213,6 +5213,80 @@ async def load_github_issue_preset_brief(
         "error": "Three candidates changed before announcement; selection retry budget exhausted."})
 
 
+_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS = 2.0
+
+
+async def _provider_profile_manager_state(runtime_id: str) -> Mapping[str, Any] | None:
+    """Query the runtime's ProviderProfileManager; ``None`` when unobservable."""
+    import asyncio
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        workflow_id_for_runtime,
+    )
+
+    client = await TemporalClientAdapter().get_client()
+    state = await asyncio.wait_for(
+        client.get_workflow_handle(workflow_id_for_runtime(runtime_id)).query(
+            "get_state"
+        ),
+        timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
+    )
+    return state if isinstance(state, Mapping) else None
+
+
+async def _local_capacity_deferral(
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Idle evidence when the run's provider profile observably cannot start work.
+
+    Claiming an issue this deployment cannot start only announces, waits, and
+    backs off with ``ISSUE_CLAIM_CAPACITY_BLOCKED``. The run's own runtime
+    selection names the profile its agent steps will request, and the
+    manager's snapshot rules decide whether that request would be admitted.
+    Unknown capacity is not saturation: selection proceeds and admission keeps
+    its existing backoff, which also covers a slot taken after this check.
+    """
+    from moonmind.runtime_identity import normalize_runtime_id
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        snapshot_admits_new_execution,
+    )
+
+    selection = _mapping((context or {}).get("runtime_selection"))
+    if not _string(selection.get("targetRuntime")):
+        return None
+    runtime_id = normalize_runtime_id(
+        _string(selection.get("targetRuntime")).replace("-", "_")
+    )
+    profile_ref = _string(selection.get("profileId"))
+    try:
+        state = await _provider_profile_manager_state(runtime_id)
+    except Exception:  # noqa: BLE001 - an unobservable manager is not saturation
+        return None
+    admitted = snapshot_admits_new_execution(
+        state, execution_profile_ref=profile_ref, now=datetime.now(timezone.utc)
+    )
+    if admitted is not False:
+        return None
+    pending = (state or {}).get("pending_requests")
+    queued = len(pending) if isinstance(pending, list) else 0
+    profile = f"provider profile {profile_ref}" if profile_ref else "the default provider profile"
+    return {
+        "disposition": "idle",
+        "reasonCode": "local_capacity_unavailable",
+        "summary": (
+            f"Search deferred: {profile} for {runtime_id} cannot start new work "
+            f"now ({queued} request(s) already queued). No issue was claimed; a "
+            "later run selects once capacity frees."
+        ),
+        "capacityEvidence": {
+            "runtimeId": runtime_id,
+            "profileId": profile_ref or None,
+            "queuedRequests": queued,
+        },
+    }
+
+
 async def _load_github_issue_preset_brief(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -5256,6 +5330,13 @@ async def _load_github_issue_preset_brief(
 
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
+        deferral = await _local_capacity_deferral(_context)
+        if deferral is not None:
+            return ToolResult(
+                status="COMPLETED",
+                outputs={"repository": repository, **deferral},
+                completion_disposition="idle",
+            )
         # A recovery candidate without usable handoff evidence would fail
         # deterministically at the start transition (it requires
         # predecessor_stopped plus handoff_usable); the routed handoff above

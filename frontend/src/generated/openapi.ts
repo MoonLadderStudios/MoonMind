@@ -1592,6 +1592,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/deployment/operations/{operation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Deployment Operation
+         * @description Request the controller's fresh bounded attempt for a failed operation.
+         */
+        post: operations["retry_deployment_operation_api_v1_operations_deployment_operations__operation_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/deployment/stacks/{stack}": {
         parameters: {
             query?: never;
@@ -7620,6 +7640,27 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DeploymentAttemptModel */
+        DeploymentAttemptModel: {
+            /** Attempt */
+            attempt: number;
+            /** Error */
+            error: string;
+            /** At */
+            at?: string | null;
+        };
+        /**
+         * DeploymentControllerModel
+         * @description Whether the standalone controller is installed and answered this read.
+         */
+        DeploymentControllerModel: {
+            /** Installed */
+            installed: boolean;
+            /** Reachable */
+            reachable: boolean;
+            /** Message */
+            message?: string | null;
+        };
         /** DeploymentCurrentImageModel */
         DeploymentCurrentImageModel: {
             /** Requestedimage */
@@ -7640,7 +7681,7 @@ export interface components {
              * Evidence
              * @enum {string}
              */
-            evidence: "desired_state" | "environment" | "policy" | "unavailable";
+            evidence: "controller" | "desired_state" | "environment" | "policy" | "unavailable";
         };
         /** DeploymentImageRequest */
         DeploymentImageRequest: {
@@ -7706,6 +7747,29 @@ export interface components {
             /** Afterbuildid */
             afterBuildId?: string | null;
             rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
+            /**
+             * Owner
+             * @default workflow
+             * @enum {string}
+             */
+            owner: "controller" | "workflow";
+            /** Operationid */
+            operationId?: string | null;
+            /** Installedimage */
+            installedImage?: string | null;
+            /** Errorsummary */
+            errorSummary?: string | null;
+            /** Attempts */
+            attempts?: components["schemas"]["DeploymentAttemptModel"][];
+            /** Attemptgroup */
+            attemptGroup?: number | null;
+            /** Verification */
+            verification?: components["schemas"]["DeploymentVerificationCheckModel"][];
+            /**
+             * Retryallowed
+             * @default false
+             */
+            retryAllowed: boolean;
         };
         /** DeploymentStackStateResponse */
         DeploymentStackStateResponse: {
@@ -7719,6 +7783,7 @@ export interface components {
             latestAction?: components["schemas"]["DeploymentRecentActionModel"] | null;
             /** Recentactions */
             recentActions?: components["schemas"]["DeploymentRecentActionModel"][];
+            controller: components["schemas"]["DeploymentControllerModel"];
             policy: components["schemas"]["DeploymentPolicyModel"];
         };
         /** DeploymentUpdateRequest */
@@ -7766,19 +7831,42 @@ export interface components {
             /** Confirmation */
             confirmation?: string | null;
         };
-        /** DeploymentUpdateResponse */
+        /**
+         * DeploymentUpdateResponse
+         * @description The accepted update and who owns it.
+         *
+         *     A controller-owned update is identified by its durable controller
+         *     ``operationId``; ``taskId``/``workflowId`` are set only for the
+         *     transitional workflow updater, never manufactured for a local operation.
+         */
         DeploymentUpdateResponse: {
             /** Deploymentupdaterunid */
             deploymentUpdateRunId: string;
             /** Taskid */
-            taskId: string;
+            taskId?: string | null;
             /** Workflowid */
-            workflowId: string;
+            workflowId?: string | null;
+            /** Operationid */
+            operationId?: string | null;
+            /**
+             * Owner
+             * @enum {string}
+             */
+            owner: "controller" | "workflow";
             /**
              * Status
-             * @constant
+             * @enum {string}
              */
-            status: "QUEUED";
+            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "PARTIALLY_VERIFIED" | "FAILED" | "SUPERSEDED";
+        };
+        /** DeploymentVerificationCheckModel */
+        DeploymentVerificationCheckModel: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail?: string | null;
         };
         /** EligibleProviderProfile */
         EligibleProviderProfile: {
@@ -7798,8 +7886,6 @@ export interface components {
              * @default false
              */
             busy: boolean;
-            /** Queuewhenbusy */
-            queueWhenBusy: boolean;
         };
         /**
          * EmbeddedHostHeartbeatRequest
@@ -7975,6 +8061,11 @@ export interface components {
              * @default false
              */
             canRetryPublication: boolean;
+            /**
+             * Canpublishsavedwork
+             * @default false
+             */
+            canPublishSavedWork: boolean;
             /**
              * Canfullretry
              * @default false
@@ -12873,6 +12964,8 @@ export interface components {
         SavedWorkPublicationRequest: {
             /** Savedworkref */
             savedWorkRef: string;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
             destination: components["schemas"]["SavedWorkPublicationDestination"];
             /** Pullrequesttitle */
             pullRequestTitle?: string | null;
@@ -17439,6 +17532,37 @@ export interface operations {
                 "application/json": components["schemas"]["DeploymentUpdateRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_deployment_operation_api_v1_operations_deployment_operations__operation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             202: {

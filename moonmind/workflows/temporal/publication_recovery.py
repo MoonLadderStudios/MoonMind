@@ -400,6 +400,29 @@ class PublicationRecoveryRolloutPolicy(BaseModel):
     )
     generation: str = "disabled"
 
+    def availability_reason(self, *, owner_id: str | None) -> str | None:
+        """Why no destination can be admitted for this owner, before one is chosen."""
+        if not self.enabled:
+            return "publication_recovery_disabled"
+        if self.shadow:
+            return "publication_recovery_shadow_only"
+        if not self.allowed_modes:
+            return "publication_mode_not_allowed"
+        if (
+            self.canary_owner_ids
+            and not self.canary_repositories
+            and (owner_id or "") not in self.canary_owner_ids
+        ):
+            return "publication_recovery_not_in_canary"
+        return None
+
+    def destination_limits(self, *, owner_id: str | None) -> dict[str, list[str]]:
+        """The modes and, under a repository canary, repositories admission accepts."""
+        limits = {"allowedModes": list(self.allowed_modes)}
+        if self.canary_repositories and (owner_id or "") not in self.canary_owner_ids:
+            limits["canaryRepositories"] = list(self.canary_repositories)
+        return limits
+
     def admission_reason(
         self, *, repository: str, owner_id: str | None, mode: str
     ) -> str | None:

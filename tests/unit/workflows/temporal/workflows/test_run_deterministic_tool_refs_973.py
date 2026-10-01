@@ -20,6 +20,7 @@ from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
     RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH,
     RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+    RUN_TOOL_RUNTIME_SELECTION_CONTEXT_PATCH,
     MoonMindRunWorkflow,
     _resolve_plan_json_pointer,
     _resolve_plan_ref_inputs,
@@ -137,14 +138,20 @@ def test_resolve_plan_json_pointer_rejects_scalar_traversal() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("selection_patched", [True, False])
 async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_run(
     monkeypatch: pytest.MonkeyPatch,
+    selection_patched: bool,
 ) -> None:
     """Mixed tool dependency: consume resolves produce's outputs via dispatch."""
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "org/repo"
+    workflow._runtime_inheritance_parameters = {
+        "targetRuntime": "codex_cli",
+        "profileId": "codex_openai_oauth",
+    }
     captured: list[tuple[str, Any, dict[str, Any]]] = []
 
     async def fake_execute_activity(
@@ -198,10 +205,13 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
                 return {"status": "COMPLETED", "outputs": {"ok": True}}
         return {"status": "COMPLETED", "outputs": {}}
 
+    enabled_patches = {RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH}
+    if selection_patched:
+        enabled_patches.add(RUN_TOOL_RUNTIME_SELECTION_CONTEXT_PATCH)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda patch_id: patch_id == RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+        lambda patch_id: patch_id in enabled_patches,
     )
     monkeypatch.setattr(
         run_workflow_module.workflow, "execute_activity", fake_execute_activity
@@ -254,6 +264,16 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
         call for call in tool_calls if call[1]["invocation_payload"]["id"] == "consume"
     )
     assert consume_call[1]["invocation_payload"]["inputs"]["ticket"] == "MM-1"
+    # Tools see the run's provider selection, e.g. so issue search can check
+    # the profile's capacity before claiming work the run cannot start.
+    # Histories recorded before the marker keep their original arguments.
+    if selection_patched:
+        assert consume_call[1]["context"]["runtime_selection"] == {
+            "targetRuntime": "codex_cli",
+            "profileId": "codex_openai_oauth",
+        }
+    else:
+        assert "runtime_selection" not in consume_call[1]["context"]
 
 
 @pytest.mark.asyncio

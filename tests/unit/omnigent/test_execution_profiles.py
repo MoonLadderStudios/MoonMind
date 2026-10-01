@@ -26,6 +26,9 @@ def immutable_bootstrap_images(monkeypatch) -> None:
     monkeypatch.setenv(
         "OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
     )
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
+    )
 
 
 def test_versioned_profile_and_policy_compile_to_stable_safe_snapshot() -> None:
@@ -160,10 +163,10 @@ def test_claude_launch_uses_deployment_resolved_images(monkeypatch, shared_tag) 
     assert launch["hostImageRef"] == shared_ref
 
 
-def test_codex_launch_keeps_its_configured_host_image(monkeypatch) -> None:
-    codex_ref = "example.test/codex-host@sha256:" + "5" * 64
+def test_codex_launch_uses_the_shared_tool_owning_host_image(monkeypatch) -> None:
+    upstream_ref = "example.test/upstream-host@sha256:" + "5" * 64
     shared_ref = "example.test/shared-host@sha256:" + "6" * 64
-    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", codex_ref)
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", upstream_ref)
     monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", shared_ref)
 
     launch = compile_effective_launch(
@@ -172,7 +175,28 @@ def test_codex_launch_keeps_its_configured_host_image(monkeypatch) -> None:
         provider_profile_id="codex-oauth",
     )
 
-    assert launch["hostImageRef"] == codex_ref
+    assert launch["hostImageRef"] == shared_ref
+
+
+def test_codex_launch_fails_closed_without_the_shared_host_image(monkeypatch) -> None:
+    """The upstream host lacks the MoonMind tools, so it is never a fallback."""
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_IMAGE_REF", "example.test/upstream-host@sha256:" + "5" * 64
+    )
+    monkeypatch.delenv("OMNIGENT_SHARED_HOST_IMAGE_REF", raising=False)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+
+    with pytest.raises(OmnigentOAuthHostError) as error:
+        compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex-oauth",
+        )
+
+    assert error.value.code == "OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE"
+    assert "OMNIGENT_SHARED_HOST_IMAGE_REF" in str(error.value)
 
 
 def test_workflow_cannot_supply_host_or_credential_authority() -> None:

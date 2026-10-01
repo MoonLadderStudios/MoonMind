@@ -3171,6 +3171,7 @@ class ExecutionActionCapabilityModel(BaseModel):
     )
     can_continue_remediation: bool = Field(False, alias="canContinueRemediation")
     can_retry_publication: bool = Field(False, alias="canRetryPublication")
+    can_publish_saved_work: bool = Field(False, alias="canPublishSavedWork")
     can_full_retry: bool = Field(False, alias="canFullRetry")
     action_evidence: dict[str, dict[str, Any]] = Field(
         default_factory=dict, alias="actionEvidence"

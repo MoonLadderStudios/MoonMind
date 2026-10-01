@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,6 +52,15 @@ class _Artifacts(FileArtifactStore):
             for path in self.root.glob("*.meta.json")
             for item in [json.loads(path.read_text())]
         }
+
+    async def link_artifact(self, *, artifact_id, principal, execution_ref):
+        _, meta_path = self._paths_for_ref(artifact_id)
+        metadata = json.loads(meta_path.read_text())
+        links = metadata.setdefault("execution_links", [])
+        link = asdict(execution_ref)
+        if link not in links:
+            links.append(link)
+            meta_path.write_text(json.dumps(metadata))
 
     async def put_content_addressed_payload_complete(
         self, *, payload, content_type, **kwargs

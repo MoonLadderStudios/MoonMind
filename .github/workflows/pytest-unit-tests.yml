@@ -913,6 +913,19 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --upgrade
+      - name: Run Settings Operations controller journey
+        # MoonLadderStudios/MoonMind#4502: the compiled dashboard and the real
+        # Operations API submit to, observe, and retry one operation of the
+        # real deploy/controller server beside the candidate stack. The API is
+        # replaced and a fresh page reconnects without submitting again, and
+        # workflow-backed history stays readable without its old engine. The
+        # controller has no Docker daemon, so it fails at image staging and
+        # mutates nothing. MOONMIND_IMAGE pins the candidate build above.
+        env:
+          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+        run: |
+          set -euo pipefail
+          ./tools/first_run_journey_3938.sh --controller
       - name: Capture docker compose diagnostics
         if: failure()
         run: |

@@ -123,6 +123,34 @@ def _rewrite_manifest(saved: CapturedSavedWork, **changes: object) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+@pytest.mark.asyncio
+async def test_materialization_keeps_recorded_delta_outside_output_summary(
+    tmp_path: Path,
+) -> None:
+    saved = await _captured(tmp_path)
+    manifest = saved.manifest()
+    assert "exact_baseline_delta" not in manifest["requiredFormats"]
+    digest = _rewrite_manifest(
+        saved,
+        outputs=[
+            output
+            for output in manifest["outputs"]
+            if output["format"] != "exact_baseline_delta"
+        ],
+    )
+    saved.remove_source()
+
+    content = await materialize_saved_work(
+        read=saved.read,
+        saved_work_ref=saved.saved_work_ref,
+        saved_work_digest=digest,
+        root=tmp_path / "publication" / "content",
+    )
+
+    assert content.recorded_deletions == ("gone.txt",)
+    assert manifest["git"]["deltaRef"] in saved.reads
+
+
 @pytest.mark.parametrize(
     ("changes", "code"),
     [
