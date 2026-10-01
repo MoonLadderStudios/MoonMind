@@ -847,3 +847,7 @@ async def test_deleted_default_connection_does_not_fall_back_to_declaration(
     )
 
     assert await resolve_github_token_for_launch({}) is None
+    resolved = await managed_api_key_resolve_module.resolve_default_github_connection_credential()
+    assert "was deleted" in resolved.safe_summary
+    assert "select a recorded connection" in resolved.safe_summary
+    assert "Source Control" not in resolved.safe_summary
