@@ -16,7 +16,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.executions.runtime_capabilities import (
@@ -105,7 +107,7 @@ async def capture_saved_work(
     )
     activities = TemporalAgentRuntimeActivities(
         run_store=store,
-        artifact_service=artifact_service or object(),
+        artifact_service=artifact_service or SimpleNamespace(link_artifact=AsyncMock()),
         client_adapter=object(),
     )
     objects: dict[str, tuple[bytes, str]] = {}

@@ -18,9 +18,10 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -252,3 +253,134 @@ async def test_restricted_and_expired_saved_outputs_stay_accurate(tmp_path):
                 artifacts[archive_id]["expires_at"].replace("Z", "+00:00")
             ).replace(tzinfo=UTC) <= datetime.now(UTC)
             assert artifacts[saved.saved_work_ref]["raw_access_allowed"] is True
+
+
+@pytest.mark.parametrize("part_format", ["full_snapshot", "exact_baseline_delta"])
+@pytest.mark.parametrize(
+    "unavailable", ["restricted", "expired", "incomplete", "identity_absent"]
+)
+@pytest.mark.asyncio
+async def test_publication_admission_requires_raw_readable_saved_closure(
+    tmp_path: Path, part_format: str, unavailable: str
+):
+    from api_service.api.routers.executions import (
+        SavedWorkPublicationRequest,
+        _admit_saved_work_publication,
+    )
+
+    async with _artifact_service(tmp_path) as service:
+        saved = await capture_saved_work(
+            tmp_path, BASE_FILES, _mutate, artifact_service=service
+        )
+        _artifact, manifest_payload = await service.read(
+            artifact_id=saved.saved_work_ref, principal=OPERATOR
+        )
+        manifest = json.loads(manifest_payload)
+        part = next(o for o in manifest["outputs"] if o["format"] == part_format)
+        assert "exact_baseline_delta" not in manifest["requiredFormats"]
+        manifest_ref = saved.saved_work_ref
+        if part_format == "exact_baseline_delta":
+            # The publisher still reads git.deltaRef when the delta is optional
+            # and is absent from the listing's outputs/format summary.
+            manifest["outputs"] = [
+                output
+                for output in manifest["outputs"]
+                if output["format"] != "exact_baseline_delta"
+            ]
+            manifest_ref = await _put_output(
+                service,
+                json.dumps(manifest).encode(),
+                content_type=SAVED_WORK_MANIFEST,
+                link_type="output.checkpoint",
+                title="Saved work with optional recorded delta",
+            )
+        artifact = await service._repository.get_artifact(part["ref"])
+        if unavailable == "restricted":
+            artifact.redaction_level = (
+                db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            )
+        elif unavailable == "expired":
+            artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+        elif unavailable == "incomplete":
+            artifact.status = db_models.TemporalArtifactStatus.PENDING_UPLOAD
+        else:
+            artifact.sha256 = None
+            artifact.size_bytes = None
+        await service._repository.commit()
+        saved.remove_source()
+
+        with pytest.raises(HTTPException) as exc:
+            await _admit_saved_work_publication(
+                canonical=SimpleNamespace(
+                    workflow_id="mm:source",
+                    run_id="source-run",
+                    created_at=datetime.now(UTC),
+                ),
+                request=SavedWorkPublicationRequest.model_validate(
+                    {
+                        "savedWorkRef": manifest_ref,
+                        "destination": {
+                            "repository": "Dest/Repo",
+                            "objective": "pr",
+                            "baseBranch": "main",
+                            "headBranch": "saved/work",
+                            "strategy": "additive_import",
+                        },
+                    }
+                ),
+                user=SimpleNamespace(id=uuid.UUID(OPERATOR)),
+                artifact_service=service,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "saved_work_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_publication_admits_selected_saved_closure_without_downloading_parts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from api_service.api.routers.executions import (
+        SavedWorkPublicationRequest,
+        _admit_saved_work_publication,
+    )
+
+    async with _artifact_service(tmp_path) as service:
+        saved = await capture_saved_work(
+            tmp_path, BASE_FILES, _mutate, artifact_service=service
+        )
+        saved.remove_source()
+        reads: list[str] = []
+        original_read = service.read
+
+        async def read(**kwargs):
+            reads.append(kwargs["artifact_id"])
+            return await original_read(**kwargs)
+
+        monkeypatch.setattr(service, "read", read)
+        contract = await _admit_saved_work_publication(
+            canonical=SimpleNamespace(
+                workflow_id="mm:source",
+                run_id="source-next",
+                created_at=datetime.now(UTC),
+            ),
+            request=SavedWorkPublicationRequest.model_validate(
+                {
+                    "savedWorkRef": saved.saved_work_ref,
+                    "sourceRunId": "source-run",
+                    "destination": {
+                        "repository": "Dest/Repo",
+                        "objective": "pr",
+                        "baseBranch": "main",
+                        "headBranch": "saved/work",
+                        "strategy": "additive_import",
+                    },
+                }
+            ),
+            user=SimpleNamespace(id=uuid.UUID(OPERATOR)),
+            artifact_service=service,
+        )
+
+        assert contract.source_run_id == "source-run"
+        assert contract.saved_work_digest == saved.saved_work_digest
+        assert reads == [saved.saved_work_ref]

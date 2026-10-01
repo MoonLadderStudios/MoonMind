@@ -356,6 +356,7 @@ export interface SavedWorkDestinationDraft {
 
 export interface SavedWorkPublicationRequest {
   savedWorkRef: string;
+  sourceRunId?: string;
   destination: {
     repository: string;
     objective: SavedWorkObjective;
@@ -454,7 +455,7 @@ export function savedResultErrorMessage(payload: unknown): string {
   return text(record.message);
 }
 
-/** A response the server returned: the request was not accepted. */
+/** A server error response; timeouts and server failures may follow admission. */
 export class SavedWorkPublicationError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -828,7 +829,12 @@ function toSavedWorkEntry(
         break;
       }
       const part = partByFormat.get(format);
-      if (part && (!part.complete || part.expired)) {
+      if (!part) {
+        complete = false;
+        completenessReason = `part-${FORMAT_PART_ROLES[format] ?? format}-missing-artifact`;
+        break;
+      }
+      if (!part.complete || part.expired) {
         complete = false;
         completenessReason = `part-${part.role}-${part.expired ? 'expired' : part.completenessReason}`;
         break;
@@ -890,10 +896,23 @@ function projectEntries(
 }
 
 export function canPublishSavedWork(entry: SavedResultEntry): boolean {
-  // Publication reads the committed manifest's raw bytes, so preview access
-  // or an incomplete/expired save never enables it.
-  return Boolean(
-    entry.savedWork && entry.complete && !entry.expired && !entry.restricted,
+  const unit = entry.savedWork;
+  if (!unit || !entry.complete || entry.expired || entry.restricted) {
+    return false;
+  }
+  // Older manifests lack a compact summary. The server admission checks the
+  // authoritative manifest and its raw dependency closure for every request.
+  if (!unit.summaryAvailable) {
+    return true;
+  }
+  if (!unit.formats.some((claim) => claim.format === 'full_snapshot' && claim.status === 'self_contained')) {
+    return false;
+  }
+  // Materialization reads the snapshot and every recorded delta, including
+  // optional deltas. Preview access to any of them cannot authorize that read.
+  const publicationParts = unit.parts.filter((part) => part.role === 'snapshot' || part.role === 'delta');
+  return publicationParts.some((part) => part.role === 'snapshot') && publicationParts.every(
+    (part) => part.present && part.complete && !part.expired && !part.restricted,
   );
 }
 

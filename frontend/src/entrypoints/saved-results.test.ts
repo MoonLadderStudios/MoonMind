@@ -461,6 +461,28 @@ describe('the committed saved-work manifest is one saved unit', () => {
     expect(failedFormat?.completenessReason).toBe('format-full_snapshot-incomplete');
   });
 
+  it.each([
+    ['full_snapshot', 'self_contained', 'snapshot'],
+    ['exact_baseline_delta', 'requires_dependencies', 'delta'],
+  ])('marks a required %s claim without an artifact incomplete', (format, status, role) => {
+    const missing = project({
+      artifacts: [
+        capture({
+          summary: {
+            required_formats: [format],
+            outputs: [{ format, status }],
+          },
+        }).manifest,
+      ],
+      authorizedContinuationRefs: ['art-manifest'],
+    });
+    const [unit] = missing.entries;
+    expect(unit?.complete).toBe(false);
+    expect(unit?.completenessReason).toBe(`part-${role}-missing-artifact`);
+    expect(canPublishSavedWork(unit!)).toBe(false);
+    expect(missing.continuationRefs).toEqual([]);
+  });
+
   it('never upgrades a manifest the server has not completed', () => {
     const saved = capture();
     const pending = project({
@@ -476,6 +498,80 @@ describe('the committed saved-work manifest is one saved unit', () => {
     expect(legacy?.savedWork?.summaryAvailable).toBe(false);
     expect(legacy?.exclusions).toBeNull();
     expect(legacy?.kind).toBe('repository');
+  });
+
+  it('requires raw access to the snapshot before publication is offered', () => {
+    const saved = capture();
+    const restricted = project({
+      artifacts: [
+        saved.manifest,
+        { ...saved.archive, rawAccessAllowed: false },
+        saved.delta,
+      ],
+    }).entries[0];
+    expect(restricted?.complete).toBe(true);
+    expect(restricted?.restricted).toBe(false);
+    expect(canPublishSavedWork(restricted!)).toBe(false);
+  });
+
+  it.each([
+    { state: 'missing', delta: null },
+    { state: 'pending', delta: { status: 'PENDING_UPLOAD' } },
+    { state: 'expired', delta: { expiresAt: '2026-09-29T00:00:00Z' } },
+    { state: 'restricted', delta: { rawAccessAllowed: false } },
+  ])('refuses publication with a $state recorded delta even when that format is optional', ({ delta }) => {
+    const saved = capture();
+    const unit = project({
+      now: Date.parse('2026-09-30T00:00:00Z'),
+      artifacts: [
+        saved.manifest,
+        saved.archive,
+        ...(delta ? [saved.part('art-delta', 'checkpoint_delta', delta)] : []),
+      ],
+    }).entries[0];
+    expect(unit?.complete).toBe(true);
+    expect(unit?.savedWork?.formats).toContainEqual({
+      format: 'exact_baseline_delta',
+      status: 'requires_dependencies',
+      required: false,
+    });
+    expect(canPublishSavedWork(unit!)).toBe(false);
+  });
+
+  it('requires a self-contained snapshot for publication while keeping a complete report useful', () => {
+    const saved = capture({
+      summary: {
+        required_formats: ['report_only'],
+        outputs: [{ format: 'report_only', status: 'self_contained', artifact_id: 'art-report' }],
+      },
+    });
+    const unit = project({ artifacts: [saved.manifest, artifact({ artifactId: 'art-report' })] }).entries[0];
+    expect(unit?.complete).toBe(true);
+    expect(canPublishSavedWork(unit!)).toBe(false);
+  });
+
+  it('does not require raw access to parts publication never reads', () => {
+    const saved = capture({
+      summary: {
+        required_formats: ['full_snapshot'],
+        outputs: [
+          { format: 'full_snapshot', status: 'self_contained', artifact_id: 'art-archive' },
+          { format: 'exact_baseline_delta', status: 'requires_dependencies', artifact_id: 'art-delta' },
+          { format: 'selected_history', status: 'self_contained', artifact_id: 'art-history' },
+        ],
+      },
+    });
+    const unit = project({
+      artifacts: [
+        saved.manifest,
+        saved.archive,
+        saved.delta,
+        { ...saved.fileManifest, rawAccessAllowed: false },
+        { ...saved.index, rawAccessAllowed: false },
+        saved.part('art-history', 'selected_history', { rawAccessAllowed: false }),
+      ],
+    }).entries[0];
+    expect(canPublishSavedWork(unit!)).toBe(true);
   });
 
   it('requires raw access to the manifest before publication is offered', () => {

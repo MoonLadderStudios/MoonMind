@@ -5762,7 +5762,7 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
 
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,
-        artifact_service=object(),
+        artifact_service=SimpleNamespace(link_artifact=AsyncMock()),
         client_adapter=object(),
     )
 
@@ -5960,7 +5960,7 @@ async def test_retry_before_execution_captures_terminal_prior_workspace(
     )
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,
-        artifact_service=object(),
+        artifact_service=SimpleNamespace(link_artifact=AsyncMock()),
         client_adapter=object(),
     )
 
@@ -6222,7 +6222,7 @@ async def test_checkpoint_capture_heartbeat_backpressure_replay(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=run_store, artifact_service=object(), client_adapter=object()
+        run_store=run_store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(

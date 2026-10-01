@@ -205,6 +205,7 @@ let cleanupRender: (() => void) | null = null;
 let publishRequests: Array<Record<string, unknown>>;
 let continueRequests: Array<Record<string, unknown>>;
 let sourceExecution: Record<string, unknown>;
+let listedArtifacts: typeof artifacts;
 
 beforeEach(() => {
   window.sessionStorage.clear();
@@ -213,6 +214,7 @@ beforeEach(() => {
   publishRequests = [];
   continueRequests = [];
   sourceExecution = execution;
+  listedArtifacts = artifacts;
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -259,7 +261,7 @@ beforeEach(() => {
       }
       if (url.includes('/executions/default/saved-source/saved-run/artifacts')) {
         if (url.includes('link_type=report.primary')) return jsonResponse({ artifacts: [] });
-        return jsonResponse({ artifacts });
+        return jsonResponse({ artifacts: listedArtifacts });
       }
       if (url.includes('/executions/saved-source')) {
         if (url.includes('/remediations')) return jsonResponse({ items: [] });
@@ -290,6 +292,11 @@ function rowFor(region: HTMLElement, text: string): HTMLElement {
 describe('saved results after the source host is gone', () => {
   for (const viewport of [DESKTOP, MOBILE]) {
     it(`shows saved work and dispatches publish/continue at ${viewport.width}px`, async () => {
+      listedArtifacts = artifacts.map((artifact) =>
+        artifact.artifact_id === 'art_saved_delta'
+          ? { ...artifact, raw_access_allowed: true, redaction_level: 'none' }
+          : artifact,
+      );
       await page.viewport(viewport.width, viewport.height);
       const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
       cleanupRender = unmount;
@@ -316,11 +323,14 @@ describe('saved results after the source host is gone', () => {
       expect(within(unit).getByText('Complete')).toBeTruthy();
       expect(within(unit).getByText('2 excluded')).toBeTruthy();
       const parts = within(unit).getByRole('list', { name: 'Saved work parts' });
-      expect(within(parts).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+      const archive = within(parts).getByText('art_saved_archive').closest('li') as HTMLElement;
+      expect(within(archive).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
         '/api/artifacts/art_saved_archive/download',
       );
       const delta = within(parts).getByText('art_saved_delta').closest('li') as HTMLElement;
-      expect(within(delta).getByText('Raw unavailable')).toBeTruthy();
+      expect(within(delta).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+        '/api/artifacts/art_saved_delta/download',
+      );
       expect(within(region).queryByText('Runtime stdout')).toBeNull();
 
       // Report-only and non-Git outputs remain useful on their own.
@@ -363,6 +373,7 @@ describe('saved results after the source host is gone', () => {
       expect(publishRequests).toEqual([
         {
           savedWorkRef: 'art_saved_manifest',
+          sourceRunId: 'saved-run',
           destination: {
             repository: 'MoonLadderStudios/MoonMind',
             objective: 'draft_pr',
@@ -397,6 +408,36 @@ describe('saved results after the source host is gone', () => {
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
     }, 30_000);
   }
+
+  it.each(['art_saved_archive', 'art_saved_delta'])(
+    'keeps publication disabled when %s has no raw access',
+    async (restrictedArtifactId) => {
+      listedArtifacts = artifacts.map((artifact) =>
+        ['art_saved_archive', 'art_saved_delta'].includes(artifact.artifact_id)
+          ? {
+              ...artifact,
+              raw_access_allowed: artifact.artifact_id !== restrictedArtifactId,
+              redaction_level: artifact.artifact_id === restrictedArtifactId ? 'restricted' : 'none',
+            }
+          : artifact,
+      );
+      const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+      cleanupRender = unmount;
+      const heading = await screen.findByRole('heading', { name: 'Saved Results' }, { timeout: 10_000 });
+      const region = heading.closest('section') as HTMLElement;
+      await within(region).findByText('Saved work', {}, { timeout: 10_000 });
+      const unit = rowFor(region, 'Saved work');
+      expect(within(unit).getByText('Complete')).toBeTruthy();
+      const publish = within(unit).getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
+      expect(publish.disabled).toBe(true);
+      const restricted = within(unit).getByText(restrictedArtifactId).closest('li') as HTMLElement;
+      expect(within(restricted).getByText('Raw unavailable')).toBeTruthy();
+      expect(within(restricted).queryByRole('link', { name: 'Download' })).toBeNull();
+      expect(within(rowFor(region, 'Final report')).getByRole('link', { name: 'Download' })).toBeTruthy();
+      expect(publishRequests).toEqual([]);
+    },
+    30_000,
+  );
 
   it('explains server-disabled publication and keeps download and continue working', async () => {
     sourceExecution = publicationDisabledExecution;

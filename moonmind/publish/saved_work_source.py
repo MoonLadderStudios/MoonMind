@@ -17,6 +17,7 @@ import json
 import os
 import tarfile
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -171,6 +172,78 @@ def _recorded_deletions(delta: dict[str, Any]) -> tuple[str, ...]:
     return tuple(sorted(deleted))
 
 
+@dataclass(frozen=True)
+class SavedWorkPublicationObject:
+    """One raw artifact the saved-work publisher must read."""
+
+    ref: str
+    digest: str
+    content_type: str
+
+
+def parse_saved_work_publication_manifest(
+    manifest_bytes: bytes,
+) -> tuple[dict[str, Any], tuple[SavedWorkPublicationObject, ...]]:
+    """Validate the manifest and identify the publisher's exact raw closure.
+
+    Admission checks this closure's availability without downloading archives.
+    Materialization reads these same snapshot/delta objects, including a delta
+    named only in ``git.deltaRef`` rather than in the output-format summary.
+    """
+
+    manifest = _json_object(manifest_bytes, "saved-work manifest")
+    if manifest.get("schemaVersion") != SAVED_WORK_MANIFEST_SCHEMA_VERSION:
+        raise SavedPublicationError(
+            "PUBLICATION_SAVED_WORK_UNSUPPORTED",
+            "saved-work manifest schema is not supported for publication",
+        )
+    scan = manifest.get("scan") if isinstance(manifest.get("scan"), dict) else {}
+    if scan.get("disposition") in {"blocked", "quarantined"}:
+        raise SavedPublicationError(
+            "PUBLICATION_CONTENT_UNSAFE",
+            "saved work was blocked or quarantined by its export scan",
+        )
+    snapshot = next(
+        (
+            output
+            for output in manifest.get("outputs") or []
+            if isinstance(output, dict)
+            and output.get("format") == "full_snapshot"
+            and output.get("status") == "self_contained"
+        ),
+        None,
+    )
+    if (
+        snapshot is None
+        or not snapshot.get("ref")
+        or not snapshot.get("digest")
+        or snapshot.get("digest") != manifest.get("contentDigest")
+    ):
+        raise SavedPublicationError(
+            "PUBLICATION_SAVED_WORK_UNSUPPORTED",
+            "saved work has no self-contained snapshot to publish",
+        )
+    objects = [
+        SavedWorkPublicationObject(
+            ref=str(snapshot["ref"]),
+            digest=str(snapshot["digest"]),
+            content_type=WORKTREE_ARCHIVE_CONTENT_TYPE,
+        )
+    ]
+    git = manifest.get("git") if isinstance(manifest.get("git"), dict) else None
+    if git is not None and git.get("deltaRef"):
+        if not git.get("deltaDigest"):
+            raise _invalid("recorded delta has no digest")
+        objects.append(
+            SavedWorkPublicationObject(
+                ref=str(git["deltaRef"]),
+                digest=str(git["deltaDigest"]),
+                content_type=SAVED_WORK_DELTA_CONTENT_TYPE,
+            )
+        )
+    return manifest, tuple(objects)
+
+
 async def materialize_saved_work(
     *,
     read: ArtifactReader,
@@ -200,41 +273,10 @@ async def materialize_saved_work(
             "PUBLICATION_CONTENT_MISMATCH",
             "saved-work manifest bytes differ from the admitted digest",
         )
-    manifest = _json_object(manifest_bytes, "saved-work manifest")
-    if manifest.get("schemaVersion") != SAVED_WORK_MANIFEST_SCHEMA_VERSION:
-        raise SavedPublicationError(
-            "PUBLICATION_SAVED_WORK_UNSUPPORTED",
-            "saved-work manifest schema is not supported for publication",
-        )
-    scan = manifest.get("scan") if isinstance(manifest.get("scan"), dict) else {}
-    if scan.get("disposition") in {"blocked", "quarantined"}:
-        raise SavedPublicationError(
-            "PUBLICATION_CONTENT_UNSAFE",
-            "saved work was blocked or quarantined by its export scan",
-        )
-    snapshot = next(
-        (
-            output
-            for output in manifest.get("outputs") or []
-            if isinstance(output, dict)
-            and output.get("format") == "full_snapshot"
-            and output.get("status") == "self_contained"
-        ),
-        None,
-    )
-    if (
-        snapshot is None
-        or not snapshot.get("ref")
-        or snapshot.get("digest") != manifest.get("contentDigest")
-    ):
-        raise SavedPublicationError(
-            "PUBLICATION_SAVED_WORK_UNSUPPORTED",
-            "saved work has no self-contained snapshot to publish",
-        )
-    archive = await read(
-        str(snapshot["ref"]), frozenset({WORKTREE_ARCHIVE_CONTENT_TYPE})
-    )
-    if _digest(archive) != snapshot["digest"]:
+    manifest, objects = parse_saved_work_publication_manifest(manifest_bytes)
+    snapshot = objects[0]
+    archive = await read(snapshot.ref, frozenset({snapshot.content_type}))
+    if _digest(archive) != snapshot.digest:
         raise SavedPublicationError(
             "PUBLICATION_CONTENT_MISMATCH",
             "saved snapshot bytes differ from the manifest digest",
@@ -254,10 +296,11 @@ async def materialize_saved_work(
         # Without a recorded delta nothing proves a deletion, so none is made.
         recorded_deletions = ()
         if git.get("deltaRef"):
+            delta_source = objects[1]
             delta_bytes = await read(
-                str(git["deltaRef"]), frozenset({SAVED_WORK_DELTA_CONTENT_TYPE})
+                delta_source.ref, frozenset({delta_source.content_type})
             )
-            if _digest(delta_bytes) != git.get("deltaDigest"):
+            if _digest(delta_bytes) != delta_source.digest:
                 raise SavedPublicationError(
                     "PUBLICATION_CONTENT_MISMATCH",
                     "recorded delta bytes differ from the manifest digest",

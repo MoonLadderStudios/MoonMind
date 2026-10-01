@@ -1015,8 +1015,8 @@ Rules:
   carries only complete saved outputs the source's captured evidence
   authorizes.
 - **Publish Saved Work** is offered for a complete, unexpired saved unit
-  whose manifest has raw access, when the execution's action projection
-  reports `canPublishSavedWork`. That capability applies the same
+  whose manifest and required snapshot/delta closure have raw access, when
+  the execution's action projection reports `canPublishSavedWork`. That capability applies the same
   submission gate and publication-recovery rollout admission as the
   publication route; when it is off, `disabledReasons.canPublishSavedWork`
   carries the route's reason (`publication_recovery_disabled` under the
@@ -1035,9 +1035,9 @@ Rules:
   setting, and the server remains the final authority: a
   `publication_retry_not_admitted` refusal is shown as returned and
   refreshes the projection.
-- Publishing posts the saved-work body (`savedWorkRef` plus the
-  destination repository, objective, base/head branch, and application
-  strategy, optional PR title) to the publication-only
+- Publishing posts the saved-work body (`savedWorkRef` and the selected
+  `sourceRunId`, plus the destination repository, objective, base/head
+  branch, application strategy, and optional PR title) to the publication-only
   `POST /executions/{workflow_id}/retry-publication` path described in
   [Publish Saved Work](../Workflows/WorkflowPublishing.md#publish-saved-work),
   so no model is rerun. The destination form is prefilled from the
@@ -1045,8 +1045,9 @@ Rules:
   publish mode, head branch, and PR title come first; the base branch and
   application strategy appear when requested, when an existing destination
   still needs a base, or when a non-default strategy is chosen. Initializing
-  an empty destination sends no base. This is the single saved-work
-  publication form; Workflow Create/edit (#2619) does not add another. It
+  an empty destination selects branch-only publication and sends no base;
+  it is offered only when branch publication is admitted. This is the
+  single saved-work publication form; Workflow Create/edit (#2619) does not add another. It
   does not depend on `canRetryPublication`: that capability gates only the
   body-less recovery of a failed requested publication, which stays in the
   workflow action menu. The server's ownership, destination, Lore, and
@@ -1068,17 +1069,18 @@ Rules:
   Late responses never retarget a historical selection or overwrite a newer
   operation; a selection change discards unfinished local state without
   cancelling accepted remote work. A double click dispatches once. A
-  transport failure after submission is reported as possibly accepted, not
-  as failure: resubmitting the same continuation intent maps to the same
-  idempotency key (derived from the source run and the authored intent and
+  transport failure after submission is reported as possibly accepted,
+  and publication timeout/server-error responses carry the same uncertainty.
+  Resubmitting the same continuation intent maps to the same idempotency key (derived from the source run and the authored intent and
   refs), and resubmitting the same publication request maps to the same
   server operation, including after a reload. Leaving a form is not
   cancellation.
 - Instance/resource cache keys stay under the single-user model: no
   human-user partitions. A `401`/`403` from a saved-result action refreshes
   the protected listing so raw-access affordances follow current
-  authorization, while machine/resource access restrictions remain
-  effective.
+  authorization. A continuation denial also refetches captured evidence
+  before retrying with current refs. Machine/resource access restrictions
+  remain effective.
 
 ---
 

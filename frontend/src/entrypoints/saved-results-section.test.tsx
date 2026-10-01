@@ -141,12 +141,19 @@ let handlers: {
   publish: (init: RequestInit | undefined) => Promise<Response>;
   continue: (init: RequestInit | undefined) => Promise<Response>;
   publicationRun: () => Promise<Response>;
+  capturedEvidence: () => Promise<Response>;
 };
 
 const PUBLICATION_RUN_URL = '/api/executions/mm%3Apublication%3Aabc?source=temporal';
 
 beforeEach(() => {
   handlers = {
+    capturedEvidence: async () =>
+      jsonResponse({
+        workflowId: 'wf-4020',
+        available: true,
+        items: [{ label: 'Report', kind: 'output_artifact', artifactRef: 'art-report' }],
+      }),
     publicationRun: async () =>
       jsonResponse({
         workflowId: 'mm:publication:abc',
@@ -174,11 +181,7 @@ beforeEach(() => {
       if (url.endsWith('/retry-publication')) return handlers.publish(init);
       if (url.endsWith('/continue')) return handlers.continue(init);
       if (url.endsWith('/captured-evidence')) {
-        return jsonResponse({
-          workflowId: 'wf-4020',
-          available: true,
-          items: [{ label: 'Report', kind: 'output_artifact', artifactRef: 'art-report' }],
-        });
+        return handlers.capturedEvidence();
       }
       return jsonResponse({});
     },
@@ -262,6 +265,7 @@ describe('Saved Results section', () => {
     expect(String(call?.[0])).toBe('/api/executions/wf-4020/retry-publication');
     expect(bodyOf(call)).toEqual({
       savedWorkRef: 'art-manifest',
+      sourceRunId: 'run-1',
       destination: {
         repository: 'Owner/Repo',
         objective: 'draft_pr',
@@ -282,6 +286,36 @@ describe('Saved Results section', () => {
     fireEvent.click(within(form).getByRole('button', { name: 'Close' }));
     expect(screen.getByText(/Publication started/)).toBeTruthy();
   });
+
+  it('publishes artifacts from the selected run when the execution advances', async () => {
+    renderSection({ runId: 'run-selected', execution: { ...failedExecution, runId: 'run-current' } });
+    fireEvent.submit(await openPublishForm());
+    expect(await screen.findByText(/Publication started/)).toBeTruthy();
+    expect(bodyOf(calls('/retry-publication')[0]).sourceRunId).toBe('run-selected');
+    expect(screen.queryByText(/The destination changed since the last request/)).toBeNull();
+  });
+
+  it.each([408, 500, 502, 503, 504])(
+    'reconciles an uncertain publication response (%s) using the same request',
+    async (status) => {
+      let attempt = 0;
+      handlers.publish = async () => {
+        attempt += 1;
+        return attempt === 1
+          ? jsonResponse({ detail: 'The start acknowledgment was lost.' }, status)
+          : jsonResponse(publication, 201);
+      };
+      renderSection();
+      const form = await openPublishForm();
+      fireEvent.submit(form);
+      expect(await screen.findByText(/may\s+have been accepted/)).toBeTruthy();
+      expect(screen.queryByText(/Publication started/)).toBeNull();
+      fireEvent.submit(form);
+      expect(await screen.findByText(/Publication started/)).toBeTruthy();
+      const [first, second] = calls('/retry-publication');
+      expect(bodyOf(second)).toEqual(bodyOf(first));
+    },
+  );
 
   it('reuses the same publication request after a lost acknowledgment', async () => {
     let attempt = 0;
@@ -399,6 +433,39 @@ describe('Saved Results section', () => {
     ).toBeTruthy();
     expect(screen.queryByText(/Continuation admitted/)).toBeNull();
     expect(view.onRefresh).toHaveBeenCalled();
+  });
+
+  it('refetches captured evidence after denial before retrying continuation', async () => {
+    let attempt = 0;
+    handlers.continue = async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        handlers.capturedEvidence = async () =>
+          jsonResponse({ workflowId: 'wf-4020', available: true, items: [] });
+        return jsonResponse({ detail: 'The selected refs are no longer authorized.' }, 403);
+      }
+      return jsonResponse({ destinationWorkflowId: 'mm:continuation', created: true }, 201);
+    };
+    renderSection();
+    const toggle = screen.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement;
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+    fireEvent.click(toggle);
+    const form = screen.getByRole('form', { name: 'Continue working' });
+    fireEvent.change(within(form).getByLabelText('New instructions'), {
+      target: { value: 'Finish the report.' },
+    });
+    fireEvent.submit(form);
+    expect(await screen.findByText('The selected refs are no longer authorized.')).toBeTruthy();
+    await waitFor(() => expect(calls('/captured-evidence')).toHaveLength(2));
+    await waitFor(() =>
+      expect(within(form).getByRole('button', { name: 'Start continuation' }).hasAttribute('disabled')).toBe(false),
+    );
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Continuation admitted/)).toBeTruthy();
+    const [first, second] = calls('/continue').map(bodyOf);
+    expect(first.selectedSourceArtifactRefs).toEqual(['art-report']);
+    expect(second.selectedSourceArtifactRefs).toBeUndefined();
+    expect(second.idempotencyKey).not.toEqual(first.idempotencyKey);
   });
 
   it('honors raw-access denials for parts and for publication', () => {
@@ -572,15 +639,16 @@ describe('Saved Results section', () => {
     fireEvent.change(within(advanced).getByLabelText('Apply saved work as'), {
       target: { value: 'empty_initialization' },
     });
-    fireEvent.change(within(form).getByLabelText('Publish as'), {
-      target: { value: 'branch' },
-    });
+    const objective = within(form).getByLabelText('Publish as') as HTMLSelectElement;
+    expect(objective.value).toBe('branch');
+    expect(objective.disabled).toBe(true);
     // An empty destination has no base, so none is sent.
     expect(within(advanced).queryByLabelText('Base branch')).toBeNull();
     fireEvent.submit(form);
     expect(await screen.findByText(/Publication started/)).toBeTruthy();
     expect(bodyOf(calls('/retry-publication')[0])).toEqual({
       savedWorkRef: 'art-manifest',
+      sourceRunId: 'run-1',
       destination: {
         repository: 'Owner/Repo',
         objective: 'branch',
@@ -588,6 +656,22 @@ describe('Saved Results section', () => {
         strategy: 'empty_initialization',
       },
     });
+  });
+
+  it('offers empty initialization only when branch publication is admitted', async () => {
+    renderSection({
+      execution: {
+        ...failedExecution,
+        actions: {
+          ...failedExecution.actions,
+          actionEvidence: { publishSavedWork: { allowedModes: ['pr'] } },
+        },
+      },
+    });
+    const form = await openPublishForm();
+    fireEvent.click(within(form).getByRole('button', { name: 'Change base or how saved work is applied' }));
+    const empty = within(form).getByRole('option', { name: 'Initialize an empty destination' }) as HTMLOptionElement;
+    expect(empty.disabled).toBe(true);
   });
 
   it('reveals the base branch when the destination still needs one', async () => {
