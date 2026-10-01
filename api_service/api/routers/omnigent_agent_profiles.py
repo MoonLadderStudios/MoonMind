@@ -8,7 +8,7 @@ import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +41,7 @@ from api_service.services.omnigent_agent_bundle_service import (
     publish_validated_agent_bundle,
 )
 from api_service.services.omnigent_agent_profile_selection import (
+    without_retired_profile_sections,
     without_retired_retrieval_override,
 )
 from api_service.services.omnigent_agent_profile_service import (
@@ -286,15 +287,27 @@ def _without_retired_retrieval(document: AgentProfileDocument) -> AgentProfileDo
     return document.model_copy(update={"rag": None})
 
 
+class AgentProfileAuthoringDocument(AgentProfileDocument):
+    """Write contract; historical retrieval remains decodable by the base model."""
+
+    rag: None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def retire_retrieval(cls, value: Any) -> dict[str, Any]:
+        document = _without_retired_retrieval(
+            AgentProfileDocument.model_validate(value)
+        )
+        return document.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
 class ProfileCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     profile_id: str = Field(alias="profileId")
     display_name: str = Field(alias="displayName", min_length=1, max_length=255)
     description: str | None = None
     visibility: Literal["private", "workspace", "public"] = "private"
-    document: AgentProfileDocument
-
-    _retire_retrieval = field_validator("document")(_without_retired_retrieval)
+    document: AgentProfileAuthoringDocument
 
 
 class GuidedProfileCreate(BaseModel):
@@ -324,9 +337,7 @@ class GuidedProfileCreate(BaseModel):
 
 
 class VersionCreate(BaseModel):
-    document: AgentProfileDocument
-
-    _retire_retrieval = field_validator("document")(_without_retired_retrieval)
+    document: AgentProfileAuthoringDocument
 
 
 class CloneCreate(BaseModel):
@@ -1123,11 +1134,12 @@ async def clone_profile(
         owner_id=current_user.id,
         visibility="private",
     )
+    document = without_retired_profile_sections(target.document)
     version = OmnigentAgentProfileVersion(
         profile_id=body.profile_id,
         version=1,
-        digest=target.digest,
-        document=target.document,
+        digest=_digest(document),
+        document=document,
         cloned_from_profile_id=profile_id,
         cloned_from_version=target.version,
         created_by=current_user.id,

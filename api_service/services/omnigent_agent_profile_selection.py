@@ -173,6 +173,14 @@ def _provider_profile_visibility_filter(user: User | None) -> Any | None:
     return None
 
 
+def without_retired_profile_sections(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a historical profile for a new version without retired authority."""
+
+    successor = copy.deepcopy(dict(document))
+    successor.pop("rag", None)
+    return successor
+
+
 def without_retired_retrieval_override(
     overrides: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -969,7 +977,7 @@ async def advance_agent_profiles_for_policy_cutover(
         )
         if active is None or not isinstance(active.document, Mapping):
             continue
-        document = copy.deepcopy(dict(active.document))
+        document = without_retired_profile_sections(active.document)
         is_v2 = document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2"
         changed = False
         applied: list[dict[str, str]] = []

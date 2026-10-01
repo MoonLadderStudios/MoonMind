@@ -312,3 +312,99 @@ async def test_profile_cutover_skips_unvalidated_matching_version(tmp_path):
         assert advanced == []
         profile = await session.get(OmnigentAgentProfile, "profile-1")
         assert profile.active_version == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["clone", "policy_cutover"])
+@pytest.mark.parametrize(
+    "retrieval", [{}, {"initial": {"collections": ["docs"]}, "followUp": {}}]
+)
+async def test_copy_derived_profile_versions_retire_retrieval_without_rewriting_history(
+    tmp_path, operation, retrieval
+):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from api_service.api.routers.omnigent_agent_profiles import (
+        CloneCreate,
+        clone_profile,
+    )
+    from api_service.services.omnigent_agent_profile_selection import (
+        _profile_document_digest,
+    )
+
+    async with profile_db(tmp_path) as sessions, sessions() as session:
+        await _seed_profile(session)
+        source = await session.get(OmnigentAgentProfile, "profile-1")
+        source.visibility = "public"
+        historical = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == "profile-1",
+                OmnigentAgentProfileVersion.version == 1,
+            )
+        )
+        recorded = deepcopy(historical.document)
+        recorded["rag"] = retrieval
+        recorded_digest = _profile_document_digest(recorded)
+        historical.document = recorded
+        historical.digest = recorded_digest
+        session.add(
+            OmnigentAgentProfileUsage(
+                consumer_type="workflow",
+                consumer_id="running-workflow",
+                profile_id="profile-1",
+                version=1,
+                digest=recorded_digest,
+                effective_snapshot={"document": deepcopy(recorded)},
+            )
+        )
+        await session.commit()
+
+        if operation == "clone":
+            await clone_profile(
+                "profile-1",
+                CloneCreate(profileId="profile-copy", displayName="Copy"),
+                session=session,
+                current_user=SimpleNamespace(id=uuid4(), is_superuser=True),
+            )
+            successor_id, successor_version = "profile-copy", 1
+        else:
+            await advance_agent_profiles_for_policy_cutover(
+                session, cutovers={"p@1": "p@3"}
+            )
+            await session.commit()
+            successor_id, successor_version = "profile-1", 2
+
+        session.expire_all()
+        historical = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == "profile-1",
+                OmnigentAgentProfileVersion.version == 1,
+            )
+        )
+        successor = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == successor_id,
+                OmnigentAgentProfileVersion.version == successor_version,
+            )
+        )
+        expected = deepcopy(recorded)
+        expected.pop("rag")
+        if operation == "policy_cutover":
+            expected["policyRef"] = "p@3"
+            expected["execution"]["allowedLaunchPolicyRefs"] = ["p@3"]
+            assert successor.parent_version == 1
+        else:
+            assert successor.cloned_from_profile_id == "profile-1"
+            assert successor.cloned_from_version == 1
+        assert successor.document == expected
+        assert successor.digest == _profile_document_digest(expected)
+        assert historical.document == recorded
+        assert historical.digest == recorded_digest
+        usage = await session.scalar(select(OmnigentAgentProfileUsage))
+        assert usage.version == 1
+        assert usage.digest == recorded_digest
+        assert usage.effective_snapshot == {"document": recorded}
