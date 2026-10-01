@@ -26,6 +26,9 @@ def immutable_bootstrap_images(monkeypatch) -> None:
     monkeypatch.setenv(
         "OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
     )
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
+    )
 
 
 def test_versioned_profile_and_policy_compile_to_stable_safe_snapshot() -> None:
