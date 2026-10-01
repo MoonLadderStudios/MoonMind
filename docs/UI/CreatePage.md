@@ -2,14 +2,14 @@
 
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
-**Status:** Proposed  
+**Status:** Desired state; Harness/Provider Profile/Backend selection adopted, implementation tracked separately  
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-30  
 **Audience:** Dashboard, workflow authoring, schema-form, and API contributors  
 **Authority:** Create-page information architecture, single-context presentation, schema-driven task inputs, preview/error behavior, and submission/reconstruction UX. Backend providing contracts remain authoritative for execution and policy.  
 **Owning Surface:** Shared /workflows/new authoring form and its catalog/compiler consumers  
 **Related Implementation:** `frontend/src/`, `frontend/src/styles/dashboard.css`, and existing workflow draft/submission helpers.  
-**Related Docs:** [Workflow Publishing](../Workflows/WorkflowPublishing.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Step Types](../Steps/StepTypes.md), [Settings System](../Security/SettingsSystem.md); further related owners are listed below.
+**Related Docs:** [Harness, Provider Profile, and Backend Selection](HarnessProfileBackendSelection.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Step Types](../Steps/StepTypes.md), [Settings System](../Security/SettingsSystem.md); further related owners are listed below.
 
 The Create page is MoonMind's primary workflow composition surface. It lets a user describe work, select its execution context, configure task-specific steps, and submit without understanding internal orchestration roles.
 
@@ -25,7 +25,19 @@ This specification describes the long-term UI, not a claim that every current co
 - Backend context, target, expansion, authorization, and publishing validation are authoritative.
 - Advanced disclosure exposes meaningful specialization, not duplicate authority or hidden contradictory values.
 
-The generic runtime is labeled **Omnigent**. Runtime and one ordinary **Profile** selection resolve the supported execution configuration through the runtime-selection owner. Publishing does not introduce a Target/Harness/Agent Profile/Host Class choice or select another runtime.
+Ordinary agent authoring uses **Harness** and one **Provider Profile**. **Backend** identifies Omnigent and is normally resolved without an ordinary selector. The existing selection/admission owners resolve their agreement and compatible execution configuration. Publishing does not introduce additional Harness, Backend, Target, Agent Profile, or Host Class controls or silently select another execution path.
+
+## Harness, Provider Profile, and Backend
+
+[The shared selection design](HarnessProfileBackendSelection.md) owns this interaction across Create, profile Settings, schedules, edit/rerun, remediation, and execution details. Harness means Codex, Claude Code, or OpenCode. Provider Profile remains the existing configured connection and defaults, not a new account object. The selected/default profile establishes the initial compatible Harness, and Harness changes filter profiles through the existing authorized projection.
+
+A genuinely unconfigured draft may use the authorized default or sole compatible profile. An explicit profile is not replaced by a different account when the user changes Harness. Keep it only if compatible; otherwise retain recoverable draft values and require a compatible selection. Delayed metadata responses cannot overwrite newer input. Missing setup, unsupported configuration, and temporary capacity failure remain distinct.
+
+Backend is normally Omnigent. Offer a Backend selector under Advanced only when a meaningful supported alternative exists. A nondefault choice stays visible in the collapsed summary. With only one supported backend, remove the selector and retain the recorded Backend in execution details. Do not create a new Direct path, require host/image/materializer choices, or call Omnigent a Container.
+
+The selected profile supplies model tiers and its actual default tier. Reuse the shared **Tier / Model / Effort** controls and the adopted Tier/Custom design. Numbered tiers populate both fields, editing either field selects Custom without clearing the companion field, and choosing Custom directly leaves both fields unchanged. The Tier fallback selector is removed, not hidden under Advanced. Model-selection details and compatibility remain with the tier contract and its separate implementation rather than another policy in the Harness picker.
+
+Submission preserves defaulted, inherited, and explicitly selected intent. The API validates the Harness/Profile/Backend agreement before credential or host effects. Simply omitting the old Runtime field must not reactivate a direct-backend fallback. Existing serialized runtime fields keep their actual meaning until their schema owner makes a necessary compatible change. Tools without agent execution do not acquire a dummy Harness or Provider Profile.
 
 ## Primary User Flows
 
@@ -65,7 +77,7 @@ The information architecture has five regions. Their visual placement may vary, 
 
 | Region | Contents |
 | --- | --- |
-| Workflow overview | Title/generated title, workflow instructions, Runtime and Profile, dependencies/starting context |
+| Workflow overview | Title/generated title, workflow instructions, Harness and Provider Profile, shared model controls, dependencies/starting context |
 | Repository and publishing | One source/repository control, its applicable branch control or derived-target display, one publishing selector, effective outcome explanation |
 | Steps | Ordered steps, type/capability selectors, task-specific schema inputs, Apply/Reapply, validation and provenance |
 | Context and attachments | Issue context, file/artifact references, additional task notes |
@@ -85,7 +97,7 @@ A draft contains ordered typed steps. The canonical types remain those defined i
 | Skill | Invoke a resolved portable Skill bundle |
 | Preset | Expand a reusable composition |
 
-Instructions, Managed Agent, and External Agent may be friendly shortcuts that normalize to Skill execution. A supported controlled script runner is a typed Tool, not another canonical Step Type. Runtime choice remains configuration under its existing owner. Labels do not create alternate authoring authorities or additional repository, branch, or publishing selectors.
+Instructions, Managed Agent, and External Agent may be friendly shortcuts that normalize to Skill execution. A supported controlled script runner is a typed Tool, not another canonical Step Type. Harness, Provider Profile, and Backend remain configuration under the existing selection owner. Steps inherit the workflow selection unless explicitly specialized through a supported override. Viewing or saving an inherited value does not author a new override. Labels do not create alternate authoring authorities or additional repository, branch, or publishing selectors.
 
 Example unexpanded preset:
 
@@ -265,7 +277,7 @@ Static conflicts are rejected before parent launch, issue creation, or child enq
 
 ## Advanced Controls
 
-Advanced mode shows optional Skill inputs, required capabilities, worker routing, Priority, and Max Attempts. Hidden controls cannot retain invisible authored values: while hidden, submission uses their defaults.
+Advanced mode shows meaningful optional Skill inputs, required capabilities, worker routing, Priority, Max Attempts, and a Backend alternative only where supported. Opening or closing disclosure never changes supported authored values. An exceptional Backend remains visible in the collapsed summary. Controls that are genuinely retired or inapplicable follow their owning intent-preserving normalization, not a blanket reset merely because they are hidden.
 
 MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103), so Create has no context-retrieval/RAG controls in either mode. Edit and rerun never resubmit an inherited `rag` or `followUpRetrieval` value; the server rejects an explicit retired value with an actionable error. Supply context through explicit attachments, artifact refs, or scoped workspace access.
 
@@ -275,7 +287,7 @@ This disclosure rule does not clear or hide the single repository/branch/publish
 
 Workflow Detail can open `/workflows/new?intent=remediate&draftId=…` with a tab-scoped draft. Import remains ordinary editable authoring and never submits implicitly.
 
-The Remediation Draft separates immutable target identity from repair intent. The pinned target includes the workflow, exact run, original outcome, failed Step Execution/checkpoint evidence, and selected source lineage. Editable repair instructions, supported workspace/destination roles, one applicable authored branch, publication, Runtime/Profile, and permitted policy options use the same Create controls. An isolated runtime-generated recovery work branch is derived execution state, not a duplicate generic branch selector. Genuinely distinct source/checkpoint and repair-destination roles are explicitly labeled and independently admitted.
+The Remediation Draft separates immutable target identity from repair intent. The pinned target includes the workflow, exact run, original outcome, failed Step Execution/checkpoint evidence, and selected source lineage. Editable repair instructions, supported workspace/destination roles, one applicable authored branch, publication, Harness/Provider Profile, and permitted Backend/policy overrides use the same Create controls. An isolated runtime-generated recovery work branch is derived execution state, not a duplicate generic branch selector. Genuinely distinct source/checkpoint and repair-destination roles are explicitly labeled and independently admitted.
 
 Draft bodies stay in `sessionStorage`. A non-sensitive presence marker only explains another-tab links. Schema version 1, `createdAt`, and the two-hour TTL remain the draft transport contract. Import is single-use: clear storage after complete successful validation/copy or explicit discard. Missing, malformed, expired, and cross-tab drafts have distinct errors and do not partially prefill. Discard removes storage and the `intent`/`draftId` query parameters.
 
@@ -283,7 +295,7 @@ Submission uses ordinary `POST /api/executions` with canonical `task.remediation
 
 ## Draft Persistence and Historical Reconstruction
 
-Drafts preserve overview, single source/repository/branch context, authored publication choice, task-specific step inputs, preset definitions/expansion state, attachments, and provenance. Derived bound values and compiled modes are not serialized back as new authored choices.
+Drafts preserve overview, single source/repository/branch context, authored publication choice, Harness/Provider Profile and defaulted or explicit Backend intent, model selection and step inheritance, task-specific step inputs, preset definitions/expansion state, attachments, and provenance. Derived bound values and compiled modes are not serialized back as new authored choices.
 
 A historical equivalent repository/branch copy can collapse only when the backend establishes equivalence. Conflicts, unknown provenance, old two-branch intent, and mixed per-step publication require an explicit reconstruction diagnostic. A historical batch parent None with PR children must reconstruct as a PR scope with a non-publishing coordinator when evidence supports it. Historical literal Auto retains Skill-owned meaning, not the new generic recommendation semantics.
 
@@ -313,12 +325,14 @@ Required production-boundary coverage includes:
 - None, incompatible resolvers, shared-branch batches, and missing prerequisite-code handoffs fail visibly before prohibited effects.
 - Edit/rerun/schedule/remediation reconstruction preserves authored versus derived values and reports legacy ambiguity.
 - Validation failure preserves task input, while changed context invalidates stale generated authority.
-- No alternate Target/runtime wizard or second publishing selection is introduced.
+- Harness, Provider Profile, and Backend agree through production form and API submission, including omitted defaults, explicit incompatible pairs, rapid changes, inherited steps, and unchanged Custom values.
+- Advanced disclosure preserves authored Backend intent and displays exceptional choices. A single supported Backend has no selector, and no extra Target/configuration wizard or second publishing selection is introduced.
 
 A rendered selector or passing component fixture alone is not proof that the API, compiler, fan-out, or runtime honors the same policy.
 
 ## Related Documents
 
+- `docs/UI/HarnessProfileBackendSelection.md`
 - `docs/Workflows/WorkflowPresetsSystem.md`
 - `docs/Steps/StepTypes.md`
 - `docs/Steps/SkillSystem.md`

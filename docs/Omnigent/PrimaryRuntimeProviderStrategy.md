@@ -1,40 +1,40 @@
-# Omnigent Primary Runtime Provider Strategy
+# Omnigent Primary Agent Backend Strategy
 
 **Status:** Canonical desired state; implementation and deployment evidence remain separate  
 **Document Class:** System / Product Architecture  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-21  
-**Authority:** Long-term runtime-provider direction under reliability-first simplification
+**Last updated:** 2026-09-30  
+**Authority:** Long-term agent-backend direction under reliability-first simplification
 
 ## Related documents
 
-[AGENTS.md](../../AGENTS.md), [Single-User Application Design](../SingleUserApplicationDesign.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Shared Host Image](SharedHostImage.md), [runtime selection and transition](RuntimeProviderRollout.md), [Provider Profiles](../Security/ProviderProfiles.md), [Workflow Chat](../UI/WorkflowChatPanel.md), [repository access and durable work](../RepositoryAccessAndWorkspaceDesign.md), and [deployment updates](../Steps/DockerComposeUpdateSystem.md).
+[AGENTS.md](../../AGENTS.md), [Harness, Provider Profile, and Backend Selection](../UI/HarnessProfileBackendSelection.md), [Single-User Application Design](../SingleUserApplicationDesign.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Shared Host Image](SharedHostImage.md), [runtime selection and transition](RuntimeProviderRollout.md), [Provider Profiles](../Security/ProviderProfiles.md), [Workflow Chat](../UI/WorkflowChatPanel.md), [repository access and durable work](../RepositoryAccessAndWorkspaceDesign.md), and [deployment updates](../Steps/DockerComposeUpdateSystem.md).
 
 ## Advance organizer
 
-Omnigent is the destination for one agent-runtime lifecycle behind Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
+Omnigent is the destination for one agent-backend lifecycle behind Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
 
 This strategy revises the earlier exact-combination promotion and staged-retirement requirements. It does not claim that their current code has been removed. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for concrete historical interpretation. Old machinery is not a permanent requirement merely because it exists. Until the owning migrations land, `README.md` exact-qualification rules, `ContractOwnership.md` per-combination and staged-retirement assignments, and `SharedHostImage.md` §§5–6 remain the authoritative implemented contract for current behavior; this document states the desired target and must not be read as having already removed those controls.
 
 ## 1. Decision
 
-**Omnigent becomes the single normal agent runtime provider.** Harness-specific behavior belongs in thin trusted adapters. Replacing direct/profile-bound paths must preserve supported behavior and actual active work, but narrow reliability fixes do not wait for every harness, static mode, connector, or migration to finish.
+**Omnigent becomes the single normal agent backend.** Harness-specific behavior belongs in thin trusted adapters. Replacing direct/profile-bound paths must preserve supported behavior and actual active work, but narrow reliability fixes do not wait for every harness, static mode, connector, or migration to finish.
 
 ### 1.1 Seven required product outcomes
 
 | Outcome | Required behavior |
 | --- | --- |
-| Primary runtime container | The Omnigent host runs admitted agent work, without absorbing the API, Temporal, artifact service, or privileged deployment controller. |
+| Shared execution host | The Omnigent host runs admitted agent work, without absorbing the API, Temporal, artifact service, or privileged deployment controller. |
 | On-demand Codex, Claude Code, and OpenCode | Supported harnesses use the shared attempt-owned lifecycle. Ordinary use does not need one permanent vendor host. Explicit static operation is optional and supported only where its own behavior is established. |
 | Workflow Detail interactions | Native chat exposes the bound session's supported turns, events, tools, approvals, terminals, and resources through existing authorization. Loading HTML is not readiness. Failures and durable results remain accessible without a second composer or host-management dashboard. |
 | Retry, checkpoint, and artifact parity | Existing recovery and preservation owners handle interruption, continuation, restore, and saved output. Where the original host is unavailable, recovery uses actual durable evidence rather than restarting completed work. |
 | Shared implementation | One owner handles each launch, session/turn mutation, capture, publication, and cleanup responsibility. Persistent records support those owners instead of becoming parallel orchestrators. |
 | Reusable OAuth Provider Profiles | Existing Codex/Claude Profiles retain their identities, enrollment-owned homes, credential generation, and capacity ownership. No duplicate account, copied home, or second login is required. |
-| One ordinary Profile choice | The existing Runtime and one Profile authoring boundary remains. Internal harness/configuration/Host Class/materializer/realizer identities do not become additional required selectors. |
+| Harness and one Provider Profile | Ordinary authoring uses Harness and Provider Profile. Backend is normally Omnigent and is not a required ordinary selector. Only a genuine supported alternative appears under Advanced. The workflows list shows Provider Profile instead of Runtime. Internal configuration/Host Class/materializer/realizer identities do not become additional required selectors. |
 
 These are required outcomes, not a claim of current support or a fixed test inventory. Prove the relevant production boundaries and reuse shared evidence. Do not silently relabel unfinished required capability as unsupported to close the program.
 
-## 2. What “primary runtime provider” means
+## 2. What the agent backend owns
 
 Omnigent provides the host/runner protocol, harness execution, live provider sessions, and native interactions. MoonMind's existing Temporal and module owners retain admission, workflow/step identity, selected Profile/model policy, credentials/capacity, workspace and context authority, Skills/tools, durable evidence, recovery, publication, and cleanup.
 
@@ -46,7 +46,9 @@ One operator per instance can use multiple accounts and concurrent workflows. In
 
 Omnigent-backed execution keeps `agentKind=external` and `agentId=omnigent`. The selected harness has its own nested identity, such as `codex-native`, `claude-native`, or `opencode-native`.
 
-Product family, harness, Provider Profile runtime, and vendor command/display names remain different domains. Reuse the existing pure harness registry for registration-level consumers and the existing resolver for executable choices. Registry membership is not permission, while temporary lack of capacity is not loss of registration.
+Use **Harness** for Codex, Claude Code, and OpenCode; **Provider Profile** for the existing configured connection and defaults; and **Backend** for Omnigent. Use **agent backend** in architecture prose when distinguishing it from the MoonMind API. Reserve **Container** and **Host** for actual execution resources. [The selection design](../UI/HarnessProfileBackendSelection.md) owns product presentation and the mapping from existing serialized names.
+
+Product family, harness, Provider Profile `runtime_id`, and vendor command/display names remain different domains. Existing profile runtime values retain their harness-ownership meaning, not Backend identity. Reuse the existing pure harness registry for registration-level consumers and the existing resolver for executable choices. Registry membership is not permission, while temporary lack of capacity is not loss of registration.
 
 New producers use one canonical runtime-input boundary. Known legacy values can be converted by an identified migration/ingress owner without changing their meaning. Unknown or conflicting explicit input never becomes another runtime. Keep original historical decoding where required, not duplicate alias maps throughout the core or a global ban on vendor names.
 
@@ -134,11 +136,15 @@ The existing pack/materializer owners define executable interfaces. Keep descrip
 
 ## 9. Product selection and defaults
 
-Preserve the existing Runtime and one Profile authoring boundary and actual server-side agreement checks. Advanced details are not a chain of mandatory Target/Harness/Agent Profile selectors. Profile choice preserves account, model policy, and supported explicit configuration. Advisory discovery/capacity failures preserve valid inventory and drafts rather than selecting another account.
+Ordinary authoring uses **Harness and one Provider Profile**, with the same server-side agreement checks. The selected/default profile establishes a compatible initial harness. Changing Harness filters profiles without silently substituting an explicitly selected account. Provider Profile retains account, model policy, and supported explicit configuration. Advisory discovery/capacity failures preserve valid inventory and drafts rather than selecting another account.
+
+**Backend** is normally Omnigent. A selector appears under Advanced only for a genuine supported alternative, and a nondefault choice stays visible when Advanced is collapsed. With only one backend, remove the selector and keep recorded Backend in execution details. Do not keep obsolete paths merely to populate a dropdown. Internal Target, Agent Profile, Host Class, materializer, and realizer identities are not another required selection chain.
+
+The workflows list leads with Provider Profile instead of Runtime, with optional secondary Harness text. Its data comes from recorded workflow selection, not today's default. [The selection design](../UI/HarnessProfileBackendSelection.md) defines pending, unknown, multiple-profile, history, and filter semantics.
 
 ### One shared selection boundary
 
-`runtime_target_selection.py` remains the integration point for Create, presets, schedules, edits/reruns, fresh retries, branches, remediation, continuation, API/MCP, and worker normalization. Simplify its providers and remove redundant defaults with their callers. Do not add a parallel selector or duplicate frontend policy.
+`runtime_target_selection.py` remains the integration point for Create, presets, schedules, edits/reruns, fresh retries, branches, remediation, continuation, API/MCP, and worker normalization. Compose it with existing Profile/configuration resolution at admission. Normal omitted/default-equivalent requests must resolve to the same supported Omnigent backend policy without an accidental direct fallback. Preserve authored versus defaulted intent. Simplify its providers and remove redundant defaults with their callers. Do not add a parallel selector or duplicate frontend policy.
 
 ### Default promotion is per combination
 
