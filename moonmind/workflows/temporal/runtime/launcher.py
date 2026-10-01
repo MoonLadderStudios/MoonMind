@@ -55,6 +55,7 @@ from moonmind.workflows.executions.repository_contract import (
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.skills.run_projection import (
+    append_remediation_attempt_context,
     load_resolved_skillset,
     materialize_run_skill_snapshot,
     prepend_skill_activation_summary,
@@ -2397,6 +2398,11 @@ class ManagedRuntimeLauncher:
             profile=profile,
             resolved_workspace_path=resolved_workspace_path,
         )
+        if request.instruction_ref:
+            request.instruction_ref = append_remediation_attempt_context(
+                request.instruction_ref,
+                parameters=request.parameters,
+            )
         if skill_materialization_metadata is not None:
             active_skills_dir = str(
                 skill_materialization_metadata.get("visiblePath") or ""

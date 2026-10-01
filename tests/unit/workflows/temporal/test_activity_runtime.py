@@ -706,6 +706,46 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert "resume check" in prepared
 
 
+@pytest.mark.parametrize("attempt", [1, 3])
+async def test_managed_verifier_receives_admitted_remediation_context(attempt) -> None:
+    parameters = {
+        "metadata": {
+            "moonmind": {
+                "selectedSkill": "moonspec-verify",
+                "remediationCadence": {
+                    "cadence": "attempt_scoped_remediation_verification",
+                    "role": "moonspec-verification-gate",
+                    "attempt": attempt,
+                    "maxAttempts": 6,
+                },
+            }
+        },
+        "remediationLoopId": "repair-profile-list",
+        "remediationWorkspaceHeadRef": f"artifact://candidate/C{attempt}",
+        "gateResultRef": f"artifact://verification/V{attempt}",
+    }
+    prepared = TemporalAgentRuntimeActivities._prepare_managed_codex_turn_text(
+        "Verify the Profile list candidate.",
+        parameters=parameters,
+    )
+    marker = "MoonMind remediation attempt context (JSON):\n"
+    assert marker in prepared
+    context, _ = json.JSONDecoder().raw_decode(prepared.split(marker, 1)[1])
+    assert context == {
+        "role": "moonspec-verification-gate",
+        "attempt": attempt,
+        "maxAttempts": 6,
+        "remediationLoopId": "repair-profile-list",
+        "remediationWorkspaceHeadRef": f"artifact://candidate/C{attempt}",
+        "gateResultRef": f"artifact://verification/V{attempt}",
+    }
+    replayed = TemporalAgentRuntimeActivities._prepare_managed_codex_turn_text(
+        prepared,
+        parameters=parameters,
+    )
+    assert replayed.count(marker) == 1
+
+
 async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_present() -> None:
     path = "var/artifacts/moonspec-verify/verify-final.json"
     prepared = TemporalAgentRuntimeActivities._prepare_managed_codex_turn_text(

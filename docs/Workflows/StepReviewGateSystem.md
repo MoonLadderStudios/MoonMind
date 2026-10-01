@@ -122,6 +122,16 @@ Optional diagnostics remain optional according to the selected acceptance policy
 not by relabeling a mandatory missing check. Neither `failure_mode: CONTINUE` nor
 a draft PR turns incomplete verification into successful acceptance.
 
+MoonSpec's resolved acceptance policy keeps browser checks advisory by default.
+An unavailable browser, missing screenshot, or need for visual signoff alone
+never creates a blocking default verdict or continuation. Use executed
+non-browser evidence for functional requirements and record browser diagnostics
+as `NOT RUN` limitations. A caller can explicitly require a browser gate for the
+current verification run; inherited report or plan wording does not opt in.
+Missing historical setup records also do not create an implicit authority gate:
+the workflow retains its own budgets, and independent authorized repository
+repairs proceed while an affected unavailable check keeps its precise handoff.
+
 Blocked means the current attempt must not repeat an unchanged prerequisite. It
 does not mean that the candidate is abandoned to a human. An authorized later
 continuation may resume when the prerequisite or controlling evidence changes.

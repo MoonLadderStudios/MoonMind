@@ -246,6 +246,7 @@ from moonmind.workflows.skills.approval_policy import (
     recommended_next_actions,
     step_gate_contract_violations,
 )
+from moonmind.workflows.skills.run_projection import append_remediation_attempt_context
 from moonmind.workflows.skills.tool_plan_contracts import (
     REVIEW_VERDICTS,
     ToolFailure,
@@ -10755,6 +10756,10 @@ class TemporalAgentRuntimeActivities:
             parameters=parameters,
         )
         prepared = cls._append_skills_on_demand_notice(
+            prepared,
+            parameters=parameters,
+        )
+        prepared = append_remediation_attempt_context(
             prepared,
             parameters=parameters,
         )
