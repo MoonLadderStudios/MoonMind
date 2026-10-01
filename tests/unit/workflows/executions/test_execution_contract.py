@@ -38,6 +38,31 @@ def test_recorded_legacy_decoder_is_separate_from_new_submission_validation() ->
     assert decoded["repository"]["branch"]["name"] == "release"
     with pytest.raises(WorkflowContractError, match="no longer accepted"):
         build_canonical_workflow_view(job_type="codex_exec", payload=legacy)
+def test_new_string_repository_input_does_not_use_the_history_decoder(
+    monkeypatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4023: the frozen decoder is history-only."""
+
+    def _history_only(*_args, **_kwargs):
+        raise AssertionError("new input must compile through the authoring path")
+
+    monkeypatch.setattr(
+        execution_contract_module, "decode_legacy_repository_history_v1", _history_only
+    )
+
+    view = build_canonical_workflow_view(
+        job_type="task",
+        payload={"repository": "owner/repo", "workflow": {"instructions": "x"}},
+    )
+
+    assert view["repository"] == "owner/repo"
+    assert "git" in view["requiredCapabilities"]
+    with pytest.raises(ValueError):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload={"repository": "x" * 2100, "workflow": {"instructions": "x"}},
+        )
+
 from tests.helpers.step_type_payloads import (
     mixed_tool_skill_step,
     preset_step,

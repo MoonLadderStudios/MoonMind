@@ -23,7 +23,7 @@ from moonmind.workflows.executions.repository_contract import (
     reconcile_default_git_connection,
     repository_branch_from_value,
     repository_name_from_value,
-    resolve_default_git_credential,
+    resolve_selected_git_credential,
     validate_connection_and_client,
 )
 
@@ -192,13 +192,70 @@ async def test_unknown_capability_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_git_connection_invokes_existing_github_resolver() -> None:
-    resolver = AsyncMock(return_value=object())
+async def test_derived_default_connection_reads_the_deployment_declaration() -> None:
+    resolver = AsyncMock(
+        return_value=ResolvedGitHubCredential(token="declared", source="direct_env")
+    )
+    connection = reconcile_default_git_connection(client_policy=_policy())
     with patch(
         "moonmind.auth.github_credentials.resolve_github_credential", resolver
     ):
-        await resolve_default_git_credential("MoonLadderStudios/MoonMind")
+        await resolve_selected_git_credential(
+            connection, "MoonLadderStudios/MoonMind"
+        )
     resolver.assert_awaited_once_with(repo="MoonLadderStudios/MoonMind")
+
+
+@pytest.mark.asyncio
+async def test_typed_connection_readiness_never_uses_ambient_token(
+    monkeypatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4023: a selected SecretRef has no fallback."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.delenv("SELECTED_GITHUB_PAT", raising=False)
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "connectionRef": "repository-connection:selected",
+            "repository": {"name": "owner/repo"},
+            "branch": {"name": "main"},
+        }
+    )
+    connection = RepositoryConnection.model_validate(
+        {
+            **reconcile_default_git_connection(client_policy=_policy()).model_dump(
+                by_alias=True
+            ),
+            "id": "repository-connection:selected",
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "SELECTED_GITHUB_PAT"},
+            },
+        }
+    )
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git-2.46",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    registry = CapabilityReadinessRegistry()
+    registry.register("git", lambda _context: True)
+    registry.register("repo.read", lambda _context: True)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ) as excinfo:
+        await ensure_repository_ready(
+            target,
+            publish_mode="none",
+            operation="read",
+            connection_resolver=lambda _target: connection,
+            evidence_resolver=lambda _connection: evidence,
+            readiness_registry=registry,
+        )
+
+    assert "env://SELECTED_GITHUB_PAT" in str(excinfo.value)
 
 
 def test_frozen_legacy_decoder_is_explicitly_history_only() -> None:
@@ -454,7 +511,7 @@ async def test_coherent_readiness_boundary_completes_before_mutation() -> None:
     )
 
     assert resolved == connection
-    credential.assert_awaited_once_with("MoonLadderStudios/MoonMind")
+    credential.assert_awaited_once_with(connection, "MoonLadderStudios/MoonMind")
     remote_tip.assert_awaited_once_with(target)
 
 

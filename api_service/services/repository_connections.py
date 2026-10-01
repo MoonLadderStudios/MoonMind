@@ -33,6 +33,7 @@ from moonmind.workflows.executions.repository_contract import (
     REPOSITORY_DENIED,
     REPOSITORY_ID_REUSE,
     REPOSITORY_POLICY_CONFLICT,
+    REPOSITORY_ROUTE_AMBIGUOUS,
     REPOSITORY_ROUTE_CONFLICT,
     REPOSITORY_SETUP_REQUIRED,
     RepositoryAssignment,
@@ -1249,6 +1250,52 @@ class RepositoryConnectionService:
                 )
             )
         return admitted
+
+    async def launch_assignment(
+        self, connection: RepositoryConnection, repository: str | None
+    ) -> RepositoryAssignment:
+        """Return the verified assignment that admits a launch's repository.
+
+        A launch names its repository (``owner/name`` or a remote URL), not a
+        provider ID, so it is matched against each assignment's recorded name
+        or canonical remote; the match can only narrow what the connection
+        allows (MoonLadderStudios/MoonMind#4023). No match, or a name shared
+        by several assignments, admits nothing.
+        """
+
+        wanted = _github_repository_key(repository)
+        rows = (
+            await self._session.execute(
+                select(RepositoryConnectionAssignment).where(
+                    RepositoryConnectionAssignment.connection_id == connection.id,
+                    RepositoryConnectionAssignment.verified.is_(True),
+                )
+            )
+        ).scalars().all()
+        matches = [
+            row
+            for row in rows
+            if wanted
+            and wanted
+            in {
+                _github_repository_key(row.display_name),
+                _github_repository_key(row.canonical_remote),
+            }
+        ]
+        named = repository or "an unnamed repository"
+        if not matches:
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED,
+                f"repository connection {connection.id} is not assigned to "
+                f"{named}; assign the repository to it",
+            )
+        if len(matches) > 1:
+            raise RepositoryRouteError(
+                REPOSITORY_ROUTE_AMBIGUOUS,
+                f"several assignments of repository connection {connection.id} "
+                f"match {named}",
+            )
+        return self._stored_assignment(matches[0], endpoint=connection.endpoint_ref)
 
     async def lore_projection_owner(self, repository: str) -> str | None:
         """Return the Lore connection whose review projection is this GitHub repo.

@@ -27,6 +27,7 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
     resolve_execution_budget,
 )
+from moonmind.auth.github_credentials import GitHubCredentialSource
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
     ExecutionFanoutCapabilityError,
@@ -35,8 +36,10 @@ from moonmind.security.execution_fanout_capabilities import (
 )
 from moonmind.workflows.executions.repository_contract import (
     AuthoredLoreRepositoryTarget,
+    AuthoredRepositoryTarget,
     CapabilityReadinessRegistry,
     DEFAULT_GIT_CONNECTION_REF,
+    REPOSITORY_CREDENTIAL_UNAVAILABLE,
     REPOSITORY_REMOTE_TIP_MISMATCH,
     RepositoryClientEvidence,
     RepositoryClientPolicy,
@@ -45,10 +48,10 @@ from moonmind.workflows.executions.repository_contract import (
     ResolvedRepositoryTarget,
     compile_repository_target,
     ensure_repository_ready,
-    load_repository_connection,
     materialize_resolved_repository_target,
-    persist_repository_connection,
     reconcile_default_git_connection,
+    repository_name_from_value,
+    resolve_selected_git_credential,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.skills.run_projection import (
@@ -70,9 +73,21 @@ from .github_auth_broker import (
 from .git_auth import build_github_token_git_environment
 from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
-from .managed_api_key_resolve import resolve_github_token_for_launch
+from .managed_api_key_resolve import (
+    SelectedGitHubAccess,
+    resolve_github_token_for_launch,
+    select_git_connection_for_launch,
+    select_github_access_for_launch,
+)
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+#: Ambient GitHub token variables a worker environment may carry. Launches
+#: deliver only the run's selected token, never these inherited values.
+_AMBIENT_GITHUB_TOKEN_ENV_KEYS: tuple[str, ...] = (
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "WORKFLOW_GITHUB_TOKEN",
+)
 _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
     {"ATLASSIAN_"}
 )
@@ -195,37 +210,6 @@ def resolve_deployment_git_client_policy() -> RepositoryClientPolicy:
     )
 
 
-def _current_default_repository_connection_path() -> Path:
-    return Path(
-        os.environ.get(
-            "MOONMIND_REPOSITORY_CONNECTION_PATH",
-            os.path.join(
-                os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
-                "repository_connections",
-                "git-default.json",
-            ),
-        )
-    )
-
-
-def reconcile_deployment_git_connection(
-    path: Path | None = None,
-) -> RepositoryConnection:
-    """Persist the worker deployment's default Git connection at startup."""
-
-    connection = reconcile_default_git_connection(
-        client_policy=resolve_deployment_git_client_policy()
-    )
-    persist_repository_connection(
-        connection, path or _current_default_repository_connection_path()
-    )
-    return connection
-
-
-def default_repository_connection_path() -> Path:
-    return _current_default_repository_connection_path()
-
-
 def _compact_string(value: Any) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -323,7 +307,11 @@ class ManagedRuntimeLauncher:
         log_streamer: RuntimeLogStreamer | None = None,
         artifact_service: Any | None = None,
         repository_readiness_boundary: Callable[
-            [AgentExecutionRequest, Mapping[str, str] | None],
+            [
+                AgentExecutionRequest,
+                Mapping[str, str] | None,
+                SelectedGitHubAccess | None,
+            ],
             Awaitable[ResolvedRepositoryTarget | None],
         ]
         | None = None,
@@ -349,18 +337,6 @@ class ManagedRuntimeLauncher:
             self._lore_checkpoint_service = LoreDurableCheckpointService(
                 adapter=lore_repository_adapter,
                 artifact_service=artifact_service,
-            )
-        if repository_client_policy is not None:
-            # Worker construction is a deployment startup boundary. Reconcile
-            # durably here as well as in the worker factory so alternate worker
-            # entrypoints cannot launch against an ephemeral connection object.
-            persist_repository_connection(
-                reconcile_default_git_connection(
-                    client_policy=repository_client_policy
-                ),
-                self._store.store_root.parent
-                / "repository_connections"
-                / "git-default.json",
             )
         self._repository_readiness_boundary = (
             repository_readiness_boundary or self._ensure_repository_ready_for_launch
@@ -424,8 +400,13 @@ class ManagedRuntimeLauncher:
         self,
         request: AgentExecutionRequest,
         git_env: Mapping[str, str] | None,
+        selected: SelectedGitHubAccess | None = None,
     ) -> None:
-        """Enforce the provider readiness contract before checkout or launch."""
+        """Enforce the provider readiness contract before checkout or launch.
+
+        ``selected`` is the launch's one read of its Git connection and
+        credential; readiness validates that read rather than reading again.
+        """
 
         workspace_spec = request.workspace_spec
         raw_target = workspace_spec.get("repositoryTarget")
@@ -460,42 +441,8 @@ class ManagedRuntimeLauncher:
                 )
             return resolved
 
-        if target.connection_ref == DEFAULT_GIT_CONNECTION_REF:
-            if self._repository_client_policy is None:
-                raise RepositoryContractError(
-                    "REPOSITORY_CONNECTION_UNAVAILABLE",
-                    "the current deployment Git client policy was not supplied",
-                )
-            connection_path = (
-                self._store.store_root.parent
-                / "repository_connections"
-                / "git-default.json"
-            )
-        else:
-            connections_dir = Path(
-                os.environ.get(
-                    "MOONMIND_REPOSITORY_CONNECTIONS_DIR",
-                    str(self._store.store_root.parent / "repository_connections"),
-                )
-            )
-            connection_path = next(
-                (
-                    path
-                    for path in sorted(connections_dir.glob("*.json"))
-                    if self._connection_file_matches(path, target.connection_ref)
-                ),
-                None,
-            )
-        if connection_path is None:
-            raise RepositoryContractError(
-                "REPOSITORY_CONNECTION_UNAVAILABLE",
-                "the selected Git connection is absent from the deployment registry",
-            )
-
+        connection = await self._select_git_connection(target, selected)
         observed = await self._observe_git_client()
-        connection = load_repository_connection(
-            connection_path, target.connection_ref
-        )
         registry = CapabilityReadinessRegistry(
             runtime_owned_tokens=(
                 "artifact.read",
@@ -541,7 +488,7 @@ class ManagedRuntimeLauncher:
             "gh",
             lambda context: (
                 context["target"].provider == "git"
-                and context["connection"].credential.source == "github_resolver"
+                and (context["connection"].hosting_service or "github") == "github"
             ),
         )
 
@@ -608,6 +555,15 @@ class ManagedRuntimeLauncher:
         async def resolve_evidence(_connection: object) -> RepositoryClientEvidence:
             return observed
 
+        async def resolve_credential(
+            selected_connection: RepositoryConnection, repository: str
+        ) -> object:
+            if selected is not None:
+                return selected.credential
+            return await resolve_selected_git_credential(
+                selected_connection, repository
+            )
+
         async def verify_remote_tip(_target: object) -> bool:
             if expected_remote_tip is None:
                 return False
@@ -627,6 +583,7 @@ class ManagedRuntimeLauncher:
             connection_resolver=resolve_connection,
             evidence_resolver=resolve_evidence,
             readiness_registry=registry,
+            credential_resolver=resolve_credential,
             remote_tip_verifier=verify_remote_tip,
         )
         observed_revision = (
@@ -661,13 +618,151 @@ class ManagedRuntimeLauncher:
             projection=connection.projection,
         )
 
+    async def _select_git_connection(
+        self,
+        target: AuthoredRepositoryTarget,
+        selected: SelectedGitHubAccess | None = None,
+    ) -> RepositoryConnection:
+        """Return exactly the connection the target selected (#4023).
+
+        Selection is shared with managed sessions; readiness adds the
+        deployment's Git client policy and derives an unrecorded default
+        from the deployment's declared GitHub configuration. A launch passes
+        its ``selected`` read so readiness, cloning, and the runtime share it.
+        """
+
+        if self._repository_client_policy is None:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                "the current deployment Git client policy was not supplied",
+            )
+        if selected is not None:
+            connection = selected.connection
+        else:
+            connection = await select_git_connection_for_launch(
+                target.connection_ref,
+                repository=target.repository.name,
+                connections_dir=self._repository_connections_dir(),
+                client_policy=self._repository_client_policy,
+            )
+        if connection is None:
+            return reconcile_default_git_connection(
+                client_policy=self._repository_client_policy
+            )
+        return connection
+
+    def _repository_connections_dir(self) -> Path:
+        return Path(
+            os.environ.get(
+                "MOONMIND_REPOSITORY_CONNECTIONS_DIR",
+                str(self._store.store_root.parent / "repository_connections"),
+            )
+        )
+
+    async def _select_request_github_access(
+        self, request: AgentExecutionRequest
+    ) -> SelectedGitHubAccess | None:
+        """Read the request's selected Git connection and credential once.
+
+        A Git ``repositoryTarget`` selects its connection, and a recorded
+        legacy request naming only a ``repository`` selects the default
+        connection, as managed sessions do. A launch carries this one read
+        through readiness, cloning, and runtime setup, so a rotation during
+        launch cannot pair one credential with another's readiness (#4023).
+        Scratch work and non-Git targets select nothing.
+        """
+
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        raw_target = workspace_spec.get("repositoryTarget")
+        if raw_target is not None:
+            target = compile_repository_target(raw_target)
+            if target.provider != "git":
+                return None
+            connection_ref, repository = (
+                target.connection_ref,
+                target.repository.name,
+            )
+        else:
+            repository = str(
+                workspace_spec.get("repository") or workspace_spec.get("repo") or ""
+            ).strip()
+            if not repository:
+                return None
+            connection_ref = DEFAULT_GIT_CONNECTION_REF
+        return await select_github_access_for_launch(
+            connection_ref,
+            repository=repository,
+            connections_dir=self._repository_connections_dir(),
+            client_policy=self._repository_client_policy,
+        )
+
     @staticmethod
-    def _connection_file_matches(path: Path, connection_ref: str) -> bool:
-        try:
-            connection = load_repository_connection(path, connection_ref)
-        except RepositoryContractError:
-            return False
-        return connection.provider == "git"
+    async def _selected_github_token(
+        request: AgentExecutionRequest, selected: SelectedGitHubAccess | None
+    ) -> str | None:
+        """Return the token of the launch's ``selected`` read, failing closed.
+
+        A selected source that fails stops the launch with its correction,
+        for a Git ``repositoryTarget`` and a recorded legacy ``repository``
+        alike, instead of continuing anonymously. Only a legacy request on a
+        deployment with no GitHub configuration, and scratch work, run
+        without a token.
+        """
+
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        has_target = workspace_spec.get("repositoryTarget") is not None
+        if selected is None:
+            return None if has_target else await resolve_github_token_for_launch()
+        credential = selected.credential
+        if credential.token:
+            return credential.token
+        if not has_target and credential.source == GitHubCredentialSource.MISSING:
+            return None
+        raise RepositoryContractError(
+            REPOSITORY_CREDENTIAL_UNAVAILABLE, credential.safe_summary
+        )
+
+    @staticmethod
+    def _profile_declared_github_token(
+        profile: ManagedRuntimeProfile, environment: Mapping[str, str]
+    ) -> str | None:
+        """Return ``GITHUB_TOKEN`` only when the runtime profile declares it."""
+
+        declared = (
+            "GITHUB_TOKEN" in (profile.env_overrides or {})
+            or "GITHUB_TOKEN" in (profile.secret_refs or {})
+            or "GITHUB_TOKEN" in (profile.passthrough_env_keys or [])
+        )
+        token = str(environment.get("GITHUB_TOKEN") or "").strip()
+        return token if declared and token else None
+
+    @staticmethod
+    def _request_uses_github(request: AgentExecutionRequest) -> bool:
+        """Whether the request names a repository or declares GitHub tooling."""
+
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        if (
+            workspace_spec.get("repository")
+            or workspace_spec.get("repo")
+            or repository_name_from_value(workspace_spec.get("repositoryTarget"))
+        ):
+            return True
+        parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
+        skill = request.skill if isinstance(request.skill, Mapping) else {}
+        declared: list[object] = []
+        for value in (
+            skill.get("requiredCapabilities"),
+            parameters.get("repositoryToolCapabilities"),
+        ):
+            if isinstance(value, (list, tuple)):
+                declared.extend(value)
+        return any(str(item).strip().lower() == "gh" for item in declared)
 
     async def capture_lore_workspace_checkpoint(
         self, *, locator: SandboxWorkspaceLocator, authority_path: Path
@@ -2156,12 +2251,18 @@ class ManagedRuntimeLauncher:
             profile=profile,
             strategy=strategy,
         )
+        needs_github_https_auth = self._request_workspace_needs_github_https_auth(
+            request,
+            workspace_path,
+        )
+        selected_github_access = (
+            await self._select_request_github_access(request)
+            if needs_github_https_auth or self._request_uses_github(request)
+            else None
+        )
         launch_github_token = (
-            await resolve_github_token_for_launch()
-            if self._request_workspace_needs_github_https_auth(
-                request,
-                workspace_path,
-            )
+            await self._selected_github_token(request, selected_github_access)
+            if needs_github_https_auth
             else None
         )
         git_host_env = (
@@ -2173,7 +2274,7 @@ class ManagedRuntimeLauncher:
             else None
         )
         resolved_repository = await self._repository_readiness_boundary(
-            request, git_host_env
+            request, git_host_env, selected_github_access
         )
         if resolved_repository is not None:
             request.workspace_spec["resolvedRepositoryTarget"] = (
@@ -2449,9 +2550,23 @@ class ManagedRuntimeLauncher:
                 runtime_id=normalize_runtime_id(profile.runtime_id),
             )
 
-            github_token = await resolve_github_token_for_launch(env_overrides)
-            if not github_token:
-                github_token = launch_github_token
+            # The base environment mirrors the worker's ambient process
+            # environment; a GitHub token there is not this run's selection
+            # (#4023). Only a token the profile itself declares is explicit.
+            explicit_github_token = self._profile_declared_github_token(
+                profile, env_overrides
+            )
+            for name in _AMBIENT_GITHUB_TOKEN_ENV_KEYS:
+                if not (explicit_github_token and name == "GITHUB_TOKEN"):
+                    env_overrides.pop(name, None)
+            github_token = explicit_github_token
+            if not github_token and self._request_uses_github(request):
+                github_token = (
+                    launch_github_token
+                    or await self._selected_github_token(
+                        request, selected_github_access
+                    )
+                )
             # The claude CLI refuses --dangerously-skip-permissions when running as root
             # (security restriction). For claude_code runtime, drop to the app user.
             _run_as_root = os.geteuid() == 0

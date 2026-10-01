@@ -4904,3 +4904,37 @@ async def test_build_runtime_activities_degraded_when_generic_not_ready():
         resources, _handlers = await _build_runtime_activities(topology)
 
     await resources.aclose()
+
+
+def test_gh_readiness_checks_the_cli_not_ambient_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4023: GitHub credentials come from the
+    selected repository connection at launch, never from ambient tokens."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+    monkeypatch.setattr(worker_runtime.shutil, "which", lambda _name: None)
+
+    blockers = _required_capability_blockers(
+        parameters={
+            "repository": "MoonLadderStudios/MoonMind",
+            "requiredCapabilities": ["gh"],
+        },
+        task_payload={},
+    )
+
+    assert [blocker["capability"] for blocker in blockers] == ["gh"]
+    assert blockers[0]["check"] == "github_cli"
+
+    monkeypatch.delenv("GITHUB_TOKEN")
+    monkeypatch.setattr(worker_runtime.shutil, "which", lambda _name: "/usr/bin/gh")
+    assert (
+        _required_capability_blockers(
+            parameters={
+                "repository": "MoonLadderStudios/MoonMind",
+                "requiredCapabilities": ["gh"],
+            },
+            task_payload={},
+        )
+        == []
+    )

@@ -486,9 +486,24 @@ async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_tar
 @pytest.mark.asyncio
 async def test_codex_session_workspace_git_metadata_is_managed_user_writable(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if os.name != "posix" or os.geteuid() != 0:
         pytest.skip("managed-session UID/GID permission integration requires root")
+
+    # The bare repository selects the default connection (#4023); this
+    # database-free journey records no connection and no GitHub secret.
+    async def _nothing_recorded(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    for loader in (
+        "load_repository_connection_for_launch",
+        "load_active_managed_github_secret_slug",
+    ):
+        monkeypatch.setattr(
+            f"moonmind.workflows.temporal.runtime.managed_api_key_resolve.{loader}",
+            _nothing_recorded,
+        )
 
     _make_tmp_path_accessible(tmp_path)
     source_repo = tmp_path / "source-repo"

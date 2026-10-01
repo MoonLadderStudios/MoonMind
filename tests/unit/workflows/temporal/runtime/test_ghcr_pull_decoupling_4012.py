@@ -154,16 +154,17 @@ def _forbid_source_token_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _unexpected_github_token(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("source GitHub token resolution must not run")
 
-    async def _unexpected_managed_token(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("managed source token lookup must not run")
+    async def _unexpected_connection(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("repository connection lookup must not run")
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_github_token_for_launch",
         _unexpected_github_token,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _unexpected_managed_token,
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _unexpected_connection,
     )
 
 

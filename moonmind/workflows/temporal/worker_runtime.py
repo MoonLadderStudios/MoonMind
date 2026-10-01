@@ -1004,19 +1004,17 @@ def _required_capability_blockers(
             remediation="Select an allowed repository for this workflow.",
         )
 
-    if "gh" in capabilities:
-        has_token = bool(
-            os.getenv("GH_TOKEN")
-            or os.getenv("GITHUB_TOKEN")
-            or os.getenv("MOONMIND_GITHUB_TOKEN_SECRET_REF")
+    # The GitHub credential is the selected repository connection's, checked
+    # at the launch boundary; ambient tokens do not establish readiness (#4023).
+    if "gh" in capabilities and shutil.which("gh") is None:
+        add(
+            "gh",
+            check="github_cli",
+            reason="The GitHub CLI is required before launch.",
+            remediation=(
+                "Run this workflow on a worker image that provides the GitHub CLI."
+            ),
         )
-        if not has_token and shutil.which("gh") is None:
-            add(
-                "gh",
-                check="github_cli_or_token",
-                reason="GitHub CLI access or a GitHub token reference is required before launch.",
-                remediation="Configure a GitHub token/provider profile with repository and pull-request access.",
-            )
 
     if "jira" in capabilities:
         atlassian_settings = getattr(settings, "atlassian", None)
@@ -2658,18 +2656,17 @@ def _build_agent_runtime_deps(
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
     from moonmind.workflows.temporal.runtime.launcher import (
-        reconcile_deployment_git_connection,
+        resolve_deployment_git_client_policy,
     )
     from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
         LoreCliReadinessAdapter,
     )
 
-    reconciled_git_connection = reconcile_deployment_git_connection()
     launcher = ManagedRuntimeLauncher(
         store,
         log_streamer=log_streamer,
         artifact_service=artifact_service,
-        repository_client_policy=reconciled_git_connection.client_policy,
+        repository_client_policy=resolve_deployment_git_client_policy(),
         lore_repository_readiness_adapter=LoreCliReadinessAdapter.from_environment(),
         lore_repository_adapter=build_lore_repository_adapter_from_environment(),
     )
