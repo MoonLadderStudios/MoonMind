@@ -939,6 +939,11 @@ RUN_REMEDIATION_LOOP_AGENT_INSTRUCTIONS_PATCH = (
 RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH = (
     "run-remediation-explicit-evidence-inputs-v1"
 )
+# Preserve controller-owned attempt context at the agent request boundary.
+# Older histories keep their recorded request parameters and cadence metadata.
+RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH = (
+    "run-remediation-attempt-context-inputs-v1"
+)
 # Explicit cutover from the legacy, statically expanded remediation history to
 # the compact controller-owned continuation schema.  Keep this separate from
 # the controller patch so histories that never authored a loop never record the
@@ -13094,6 +13099,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
+                                node_annotations=self._node_annotations_mapping(node),
                                 node_id=node_id,
                                 tool_name=tool_name,
                                 resolved_skillset_ref=resolved_skillset_ref,
@@ -16229,6 +16235,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._record_canonical_turn_lineage(node=node, node_id=node_id)
             request = self._build_agent_execution_request(
                 node_inputs=dict(node_inputs),
+                node_annotations=self._node_annotations_mapping(node),
                 node_id=node_id,
                 tool_name=tool_name,
                 resolved_skillset_ref=resolved_skillset_ref,
@@ -21121,6 +21128,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         node_inputs: dict[str, Any],
         node_id: str,
         tool_name: str,
+        node_annotations: Mapping[str, Any] | None = None,
         resolved_skillset_ref: str | None = None,
         workflow_parameters: Mapping[str, Any] | None = None,
         step_execution: int | None = None,
@@ -21332,6 +21340,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        remediation_context_enabled = self._workflow_patch_enabled(
+            RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH
+        )
+        if remediation_context_enabled:
+            # Materialized node inputs carry the current controller-owned loop
+            # and candidate. Runtime defaults and workflow inputs may be stale.
+            for context_key in ("remediationLoopId", "remediationWorkspaceHeadRef"):
+                context_value = node_inputs.get(context_key)
+                if context_value is not None:
+                    parameters[context_key] = context_value
         if (
             agent_id == "omnigent"
             and self._workflow_patch_enabled(
@@ -21778,6 +21796,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             parameters["metadata"] = metadata_payload
 
         node_for_remediation_metadata = {"id": node_id, "inputs": node_inputs}
+        if remediation_context_enabled and node_annotations is not None:
+            node_for_remediation_metadata["annotations"] = node_annotations
         remediation_role = self._moonspec_step_role(node_for_remediation_metadata)
         if remediation_role in {
             "moonspec-remediation",

@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 from unittest.mock import AsyncMock
@@ -38,6 +39,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
+    RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
@@ -3858,6 +3860,71 @@ def test_materialized_loop_attempts_dispatch_on_the_selected_managed_runtime(
         assert request.agent_kind == "managed"
         assert request.execution_profile_ref == "codex_openai_oauth"
         assert request.instruction_ref == node["inputs"]["instructions"]
+
+
+@pytest.mark.parametrize("context_patch_enabled", [False, True])
+def test_materialized_loop_attempts_preserve_candidate_context_in_runtime_request(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    context_patch_enabled: bool,
+) -> None:
+    """Exercise the controller's real nodes rather than injecting request fields."""
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    candidate = "artifact://workspace/retained-candidate"
+    mock_run_workflow._remediation_loop_state = (
+        mock_run_workflow._remediation_loop_state.model_copy(
+            update={"workspace_head_ref": candidate}
+        )
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH
+        or (
+            context_patch_enabled
+            and patch_id == RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH
+        ),
+    )
+
+    from moonmind.workflows.skills.run_projection import (
+        append_remediation_attempt_context,
+    )
+
+    for node in mock_run_workflow._materialize_remediation_attempt(ordinal=1):
+        request = mock_run_workflow._build_agent_execution_request(
+            node_inputs=dict(node["inputs"]),
+            node_annotations=node["annotations"],
+            node_id=node["id"],
+            tool_name=node["tool"]["name"],
+            workflow_parameters={"targetRuntime": "codex_cli"},
+        )
+        if context_patch_enabled:
+            assert request.parameters["remediationLoopId"] == (
+                "issue-implementation-remediation"
+            )
+            assert request.parameters["remediationWorkspaceHeadRef"] == candidate
+            prompt = append_remediation_attempt_context(
+                request.instruction_ref, parameters=request.parameters
+            )
+            context = json.loads(
+                prompt.split("MoonMind remediation attempt context (JSON):\n", 1)[1]
+            )
+            assert context == {
+                "role": node["annotations"]["issueImplementRole"],
+                "attempt": 1,
+                "maxAttempts": 6,
+                "remediationLoopId": "issue-implementation-remediation",
+                "remediationWorkspaceHeadRef": candidate,
+            }
+        else:
+            assert "remediationLoopId" not in request.parameters
+            assert "remediationWorkspaceHeadRef" not in request.parameters
+            assert "remediationCadence" not in (
+                request.parameters.get("metadata", {}).get("moonmind", {})
+            )
 
 
 def test_loop_attempt_materialization_requires_a_resolved_controller_runtime(
