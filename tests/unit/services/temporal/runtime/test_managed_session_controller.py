@@ -7590,3 +7590,49 @@ async def test_launch_session_uses_ephemeral_ghcr_config_for_private_image(
     # Ephemeral config removed before return; never in container env.
     assert seen_dirs and not Path(seen_dirs[0]).exists()
     assert "ghcr-token-value" not in json.dumps(seen_env)
+
+
+@pytest.mark.asyncio
+async def test_scratch_session_receives_no_github_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """MoonLadderStudios/MoonMind#4023: scratch work needs no GitHub login."""
+
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "mm:task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={},
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+
+    async def _unexpected_resolve(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("scratch sessions must not resolve a GitHub credential")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.resolve_github_token_for_launch",
+        _unexpected_resolve,
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        ready_poll_interval_seconds=0,
+    )
+    session_environment: dict[str, str] = {}
+
+    git_env = await controller._git_host_environment(request)
+    secret_env = await controller._configure_session_github_auth(
+        request, session_environment
+    )
+
+    assert "GITHUB_TOKEN" not in git_env
+    assert secret_env == {}
+    assert "GIT_CONFIG_GLOBAL" not in session_environment

@@ -382,6 +382,24 @@ def _normalize_absolute_posix_path(value: str, *, field_name: str) -> PurePosixP
 def _is_sensitive_env_key(key: str) -> bool:
     return bool(_SENSITIVE_ENV_KEY_PATTERN.search(key))
 
+async def _session_github_token(
+    request: LaunchCodexManagedSessionRequest,
+) -> str:
+    """Resolve the session's GitHub token; scratch sessions have none (#4023)."""
+
+    spec = request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+    uses_repository = any(
+        spec.get(key) for key in ("repository", "repo", "repositoryTarget")
+    )
+    explicit = str(request.environment.get("GITHUB_TOKEN", "")).strip()
+    if request.github_credential is None and not uses_repository and not explicit:
+        return ""
+    token = await resolve_github_token_for_launch(
+        request.environment,
+        github_credential=request.github_credential,
+    )
+    return str(token or "").strip()
+
 class DockerCodexManagedSessionController:
     """Launch and control managed runtime session containers via Docker CLI."""
 
@@ -1135,11 +1153,7 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
         session_environment: dict[str, str],
     ) -> dict[str, str]:
-        token = await resolve_github_token_for_launch(
-            request.environment,
-            github_credential=request.github_credential,
-        )
-        token = str(token or "").strip()
+        token = await _session_github_token(request)
         if not token:
             return {}
 
@@ -1500,19 +1514,9 @@ class DockerCodexManagedSessionController:
         env = dict(_GIT_COMMAND_LOCALE)
         request_env = request.environment if request is not None else {}
         try:
-            token = (
-                await resolve_github_token_for_launch(
-                    request_env,
-                    github_credential=(
-                        request.github_credential if request is not None else None
-                    ),
-                )
-                if request is not None
-                else None
-            )
+            token = await _session_github_token(request) if request is not None else ""
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
-        token = str(token or "").strip()
         if token:
             # Avoid depending on persistent per-user gh setup in the worker. The
             # clone happens before the managed agent container starts.

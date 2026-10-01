@@ -10000,8 +10000,9 @@ class TemporalAgentRuntimeActivities:
             ).strip()
             github_credential = build_github_credential_descriptor_for_launch(
                 environment,
-                ambient_github_token=os.environ.get("GITHUB_TOKEN"),
-                enable_managed_secret_fallback=bool(repository),
+                repository_session=bool(
+                    repository or request.workspace_spec.get("repositoryTarget")
+                ),
             )
 
         if not str(environment.get("GITHUB_TOKEN", "")).strip():

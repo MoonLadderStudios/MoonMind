@@ -660,7 +660,9 @@ ConnectionResolver = Callable[
 ClientEvidenceResolver = Callable[
     [RepositoryConnection], RepositoryClientEvidence | Awaitable[RepositoryClientEvidence]
 ]
-CredentialResolver = Callable[[str], object | Awaitable[object]]
+CredentialResolver = Callable[
+    [RepositoryConnection, str], object | Awaitable[object]
+]
 RemoteTipVerifier = Callable[
     [AuthoredRepositoryTarget], bool | Awaitable[bool]
 ]
@@ -702,12 +704,16 @@ class CapabilityReadinessRegistry:
                 )
 
 
-async def resolve_default_git_credential(repository: str) -> object:
-    """Invoke the canonical GitHub resolver selected by the default connection."""
+async def resolve_selected_git_credential(
+    connection: RepositoryConnection, repository: str
+) -> object:
+    """Read only the credential the selected connection names (#4023)."""
 
-    from moonmind.auth.github_credentials import resolve_github_credential
+    from moonmind.auth.github_credentials import (
+        resolve_connection_github_credential,
+    )
 
-    return await resolve_github_credential(repo=repository)
+    return await resolve_connection_github_credential(connection, repo=repository)
 
 
 async def _await_if_needed(value: Any) -> Any:
@@ -726,7 +732,7 @@ async def ensure_repository_ready(
     connection_resolver: ConnectionResolver,
     evidence_resolver: ClientEvidenceResolver,
     readiness_registry: CapabilityReadinessRegistry,
-    credential_resolver: CredentialResolver = resolve_default_git_credential,
+    credential_resolver: CredentialResolver = resolve_selected_git_credential,
     remote_tip_verifier: RemoteTipVerifier | None = None,
 ) -> RepositoryConnection:
     """Resolve and validate all repository authority before any side effect.
@@ -754,9 +760,9 @@ async def ensure_repository_ready(
     )
     await readiness_registry.check(required, context)
 
-    if connection.credential.source == "github_resolver":
+    if target.provider == "git":
         credential = await _await_if_needed(
-            credential_resolver(target.repository.name)
+            credential_resolver(connection, target.repository.name)
         )
         if not bool(getattr(credential, "resolved", False)):
             safe_summary = str(
@@ -1481,7 +1487,7 @@ __all__ = [
     "reconcile_verified_rename",
     "repository_branch_from_value",
     "repository_name_from_value",
-    "resolve_default_git_credential",
+    "resolve_selected_git_credential",
     "route_diagnostic",
     "route_key_for",
     "scope_key_for",
