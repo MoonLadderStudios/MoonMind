@@ -2609,6 +2609,78 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     expect(payload.model_tiers.map((tier: { effort: string | null }) => tier.effort)).toEqual(['medium', 'xhigh', 'max']);
   });
 
+  it('honors model-specific effort compatibility and blocks a newly incompatible tier', async () => {
+    const supportedModel = 'opencode-go/future-model';
+    const seededModel = 'opencode-go/muse-spark-1.3-contributor';
+    const profile: ProviderProfile = {
+      ...tierProfile,
+      runtime_id: 'opencode',
+      provider_id: 'opencode-go',
+      model_tiers: [
+        { label: 'Seeded', model: seededModel, effort: 'xhigh', parameters: {}, annotations: {} },
+        { label: 'Other', model: supportedModel, effort: 'xhigh', parameters: {}, annotations: {} },
+      ],
+    };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/capabilities')) {
+        return { ok: true, json: async () => ({
+          version: 'tier-cap-model-efforts', profile_id: profile.profile_id,
+          runtime_id: profile.runtime_id, provider_id: profile.provider_id,
+          evidence: { source: 'profile_catalog_evidence', stale: false },
+          model: { runtime_default: seededModel, allow_custom: true, options: [seededModel, supportedModel].map((value) => ({ value, label: value, status: 'available' })) },
+          effort: { runtime_default: 'medium', options: [
+            { value: 'xhigh', label: 'Extra high', status: 'available', compatible_models: null },
+            { value: 'max', label: 'Max', status: 'available', compatible_models: [supportedModel] },
+          ] }, diagnostics: [],
+        }) } as Response;
+      }
+      return { ok: true, json: async () => profile } as Response;
+    });
+    const { onNotice } = renderProviderProfilesManager([profile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const seededEffort = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
+    const otherEffort = screen.getByLabelText('Tier 2 effort') as HTMLSelectElement;
+    await waitFor(() => expect(within(seededEffort).getByRole('option', { name: 'Max' }).hasAttribute('disabled')).toBe(true));
+    expect(within(otherEffort).getByRole('option', { name: 'Max' }).hasAttribute('disabled')).toBe(false);
+    fireEvent.change(screen.getByLabelText('Tier 1 model'), { target: { value: '__runtime_default__' } });
+    expect(within(seededEffort).getByRole('option', { name: 'Max' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.change(otherEffort, { target: { value: 'max' } });
+    fireEvent.change(screen.getByLabelText('Tier 2 model'), { target: { value: seededModel } });
+    expect(otherEffort.value).toBe('max');
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    expect(onNotice).toHaveBeenCalledWith(expect.objectContaining({ level: 'error', text: expect.stringContaining('unavailable for this model') }));
+    expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(false);
+    fireEvent.change(otherEffort, { target: { value: 'xhigh' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+  });
+
+  it('preserves an unchanged saved unavailable effort during an unrelated edit', async () => {
+    const profile = { ...tierProfile, model_tiers: [{ ...tierProfile.model_tiers![0], effort: 'max' }], default_model_tier: 1 };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/capabilities')) {
+        return { ok: true, json: async () => ({
+          version: 'tier-cap-unavailable', profile_id: profile.profile_id,
+          model: { runtime_default: 'gpt-5.5', options: [] },
+          effort: { options: [{ value: 'max', label: 'Max', status: 'unavailable', compatible_models: [] }] },
+          diagnostics: [],
+        }) } as Response;
+      }
+      return { ok: true, json: async () => profile } as Response;
+    });
+    renderProviderProfilesManager([profile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const effort = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
+    await waitFor(() => expect(within(effort).getByRole('option', { name: 'Max (unavailable)' }).hasAttribute('disabled')).toBe(true));
+    expect(effort.value).toBe('max');
+    fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Updated label' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    const saveCall = fetchSpy.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH');
+    const payload = JSON.parse(String((saveCall?.[1] as RequestInit).body));
+    expect(payload.model_tiers[0]).toMatchObject({ label: 'Updated label', effort: 'max' });
+  });
+
   it('can append and duplicate tiers without renumbering existing tiers', async () => {
     renderProviderProfilesManager([tierProfile]);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
