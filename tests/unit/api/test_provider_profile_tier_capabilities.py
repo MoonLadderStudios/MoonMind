@@ -93,3 +93,15 @@ def test_draft_capabilities_are_not_stale():
     result = tier_capabilities_for_draft("codex_cli", "openai")
     assert result["evidence"]["stale"] is False
     assert result["evidence"]["source"] == "runtime_draft"
+
+
+def test_effort_options_offer_max_above_xhigh():
+    for result in (
+        tier_capabilities_for_draft("claude_code", "anthropic"),
+        tier_capabilities_for_profile(_profile()),
+    ):
+        values = [o["value"] for o in result["effort"]["options"]]
+        assert values == ["low", "medium", "high", "xhigh", "max"]
+        max_option = result["effort"]["options"][-1]
+        assert max_option["label"] == "Max"
+        assert max_option["status"] == "available"
