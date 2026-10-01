@@ -39,6 +39,16 @@ async def run_runtime_command(
             return encoded[: max(0, output_limit_bytes)]
         return encoded
 
+    def retain(retained: bytearray, safe: bytes) -> None:
+        # Streamed output keeps its tail: a long-running command reports its
+        # terminal error last, after any amount of progress output.
+        retained.extend(safe)
+        if output_limit_bytes is not None and len(retained) > output_limit_bytes:
+            del retained[: len(retained) - max(0, output_limit_bytes)]
+            # Drop a split UTF-8 sequence so re-sanitizing cannot grow the tail.
+            while retained and 0x80 <= retained[0] <= 0xBF:
+                del retained[0]
+
     async def read_stream(name: str, reader: asyncio.StreamReader) -> bytes:
         retained = bytearray()
         pending = bytearray()
@@ -56,9 +66,7 @@ async def run_runtime_command(
                     else sanitize(bytes(line) + b"\n")
                 )
                 oversized = False
-                retained.extend(safe)
-                if output_limit_bytes is not None:
-                    del retained[max(0, output_limit_bytes) :]
+                retain(retained, safe)
                 try:
                     await on_output(name, safe)
                 except Exception:
@@ -72,12 +80,12 @@ async def run_runtime_command(
                 if oversized
                 else sanitize(bytes(pending))
             )
-            retained.extend(safe)
+            retain(retained, safe)
             try:
                 await on_output(name, safe)
             except Exception:
-                pass
-        return sanitize(bytes(retained))
+                pass  # Auxiliary evidence cannot change command success.
+        return bytes(retained)
 
     async def communicate_progress() -> tuple[bytes, bytes]:
         if process.stdin is not None:

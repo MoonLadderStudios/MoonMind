@@ -1526,6 +1526,18 @@ def main():
     head_non_sec = summarize_ci_checks(head_check_runs)["nonSecurityCheckCount"]
     ci_summary["headShaNonSecurityCheckCount"] = head_non_sec
     degraded = list(ci_summary["degradedReasons"])
+    if (
+        required_checks == []
+        and advisory_statuses
+        and fetched_runs is not None
+        and fetched_statuses is not None
+    ):
+        # Policy confirms nothing gates, and HEAD did report (advisory) status:
+        # an empty gating set is a clean signal, not a missing one.
+        degraded = [r for r in degraded if r != "no_status_checks_reported"]
+        if not degraded:
+            ci_summary["signalQuality"] = "ok"
+            ci_summary["hasFailures"] = bool(ci_summary["hasAuthoritativeFailures"])
     if fetched_runs is None or fetched_statuses is None:
         degraded.append(
             "head_checks_unavailable"
@@ -1612,6 +1624,12 @@ def main():
         and ci_summary.get("hasAuthoritativeFailures")
         and ci_summary.get("signalQuality") == "ok"
         and int(ci_summary.get("headShaNonSecurityCheckCount") or 0) > 0
+        # Infrastructure classification covers Actions check-runs only; any
+        # failing gating legacy status is an independent, PR-owned failure.
+        and not any(
+            _check_state(status) in _FAILURE_CHECK_STATES
+            for status in gating_statuses
+        )
     ):
         ci_summary.update(
             summarize_ci_infrastructure(
