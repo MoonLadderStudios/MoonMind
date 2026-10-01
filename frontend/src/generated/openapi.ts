@@ -7976,6 +7976,11 @@ export interface components {
              */
             canRetryPublication: boolean;
             /**
+             * Canpublishsavedwork
+             * @default false
+             */
+            canPublishSavedWork: boolean;
+            /**
              * Canfullretry
              * @default false
              */

@@ -38,7 +38,12 @@ const execution = {
   publishMode: 'pr',
   createdAt: '2026-09-30T00:00:00Z',
   updatedAt: '2026-09-30T00:05:00Z',
-  actions: { canRetryPublication: false },
+  actions: {
+    canRetryPublication: false,
+    canPublishSavedWork: true,
+    actionEvidence: { publishSavedWork: { allowedModes: ['pr', 'draft_pr', 'branch'] } },
+    disabledReasons: { canRetryPublication: 'publication_retry_not_eligible' },
+  },
   finishSummary: {
     controlStop: {
       auxiliaryOutcomes: {
@@ -168,10 +173,38 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+// The default rollout gate leaves saved-work publication off; the server's
+// action projection says so with its reason.
+const publicationDisabledExecution = {
+  ...execution,
+  actions: {
+    canRetryPublication: false,
+    canPublishSavedWork: false,
+    actionEvidence: {},
+    disabledReasons: {
+      canRetryPublication: 'publication_retry_not_eligible',
+      canPublishSavedWork: 'publication_recovery_disabled',
+    },
+  },
+};
+
+// The returned publication operation, read through the ordinary execution
+// detail endpoint after it finishes.
+const publicationRun = {
+  taskId: 'mm:saved-publication:7f3a',
+  workflowId: 'mm:saved-publication:7f3a',
+  workflowType: 'MoonMind.PublicationRecoveryV1',
+  state: 'completed',
+  rawState: 'completed',
+  temporalStatus: 'completed',
+  closeStatus: 'completed',
+};
+
 let fetchSpy: MockInstance;
 let cleanupRender: (() => void) | null = null;
 let publishRequests: Array<Record<string, unknown>>;
 let continueRequests: Array<Record<string, unknown>>;
+let sourceExecution: Record<string, unknown>;
 
 beforeEach(() => {
   window.sessionStorage.clear();
@@ -179,11 +212,15 @@ beforeEach(() => {
   window.history.replaceState({}, '', '/workflows/saved-source/artifacts?source=temporal');
   publishRequests = [];
   continueRequests = [];
+  sourceExecution = execution;
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/ui/info') return jsonResponse(uiInfo);
       if (url === '/api/v1/secrets') return jsonResponse({ items: [] });
+      if (url === '/api/executions/mm%3Asaved-publication%3A7f3a?source=temporal') {
+        return jsonResponse(publicationRun);
+      }
       if (url.startsWith('/api/v1/provider-profiles')) return jsonResponse([]);
       if (url.endsWith('/executions/saved-source/retry-publication')) {
         publishRequests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -228,7 +265,7 @@ beforeEach(() => {
         if (url.includes('/remediations')) return jsonResponse({ items: [] });
         if (url.includes('/checkpoint-branches')) return jsonResponse({ items: [] });
         if (url.includes('/artifacts')) return jsonResponse({ artifacts: [] });
-        return jsonResponse(execution);
+        return jsonResponse(sourceExecution);
       }
       if (url.startsWith('/api/executions')) return jsonResponse({ items: [] });
       return jsonResponse({});
@@ -310,8 +347,19 @@ describe('saved results after the source host is gone', () => {
       await userEvent.click(
         within(publishForm).getByRole('button', { name: 'Publish to this destination' }),
       );
+      // Simple destination choices first; the base and application are summarized.
+      expect(within(publishForm).queryByLabelText('Base branch')).toBeNull();
       const started = await within(region).findByText(/Publication started/, {}, { timeout: 10_000 });
       expect(within(started).getByText('saved-publication:7f3a')).toBeTruthy();
+      // The accepted operation is followed to its persisted outcome.
+      const outcome = await within(region).findByRole(
+        'status',
+        { name: 'Publication outcome' },
+        { timeout: 10_000 },
+      );
+      await waitFor(() => expect(outcome.textContent).toMatch(/^Publication completed/), {
+        timeout: 10_000,
+      });
       expect(publishRequests).toEqual([
         {
           savedWorkRef: 'art_saved_manifest',
@@ -349,4 +397,38 @@ describe('saved results after the source host is gone', () => {
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
     }, 30_000);
   }
+
+  it('explains server-disabled publication and keeps download and continue working', async () => {
+    sourceExecution = publicationDisabledExecution;
+    const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+    cleanupRender = unmount;
+
+    const heading = await screen.findByRole('heading', { name: 'Saved Results' }, { timeout: 10_000 });
+    const region = heading.closest('section') as HTMLElement;
+    await within(region).findByText('Saved work', {}, { timeout: 10_000 });
+
+    expect(within(region).getByRole('note').textContent).toMatch(
+      /Publish saved work is unavailable: .*publication rollout policy/,
+    );
+    const unit = rowFor(region, 'Saved work');
+    const publish = within(unit).getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    expect(within(unit).getByText('Complete')).toBeTruthy();
+    const report = rowFor(region, 'Final report');
+    expect(within(report).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_report/download',
+    );
+
+    const continueButton = within(region).getByRole('button', { name: 'Continue working' });
+    await waitFor(() => expect((continueButton as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(continueButton);
+    const continueForm = within(region).getByRole('form', { name: 'Continue working' });
+    await userEvent.fill(within(continueForm).getByLabelText('New instructions'), 'Keep going.');
+    await userEvent.click(within(continueForm).getByRole('button', { name: 'Start continuation' }));
+    expect(
+      await within(region).findByText(/Continuation admitted/, {}, { timeout: 10_000 }),
+    ).toBeTruthy();
+    expect(continueRequests).toHaveLength(1);
+    expect(publishRequests).toEqual([]);
+  }, 30_000);
 });

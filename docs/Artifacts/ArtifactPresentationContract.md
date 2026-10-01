@@ -973,9 +973,10 @@ Rules:
   The snapshot archive, delta, history, file manifest, and index patch it
   names are listed as its parts, each with its own completeness and raw
   download, not as separate saved results. Its format claims, exclusion
-  counts by reason, limitations, and retention handle come from the
-  `saved_work_summary` listing metadata the capture path projects from the
-  committed manifest; the browser never parses raw manifest bytes. A
+  counts by reason, and limitations come from the `saved_work_summary`
+  listing metadata the capture path projects from the committed manifest;
+  its displayed retention is the listing's retention class and expiry. The
+  browser never parses raw manifest bytes. A
   manifest listed without that summary is shown with its own status and
   identity and "format details unavailable".
 - Completeness never comes from a provider exit code, a local directory
@@ -1014,21 +1015,54 @@ Rules:
   carries only complete saved outputs the source's captured evidence
   authorizes.
 - **Publish Saved Work** is offered for a complete, unexpired saved unit
-  whose manifest has raw access. It posts the saved-work body
-  (`savedWorkRef` plus the destination repository, objective, base/head
-  branch, and application strategy, optional PR title) to the
-  publication-only `POST /executions/{workflow_id}/retry-publication` path
-  described in [Publish Saved Work](../Workflows/WorkflowPublishing.md#publish-saved-work),
+  whose manifest has raw access, when the execution's action projection
+  reports `canPublishSavedWork`. That capability applies the same
+  submission gate and publication-recovery rollout admission as the
+  publication route; when it is off, `disabledReasons.canPublishSavedWork`
+  carries the route's reason (`publication_recovery_disabled` under the
+  shipped default-off rollout gate, `publication_recovery_shadow_only`,
+  `publication_mode_not_allowed`, `publication_recovery_not_in_canary` when
+  a canary admits no repository for the operator,
+  `publication_recovery_policy_invalid` when the rollout setting cannot be
+  read, or `temporal_submit_disabled`); a malformed rollout setting never
+  breaks the execution read. The section then explains the reason once,
+  separately from the save's completeness and the compute outcome, and
+  keeps Preview, Download, and Continue available. An unreported
+  capability is unavailable, never assumed. When available,
+  `actionEvidence.publishSavedWork` lists the `allowedModes` and, under a
+  repository canary, the `canaryRepositories`; the form offers only those
+  modes and names those repositories. The UI never changes the rollout
+  setting, and the server remains the final authority: a
+  `publication_retry_not_admitted` refusal is shown as returned and
+  refreshes the projection.
+- Publishing posts the saved-work body (`savedWorkRef` plus the
+  destination repository, objective, base/head branch, and application
+  strategy, optional PR title) to the publication-only
+  `POST /executions/{workflow_id}/retry-publication` path described in
+  [Publish Saved Work](../Workflows/WorkflowPublishing.md#publish-saved-work),
   so no model is rerun. The destination form is prefilled from the
-  execution's repository, starting branch, and publish mode. It does not
-  depend on `canRetryPublication`: that capability gates only the body-less
-  recovery of a failed requested publication, which stays in the workflow
-  action menu. The server's ownership, destination, Lore, and rollout
-  checks decide admission, and their rejection is shown as returned. The
-  returned publication workflow and `publicationIdempotencyKey` are
-  displayed with the destination they were admitted for. Changing the
-  destination makes the next submission a new decision; the earlier
-  operation stays visible, and no second approval system is added.
+  execution's repository, starting branch, and publish mode. Repository,
+  publish mode, head branch, and PR title come first; the base branch and
+  application strategy appear when requested, when an existing destination
+  still needs a base, or when a non-default strategy is chosen. Initializing
+  an empty destination sends no base. This is the single saved-work
+  publication form; Workflow Create/edit (#2619) does not add another. It
+  does not depend on `canRetryPublication`: that capability gates only the
+  body-less recovery of a failed requested publication, which stays in the
+  workflow action menu. The server's ownership, destination, Lore, and
+  rollout checks decide admission, and their rejection is shown as
+  returned. The returned publication workflow and
+  `publicationIdempotencyKey` are displayed with the destination they were
+  admitted for. Changing the destination makes the next submission a new
+  decision; the earlier operation stays visible, and no second approval
+  system is added.
+- An accepted publication is followed through the existing execution
+  detail read of the returned workflow (`GET /executions/{workflow_id}`)
+  until it closes, and its terminal status is shown: completed means the
+  saved work was published or the destination already had it, and failed
+  or canceled means the run's persisted saved-work publication result
+  records the reason and any confirmed change. Following never starts,
+  retries, or cancels work, and closing the form does not stop it.
 - Requests and displayed state are bound to the exact selected
   `(workflow_id, run_id)` result and to the latest request for each action.
   Late responses never retarget a historical selection or overwrite a newer
