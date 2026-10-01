@@ -2333,12 +2333,11 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
             rest = command[3:]
             if "gh" in rest and "status" in rest:
                 return 1, "", "account endpoint temporarily unavailable"
-            if any("gh api rate_limit" in str(arg) for arg in rest):
+            if any("x-ratelimit" in str(arg).lower() or "--include" in str(arg) for arg in rest):
                 return (
                     0,
-                    json.dumps(
-                        {"resources": {"graphql": {"remaining": 0, "reset": 1}}}
-                    ),
+                    "HTTP/2.0 403 Forbidden\nX-Ratelimit-Remaining: 0\n"
+                    "X-Ratelimit-Reset: 1\nX-Ratelimit-Resource: graphql\n\n",
                     "",
                 )
             if any("gh repo view" in str(arg) for arg in rest):

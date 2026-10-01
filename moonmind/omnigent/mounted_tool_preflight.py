@@ -28,7 +28,18 @@ REMOTE_PROBE_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
 RATE_LIMIT_MAX_WAITS = 1
 RATE_LIMIT_DEFAULT_WAIT_SECONDS = 60.0
 RATE_LIMIT_MAX_WAIT_SECONDS = 900.0
-RATE_LIMIT_LOOKUP_COMMAND = "gh api rate_limit"
+# ``/rate_limit`` can report an untouched budget while every request is
+# rejected (observed 2026-10-01), so the reset is read from the headers of one
+# REST and one GraphQL request. A rejected request costs nothing; the probes
+# run under ``sh -e``, so each tolerates its own non-zero exit.
+RATE_LIMIT_LOOKUP_COMMAND = (
+    "gh api --include --silent user || true; "
+    "gh api graphql --include --silent -f query='{rateLimit{remaining}}' || true"
+)
+_RATE_LIMIT_HEADER = re.compile(
+    r"^(x-ratelimit-remaining|x-ratelimit-reset|retry-after):\s*(\d+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 class MountedToolPreflightError(RuntimeError):
@@ -147,28 +158,31 @@ _RATE_LIMITED_GITHUB_FAILURE = re.compile(
 async def _rate_limit_wait_seconds(command_runner: CommandRunner) -> float:
     """Seconds until GitHub's reported reset for the exhausted resource.
 
-    The rate-limit endpoint does not consume rate limit. Any lookup failure or
-    a limit with no exhausted primary resource (a secondary limit) falls back
-    to the bounded default wait.
+    ``Retry-After`` (secondary limits) wins; otherwise the latest reset of a
+    resource reporting no remaining budget. Any lookup failure or a response
+    with neither falls back to the bounded default wait.
     """
 
     try:
-        rc, stdout, _stderr = await command_runner(RATE_LIMIT_LOOKUP_COMMAND)
-        resources = json.loads(stdout).get("resources") if rc == 0 else None
-    except (TimeoutError, TypeError, ValueError, AttributeError):
-        resources = None
-    if not isinstance(resources, Mapping):
+        _rc, stdout, _stderr = await command_runner(RATE_LIMIT_LOOKUP_COMMAND)
+    except TimeoutError:
         return RATE_LIMIT_DEFAULT_WAIT_SECONDS
-    resets = [
-        float(item["reset"])
-        for item in resources.values()
-        if isinstance(item, Mapping)
-        and item.get("remaining") == 0
-        and isinstance(item.get("reset"), (int, float))
-    ]
-    if not resets:
+    waits: list[float] = []
+    for response in re.split(r"^HTTP/", stdout or "", flags=re.MULTILINE)[1:]:
+        headers = {
+            name.lower(): int(value)
+            for name, value in _RATE_LIMIT_HEADER.findall(response)
+        }
+        if "retry-after" in headers:
+            waits.append(float(headers["retry-after"]))
+        elif (
+            headers.get("x-ratelimit-remaining") == 0
+            and "x-ratelimit-reset" in headers
+        ):
+            waits.append(headers["x-ratelimit-reset"] - time.time() + 1.0)
+    if not waits:
         return RATE_LIMIT_DEFAULT_WAIT_SECONDS
-    return min(max(max(resets) - time.time() + 1.0, 1.0), RATE_LIMIT_MAX_WAIT_SECONDS)
+    return min(max(max(waits), 1.0), RATE_LIMIT_MAX_WAIT_SECONDS)
 
 
 async def _run_probes(

@@ -75,9 +75,11 @@ Repository-free tool projections attest only local credential availability.
 
 Transient transport failures and HTTP 5xx responses receive up to four attempts
 on the same host and credential, with bounded backoff. A rate-limited probe
-reads GitHub's free rate-limit endpoint and waits in place once for the
-exhausted resource's reported reset (at most 15 minutes; one minute when no
-primary resource is exhausted, as with secondary limits). Authentication,
+reads the reset from the response headers of one REST and one GraphQL request
+(GitHub's `/rate_limit` endpoint can report an untouched budget while requests
+are rejected) and waits in place once: for `Retry-After` when present,
+otherwise for the exhausted resource's reset (at most 15 minutes; one minute
+when neither is reported). Authentication,
 authorization, identity, and permission failures fail closed. Cancellation
 propagates. Generic-host failures preserve redacted attempt evidence and the
 original diagnostic even if artifact storage is unavailable. A rejected
