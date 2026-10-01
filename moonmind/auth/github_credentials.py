@@ -257,6 +257,98 @@ async def resolve_github_credential(
     )
 
 
+async def resolve_deployment_github_credential(
+    *,
+    repo: str | None = None,
+) -> ResolvedGitHubCredential:
+    """Resolve the deployment's GitHub declaration (#4023).
+
+    This derives ``repository-connection:git-default`` while it is not
+    recorded, with the precedence migration ``391_legacy_github_cred_4023``
+    records: the configured sources above, then an active ``GITHUB_TOKEN`` or
+    ``GITHUB_PAT`` managed secret, so a secret saved in Settings after the
+    migration still selects the default. The managed secret is consulted only
+    when nothing else is configured; a configured source that fails is the
+    result, and an unreadable secret store is not mistaken for no secret.
+    """
+
+    resolved = await resolve_github_credential(repo=repo)
+    if resolved.source != GitHubCredentialSource.MISSING:
+        return resolved
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    try:
+        slug = await managed_api_key_resolve.load_active_managed_github_secret_slug()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName="managed secrets",
+            repo=repo,
+            diagnostic=(
+                "The GITHUB_TOKEN and GITHUB_PAT managed secrets could not be read"
+                + (f" for {repo}" if repo else "")
+                + "; MoonMind does not try another GitHub credential."
+            ),
+            retryable=True,
+        )
+    if slug is None:
+        return resolved
+    return await _resolve_reference_credential(
+        f"db://{slug}",
+        subject="Deployment GitHub credential",
+        source_name=f"managed secret {slug}",
+        repo=repo,
+    )
+
+
+async def _resolve_reference_credential(
+    reference: str,
+    *,
+    subject: str,
+    source_name: str,
+    repo: str | None,
+) -> ResolvedGitHubCredential:
+    """Read one selected SecretRef; a failure is the result, never a fallback."""
+
+    target = f" for {repo}" if repo else ""
+    correction = (
+        "; MoonMind does not try another GitHub credential. Set or rotate "
+        f"{reference}, or select a different repository connection."
+    )
+    try:
+        token = str(await _resolve_secret_ref(reference) or "").strip()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        absent = _secret_is_absent(exc)
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=source_name,
+            repo=repo,
+            diagnostic=(
+                f"{subject} {reference} "
+                + ("is not set" if absent else "could not be read")
+                + f"{target}{correction}"
+            ),
+            retryable=not absent,
+        )
+    if not token:
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=source_name,
+            repo=repo,
+            diagnostic=f"{subject} {reference} is empty{target}{correction}",
+        )
+    return ResolvedGitHubCredential(
+        token=token,
+        source=GitHubCredentialSource.SECRET_REF_ENV,
+        sourceName=source_name,
+        repo=repo,
+    )
+
+
 async def resolve_connection_github_credential(
     connection: Any,
     *,
@@ -268,7 +360,8 @@ async def resolve_connection_github_credential(
     is unreadable or empty the result is unresolved, never another
     environment token, Settings reference, or managed secret
     (MoonLadderStudios/MoonMind#4023). Only historical ``github_resolver``
-    connections keep the deployment precedence above.
+    connections keep the deployment declaration
+    (:func:`resolve_deployment_github_credential`).
     """
 
     connection_id = str(getattr(connection, "id", "") or "").strip() or "connection"
@@ -276,49 +369,17 @@ async def resolve_connection_github_credential(
     source = str(getattr(credential, "source", "") or "").strip()
     target = f" for {repo}" if repo else ""
     if source == "github_resolver":
-        return await resolve_github_credential(repo=repo)
+        return await resolve_deployment_github_credential(repo=repo)
     if source == "secret_ref":
         ref = getattr(credential, "credential_ref", None)
         reference = (
             f"{str(getattr(ref, 'provider', '') or '').strip()}://"
             f"{str(getattr(ref, 'key', '') or '').strip()}"
         )
-        correction = (
-            "; MoonMind does not try another GitHub credential. Set or rotate "
-            f"{reference}, or select a different repository connection."
-        )
-        try:
-            token = str(await _resolve_secret_ref(reference) or "").strip()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            absent = _secret_is_absent(exc)
-            return ResolvedGitHubCredential(
-                source=GitHubCredentialSource.UNRESOLVABLE,
-                sourceName=connection_id,
-                repo=repo,
-                diagnostic=(
-                    f"Repository connection {connection_id} credential "
-                    f"{reference} "
-                    + ("is not set" if absent else "could not be read")
-                    + f"{target}{correction}"
-                ),
-                retryable=not absent,
-            )
-        if not token:
-            return ResolvedGitHubCredential(
-                source=GitHubCredentialSource.UNRESOLVABLE,
-                sourceName=connection_id,
-                repo=repo,
-                diagnostic=(
-                    f"Repository connection {connection_id} credential "
-                    f"{reference} is empty{target}{correction}"
-                ),
-            )
-        return ResolvedGitHubCredential(
-            token=token,
-            source=GitHubCredentialSource.SECRET_REF_ENV,
-            sourceName=connection_id,
+        return await _resolve_reference_credential(
+            reference,
+            subject=f"Repository connection {connection_id} credential",
+            source_name=connection_id,
             repo=repo,
         )
     return ResolvedGitHubCredential(
