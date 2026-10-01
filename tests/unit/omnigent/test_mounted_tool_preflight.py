@@ -296,21 +296,124 @@ async def test_repository_identity_and_requested_permission_fail_closed(
         "HTTP 401: Bad credentials",
         "HTTP 403: Forbidden",
         "HTTP 404: Not Found",
-        "HTTP 429: rate limit exceeded",
     ],
 )
 @pytest.mark.asyncio
-async def test_permanent_rejection_and_rate_limits_do_not_tight_loop(
-    error, monkeypatch
-):
+async def test_permanent_rejection_fails_closed_without_retry(error, monkeypatch):
     sleep = AsyncMock()
     monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
     runner = AsyncMock(side_effect=[(0, "", ""), (1, "", error)])
-    with pytest.raises(MountedToolPreflightError, match=error):
+    with pytest.raises(MountedToolPreflightError, match=error) as raised:
         await preflight_github_access(
             repository="owner/repo", boundaries={"runner": runner}
         )
     sleep.assert_not_awaited()
+    assert raised.value.transient is False
+
+
+def _rate_limited_runner(*, limited_responses: int, rate_limit_payload: dict):
+    calls: list[str] = []
+
+    async def runner(command: str) -> tuple[int, str, str]:
+        calls.append(command)
+        if command.startswith("gh auth token"):
+            return 0, "", ""
+        if command == "gh api rate_limit":
+            return 0, json.dumps(rate_limit_payload), ""
+        if sum(item.startswith("gh repo view") for item in calls) <= limited_responses:
+            return 1, "", "GraphQL: API rate limit exceeded for user ID 16808547."
+        return (
+            0,
+            json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}),
+            "",
+        )
+
+    return runner, calls
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_waits_for_reported_reset_then_recovers_in_place(
+    monkeypatch,
+):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.time.time", lambda: 1_000.0
+    )
+    runner, calls = _rate_limited_runner(
+        limited_responses=1,
+        rate_limit_payload={
+            "resources": {
+                "core": {"limit": 5000, "remaining": 4100, "reset": 4_000},
+                "graphql": {"limit": 5000, "remaining": 0, "reset": 1_090},
+            }
+        },
+    )
+
+    result = await preflight_github_access(
+        repository="owner/repo", boundaries={"host": runner}
+    )
+
+    assert result["status"] == "ready"
+    # Wait for the exhausted resource's reported reset, not a tight loop and
+    # not the unrelated core window.
+    sleep.assert_awaited_once_with(91.0)
+    assert calls.count("gh api rate_limit") == 1
+    limited = [item for item in result["probes"] if item["status"] == "rate_limited"]
+    assert len(limited) == 1
+    assert limited[0]["error"].startswith("GraphQL: API rate limit exceeded")
+    assert limited[0]["retryAfterSeconds"] == 91.0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_without_reported_reset_waits_bounded_default(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    # A secondary rate limit leaves every primary resource with budget left.
+    runner, _calls = _rate_limited_runner(
+        limited_responses=1,
+        rate_limit_payload={
+            "resources": {"graphql": {"limit": 5000, "remaining": 12, "reset": 1}}
+        },
+    )
+
+    result = await preflight_github_access(
+        repository="owner/repo", boundaries={"host": runner}
+    )
+
+    assert result["status"] == "ready"
+    sleep.assert_awaited_once_with(60.0)
+
+
+@pytest.mark.asyncio
+async def test_persistent_rate_limit_is_reported_as_transient_with_original_error(
+    monkeypatch,
+):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.time.time", lambda: 1_000.0
+    )
+    runner, _calls = _rate_limited_runner(
+        limited_responses=100,
+        rate_limit_payload={
+            # A nonsensical far-future reset is still bounded by the window.
+            "resources": {"graphql": {"limit": 5000, "remaining": 0, "reset": 99_999}}
+        },
+    )
+
+    with pytest.raises(MountedToolPreflightError) as raised:
+        await preflight_github_access(
+            repository="owner/repo", boundaries={"host": runner}
+        )
+
+    assert raised.value.code == "github_rate_limited"
+    assert raised.value.transient is True
+    assert "API rate limit exceeded" in str(raised.value)
+    assert sleep.await_count == 2
+    assert all(
+        wait.args[0] <= 3600.0 for wait in sleep.await_args_list
+    ), sleep.await_args_list
 
 
 @pytest.mark.asyncio
@@ -333,6 +436,7 @@ async def test_transient_exhaustion_retains_all_redacted_attempts(monkeypatch):
         )
     assert len(raised.value.evidence["probes"]) == 5
     assert sleep.await_count == 3
+    assert raised.value.transient is True
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(raised.value)
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(raised.value.evidence)
 

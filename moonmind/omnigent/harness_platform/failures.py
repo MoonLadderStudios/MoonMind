@@ -28,6 +28,10 @@ class HarnessPlatformFailure(StrEnum):
     )
     OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN = "OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN"
     OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH = "OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH"
+    # An external service a required capability depends on (for example the
+    # GitHub API under a rate limit) stayed unavailable before any provider
+    # session existed. Nothing ran, so a fresh Step Execution is safe.
+    OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE = "OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE"
     OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT = (
         "OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT"
     )
@@ -88,6 +92,7 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_CAPABILITY_REQUIRED_UNSUPPORTED: "select_compatible_capability",
     HarnessPlatformFailure.OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN: "declare_capability",
     HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH: "remediate_host_capability",
+    HarnessPlatformFailure.OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE: "retry_step_execution",
     HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT: "resolve_binding_set_version",
     HarnessPlatformFailure.OMNIGENT_CREDENTIAL_SLOT_UNBOUND: "bind_required_slot",
     HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE: "select_compatible_provider",

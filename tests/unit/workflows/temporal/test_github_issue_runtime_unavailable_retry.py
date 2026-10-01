@@ -471,6 +471,10 @@ def test_reconstruction_defers_a_candidate_inside_its_backoff_window() -> None:
         "OMNIGENT_HOST_CAPACITY_UNAVAILABLE: no capacity for this allocation",
         "OMNIGENT_HOST_REGISTRATION_TIMEOUT: host never registered",
         "OMNIGENT_GENERIC_REALIZER_NOT_READY: realizer unavailable",
+        "Provider request failed with provider error "
+        "OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE: GitHub preflight failed during "
+        "host repository_access after 3 attempt(s): GraphQL: API rate limit "
+        "exceeded (retryRecommendation: retry_step_execution)",
     ],
 )
 def test_typed_host_provisioning_codes_are_runtime_faults(detail: str) -> None:
