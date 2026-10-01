@@ -668,6 +668,36 @@ async def test_live_host_lease_still_spends_host_capacity(
 
 
 @pytest.mark.asyncio
+async def test_expired_cleanup_pending_lease_still_spends_host_capacity(
+    lease_session_factory,
+) -> None:
+    """Teardown that is owed but unconfirmed still occupies the machine.
+
+    ``cleanup_pending`` means cleanup was claimed and has not been confirmed,
+    so the container may still be running. Expiry releases the *owner's*
+    authority, not the host itself; only ``cleaned`` proves it is gone.
+    """
+
+    await _add_host_lease(
+        lease_session_factory,
+        lease_id="draining",
+        status="cleanup_pending",
+        expires_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+    admission = GenericHostCapacityAdmission(
+        session_factory=lease_session_factory,
+        host_capacity=1,
+        cold_launch_burst=8,
+        cold_launch_window_seconds=30,
+    )
+
+    decision = await admission.evaluate()
+
+    assert decision.active_hosts == 1
+    assert decision.admitted is False
+
+
+@pytest.mark.asyncio
 async def test_host_lease_without_an_expiry_still_spends_host_capacity(
     lease_session_factory,
 ) -> None:

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from moonmind.omnigent.harness_platform.failures import (
@@ -219,6 +219,11 @@ class InMemoryOmnigentHostLeaseRepository:
         existing = self._leases.get(lease_ref)
         if existing is None:
             _conflict("host lease heartbeat authority does not exist")
+        # Expiry is a one-way door. Once the deadline passes this lease stops
+        # spending host capacity, so renewing it would let the previous owner
+        # resume alongside whichever allocation took its slot.
+        if existing.expiresAt is not None and existing.expiresAt <= now:
+            _conflict("host lease heartbeat authority has expired")
         return self._transition(
             lease_ref,
             expected_generation=expected_generation,
@@ -433,6 +438,12 @@ class DbOmnigentHostLeaseRepository:
                 "expires_at": now
                 + timedelta(seconds=int(kwargs.get("ttl_seconds", 900))),
             },
+            # Expiry is a one-way door. Once the deadline passes the lease stops
+            # spending host capacity, so renewing it here would let the previous
+            # owner resume against a host it no longer owns. The guard belongs
+            # in the CAS, not in a prior read: between the read and the update
+            # another allocator may take the freed slot.
+            unexpired_only=True,
         )
 
     async def _db_transition(
@@ -442,18 +453,28 @@ class DbOmnigentHostLeaseRepository:
         expected_generation: int,
         expected_statuses: tuple[str, ...],
         values: dict[str, Any],
+        unexpired_only: bool = False,
     ) -> HostLeaseAuthority:
         from api_service.db.models import OmnigentHostLeaseRecordV2
 
         values = {**values, "heartbeat_at": datetime.now(UTC)}
+        conditions = [
+            OmnigentHostLeaseRecordV2.lease_id == lease_ref,
+            OmnigentHostLeaseRecordV2.generation == expected_generation,
+            OmnigentHostLeaseRecordV2.status.in_(expected_statuses),
+        ]
+        if unexpired_only:
+            observed_at = datetime.now(UTC)
+            conditions.append(
+                or_(
+                    OmnigentHostLeaseRecordV2.expires_at.is_(None),
+                    OmnigentHostLeaseRecordV2.expires_at > observed_at,
+                )
+            )
         async with self._session_factory() as session:
             result = await session.execute(
                 update(OmnigentHostLeaseRecordV2)
-                .where(
-                    OmnigentHostLeaseRecordV2.lease_id == lease_ref,
-                    OmnigentHostLeaseRecordV2.generation == expected_generation,
-                    OmnigentHostLeaseRecordV2.status.in_(expected_statuses),
-                )
+                .where(*conditions)
                 .values(**values)
             )
             if result.rowcount != 1:
