@@ -53,6 +53,24 @@ recreated stack, can verify what an earlier phase saved):
     published, or it refused only because subsystem transforms are not yet
     registered. That refusal is recorded and printed as not published. Any
     other refusal, a deferral, or no observed outcome fails.
+``deployment_history``
+    MoonLadderStudios/MoonMind#4502, before a deployment controller is
+    installed and while the deployment worker is stopped: submit one Settings
+    Operations update, which must be accepted by the transitional workflow
+    updater, cancel it before any updater runs, and wait until Settings
+    Operations lists it as a closed workflow-backed row.
+``controller_ready``
+    After the journey starts the standalone controller: Settings Operations
+    must report it installed and reachable, with no controller operation yet
+    and the workflow-backed history row unchanged.
+``controller``
+    After the dashboard submitted, reloaded, and retried
+    (``tools/single_user_journey_browser.mjs ... controller``): the dashboard's
+    submission and retry were answered by the controller with no workflow,
+    the reload reconnected to the same operation, exactly one controller
+    operation owns the stack, its retry started a fresh attempt group while
+    keeping the first failure, and the workflow-backed history is unchanged
+    with no new workflow-backed update.
 
 Stdlib only: it runs on the CI host, outside the application image.
 """
@@ -90,6 +108,8 @@ CONVERSION_GUARD = re.compile(
     r"reason=(?P<reason>[a-z_]+)"
 )
 PENDING_TRANSFORMS = re.compile(r"lack registered transforms: (?P<names>[a-z_,]+)")
+DEPLOYMENT_STACK = "moonmind"
+DEPLOYMENT_STACK_PATH = f"/api/v1/operations/deployment/stacks/{DEPLOYMENT_STACK}"
 
 
 class JourneyFailure(RuntimeError):
@@ -797,6 +817,235 @@ def vector_free(api: Api, state: dict[str, Any]) -> None:
     log("retired vector submission rejected with no execution created")
 
 
+def _stack_actions(api: Api) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    stack = api.json("GET", DEPLOYMENT_STACK_PATH)
+    actions = stack.get("recentActions") if isinstance(stack, dict) else None
+    if not isinstance(actions, list):
+        raise JourneyFailure(f"Settings Operations stack state is not readable: {stack!r}")
+    return stack, [action for action in actions if isinstance(action, dict)]
+
+
+def _workflow_rows(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [action for action in actions if action.get("owner") != "controller"]
+
+
+def _require_history_unchanged(
+    api: Api, state: dict[str, Any], actions: list[dict[str, Any]]
+) -> None:
+    """The workflow-backed row stays readable history, not a revived engine."""
+
+    history = state.get("deploymentHistory") or {}
+    if not history.get("workflowId"):
+        raise JourneyFailure("no workflow-backed deployment history was recorded")
+    rows = _workflow_rows(actions)
+    urls = sorted(str(row.get("runDetailUrl")) for row in rows)
+    if urls != [history["runDetailUrl"]]:
+        raise JourneyFailure(
+            "Settings Operations lists workflow-backed updates other than the "
+            f"recorded history ({urls}); the controller era created a workflow"
+        )
+    if str(rows[0].get("status")) != history["status"]:
+        raise JourneyFailure(
+            f"workflow-backed history changed from {history['status']} to "
+            f"{rows[0].get('status')}"
+        )
+    _, values = execution_state(describe(api, history["workflowId"]))
+    if not values & (CANCELED | TERMINAL_FAILURE):
+        raise JourneyFailure(
+            f"history workflow {history['workflowId']} is no longer closed: "
+            f"{sorted(values)}"
+        )
+
+
+def deployment_history(
+    api: Api, state: dict[str, Any], *, label: str, timeout: float
+) -> None:
+    """Record one workflow-backed update before a controller is installed.
+
+    The journey stops the deployment worker first, so the transitional
+    updater can accept the request but never run it.
+    """
+
+    targets = api.json(
+        "GET", f"/api/v1/operations/deployment/image-targets?stack={DEPLOYMENT_STACK}"
+    )
+    repositories = targets.get("repositories") if isinstance(targets, dict) else None
+    if not repositories:
+        raise JourneyFailure(f"Settings Operations offers no image target: {targets!r}")
+    repository = str(repositories[0]["repository"])
+    queued = api.json(
+        "POST",
+        "/api/v1/operations/deployment/update",
+        body={
+            "stack": DEPLOYMENT_STACK,
+            "image": {
+                "repository": repository,
+                "reference": f"journey-history-{label}-{uuid.uuid4().hex[:8]}",
+            },
+            "mode": "changed_services",
+            "removeOrphans": True,
+            "wait": True,
+            "runSmokeCheck": False,
+            "pauseWork": False,
+            "pruneOldImages": False,
+            "reason": f"single-user journey {label}: workflow-backed history",
+        },
+        expect=(202,),
+    )
+    workflow_id = str(queued.get("workflowId") or "")
+    if queued.get("owner") != "workflow" or not workflow_id:
+        raise JourneyFailure(
+            "without an installed controller Settings Operations must use the "
+            f"transitional workflow updater: {queued!r}"
+        )
+    api.json(
+        "POST",
+        f"/api/executions/{quote(workflow_id)}/cancel",
+        body={"action": "cancel", "graceful": True},
+        expect=(202,),
+    )
+    deadline = time.monotonic() + timeout
+    row: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        _, values = execution_state(describe(api, workflow_id))
+        if values & COMPLETED:
+            raise JourneyFailure(
+                f"history update {workflow_id} completed although no deployment "
+                "worker was running"
+            )
+        if values & (CANCELED | TERMINAL_FAILURE):
+            _, actions = _stack_actions(api)
+            row = next(
+                (
+                    action
+                    for action in _workflow_rows(actions)
+                    if action.get("runDetailUrl") == f"/workflows/{workflow_id}"
+                ),
+                None,
+            )
+            if row is not None and str(row.get("status") or "") not in {
+                "QUEUED",
+                "RUNNING",
+                "UNKNOWN",
+            }:
+                break
+            row = None
+        time.sleep(3)
+    if row is None:
+        raise JourneyFailure(
+            f"Settings Operations never listed {workflow_id} as a closed "
+            f"workflow-backed update within {timeout:.0f}s"
+        )
+    state["deploymentHistory"] = {
+        "workflowId": workflow_id,
+        "status": str(row["status"]),
+        "runDetailUrl": str(row["runDetailUrl"]),
+    }
+    # The dashboard later submits this unpublished tag to the controller.
+    state["controller"] = {
+        "repository": repository,
+        "reference": f"journey-controller-{label}-{uuid.uuid4().hex[:8]}",
+    }
+    log(f"workflow-backed history {workflow_id} recorded as {row['status']}")
+
+
+def controller_ready(api: Api, state: dict[str, Any], *, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    controller: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        stack, actions = _stack_actions(api)
+        controller = stack.get("controller") or {}
+        if controller.get("installed") and controller.get("reachable"):
+            if any(action.get("owner") == "controller" for action in actions):
+                raise JourneyFailure(
+                    "the controller already owns an operation before the "
+                    "dashboard submitted one"
+                )
+            _require_history_unchanged(api, state, actions)
+            log("Settings Operations reaches the installed controller")
+            return
+        time.sleep(3)
+    raise JourneyFailure(
+        "Settings Operations never reported the installed controller as "
+        f"reachable: {controller!r}"
+    )
+
+
+def _require_controller_answer(name: str, answer: Any, operation_id: str) -> None:
+    if not isinstance(answer, dict) or answer.get("owner") != "controller":
+        raise JourneyFailure(f"the dashboard {name} was not answered by the controller: {answer!r}")
+    if answer.get("operationId") != operation_id:
+        raise JourneyFailure(
+            f"the dashboard {name} named operation {answer.get('operationId')!r}, "
+            f"not {operation_id!r}"
+        )
+    if answer.get("workflowId") or answer.get("taskId"):
+        raise JourneyFailure(
+            f"the dashboard {name} created workflow {answer.get('workflowId')!r} "
+            "for a controller operation"
+        )
+
+
+def controller(api: Api, state: dict[str, Any]) -> None:
+    """Confirm the dashboard journey left one controller-owned operation."""
+
+    record = state.get("controller") or {}
+    operation_id = str(record.get("operationId") or "")
+    if not operation_id.startswith("ui-"):
+        raise JourneyFailure(
+            f"the dashboard recorded no Settings Operations controller operation: {record!r}"
+        )
+    _require_controller_answer("submission", record.get("submission"), operation_id)
+    _require_controller_answer("retry", record.get("retry"), operation_id)
+    if record.get("reloadedOperationId") != operation_id:
+        raise JourneyFailure(
+            f"the dashboard reload did not reconnect to operation {operation_id}"
+        )
+    if record.get("dashboardSubmissions") != 1:
+        raise JourneyFailure(
+            f"the dashboard submitted {record.get('dashboardSubmissions')} updates; "
+            "reconnecting must not submit again"
+        )
+    stack, actions = _stack_actions(api)
+    controller_state = stack.get("controller") or {}
+    if not (controller_state.get("installed") and controller_state.get("reachable")):
+        raise JourneyFailure(f"the controller is no longer reachable: {controller_state!r}")
+    owned = [action for action in actions if action.get("owner") == "controller"]
+    if [action.get("operationId") for action in owned] != [operation_id]:
+        raise JourneyFailure(
+            "expected one mutation owner, the dashboard's operation "
+            f"{operation_id}; the controller lists "
+            f"{[action.get('operationId') for action in owned]}"
+        )
+    operation = owned[0]
+    requested = f"{record['repository']}:{record['reference']}"
+    if operation.get("requestedImage") != requested:
+        raise JourneyFailure(
+            f"operation {operation_id} targets {operation.get('requestedImage')!r}, "
+            f"not the dashboard's {requested!r}"
+        )
+    if operation.get("status") != "FAILED" or operation.get("installedImage"):
+        raise JourneyFailure(
+            f"operation {operation_id} reports {operation.get('status')} with "
+            f"installed {operation.get('installedImage')!r}; a controller without "
+            "Docker cannot have installed anything"
+        )
+    if not str(operation.get("errorSummary") or "").startswith("attempt 1:"):
+        raise JourneyFailure(
+            f"the retry lost the first failure: {operation.get('errorSummary')!r}"
+        )
+    if int(operation.get("attemptGroup") or 0) < 2:
+        raise JourneyFailure(
+            f"the retry of {operation_id} started no fresh attempt group "
+            f"(attempt group {operation.get('attemptGroup')!r})"
+        )
+    _require_history_unchanged(api, state, actions)
+    log(
+        f"controller operation {operation_id} is the only mutation owner; retry "
+        "kept the first failure and history is unchanged"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -809,6 +1058,9 @@ def main(argv: list[str] | None = None) -> int:
             "release",
             "vector_free",
             "conversion",
+            "deployment_history",
+            "controller_ready",
+            "controller",
         ),
     )
     parser.add_argument("--api-base", required=True)
@@ -821,7 +1073,8 @@ def main(argv: list[str] | None = None) -> int:
 
     api = Api(args.api_base)
     state: dict[str, Any] = {}
-    if args.phase != "populate":
+    # These phases start a journey's state; every later phase reads it.
+    if args.phase not in {"populate", "deployment_history"}:
         state = json.loads(args.state_file.read_text())
     try:
         if args.phase == "populate":
@@ -844,6 +1097,12 @@ def main(argv: list[str] | None = None) -> int:
             verify(api, state)
         elif args.phase == "vector_free":
             vector_free(api, state)
+        elif args.phase == "deployment_history":
+            deployment_history(api, state, label=args.label, timeout=args.timeout)
+        elif args.phase == "controller_ready":
+            controller_ready(api, state, timeout=args.timeout)
+        elif args.phase == "controller":
+            controller(api, state)
         else:
             release(api, state)
     except JourneyFailure as exc:

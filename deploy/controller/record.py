@@ -12,6 +12,7 @@ group with prior diagnostics retained. Reporting or cleanup failures are
 recorded alongside the result and can never erase a confirmed installation
 or hide failed mandatory verification.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -140,17 +141,27 @@ class OperationStore:
         source_revision: str,
         reason: str = "",
         target: Mapping[str, Any] | None = None,
+        operation_id: str | None = None,
     ) -> dict:
         """Start an operation, reattaching to an open one for the same target.
 
-        A lost acknowledgment must not fork a duplicate writer: when an
-        unfinished operation already targets the same concrete image, the
-        caller reattaches to it instead of launching a competing apply.
-        When no unfinished operation targets the image but a completed
-        (succeeded or partially verified) one does, the caller reattaches
-        to that recorded success so a retried submission observes the
-        terminal result instead of repeating the Compose mutation.
+        A lost acknowledgment must not fork a duplicate writer: a caller that
+        supplies its own ``operation_id`` reattaches to that record whatever
+        its status, so resubmitting after a timeout observes the original
+        operation instead of starting another. When an unfinished operation
+        already targets the same concrete image, the caller reattaches to it
+        instead of launching a competing apply. When no unfinished operation
+        targets the image but a completed (succeeded or partially verified)
+        one does, the caller reattaches to that recorded success so a
+        retried submission observes the terminal result instead of
+        repeating the Compose mutation.
         """
+        if operation_id is not None:
+            check_operation_id(operation_id)
+            try:
+                return self.load(operation_id)
+            except KeyError:
+                pass
         for operation in self.list_open(stack=stack):
             if operation.get("desired", {}).get("image") == desired_image:
                 return operation
@@ -158,7 +169,7 @@ class OperationStore:
         if completed is not None:
             return completed
         operation = {
-            "operationId": str(uuid.uuid4()),
+            "operationId": operation_id or str(uuid.uuid4()),
             "stack": stack,
             "status": "pending",
             "desired": {
@@ -177,9 +188,10 @@ class OperationStore:
             "createdAt": _utc_now(),
             "updatedAt": _utc_now(),
         }
-        # Creation is the one path that builds a filename, and its id is
-        # generated in-process (never caller-supplied), so no tainted
-        # string reaches path construction here either.
+        # Creation is the one path that builds a filename. Its id is either
+        # generated in-process or a caller id already validated against the
+        # safe alphabet above (no separators), so it cannot escape the
+        # operations directory.
         return self._save(
             self.operations_dir / f"{operation['operationId']}.json", operation
         )
@@ -298,8 +310,19 @@ class OperationStore:
         return self._write(operation)
 
     def begin_retry(self, operation_id: str) -> dict:
-        """Start a fresh bounded attempt group; prior diagnostics are kept."""
+        """Start a fresh bounded attempt group for a failed operation.
+
+        Only ``failed`` is retryable: succeeded/partially verified records
+        already installed their image, open ones are owned by a writer or
+        restart recovery, and superseded ones are stale intent that must
+        never be recreated over a newer target. Prior diagnostics are kept.
+        """
         operation = self.load(operation_id)
+        if operation.get("status") != "failed":
+            raise RuntimeError(
+                f"Only a failed operation can be retried (status "
+                f"{operation.get('status')!r}); submit a new operation instead."
+            )
         if operation.get("attemptGroup", 1) >= MAX_ATTEMPT_GROUPS:
             raise RuntimeError(
                 "Retry budget exhausted for this operation; start a new "
@@ -308,6 +331,20 @@ class OperationStore:
         operation["attemptGroup"] = operation.get("attemptGroup", 1) + 1
         operation["autoAttemptsExhausted"] = False
         operation["status"] = "pending"
+        return self._write(operation)
+
+    def record_omnigent_step(self, operation_id: str, phase: str | None) -> dict:
+        """Identify the one-off this kernel-owned controller is awaiting."""
+        operation = self.load(operation_id)
+        operation["omnigentStep"] = phase
+        return self._write(operation)
+
+    def record_omnigent_selection(
+        self, operation_id: str, selection: Mapping[str, Any]
+    ) -> dict:
+        """Keep the selected revision across apply retries and restarts."""
+        operation = self.load(operation_id)
+        operation["omnigentSelection"] = dict(selection)
         return self._write(operation)
 
     def confirm_installed(self, operation_id: str, *, image: str) -> dict:
