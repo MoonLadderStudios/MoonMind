@@ -479,8 +479,25 @@ def recovery_disposition_evidence(*, agent_started: bool, remaining: int, runtim
     }
 
 
+#: Comparison verdicts kept across sweeps; oldest are dropped beyond this.
+MAX_COMPARE_VERDICTS = 500
+
+
+def _remember_compare_verdict(verdicts, key, *, contained, etag):
+    verdicts.pop(key, None)
+    verdicts[key] = {"contained": contained, "etag": etag}
+    for stale in list(verdicts)[: max(0, len(verdicts) - MAX_COMPARE_VERDICTS)]:
+        verdicts.pop(stale, None)
+
+
 async def _runtime_no_work(
-    store, agents, receipt, service, *, undispatched_agents=frozenset()
+    store,
+    agents,
+    receipt,
+    service,
+    *,
+    undispatched_agents=frozenset(),
+    compare_verdicts=None,
 ):
     from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
 
@@ -535,7 +552,9 @@ async def _runtime_no_work(
         ):
             raise ValueError("saved_work_requires_recovery")
         # A stopped clean checkout can still contain unique commits. Re-read
-        # GitHub on every sweep so outage recovery needs no host or agent turn.
+        # GitHub on every sweep so outage recovery needs no host or agent turn,
+        # as a conditional request: GitHub does not count a 304 against the
+        # shared rate limit, and it means the stored verdict still holds.
         head = proof["headSha"]
         base = proof.get("baseBranch")
         if (
@@ -544,22 +563,40 @@ async def _runtime_no_work(
             or not base
         ):
             raise ValueError("saved_work_requires_recovery")
+        verdict_key = f"{_repository_identity(receipt.repository)}:{head}...{base}"
+        known = (compare_verdicts or {}).get(verdict_key)
+        if not isinstance(known, dict):
+            known = {}
         token, _ = await service.resolve_github_token(repo=receipt.repository)
         if not token:
             raise ValueError("remote_preservation_unavailable")
+        headers = service._github_headers(token)
+        if known.get("etag"):
+            headers = {**headers, "If-None-Match": known["etag"]}
         async with httpx.AsyncClient(timeout=20) as http:
             response = await http.get(
                 f"https://api.github.com/repos/{receipt.repository}/compare/{head}...{quote(base, safe='')}",
                 params={"per_page": 1},
-                headers=service._github_headers(token),
+                headers=headers,
             )
-            response.raise_for_status()
-            compared = response.json()
-        if (
-            compared.get("status") not in {"identical", "ahead"}
-            or (compared.get("base_commit") or {}).get("sha") != head
-            or (compared.get("merge_base_commit") or {}).get("sha") != head
-        ):
+            if response.status_code == 304 and known:
+                contained = known.get("contained") is True
+            else:
+                response.raise_for_status()
+                compared = response.json()
+                contained = (
+                    compared.get("status") in {"identical", "ahead"}
+                    and (compared.get("base_commit") or {}).get("sha") == head
+                    and (compared.get("merge_base_commit") or {}).get("sha") == head
+                )
+                if compare_verdicts is not None:
+                    _remember_compare_verdict(
+                        compare_verdicts,
+                        verdict_key,
+                        contained=contained,
+                        etag=response.headers.get("ETag", ""),
+                    )
+        if not contained:
             raise ValueError("saved_work_requires_recovery")
         checkpoints.append(saved["checkpointRef"])
     uncovered = agents - covered
@@ -700,6 +737,7 @@ async def reconcile_local_claims(
                     receipt,
                     service,
                     undispatched_agents=undispatched_agents,
+                    compare_verdicts=state.setdefault("compareVerdicts", {}),
                 )
                 # ``_runtime_no_work`` returns a checkpoint for every started
                 # agent that had a provider session or workspace and raises for
