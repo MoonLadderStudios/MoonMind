@@ -842,6 +842,34 @@ def test_release_drift_family_change_fences_with_explicit_revision():
     assert "explicitly" in str(exc.value)
 
 
+def test_release_pins_codex_policies_to_the_shared_tool_owning_host():
+    """Codex policies follow the shared host, never the upstream host image."""
+    from moonmind.workflows.skills.omnigent_release import (
+        release_policy_drift_dispositions,
+    )
+
+    upstream = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "d" * 64
+    target = {"server": NEW_SERVER, "codex": upstream, "shared": NEW_HOST}
+
+    dispositions = release_policy_drift_dispositions(
+        {
+            policy_id: upstream
+            for policy_id in ("omnigent-codex", "codex-static", "codex-on-demand")
+        },
+        target,
+    )
+
+    assert {item["policyRef"] for item in dispositions} == {
+        "omnigent-codex",
+        "codex-static",
+        "codex-on-demand",
+    }
+    assert {item["selectedHostImageRef"] for item in dispositions} == {NEW_HOST}
+    assert (
+        release_policy_drift_dispositions({"codex-on-demand": NEW_HOST}, target) == []
+    )
+
+
 def test_release_drift_absent_when_aligned():
     from moonmind.workflows.skills.omnigent_release import (
         raise_for_release_policy_drift,

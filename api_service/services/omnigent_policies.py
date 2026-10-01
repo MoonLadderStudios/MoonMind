@@ -91,7 +91,7 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="codex-native",
         agent_identities=(CODEX_STOCK_AGENT_NAME,),
         compatible_providers=("codex",),
-        host_image_kind="codex",
+        host_image_kind="shared",
     ),
     _BootstrapPolicyDefinition(
         policy_id="codex-static",
@@ -101,7 +101,7 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="codex-native",
         agent_identities=(CODEX_STOCK_AGENT_NAME,),
         compatible_providers=("codex",),
-        host_image_kind="codex",
+        host_image_kind="shared",
     ),
     _BootstrapPolicyDefinition(
         policy_id="codex-on-demand",
@@ -111,7 +111,7 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="codex-native",
         agent_identities=(CODEX_STOCK_AGENT_NAME,),
         compatible_providers=("codex",),
-        host_image_kind="codex",
+        host_image_kind="shared",
     ),
     _BootstrapPolicyDefinition(
         policy_id="claude-on-demand",
@@ -1094,19 +1094,18 @@ async def resolve_bootstrap_image_refs(
     *,
     env: Mapping[str, str] | None = None,
     image_resolver: ImageResolver = resolve_bootstrap_image_ref,
-) -> tuple[str | None, str | None, str | None]:
-    server_input, host_input = configured_bootstrap_image_refs(env)
+) -> tuple[str | None, str | None]:
+    server_input, _legacy_host_input = configured_bootstrap_image_refs(env)
     opencode_host_input = configured_opencode_bootstrap_image_ref(env)
-    server_image, host_image, opencode_host_image = await asyncio.gather(
+    server_image, opencode_host_image = await asyncio.gather(
         image_resolver(server_input),
-        image_resolver(host_input),
         (
             image_resolver(opencode_host_input)
             if opencode_support_enabled(env=env)
             else asyncio.sleep(0, result=None)
         ),
     )
-    return server_image, host_image, opencode_host_image
+    return server_image, opencode_host_image
 
 
 def resolved_shared_bootstrap_image_ref(
@@ -1729,12 +1728,16 @@ async def seed_bootstrap_policies(
             reconciliation_required = True
             break
     seeded: list[str] = []
-    server_image, host_image, opencode_host_image = await resolve_bootstrap_image_refs(
+    server_image, opencode_host_image = await resolve_bootstrap_image_refs(
         env=env, image_resolver=image_resolver
     )
-    host_images = {"codex": host_image, "opencode": opencode_host_image}
-    if generic_claude_qualified(env=env):
-        host_images["shared"] = resolved_shared_bootstrap_image_ref(env)
+    # Codex and Claude launch the shared host image: it owns the MoonMind tools
+    # (``/opt/moonmind-tools``) that host launches require, which the upstream
+    # ``omnigent-host`` image does not carry.
+    host_images = {
+        "shared": resolved_shared_bootstrap_image_ref(env),
+        "opencode": opencode_host_image,
+    }
     resolvable_definitions = tuple(
         definition
         for definition in definitions
