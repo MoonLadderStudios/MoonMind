@@ -82,7 +82,9 @@ steady-state interval and failure threshold.
 `release.inspect` is registered on every affected worker queue and verifies the
 installed content digest. Startup promotion waits for Temporal to register all
 candidate queues. Then, before routing moves, it admits a pinned cross-queue
-canary on every Activity queue the target registered. After promotion, ordinary
+canary on every Activity queue the target registered. It re-reads the
+registrations after each canary, so a fleet that registers during the check is
+also covered. After promotion, ordinary
 verification checks each workflow queue against its own worker only. Work that
 was waiting now reaches the target fleets. That includes a deployment update's
 own supervising Activity on the single-slot deployment-control fleet, which

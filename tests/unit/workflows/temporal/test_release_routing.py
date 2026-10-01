@@ -712,21 +712,34 @@ async def test_startup_does_not_wait_on_update_holding_singleton_fleet(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("current", ["old", "__unversioned__"])
+@pytest.mark.parametrize("registers", ["before_startup", "during_qualification"])
 async def test_pinned_canary_qualifies_every_target_activity_queue(
-    monkeypatch, current
+    monkeypatch, current, registers
 ):
     """Cross-fleet identity is proven before routing moves.
 
-    Ordinary verification proves unpinned workflow routing on each workflow
-    queue against its own worker, so the pinned canary must cover every
-    Activity queue the target registered: on first routing, and on
-    stewardship even when the outgoing route never served that queue (a
-    fleet added by this release).
+    Ordinary verification checks each workflow queue only against its own
+    worker. Pinned qualification must therefore cover every Activity queue
+    the target registered by the time routing moves. That holds on first
+    routing and on stewardship, for a fleet this release adds that the
+    outgoing route never served, and for one that starts alongside this fleet
+    and registers while qualification is already running. The first,
+    deterministically named canary keeps the caller's queue set, so reusing
+    its run never vouches for queues it did not inspect.
     """
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
     _use_fake_clock(monkeypatch)
     added = ("mm.activity.llm", TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY)
-    server, _old, new = _release_pair(_WORKFLOW_QUEUE, _WORKFLOW_QUEUE | {added})
+    if registers == "before_startup":
+        server, _old, new = _release_pair(_WORKFLOW_QUEUE, _WORKFLOW_QUEUE | {added})
+    else:
+        server, _old, new = _release_pair(_WORKFLOW_QUEUE, _WORKFLOW_QUEUE)
+
+        def _fleet_registers():
+            server.versions[new]["queues"].add(added)
+            server.on_canary_start = None
+
+        server.on_canary_start = _fleet_registers
     if current != "old":
         server.current = current
 
@@ -734,9 +747,12 @@ async def test_pinned_canary_qualifies_every_target_activity_queue(
 
     assert result == {"status": "current", "currentVersion": new}
     pinned = [entry for entry in server.canary_log if entry["pinned"]]
-    assert len(pinned) == 1
-    assert pinned[0]["currentAtStart"] != new
-    assert pinned[0]["taskQueues"] == ["mm.activity.llm", "mm.workflow.user.v2"]
+    assert all(entry["currentAtStart"] != new for entry in pinned)
+    assert pinned[0]["taskQueues"] == ["mm.workflow.user.v2"]
+    assert sorted(queue for entry in pinned for queue in entry["taskQueues"]) == [
+        "mm.activity.llm",
+        "mm.workflow.user.v2",
+    ]
     ordinary = [entry for entry in server.canary_log if not entry["pinned"]]
     assert [entry["taskQueues"] for entry in ordinary] == [["mm.workflow.user.v2"]]
 
