@@ -1202,6 +1202,8 @@ class DockerContainerJobBackend:
                     try:
                         await self._write_projection(request)
                     except Exception:
+                        # A stale live projection is auxiliary; it must never
+                        # interrupt or reclassify the pull itself.
                         pass
 
         async def on_output(stream: str, line: bytes) -> None:

@@ -66,7 +66,7 @@ async def test_runtime_command_streams_redacted_progress_before_exit_and_cancell
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.wait_for(task, timeout=5)
 
 
 @pytest.mark.asyncio
@@ -81,3 +81,26 @@ async def test_runtime_command_diagnostic_failure_does_not_mask_command_result()
         on_output=on_output,
     )
     assert (code, stdout, stderr) == (3, b"progress\n", b"")
+
+
+@pytest.mark.asyncio
+async def test_runtime_command_streamed_output_retains_terminal_error_tail() -> None:
+    async def on_output(_stream: str, _line: bytes) -> None:
+        return None
+
+    code, _stdout, stderr = await run_runtime_command(
+        (
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "for i in range(200): print('progress line', i, file=sys.stderr)\n"
+            "print('Error: pull access denied for example', file=sys.stderr)\n"
+            "sys.exit(1)",
+        ),
+        on_output=on_output,
+        output_limit_bytes=256,
+    )
+
+    assert code == 1
+    assert len(stderr) <= 256
+    assert stderr.endswith(b"Error: pull access denied for example\n")

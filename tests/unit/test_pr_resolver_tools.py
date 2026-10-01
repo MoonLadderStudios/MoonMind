@@ -194,6 +194,90 @@ def test_snapshot_reconciles_current_head_legacy_statuses(
     )
 
 
+def _run_snapshot_with_head_evidence(
+    module, monkeypatch, tmp_path, *, check_runs, statuses, required
+) -> dict:
+    main = module["main"]
+    globals_ = main.__globals__
+    pr = {
+        "number": 2776,
+        "url": "https://github.com/owner/repo/pull/2776",
+        "state": "OPEN",
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "UNSTABLE",
+        "headRefOid": "current-head",
+        "baseRefName": "main",
+        "statusCheckRollup": [],
+    }
+
+    def read_api(command, *args):
+        endpoint = " ".join(command)
+        if "/check-runs" in endpoint:
+            return {"check_runs": check_runs}
+        if "/statuses" in endpoint:
+            return statuses
+        if "/branches/main/protection" in endpoint:
+            return {"required_status_checks": {"contexts": required}}
+        if "/rules/branches/main" in endpoint:
+            return []
+        if "/branches/main" in endpoint:
+            return {"protected": required != []}
+        return None
+
+    monkeypatch.setitem(globals_, "fetch_pr_data", lambda _: (pr, "2776", []))
+    monkeypatch.setitem(globals_, "run_command_optional", read_api)
+    monkeypatch.setitem(globals_, "run_command", lambda *args: {"comments": []})
+    monkeypatch.setitem(globals_, "_fetch_previous_commit_sha", lambda **kwargs: None)
+    path = tmp_path / "snapshot.json"
+    monkeypatch.setattr(
+        "sys.argv", ["snapshot", "--pr", "2776", "--snapshot-path", str(path)]
+    )
+    main()
+    return json.loads(path.read_text())["ci"]
+
+
+def test_snapshot_treats_advisory_only_statuses_on_unprotected_branch_as_clean(
+    pr_resolve_snapshot_module, monkeypatch, tmp_path
+):
+    ci = _run_snapshot_with_head_evidence(
+        pr_resolve_snapshot_module,
+        monkeypatch,
+        tmp_path,
+        check_runs=[],
+        statuses=[{"context": "GitBook", "state": "success"}],
+        required=[],
+    )
+
+    assert ci["signalQuality"] == "ok"
+    assert ci["hasFailures"] is False
+    assert ci["degradedReasons"] == []
+    assert ci["advisoryStatuses"][0]["context"] == "GitBook"
+
+
+def test_snapshot_failing_gating_status_is_never_infrastructure_only(
+    pr_resolve_snapshot_module, monkeypatch, tmp_path
+):
+    globals_ = pr_resolve_snapshot_module["main"].__globals__
+    monkeypatch.setitem(
+        globals_,
+        "summarize_ci_infrastructure",
+        lambda *args, **kwargs: {"infrastructureOnly": True},
+    )
+    ci = _run_snapshot_with_head_evidence(
+        pr_resolve_snapshot_module,
+        monkeypatch,
+        tmp_path,
+        check_runs=[
+            {"id": 1, "name": "Unit", "status": "completed", "conclusion": "failure"}
+        ],
+        statuses=[{"context": "GitBook", "state": "failure"}],
+        required=["GitBook", "Unit"],
+    )
+
+    assert ci["hasAuthoritativeFailures"] is True
+    assert ci["infrastructureOnly"] is False
+
+
 def test_unprotected_branch_supplies_required_check_policy_without_protection_api(
     pr_resolve_snapshot_module, monkeypatch
 ):
