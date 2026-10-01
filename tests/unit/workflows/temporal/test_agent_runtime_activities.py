@@ -7827,6 +7827,7 @@ async def test_launch_session_authenticates_as_the_selected_connection_among_sev
 ) -> None:
     from tests.helpers.repository_connections import (
         github_pat_connection,
+        github_repository_assignment,
         record_repository_connections,
     )
 
@@ -7839,6 +7840,11 @@ async def test_launch_session_authenticates_as_the_selected_connection_among_sev
         tmp_path,
         github_pat_connection("repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"),
         github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        assignments=[
+            github_repository_assignment(
+                "repository-connection:team-b", "MoonLadderStudios/private-repo"
+            )
+        ],
     )
     workspace_root = tmp_path / "agent_jobs"
     host = _RecordingSessionHost()
@@ -7878,6 +7884,7 @@ async def test_launch_session_stops_with_the_correction_when_the_selected_source
 ) -> None:
     from tests.helpers.repository_connections import (
         github_pat_connection,
+        github_repository_assignment,
         record_repository_connections,
     )
 
@@ -7890,6 +7897,11 @@ async def test_launch_session_stops_with_the_correction_when_the_selected_source
         tmp_path,
         github_pat_connection("repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"),
         github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        assignments=[
+            github_repository_assignment(
+                "repository-connection:team-b", "MoonLadderStudios/private-repo"
+            )
+        ],
     )
     workspace_root = tmp_path / "agent_jobs"
     host = _RecordingSessionHost()

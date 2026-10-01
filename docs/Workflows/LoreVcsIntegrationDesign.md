@@ -289,7 +289,7 @@ MoonMind selects a deployment-owned connection with the well-known id:
 repository-connection:git-default
 ```
 
-A recorded `repository-connection:git-default` is authoritative. The upgrade migration for MoonLadderStudios/MoonMind#4023 records it with a typed `secret_ref` credential naming the legacy GitHub source the deployment actually used, so no operator has to create the record by hand. While none is recorded, the default derives from the deployment's GitHub declaration (`credential.source = "github_resolver"`); startup does not persist an always-on alias. A recorded connection whose credential fails stays failed rather than falling back to another token.
+A recorded `repository-connection:git-default` is authoritative. The upgrade migration for MoonLadderStudios/MoonMind#4023 records it with a typed `secret_ref` credential naming the legacy GitHub source the deployment actually used, so no operator has to create the record by hand. While none is recorded, the default derives from the deployment's GitHub declaration (`credential.source = "github_resolver"`) in the precedence the migration records: a configured GitHub token or SecretRef, then an active `GITHUB_TOKEN` or `GITHUB_PAT` managed secret, so a token saved in Settings after the migration still applies. Startup does not persist an always-on alias. A recorded connection whose credential fails stays failed rather than falling back to another token. A recorded connection other than the default authorizes a launch only for a repository with a verified assignment, and only for that assignment's operations; the default maps the deployment's pre-assignment credential and needs none.
 
 The common GitHub authoring path therefore remains low ceremony:
 
