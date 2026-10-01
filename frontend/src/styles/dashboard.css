@@ -10855,13 +10855,13 @@ button.workflow-workspace-sidebar-row:active {
   padding: 0;
 }
 
-/* Tier Duplicate/Remove live in their own wrapping action area, not inside
- * the legend competing with the tier name and default badge. */
+/* Tier Duplicate/Remove live in their own wrapping action area beside the
+ * default-tier choice, not inside the legend competing with the tier name and
+ * default badge. */
 .tier-card__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;
-  margin-block: 0.5rem 0.25rem;
 }
 
 /* Enrollment, confirmation, and tier dialogs stay viewport-bounded with

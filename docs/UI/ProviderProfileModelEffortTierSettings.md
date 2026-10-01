@@ -281,7 +281,8 @@ The row keeps its `Edit tiers` action so a user with write permission can reach 
 ```text
 ┌ Model & effort tiers ───────────────────────────────────────────────────────┐
 │ Map workflow tier requests to a model and effort for this profile.         │
-│ 3 tiers · Default: Tier 2                              [+ Add tier]          │
+│ Future launches use the saved policy. Historical runs keep their record.   │
+│ 3 tiers · Default: Tier 2                                                  │
 │                                                                            │
 │  ●  Tier 1  Plan and verify                                                │
 │  │  [○ Use as default]                                      [Remove tier]  │
@@ -292,8 +293,8 @@ The row keeps its `Edit tiers` action so a user with write permission can reach 
 │  ●  Tier 2  Implementation                              [Default]           │
 │  │  [● Default tier]                                       [Remove tier]  │
 │  │  Model [gpt-5.5                         ▾]                               │
-│  │  Effort level [xhigh                   ▾]                               │
-│  │  Resolves to gpt-5.5 · xhigh                                           │
+│  │  Effort level [max                     ▾]                               │
+│  │  Resolves to gpt-5.5 · max                                             │
 │  │                                                                         │
 │  ●  Tier 3  Documentation audit                                           │
 │     [○ Use as default]                                      [Remove tier]  │
@@ -301,7 +302,6 @@ The row keeps its `Edit tiers` action so a user with write permission can reach 
 │     Effort level [xhigh                    ▾]                              │
 │                                                                            │
 │ [+ Add tier]                                                               │
-│ Future launches use the saved policy. Historical runs keep their record.   │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -317,7 +317,7 @@ The section follows the Dashboard Design System:
 - the default tier uses restrained violet emphasis,
 - warning states use amber,
 - destructive confirmation uses rose,
-- `Add tier` uses the normal create or commit action treatment, and
+- `Add tier` is a single full-width add action after the stack, and
 - decorative glass is not used inside the tier stack.
 
 ### 7.3 Section header
@@ -328,10 +328,9 @@ The header contains:
 - a one-sentence explanation,
 - tier count,
 - default tier summary,
-- capability loading or warning state when relevant, and
-- a primary `Add tier` button.
+- capability loading or warning state when relevant.
 
-A second full-width `Add tier` action appears after the final card. This makes adding easy after the user reviews the current stack.
+The header carries no actions. The section has exactly one `Add tier` action: a full-width button after the final card, where the appended tier appears. Each card puts its default-tier choice and its `Duplicate tier` / `Remove tier` actions on one wrapping row.
 
 ---
 
@@ -424,7 +423,7 @@ The control shape comes from backend capabilities:
 | Unsupported | Disabled field reading `Not supported by this runtime` |
 | Capability unavailable | Preserve current value and show catalog warning |
 
-A supported effort control always includes `Runtime default` as the null option.
+A supported effort control always includes `Runtime default` as the null option. Options are listed in ascending order of effort; the default catalog offers `low`, `medium`, `high`, `xhigh`, and `max`, with `max` above `xhigh`. While capabilities are unavailable, the editor offers the same values as a fallback and shows a saved value outside them only once, as custom or unavailable.
 
 When effort support depends on the selected model, changing the model refreshes the compatible effort choices. The UI does not silently clear an incompatible effort. It marks the field and asks the user to choose a valid value.
 
@@ -484,7 +483,7 @@ stacked label/model/effort fields.
 
 ## 9. Add Tier Behavior
 
-The primary `Add tier` action appends one tier. Appending preserves every existing tier number.
+The `Add tier` action appends one tier. Appending preserves every existing tier number.
 
 Default new tier:
 
@@ -704,7 +703,8 @@ Illustrative response:
       {"value": "low", "label": "Low", "status": "available", "compatible_models": null},
       {"value": "medium", "label": "Medium", "status": "available", "compatible_models": null},
       {"value": "high", "label": "High", "status": "available", "compatible_models": null},
-      {"value": "xhigh", "label": "Extra high", "status": "available", "compatible_models": null}
+      {"value": "xhigh", "label": "Extra high", "status": "available", "compatible_models": null},
+      {"value": "max", "label": "Max", "status": "available", "compatible_models": null}
     ]
   },
   "diagnostics": []
@@ -1075,11 +1075,11 @@ Rules:
 3. Use full-width controls.
 4. Do not use horizontal scrolling for the tier editor.
 5. Keep destructive actions labeled with text.
-6. The bottom `Add tier` action remains full width.
+6. The single `Add tier` action after the final card remains full width.
 
 Mobile implementation note (MoonMind#4559): tier legends hold the group
 name only — `Duplicate tier` / `Remove tier` live in a separate wrapping
-action area below the heading so long labels no longer compete with actions
+action area below the heading, beside the default-tier choice, so long labels no longer compete with actions
 inside the legend. The ordered list drops its indentation on phones
 (`margin: 0; padding: 0; list-style: none` at `max-width: 720px`), tier
 fieldsets opt out of the intrinsic `min-inline-size: min-content` minimum,

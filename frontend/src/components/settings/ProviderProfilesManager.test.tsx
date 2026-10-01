@@ -2563,11 +2563,56 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     expect(screen.getByLabelText('Default tier')).toBeTruthy();
   });
 
+  it('offers one Add tier action after the ordered tier list', () => {
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const addButton = screen.getByRole('button', { name: 'Add tier' });
+    const tierList = screen.getByRole('list', { name: 'Model and effort tiers' });
+    expect(tierList.compareDocumentPosition(addButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByText(/Future launches use the saved policy/)).toHaveLength(1);
+  });
+
+  it('offers a max effort above xhigh when capabilities are unavailable', () => {
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const effort = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
+    expect(Array.from(effort.options).map((o) => o.value)).toEqual(['__runtime_default__', 'low', 'medium', 'high', 'xhigh', 'max']);
+    fireEvent.change(effort, { target: { value: 'max' } });
+    expect(effort.value).toBe('max');
+    expect(screen.getByText('Resolves to gpt-5.5 · max')).toBeTruthy();
+  });
+
+  it('offers backend-advertised Max above Extra high and saves it', async () => {
+    const effortOptions = [
+      { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'high', label: 'High' },
+      { value: 'xhigh', label: 'Extra high' },
+      { value: 'max', label: 'Max' },
+    ].map((o) => ({ ...o, description: null, status: 'available', compatible_models: null }));
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return { ok: true, json: async () => ({ version: 'tier-cap-v1-max', profile_id: tierProfile.profile_id, runtime_id: tierProfile.runtime_id, provider_id: tierProfile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: false }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }, { value: 'gpt-5.3', label: 'GPT-5.3', description: null, status: 'available' }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: effortOptions }, diagnostics: [] }) } as Response;
+      }
+      return { ok: true, json: async () => tierProfile } as Response;
+    });
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const effort = screen.getByLabelText('Tier 3 effort') as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(effort.options).map((o) => o.textContent)).toEqual(['Runtime default — medium', 'Low', 'Medium', 'High', 'Extra high', 'Max']));
+    fireEvent.change(effort, { target: { value: 'max' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => String((init as RequestInit | undefined)?.body ?? '').includes('model_tiers'))).toBe(true));
+    const saveCall = fetchSpy.mock.calls.find(([, init]) => String((init as RequestInit | undefined)?.body ?? '').includes('model_tiers'));
+    const payload = JSON.parse(String((saveCall?.[1] as RequestInit).body));
+    expect(payload.model_tiers.map((tier: { effort: string | null }) => tier.effort)).toEqual(['medium', 'xhigh', 'max']);
+  });
+
   it('can append and duplicate tiers without renumbering existing tiers', async () => {
     renderProviderProfilesManager([tierProfile]);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    const addButtons = screen.getAllByRole('button', { name: 'Add tier' });
-    fireEvent.click(addButtons[0]!);
+    fireEvent.click(screen.getByRole('button', { name: 'Add tier' }));
     expect(screen.getByLabelText('Tier 4 label')).toBeTruthy();
     expect(screen.getByText('4 tiers · Default: Tier 2')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('Duplicate Tier 1 as new last tier'));

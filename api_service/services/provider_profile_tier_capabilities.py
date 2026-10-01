@@ -39,6 +39,7 @@ _DEFAULT_EFFORT_OPTIONS: list[dict[str, Any]] = [
     {"value": "medium", "label": "Medium", "description": None, "status": "available", "compatible_models": None},
     {"value": "high", "label": "High", "description": None, "status": "available", "compatible_models": None},
     {"value": "xhigh", "label": "Extra high", "description": None, "status": "available", "compatible_models": None},
+    {"value": "max", "label": "Max", "description": None, "status": "available", "compatible_models": None},
 ]
 
 _RUNTIME_DEFAULTS: dict[str, dict[str, Any]] = {

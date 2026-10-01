@@ -190,7 +190,7 @@ class ContinuationDefaults(BaseModel):
 class ModelDefaults(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     model: str | None = Field(None, max_length=128)
-    effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None = None
     settings: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 

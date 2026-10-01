@@ -225,7 +225,7 @@ def resolve_bootstrap_model(
 
 def validate_effort(effort: str, available_efforts: list[str] | None = None) -> str:
     normalized = effort.strip().lower()
-    allowed = {"minimal", "low", "medium", "high", "xhigh"}
+    allowed = {"minimal", "low", "medium", "high", "xhigh", "max"}
     if normalized not in allowed:
         raise ValueError(f"effort {effort!r} is not supported")
     if available_efforts is not None and normalized not in {

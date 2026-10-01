@@ -243,7 +243,10 @@ low
 medium
 high
 xhigh
+max
 ```
+
+`max` is the level above `xhigh`. The tier editor's capability catalog lists effort levels in ascending order. A runtime or model that records its own supported values still decides whether it accepts `max`: the seeded OpenCode models top out at `xhigh`, so they reject `max` instead of silently forwarding it.
 
 A null effort means “use runtime default effort if one exists, otherwise omit effort.”
 

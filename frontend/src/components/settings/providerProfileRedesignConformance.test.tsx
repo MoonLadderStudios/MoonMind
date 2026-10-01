@@ -1061,7 +1061,7 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
     fireEvent.change(screen.getByLabelText('Priority'), { target: { value: '55' } });
 
     // Build a custom ordered tier policy while advanced options are open.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Add tier' })[0]!);
+    fireEvent.click(screen.getByRole('button', { name: 'Add tier' }));
     fireEvent.change(screen.getByLabelText('Tier 2 label'), { target: { value: 'Deep work' } });
     fireEvent.change(screen.getByLabelText('Tier 2 model'), { target: { value: 'gpt-4o' } });
     fireEvent.click(screen.getByRole('radio', { name: 'Use Tier 2 as default' }));
@@ -1085,7 +1085,7 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
     renderManager();
     await startStandardCreation(creationClass, profileId);
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Add tier' })[0]!);
+    fireEvent.click(screen.getByRole('button', { name: 'Add tier' }));
     fireEvent.change(screen.getByLabelText('Tier 2 label'), { target: { value: 'Deep work' } });
     fireEvent.change(screen.getByLabelText('Tier 2 model'), { target: { value: 'gpt-4o' } });
     fireEvent.change(screen.getByLabelText('Tier 2 effort'), { target: { value: 'high' } });
