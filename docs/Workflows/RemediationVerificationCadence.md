@@ -97,6 +97,8 @@ Keep durable attempt state under the existing workflow/step owner. The lifecycle
 
 Before runtime launch, persist exact source report, candidate, attempt, Skill/configuration, destination and idempotency identities. Before advancing to full verification, commit accepted compute/candidate evidence. Before another remediation attempt, commit the current verifier outcome and the budget/no-progress decision.
 
+Both remediation and verification agent requests expose the controller's current loop ID, candidate checkpoint, role, attempt, and attempt limit. The runtime projects that compact context into the agent prompt from the materialized node inputs and annotations; runtime defaults cannot replace the current candidate. The `run-remediation-attempt-context-inputs-v1` cutover preserves the request shape recorded by older Temporal histories.
+
 An Activity retry retries the same effect. A restore retry continues the same destination reservation. A semantic repair attempt gets a new Step Execution and increments its admitted attempt count. A verification-only retry reuses the candidate without running the repair again.
 
 ## 9. Dashboard expectations
