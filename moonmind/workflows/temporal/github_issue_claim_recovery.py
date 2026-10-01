@@ -370,6 +370,9 @@ RUNTIME_PROVISIONING_FAILURES: tuple[str, ...] = (
     "OMNIGENT_HOST_CLASS_UNAVAILABLE",
     "OMNIGENT_GENERIC_REALIZER_NOT_READY",
     "OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE",
+    # A required external service (GitHub) stayed unavailable before any
+    # session started; the failure says nothing about the issue.
+    "OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE",
 )
 
 

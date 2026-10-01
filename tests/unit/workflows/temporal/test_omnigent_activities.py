@@ -311,6 +311,62 @@ async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_recommends_step_retry_for_unavailable_external_service() -> (
+    None
+):
+    """A pre-session GitHub outage gets a fresh Step Execution, not a failure.
+
+    Regression for mm:3d760c52-56af-5a25-bfc9-771ea7d6bc68: a two-minute
+    GitHub rate limit at exact-host qualification ended the workflow 40s after
+    it waited hours for capacity. The parent honors ``retry_step_execution``
+    through its existing bounded step-retry contract.
+    """
+
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise HarnessPlatformError(
+                "GitHub preflight failed during host repository_access after "
+                "3 attempt(s): GraphQL: API rate limit exceeded for user ID 1.",
+                code=HarnessPlatformFailure.OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE,
+            )
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-rate-limited",
+            idempotencyKey="step-rate-limited",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result is not None
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert "API rate limit exceeded" in result.summary
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("code", "recommendation"),
     [
