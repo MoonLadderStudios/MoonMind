@@ -23,6 +23,23 @@ class FakeRunner:
         return {"exit": 0, "output": "ok"}
 
 
+def test_apply_names_the_target_checkout_compose_files(controller_path):
+    """A relative target file belongs to the project directory, not the cwd."""
+    engine = load("engine")
+    runner = FakeRunner()
+    engine.apply(
+        runner,
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml", "/etc/moonmind/site.yaml"),
+        services=("api",),
+        images=("img:api",),
+    )
+    for command, _ in runner.commands:
+        files = [command[i + 1] for i, arg in enumerate(command) if arg == "-f"]
+        assert files == ["/srv/moonmind/docker-compose.yaml", "/etc/moonmind/site.yaml"]
+
+
 def test_apply_stages_all_images_before_any_up(controller_path):
     engine = load("engine")
     runner = FakeRunner()
@@ -237,7 +254,51 @@ def test_observe_services_reports_only_running_selected_services(controller_path
         compose_files=("docker-compose.yaml",),
     )
     observed = engine.observe_services(runner, base, ("api", "worker"))
-    assert observed == {"services": {"api": True, "worker": False}}
+    assert observed["services"] == {"api": True, "worker": False}
+
+
+def test_observe_services_accepts_completed_one_shots_but_not_failures(
+    controller_path,
+):
+    import json as _json
+
+    engine = load("engine")
+    commands = []
+
+    class _PsRunner:
+        def run(self, args, timeout_seconds):
+            commands.append(tuple(args))
+            rows = [
+                {"Service": "api", "State": "running", "ExitCode": 0},
+                {"Service": "init-db", "State": "exited", "ExitCode": 0},
+                {"Service": "codex-auth-init", "State": "exited", "ExitCode": 1},
+                # A finished `compose run` container is not the service itself.
+                {
+                    "Service": "worker",
+                    "State": "exited",
+                    "ExitCode": 0,
+                    "Labels": "com.docker.compose.oneoff=True,com.docker.compose.service=worker",
+                },
+            ]
+            return {"exit": 0, "output": "\n".join(_json.dumps(r) for r in rows)}
+
+    base = engine.compose_base(
+        project="moonmind",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml",),
+    )
+    observed = engine.observe_services(
+        _PsRunner(), base, ("api", "init-db", "codex-auth-init", "worker")
+    )
+    assert observed["services"] == {
+        "api": True,
+        "init-db": True,
+        "codex-auth-init": False,
+        "worker": False,
+    }
+    assert observed["completed"] == ["init-db"]
+    # Compose lists exited one-shot containers only with --all.
+    assert "--all" in commands[0]
 
 
 def test_observe_services_rejects_destructive_or_empty_observation(controller_path):

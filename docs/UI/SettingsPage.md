@@ -413,6 +413,8 @@ This page contains explicit administrative commands and statusful controls for:
 
 Each command card shows current state, expected impact, permitted actions, disabled reason, confirmation requirements, reason input where required, pending transitions, last actor and time, failure state, and recovery or resume action.
 
+The MoonMind update card submits to the standalone deployment controller when the deployment has installed one ([Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md)). Its history shows each controller operation's identity, requested and installed image, status, original error, attempt log, and verification checks, and offers Retry for a failed operation. It keeps polling with ordinary bounded reads while an operation is queued or running, so a reload or API restart reconnects to the same operation. When the installed controller does not answer, the card says so, disables dashboard submission, and points to the host command `./tools/update-moonmind.sh`. Workflow-backed updates from the transitional updater remain readable history with their run and log links.
+
 The page title `Operations` is distinct from any broader dropdown group also labeled Operations. The group classifies destinations. This page specifically owns configuration and administration controls.
 
 ---

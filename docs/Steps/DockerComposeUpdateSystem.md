@@ -5,7 +5,7 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-09-26
+**Last Updated:** 2026-10-01
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
 
@@ -39,7 +39,7 @@ Use existing Docker/Compose, local job files, and process ownership. The control
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector. Resolve and record the concrete image that will run.
 
-**Controller:** The standalone deployment controller in its own Compose project (`deploy/moonmind-controller`), separate from the MoonMind stack. It owns its durable state, restart policy, direct Docker socket mount, and one small authenticated local endpoint guarded by a deployment-owned secret, and is capable of outliving the worker or API that submitted work to it. Its Docker transport and command endpoint survive target-project shutdown. The host CLI installs, starts, updates, and restores the controller; the controller never replaces itself, and controller updates are serialized against active deployment mutation. Its privileged execution boundary is deployment-owned, not selectable by an agent. No agents receive sockets or unrestricted controller access; its lifecycle is host-owned.
+**Controller:** The standalone deployment controller (`deploy/controller`), installed by `deploy/controller/bootstrap.py` as its own `moonmind-controller-<id>` Compose project, separate from the MoonMind stack. It owns its durable state, restart policy, direct Docker socket mount, and one small authenticated local endpoint guarded by a deployment-owned secret, and is capable of outliving the worker or API that submitted work to it. Its Docker transport and command endpoint survive target-project shutdown. The host CLI installs, starts, updates, and restores the controller; the controller never replaces itself, and controller updates are serialized against active deployment mutation. Its privileged execution boundary is deployment-owned, not selectable by an agent. No agents receive sockets or unrestricted controller access; its lifecycle is host-owned.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -88,6 +88,16 @@ The submission identifies the stack and target image, with existing explicit mai
 
 The API submits or observes the same controller operation the host uses. Its response identifies that operation and its actual current state. An API/workflow timeout is not permission to launch another updater or evidence that the underlying operation failed.
 
+Each caller names its own controller operation identity (`ui-…` from Settings Operations, `host-<submission>` from the host entrypoint, `wf-…` from a workflow's durable identity). A lost acknowledgment is resolved by reading that identity and, only if the controller never recorded it, resubmitting the same identity. A duplicate request for the target the stack is already applying reattaches to the running operation. A changed target is new intent and is refused, naming the operation that owns the stack, until that operation ends. The stack state lists controller operations (requested and installed image, status, original error, attempts, verification) beside read-only history of workflow-backed updates. An explicit Retry of a failed operation uses:
+
+```text
+POST /api/v1/operations/deployment/operations/{operationId}/retry
+```
+
+It asks the controller for its fresh bounded attempt and keeps prior errors. The response carries `operationId` and `owner`; `taskId`/`workflowId` are set only for a workflow-backed update. Controller unavailable, credential rejected, busy, and refused requests are distinct errors, and none of them starts another updater. The API reaches the controller over the deployment's private `deployment-controller-network` (joined by the API and the deployment-control worker only) using the identity and bearer secret in the read-only deployment state mount; the secret never reaches the browser. That state (`deploy/state/controller`: the bearer secret and the operation records the controller applies on restart) is visible only to the API (read-only) and the deployment-control worker. The agent runtime, which hosts managed Skills and mounts the checkout and deployment state for other duties, sees an empty read-only view of it. When the endpoint does not answer, the dashboard says so and points to the host command instead of accepting work.
+
+Until a deployment installs a working controller, Settings Operations uses the transitional workflow updater, the same rule as the host entrypoint in section 11.2. That path is removed once the default install provides the controller.
+
 The workflow's deployment observer heartbeats while reading its registry,
 pulling the updater image, and awaiting the durable result. A 60-second
 heartbeat timeout detects a replaced observer independently of the longer
@@ -108,7 +118,7 @@ Keep the owning executable definition and API schema authoritative rather than d
 
 ### 8.3 Representative plan node
 
-A workflow may request this existing operation when authorized. It does not implement its own pull/recreate loop, approval chain, or retry budget on top of the controller. The host recovery entrypoint must not need to create a `MoonMind.UserWorkflow` first.
+A workflow may request this existing operation when authorized. It does not implement its own pull/recreate loop, approval chain, or retry budget on top of the controller: with an installed controller, `deployment.update_compose_stack` only submits the controller operation under the workflow's durable identity and observes it, so an activity retry reattaches instead of starting a second updater. The host recovery entrypoint must not need to create a `MoonMind.UserWorkflow` first.
 
 ## 9. Desired state storage
 
@@ -206,6 +216,26 @@ shared host image (recreated without draining, checkpointing, or deferring for a
 with no suitable new Omnigent image for a configured channel leaves the installed release in place.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 
+The standalone controller delegates selection and migration to the existing
+`deployment_release --omnigent-select` and `--omnigent-migrate` helpers in
+bounded, dependency-free Compose one-offs from the selected MoonMind image.
+Those trusted one-offs receive the controller's deployment-owned Docker
+transport, so repair does not require the target project's proxy to be running.
+It keeps the deployment lock while those helpers run; they do not launch the
+legacy full updater. Selection completes before the main Compose pass, which
+layers the operator `.env`, release-owned `.env.deploy`, and controller image
+overlay in that order. After installation, migration finishes the durable
+selected revision without resolving a moved channel again. The default
+rendered Omnigent service follows this path even when `.env` is absent. A
+selection failure leaves the fleet untouched; migration failure retains the
+confirmed installation and records the original error as failed verification.
+Lost acknowledgments reuse the saved selection, including a desired-state
+write confirmed before its selection receipt was saved. A still-running
+one-off is observed before another attempt can launch. Only a helper whose operation,
+project, current step and kernel lock match the controller's record is excluded
+from legacy-writer detection; orphaned or terminal competing writers continue
+to block cutover.
+
 Reconcile uncertain recreations before repeating them. Future launches follow
 the installed runtime while preserving explicit harness/provider choices and
 the actual image identity of attempts already in progress. A version-number
@@ -235,7 +265,7 @@ The existing deployment-control worker is a submission/observation adapter where
 
 ### 11.2 Standalone controller project
 
-The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The host entrypoint derives the installed endpoint port from the controller's deployment-owned identity. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner. Until a deployment installs a working controller, the host entrypoint updates through the application-owned updater when no controller secret exists, or when bootstrap left a secret but no reachable endpoint, operation record, or Compose container. A controller with recorded work retains recovery authority, and explicit controller selection is never bypassed. This fallback is removed once the entrypoint can install a published controller image itself.
+The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The host entrypoint derives the installed endpoint port from the controller's deployment-owned identity, and the API reaches the same port under the controller's alias on `deployment-controller-network`. That network is named `<compose project>_deployment-controller-network` unless `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides it, so independent deployments on one host never share the alias. A submission that names no Compose target (Settings Operations, the workflow adapter) uses the target the controller derives: the MoonMind Compose project bootstrap recorded in the controller identity (else `COMPOSE_PROJECT_NAME` from the deployment `.env`), `COMPOSE_FILE` from that `.env` (else `docker-compose.yaml` plus its override) in its read-only checkout mount, and the services that selection renders minus the Docker transport substrate. Post-apply verification accepts a run-to-completion service (such as `init-db`) that exited 0; any other non-running service fails its check. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner. Until a deployment installs a working controller, the host entrypoint updates through the application-owned updater when no controller secret exists, or when bootstrap left a secret but no reachable endpoint, operation record, or Compose container. A controller with recorded work retains recovery authority, explicit controller selection is never bypassed, and `--legacy-direct` is refused once a controller owns the deployment. This fallback is removed once the entrypoint can install a published controller image itself.
 
 ### 11.3 Runner image policy
 

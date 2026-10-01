@@ -252,9 +252,9 @@ FROM runtime-dependencies AS runtime-base
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
-# The deployment handoff imports the standalone controller client in the
-# deployed worker/API runtimes; without this copy every submission raises
-# ImportError and silently stays on the legacy updater.
+# pyproject.toml packages moonmind_controller, so the project install below
+# needs its source. No API or worker runtime path imports it: deployment
+# updates reach the deploy/controller endpoint over HTTP.
 COPY moonmind_controller /app/moonmind_controller/
 COPY docker/sandbox-egress-proxy /app/docker/sandbox-egress-proxy/
 # The enforcer's own policy is image-owned and lives in its own source

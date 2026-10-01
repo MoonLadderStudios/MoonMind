@@ -1021,3 +1021,180 @@ def _wedged_manager_disposition(blocked: bool = True) -> dict:
         "recoveryRunbook": "docs/Security/ProviderProfiles.md" if blocked else None,
         "recoveryHint": "hint" if blocked else None,
     }
+
+
+@pytest.mark.asyncio
+async def test_controller_omnigent_steps_reuse_selection_after_restart(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "mounted-project"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    (repo / "docker-compose.override.yaml").write_text("services: {}\n")
+    state = tmp_path / "deployment-state"
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(repo))
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(state / ".env.deploy")
+    )
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(state / "desired-state.json")
+    )
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
+    calls = []
+
+    async def select(runner, owner, image, *, actor="release"):
+        calls.append(("select", owner, image, actor))
+        assert runner.project_name == "moonmind-test-custom"
+        assert runner.project_dir == "/host/installed-project"
+        assert runner.local_project_dir == str(repo)
+        assert str(runner._compose_file_path()) == str(repo / "docker-compose.yaml")
+        assert runner.override_files == (str(repo / "docker-compose.override.yaml"),)
+        return {"status": "advanced", "revision": 7}
+
+    async def migrate(runner, owner, image, *, actor="release", selected_revision=None):
+        calls.append(("migrate", owner, image, actor, selected_revision))
+        return {"status": "converged", "revision": selected_revision}
+
+    monkeypatch.setattr(release, "select_omnigent", select)
+    monkeypatch.setattr(release, "migrate_omnigent", migrate)
+    payload = {
+        "operationId": "controller-operation",
+        "moonmindImage": "example/moonmind@sha256:selected",
+        "target": {
+            "project": "moonmind-test-custom",
+            "projectDir": "/host/installed-project",
+            "composeFiles": ["docker-compose.yaml", "docker-compose.override.yaml"],
+        },
+    }
+    selected = await release.run_controller_omnigent_step("select", payload)
+    assert selected == {"status": "advanced", "revision": 7}
+    # Lost acknowledgment/restart reattaches to the durable selection; it
+    # must not resolve a moved channel into another desired-state revision.
+    again = await release.run_controller_omnigent_step("select", payload)
+    assert again == selected
+    migrated = await release.run_controller_omnigent_step(
+        "migrate", {**payload, "selectedRevision": 7}
+    )
+    assert migrated == {"status": "converged", "revision": 7}
+    assert [call[0] for call in calls] == ["select", "migrate"]
+    assert calls[-1][-1] == 7
+    # Same identity may not be repurposed for a different image or target.
+    with pytest.raises(ValueError, match="different"):
+        await release.run_controller_omnigent_step(
+            "select", {**payload, "moonmindImage": "example/moonmind@sha256:other"}
+        )
+    with pytest.raises(ValueError, match="selection"):
+        await release.run_controller_omnigent_step(
+            "migrate", {**payload, "selectedRevision": 8}
+        )
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_controller_omnigent_failure_preserves_selection_for_retry(
+    tmp_path, monkeypatch
+):
+    state = tmp_path / "deployment-state"
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(state / ".env.deploy")
+    )
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
+    selected = []
+    migrated = []
+
+    async def select(*args, **kwargs):
+        selected.append(True)
+        return {"status": "advanced", "revision": 3}
+
+    async def migrate(*args, **kwargs):
+        migrated.append(kwargs["selected_revision"])
+        if len(migrated) == 1:
+            raise RuntimeError("catalog unavailable")
+        return {"status": "aligned", "revision": 3}
+
+    monkeypatch.setattr(release, "select_omnigent", select)
+    monkeypatch.setattr(release, "migrate_omnigent", migrate)
+    payload = {
+        "operationId": "retry-omnigent",
+        "moonmindImage": "example/moonmind@sha256:selected",
+        "target": {
+            "project": "moonmind-test",
+            "projectDir": "/host/repo",
+            "composeFiles": ["docker-compose.yaml"],
+        },
+    }
+    await release.run_controller_omnigent_step("select", payload)
+    with pytest.raises(RuntimeError, match="catalog unavailable"):
+        await release.run_controller_omnigent_step(
+            "migrate", {**payload, "selectedRevision": 3}
+        )
+    await release.run_controller_omnigent_step("select", payload)
+    assert await release.run_controller_omnigent_step(
+        "migrate", {**payload, "selectedRevision": 3}
+    ) == {"status": "aligned", "revision": 3}
+    assert selected == [True]
+    assert migrated == [3, 3]
+
+
+@pytest.mark.asyncio
+async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
+    tmp_path, monkeypatch
+):
+    from moonmind.workflows.skills.omnigent_release import OmnigentRelease
+
+    state = tmp_path / "deployment-state"
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(state / ".env.deploy")
+    )
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(state / "desired-state.json")
+    )
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
+    calls = []
+
+    async def select(runner, owner, image, *, actor="release"):
+        calls.append(owner)
+        recorded = OmnigentRelease(
+            revision=len(calls),
+            server_image_ref="example/server@sha256:" + "a" * 64,
+            host_image_refs={"shared": "example/host@sha256:" + "b" * 64},
+            updated_at="2026-10-01T07:00:00Z",
+            updated_by=owner,
+        )
+        await release._omnigent_release_store().merge(
+            env_updates=recorded.to_env(),
+            json_updates={"omnigentRelease": recorded.to_record()},
+        )
+        return {
+            "status": "advanced",
+            "revision": recorded.revision,
+            "serverImageRef": recorded.server_image_ref,
+            "hostImageRefs": recorded.host_image_refs,
+        }
+
+    monkeypatch.setattr(release, "select_omnigent", select)
+    original_write = release.write_record
+    interrupted = []
+
+    def lose_receipt(path, value):
+        if path.name == "selection.json" and not interrupted:
+            interrupted.append(True)
+            raise OSError("selection acknowledgment interrupted")
+        original_write(path, value)
+
+    monkeypatch.setattr(release, "write_record", lose_receipt)
+    payload = {
+        "operationId": "lost-selection-receipt",
+        "moonmindImage": "example/moonmind@sha256:selected",
+        "target": {
+            "project": "moonmind-test",
+            "projectDir": "/host/repo",
+            "composeFiles": ["docker-compose.yaml"],
+        },
+    }
+    with pytest.raises(OSError, match="acknowledgment interrupted"):
+        await release.run_controller_omnigent_step("select", payload)
+    recovered = await release.run_controller_omnigent_step("select", payload)
+    assert recovered["revision"] == 1
+    assert calls == ["controller:lost-selection-receipt"]
+    assert await release.run_controller_omnigent_step("select", payload) == recovered

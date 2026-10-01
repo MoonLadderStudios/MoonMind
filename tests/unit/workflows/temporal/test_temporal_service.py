@@ -8236,6 +8236,54 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
         assert len(result.items) == 1
         assert result.items[0].workflow_id == matching.workflow_id
 
+
+@pytest.mark.asyncio
+async def test_list_executions_still_filters_integration_after_a_state_change(tmp_path):
+    """A declared integration outlives the first state transition.
+
+    ``_touch`` rebuilds ``mm_integration`` from ``integration_state``, which
+    only integration-monitored executions populate. Without a guard, the first
+    state transition of an ordinary execution erased the ``integration=`` value
+    its creator declared, so every later ``list_executions(integration=...)``
+    filter silently stopped matching. Settings Operations lists the transitional
+    workflow updater's history through exactly that filter, so a real
+    deployment update vanished from the operator's history.
+    """
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Deployment update history",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+            integration="deployment.update_compose_stack",
+        )
+
+        # Every execution takes this path as soon as it runs.
+        await service.record_progress(
+            workflow_id=created.workflow_id, completed_steps=1
+        )
+
+        result = await service.list_executions(
+            workflow_type="MoonMind.UserWorkflow",
+            state=None,
+            entry=None,
+            owner_type=None,
+            owner_id=None,
+            repo=None,
+            integration="deployment.update_compose_stack",
+            page_size=10,
+            next_page_token=None,
+        )
+
+        assert [item.workflow_id for item in result.items] == [created.workflow_id]
+
+
 @pytest.mark.asyncio
 async def test_polling_backoff_resets_after_status_change_and_updates_visibility(
     tmp_path,
