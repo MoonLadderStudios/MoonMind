@@ -97,7 +97,11 @@ image authority. Stock image tags are acquired and resolved during seeding;
 only repository digests are projected into immutable active versions. Each
 host-image family seeds independently, so an unavailable optional harness does
 not withhold another runtime's valid authority. OpenCode policies reuse the
-exact host digest already qualified by deployment image reconciliation.
+exact host digest already qualified by deployment image reconciliation. Codex
+and Claude policies use the deployment-resolved shared host image
+(`OMNIGENT_SHARED_HOST_IMAGE_REF`), which owns the MoonMind tools under
+`/opt/moonmind-tools`; the upstream `omnigent-host` image does not carry them,
+so bootstrap versions any bootstrap-owned Codex default still pinned to it.
 `codex-on-demand@1` is the normal Codex default and static hosting remains an
 explicit advanced choice. Normal work uses persisted selections; a planner or
 runtime may not synthesize one policy from another, and durable/environment

@@ -31,6 +31,10 @@ _DEFAULT_CONTROLLER_URL = os.environ.get(
 _CONTROLLER_EXCLUDED_SERVICES = frozenset({"docker-proxy", "sandbox-egress-proxy"})
 _CONTROLLER_POLL_INTERVAL_SECONDS = 10
 _CONTROLLER_POLL_TIMEOUT_SECONDS = 1800
+# The controller applies inside the submission request; after this bounded
+# wait the entrypoint observes its own operation identity instead.
+_CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
+_CONTROLLER_SUBMIT_ATTEMPTS = 2
 
 
 _MAX_DIAGNOSTIC_CHARS = 4000
@@ -60,6 +64,14 @@ class DockerPullError(RuntimeError):
 
 class ControllerUnreachableError(RuntimeError):
     """The controller transport did not answer."""
+
+
+class ControllerHTTPError(RuntimeError):
+    """The controller answered with an HTTP error status."""
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
 
 
 def _redact_diagnostics(text):
@@ -246,10 +258,9 @@ def main(argv=None):
     )
     parser.add_argument(
         "--legacy-direct", action="store_true",
-        help="Transitional escape hatch: launch the legacy application-owned "
-        "updater container instead of the standalone controller. Prefer the "
-        "controller; the legacy path requires the target image's worker "
-        "runtime and Docker proxy to work.",
+        help="Transitional: confirm the legacy application-owned updater for "
+        "a deployment without an installed controller (for example to resume "
+        "a legacy submission). Refused once a controller owns the deployment.",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -378,12 +389,6 @@ def main(argv=None):
         f"Release submission: {submission_id} (resume with --resume {submission_id})",
         flush=True,
     )
-    # Replacement owner first: the canonical client handoff when configured,
-    # then this PR's direct controller path; the legacy application-owned
-    # updater remains the final fallback.
-    controller_rc = _try_controller_handoff(record=record)
-    if controller_rc is not None:
-        return controller_rc
     return _submit_release(
         record,
         repo,
@@ -422,8 +427,6 @@ def _submit_release(
     updater would create two deployment writers. Resume requires the owner
     to be reconciled first via an explicit selection.
     """
-    if legacy_direct:
-        return _submit_legacy_direct(record, repo)
     explicit_controller = bool(
         secret_file
         or os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
@@ -435,18 +438,16 @@ def _submit_release(
         if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
             controller_url = f"http://127.0.0.1:{port}"
     default_secret = _default_controller_secret_file(repo)
+    legacy_notice = None
     if not explicit_controller and not default_secret.exists():
-        _reject_automatic_resume(is_resume)
         # The notice stays free of secret material (CodeQL clear-text
         # logging): it names no secret path or value, only the installer.
-        print(
+        legacy_notice = (
             "Standalone controller is not installed; updating through the "
             "application-owned updater. Install the controller with "
-            "`python3 deploy/controller/bootstrap.py install` to use it.",
-            flush=True,
+            "`python3 deploy/controller/bootstrap.py install` to use it."
         )
-        return _submit_legacy_direct(record, repo)
-    if not explicit_controller:
+    elif not explicit_controller:
         secret = default_secret.read_text(encoding="utf-8").strip()
         try:
             _controller_call(controller_url, secret, "GET", "/v1/healthz", timeout=5)
@@ -456,19 +457,34 @@ def _submit_release(
             # never recorded an operation and owns no container; a stopped
             # controller with durable work must retain its recovery authority.
             if not _controller_never_started(repo):
+                if legacy_direct:
+                    _refuse_legacy_direct()
                 raise
-            _reject_automatic_resume(is_resume)
-            print(
+            legacy_notice = (
                 "Standalone controller bootstrap did not start a service; "
-                "updating through the application-owned updater.",
-                flush=True,
+                "updating through the application-owned updater."
             )
-            return _submit_legacy_direct(record, repo)
+    if legacy_direct:
+        if legacy_notice is None:
+            _refuse_legacy_direct()
+        return _submit_legacy_direct(record, repo)
+    if legacy_notice is not None:
+        _reject_automatic_resume(is_resume)
+        print(legacy_notice, flush=True)
+        return _submit_legacy_direct(record, repo)
     return _submit_via_controller(
         record,
         repo,
         controller_url=controller_url,
         secret_file=secret_file,
+    )
+
+
+def _refuse_legacy_direct():
+    raise RuntimeError(
+        "Refusing --legacy-direct: a standalone controller owns this "
+        "deployment, and a second updater could compete with its "
+        "operation. Omit --legacy-direct to update through the controller."
     )
 
 
@@ -548,16 +564,71 @@ def _controller_call(controller_url, secret, method, path, payload=None, timeout
             return response.status, json.loads(response.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as exc:
         detail = _redact_diagnostics(exc.read().decode("utf-8", errors="replace")[-2000:])
-        raise RuntimeError(
-            f"Controller {method} {path} failed with HTTP {exc.code}: {detail}"
+        raise ControllerHTTPError(
+            f"Controller {method} {path} failed with HTTP {exc.code}: {detail}",
+            exc.code,
         ) from None
     except urllib.error.URLError as exc:
         raise ControllerUnreachableError(
             f"Controller at {controller_url} is unreachable ({exc.reason}); "
-            "install and start it with "
-            "`python3 deploy/controller/bootstrap.py install` (then `start`), "
-            "or pass --legacy-direct for the transitional application-owned path."
+            "start or restore it with "
+            "`python3 deploy/controller/bootstrap.py restore`."
         ) from None
+    except (OSError, TimeoutError) as exc:
+        # The request may have reached the controller; only its answer was
+        # lost. Callers resolve that through the operation identity.
+        raise ControllerUnreachableError(
+            f"Controller at {controller_url} did not answer ({type(exc).__name__})"
+        ) from None
+
+
+def _controller_operation_id(context):
+    """Derive the controller operation identity from the recorded submission.
+
+    The same submission (including ``--resume``) always names the same
+    controller operation, so a lost acknowledgment or a rerun reattaches
+    instead of starting a second writer.
+    """
+    submission = str(context.get("idempotency_key", "")).removeprefix("host-update:")
+    candidate = f"host-{submission}" if submission else f"host-{uuid.uuid4()}"
+    return re.sub(r"[^A-Za-z0-9._-]", "-", candidate)[:128]
+
+
+def _submit_controller_operation(controller_url, secret, payload):
+    """Submit once; after a lost acknowledgment observe before resubmitting."""
+    operation_id = payload["operationId"]
+    last_error = None
+    for _attempt in range(_CONTROLLER_SUBMIT_ATTEMPTS):
+        try:
+            _, created = _controller_call(
+                controller_url,
+                secret,
+                "POST",
+                "/v1/operations",
+                payload,
+                timeout=_CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+            )
+            return created
+        except ControllerUnreachableError as exc:
+            last_error = exc
+            print(
+                f"Controller did not acknowledge operation {operation_id}; "
+                f"observing it before any resubmission ({exc})",
+                flush=True,
+            )
+        try:
+            _, observed = _controller_call(
+                controller_url, secret, "GET", f"/v1/operations/{operation_id}"
+            )
+            return observed
+        except ControllerHTTPError as exc:
+            if exc.status != 404:
+                raise
+            # Never recorded: resubmitting the same identity is safe.
+        except ControllerUnreachableError as exc:
+            last_error = exc
+            break
+    raise last_error
 
 
 def _resolve_compose_files(repo):
@@ -651,12 +722,11 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
         # Recorded for post-apply operator-access verification; the
         # controller stores the submission target unchanged.
         target["operatorUrls"] = operator_urls
-    _, created = _controller_call(
+    created = _submit_controller_operation(
         controller_url,
         secret,
-        "POST",
-        "/v1/operations",
         {
+            "operationId": _controller_operation_id(context),
             "stack": "moonmind",
             "desiredImage": record["image"],
             "sourceRevision": record["inputs"].get("sourceRevision", ""),
@@ -664,6 +734,8 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
             "target": target,
         },
     )
+    # The controller may answer with the operation that already owns this
+    # target (a duplicate from Settings Operations); observe that one.
     operation_id = created.get("operationId")
     if not operation_id:
         raise RuntimeError(f"Controller refused the submission: {created}")
@@ -698,8 +770,15 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
             return 2
         if status == "failed":
             raise RuntimeError(
-                "Controller operation failed: "
-                f"{_redact_diagnostics(operation.get('errorSummary', 'unknown error'))}"
+                f"Controller operation {operation_id} failed: "
+                f"{_redact_diagnostics(operation.get('errorSummary', 'unknown error'))}. "
+                "Retry it from Settings Operations or rerun this command for a "
+                "new attempt; the original error stays in its record."
+            )
+        if status == "superseded":
+            raise RuntimeError(
+                f"Controller operation {operation_id} was superseded: "
+                f"{_redact_diagnostics(operation.get('supersededReason', ''))}"
             )
         if time.time() > deadline:
             raise RuntimeError(
@@ -811,58 +890,6 @@ def _submit_legacy_direct(record, repo):
                 },
             check=False,
         ).returncode
-
-
-def _try_controller_handoff(*, record):
-    """Submit trusted release data to the standalone controller if configured.
-
-    Returns the controller exit code on a handled submission, else None to
-    fall through to the legacy application-owned path. A controller failure
-    falls back with an explicit diagnostic; the installation is unchanged.
-    """
-    try:
-        from moonmind_controller import client
-    except ImportError:
-        return None
-    if not client.is_controller_configured():
-        return None
-    trusted_inputs = dict((record.get("inputs") or {}) if isinstance(record.get("inputs"), dict) else {})
-
-    def _optional_mapping(value) -> dict | None:
-        return dict(value) if isinstance(value, dict) else None
-
-    payload = client.build_operation_payload(
-        operation_id=str(
-            record["context"].get("idempotency_key") or f"host-update:{record['image']}"
-        ),
-        target_image=record["image"],
-        stack=record.get("project"),
-        authorization=_optional_mapping(trusted_inputs.get("authorization")),
-        storage=_optional_mapping(trusted_inputs.get("storage")),
-        access_settings=_optional_mapping(
-            trusted_inputs.get("accessSettings") or trusted_inputs.get("access_settings")
-        ),
-    )
-    try:
-        receipt = client.submit_operation(payload, wait_for_terminal=True)
-    except client.ControllerUnavailableError as exc:
-        # No controller writer owns this operation (down or absent record):
-        # falling back to the legacy application-owned updater is safe.
-        print(
-            f"Standalone controller unavailable ({exc}); falling back to the "
-            "legacy application-owned updater until cutover completes.",
-            flush=True,
-        )
-        return None
-    except Exception as exc:
-        # The controller owns (or may own) this operation: never fork the
-        # legacy updater while it may still be applying the same stack.
-        # The durable record stays observable via controller status, and a
-        # retry reuses the same submission ID idempotently.
-        print(f"Standalone controller did not complete the operation ({exc})", flush=True)
-        return 1
-    print(f"Controller operation: {receipt} (standalone replacement owner)", flush=True)
-    return 0
 
 
 def _compose_ps_state(*, repo, project):

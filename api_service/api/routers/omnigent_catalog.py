@@ -134,8 +134,9 @@ class EligibleProviderProfile(BaseModel):
     runtime_id: Literal["codex_cli", "claude_code", "opencode"] = Field(
         alias="runtimeId"
     )
+    # A busy profile stays selectable: new work waits for the same profile's
+    # lease in the Provider Profile Manager queue.
     busy: bool = False
-    queue_when_busy: bool = Field(alias="queueWhenBusy")
 
 
 class IneligibleProviderProfile(BaseModel):
@@ -368,9 +369,9 @@ _REASONS: dict[str, tuple[str, str]] = {
     # opencode-zen-free route surfaces eligibility with separate
     # availability/pricing/capability/privacy reasons through the normal
     # Runtime/Profile UI, with a clear reason and an explicit valid
-    # alternative. Provider/host capacity stays a wait state (see
-    # omnigent_capacity_wait / profile_capacity_unavailable) that never
-    # requalifies a model or selects a paid fallback.
+    # alternative. A busy Provider Profile queues new work and host capacity
+    # stays a wait state (omnigent_capacity_wait); neither requalifies a
+    # model or selects a paid fallback.
     "no_eligible_free_model": (
         "No credentialless OpenCode model is currently eligible. Review the "
         "availability, pricing, capability, and privacy detail, then choose an "
@@ -435,7 +436,7 @@ _REASONS: dict[str, tuple[str, str]] = {
         "/settings#provider-profiles",
     ),
     "profile_capacity_unavailable": (
-        "Wait for Provider Profile capacity or enable queued execution.",
+        "Fix this Provider Profile's concurrency or cooldown settings.",
         "/settings#provider-profiles",
     ),
     "generic_realizer_not_ready": (
@@ -503,10 +504,8 @@ def free_model_gate_reasons_for_profile(row: Any) -> dict[str, str]:
 
     Pricing is never fabricated here: no trusted pricing feed has a
     production source yet (req-2), so that axis is evaluated by hermetic
-    tests only until the feed exists. Saturated capacity stays a separate
-    wait state (``omnigent_capacity_wait`` /
-    ``profile_capacity_unavailable``) that never requalifies a model or
-    selects a paid fallback.
+    tests only until the feed exists. A busy profile queues new work, which
+    never requalifies a model or selects a paid fallback.
     """
     provider_id = str(getattr(row, "provider_id", "") or "")
     if provider_id != "opencode":
@@ -555,8 +554,8 @@ def free_model_gate_reason(reasons: dict[str, str]) -> GateReason:
     capability, and privacy axes stay separate in the message so the normal
     Runtime/Profile UI can show why the credentialless default is blocked
     and which explicit valid alternative to choose. Capacity pressure is
-    never reported here: saturated capacity uses omnigent_capacity_wait /
-    profile_capacity_unavailable as a wait state, never a paid fallback.
+    never reported here: a busy profile queues new work, never a paid
+    fallback.
     """
     ordered = {
         k: reasons[k]
@@ -1139,9 +1138,7 @@ async def get_omnigent_codex_catalog_readiness(
 
     eligible: list[EligibleProviderProfile] = []
     eligible_by_runtime: dict[str, int] = {}
-    saturated_by_runtime: set[str] = set()
     ineligible: list[IneligibleProviderProfile] = []
-    saturated_by_profile: dict[str, bool] = {}
     for row in rows:
         raw_runtime_id = getattr(row, "runtime_id", "codex_cli")
         runtime_id = str(getattr(raw_runtime_id, "value", raw_runtime_id))
@@ -1163,10 +1160,9 @@ async def get_omnigent_codex_catalog_readiness(
         )
         if label.lower().startswith(("ghp_", "github_pat_", "aiza", "akia")):
             label = "[REDACTED]"
+        # Busy is informational. The Provider Profile Manager queues every
+        # request for a full profile, whatever its 429 ``rate_limit_policy``.
         busy = active_slot_counts.get(row.profile_id, 0) >= (row.max_parallel_runs or 1)
-        queue_when_busy = (
-            getattr(row.rate_limit_policy, "value", row.rate_limit_policy) == "queue"
-        )
         # MoonLadderStudios/MoonMind#3877: OpenCode's built-in Zen Contributor
         # Free route is credentialless (`credential_source == "none"`, the
         # `none@1` materializer), so eligibility must be derived from the
@@ -1183,12 +1179,6 @@ async def get_omnigent_codex_catalog_readiness(
             is not None
             and (credential_source == "none") == (row.provider_id == "opencode")
         )
-        if compatible and readiness["launch_ready"]:
-            # A busy profile that queues can still accept new work, so it is
-            # not saturated from the admission surface's point of view.
-            saturated_by_profile[row.profile_id] = busy and not queue_when_busy
-            if saturated_by_profile[row.profile_id]:
-                saturated_by_runtime.add(runtime_id)
         # MoonLadderStudios/MoonMind#4021 req-4/req-5: the credentialless free
         # route additionally needs the recorded per-policy-version data-use
         # authorization from the existing Settings authority, the exact
@@ -1197,8 +1187,7 @@ async def get_omnigent_codex_catalog_readiness(
         # decline or a catalog/effort mismatch surfaces here through the
         # normal Runtime/Profile UI with the evaluated axes instead of
         # fabricated pricing/capability axes. A blocked default is
-        # structural, never capacity pressure, so it stays out of the
-        # saturation bookkeeping below.
+        # structural, never capacity pressure.
         free_route_blocked_reasons: dict[str, str] = {}
         if (
             compatible
@@ -1207,14 +1196,7 @@ async def get_omnigent_codex_catalog_readiness(
             and str(getattr(row, "provider_id", "") or "") == "opencode"
         ):
             free_route_blocked_reasons = free_model_gate_reasons_for_profile(row)
-        if free_route_blocked_reasons:
-            saturated_by_profile.pop(row.profile_id, None)
-        if (
-            compatible
-            and readiness["launch_ready"]
-            and not free_route_blocked_reasons
-            and (not busy or queue_when_busy)
-        ):
+        if compatible and readiness["launch_ready"] and not free_route_blocked_reasons:
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1
             eligible.append(
                 EligibleProviderProfile(
@@ -1223,17 +1205,10 @@ async def get_omnigent_codex_catalog_readiness(
                     providerId=row.provider_id,
                     runtimeId=runtime_id,
                     busy=busy,
-                    queueWhenBusy=queue_when_busy,
                 )
             )
         elif compatible:
             codes = _profile_gate_codes(readiness)
-            if (
-                busy
-                and not queue_when_busy
-                and "profile_capacity_unavailable" not in codes
-            ):
-                codes.append("profile_capacity_unavailable")
             gate_reasons: list[GateReason]
             if free_route_blocked_reasons:
                 # The profile is launch-ready but the free-route policy blocks
@@ -1252,16 +1227,6 @@ async def get_omnigent_codex_catalog_readiness(
                     gateReasons=gate_reasons,
                 )
             )
-
-    # MoonLadderStudios/MoonMind#3885: provider saturation is *transient*
-    # pressure, not a qualification defect. It is only observed when this
-    # deployment has launch-ready profiles and every one of them is currently
-    # unable to take new work; with no launch-ready profile at all the blocker
-    # is structural and is already reported by the per-profile gate reasons
-    # above.
-    provider_capacity_available: bool | None = None
-    if saturated_by_profile:
-        provider_capacity_available = not all(saturated_by_profile.values())
 
     bindings = list(
         (await session.execute(select(OmnigentOAuthHostBindingRecord))).scalars().all()
@@ -1514,13 +1479,7 @@ async def get_omnigent_codex_catalog_readiness(
             if profile.provider_runtime == "claude_code":
                 profile_reasons.append(_reason("launch_policy_unavailable"))
         if not eligible_by_runtime.get(profile.provider_runtime):
-            profile_reasons.append(
-                _reason(
-                    "profile_capacity_unavailable"
-                    if profile.provider_runtime in saturated_by_runtime
-                    else "no_eligible_codex_oauth_profile"
-                )
-            )
+            profile_reasons.append(_reason("no_eligible_codex_oauth_profile"))
         profile_views.append(
             ExecutionProfileReadiness(
                 ref=profile.ref,
@@ -1623,7 +1582,8 @@ async def get_omnigent_codex_catalog_readiness(
             janitor_healthy=janitor_healthy,
             exact_image_conformant=exact_image_conformant,
             protected_live_evidence_age=protected_evidence_age,
-            provider_capacity_available=provider_capacity_available,
+            # Provider Profile capacity is not observed as pressure here: a
+            # full profile queues new work rather than refusing it.
         )
     )
     for capability in admission.capabilities:

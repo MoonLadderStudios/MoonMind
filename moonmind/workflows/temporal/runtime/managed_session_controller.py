@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 
+from moonmind.auth.github_credentials import GitHubCredentialSource
 from moonmind.config.settings import settings
 from moonmind.omnigent.git_identity import ensure_workspace_git_identity
 from moonmind.schemas.container_job_models import OwnerIdentity
@@ -61,10 +62,17 @@ from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
+from moonmind.workflows.executions.repository_contract import (
+    DEFAULT_GIT_CONNECTION_REF,
+    REPOSITORY_CREDENTIAL_UNAVAILABLE,
+    RepositoryContractError,
+    compile_repository_target,
+)
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     GHCR_REGISTRY,
     resolve_ghcr_pull_credentials_for_launch,
     resolve_github_token_for_launch,
+    resolve_selected_github_credential_for_launch,
 )
 
 from .github_auth_broker import (
@@ -381,6 +389,56 @@ def _normalize_absolute_posix_path(value: str, *, field_name: str) -> PurePosixP
 
 def _is_sensitive_env_key(key: str) -> bool:
     return bool(_SENSITIVE_ENV_KEY_PATTERN.search(key))
+
+async def _session_github_token(
+    request: LaunchCodexManagedSessionRequest,
+) -> str:
+    """Resolve the session's GitHub token from its repository selection (#4023).
+
+    An explicit launch token or credential descriptor is the launch's own
+    choice. Otherwise the session uses only the connection its
+    ``repositoryTarget`` selects, and a bare ``repository`` selects the
+    default connection exactly as a target that omits ``connectionRef``
+    does. A configured source that fails stops the session with its
+    correction instead of cloning without a token or as another account.
+    Scratch sessions, and a deployment with no GitHub configuration at all,
+    have no token.
+    """
+
+    spec = request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+    explicit = str(request.environment.get("GITHUB_TOKEN", "")).strip()
+    descriptor = request.github_credential
+    raw_target = spec.get("repositoryTarget")
+    repository = str(spec.get("repository") or spec.get("repo") or "").strip()
+    if (
+        (raw_target is not None or repository)
+        and not explicit
+        and (descriptor is None or descriptor.source == "managed_secret")
+    ):
+        connection_ref, repo = DEFAULT_GIT_CONNECTION_REF, repository
+        if raw_target is not None:
+            target = compile_repository_target(raw_target)
+            if target.provider != "git":
+                return ""
+            connection_ref, repo = target.connection_ref, target.repository.name
+        credential = await resolve_selected_github_credential_for_launch(
+            connection_ref, repo=repo
+        )
+        if credential.token:
+            return credential.token
+        required = descriptor is not None and descriptor.required
+        if credential.source == GitHubCredentialSource.MISSING and not required:
+            return ""
+        raise RepositoryContractError(
+            REPOSITORY_CREDENTIAL_UNAVAILABLE, credential.safe_summary
+        )
+    if descriptor is None and not explicit:
+        return ""
+    token = await resolve_github_token_for_launch(
+        request.environment,
+        github_credential=descriptor,
+    )
+    return str(token or "").strip()
 
 class DockerCodexManagedSessionController:
     """Launch and control managed runtime session containers via Docker CLI."""
@@ -1135,11 +1193,7 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
         session_environment: dict[str, str],
     ) -> dict[str, str]:
-        token = await resolve_github_token_for_launch(
-            request.environment,
-            github_credential=request.github_credential,
-        )
-        token = str(token or "").strip()
+        token = await _session_github_token(request)
         if not token:
             return {}
 
@@ -1500,19 +1554,9 @@ class DockerCodexManagedSessionController:
         env = dict(_GIT_COMMAND_LOCALE)
         request_env = request.environment if request is not None else {}
         try:
-            token = (
-                await resolve_github_token_for_launch(
-                    request_env,
-                    github_credential=(
-                        request.github_credential if request is not None else None
-                    ),
-                )
-                if request is not None
-                else None
-            )
+            token = await _session_github_token(request) if request is not None else ""
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
-        token = str(token or "").strip()
         if token:
             # Avoid depending on persistent per-user gh setup in the worker. The
             # clone happens before the managed agent container starts.

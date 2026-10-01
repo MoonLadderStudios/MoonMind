@@ -375,7 +375,11 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         str(tmp_path / "temporal-artifacts"),
     )
     immutable_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "8" * 64
-    immutable_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "9" * 64
+    immutable_host = (
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "9" * 64
+    )
+    # The deployment's resolved shared host image is Codex launch authority.
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", immutable_host)
 
     async def resolve_image(image_ref: str) -> str:
         return immutable_server if "server" in image_ref else immutable_host

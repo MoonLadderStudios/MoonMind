@@ -1,43 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 
-interface SecretMetadata {
-  slug: string;
-  status: string;
-}
-interface SecretsListResponse {
-  items: SecretMetadata[];
-}
-
 interface ProviderProfileResponse {
   profile_id: string;
   enabled: boolean;
   launch_ready: boolean;
 }
 
-const GITHUB_TOKEN_SLUGS = ["GITHUB_PAT", "GITHUB_TOKEN"] as const;
-
-function hasActiveSlug(
-  items: SecretMetadata[],
-  slugs: readonly string[],
-): boolean {
-  return items.some((s) => slugs.includes(s.slug) && s.status === "active");
-}
-
+// GitHub access is not a first-run prerequisite: scratch work needs no PAT,
+// and repository work reports its own missing connection when it runs
+// (MoonLadderStudios/MoonMind#4023).
 export function DashboardAlerts() {
-  const { data: secretsData, isLoading: secretsLoading } =
-    useQuery<SecretsListResponse>({
-      queryKey: ["secrets"],
-      queryFn: async () => {
-        const response = await fetch("/api/v1/secrets", {
-          headers: { Accept: "application/json" },
-        });
-        if (!response.ok) {
-          throw new Error("Failed to fetch secrets");
-        }
-        return response.json();
-      },
-    });
-
   const {
     data: profilesData,
     isLoading: profilesLoading,
@@ -55,15 +27,9 @@ export function DashboardAlerts() {
     },
   });
 
-  if (
-    secretsLoading ||
-    profilesLoading ||
-    !secretsData ||
-    (!profilesData && !profilesError)
-  ) {
+  if (profilesLoading || (!profilesData && !profilesError)) {
     return null;
   }
-  const hasGithub = hasActiveSlug(secretsData.items, GITHUB_TOKEN_SLUGS);
 
   if (profilesError) {
     return (
@@ -86,7 +52,7 @@ export function DashboardAlerts() {
     profilesData?.some((profile) => profile.launch_ready) ?? false
   );
 
-  if (!needsProviderProfileSetup && hasGithub) {
+  if (!needsProviderProfileSetup) {
     return null;
   }
 
@@ -97,10 +63,7 @@ export function DashboardAlerts() {
       <ul
         style={{ marginTop: "8px", marginLeft: "20px", listStyleType: "disc" }}
       >
-        {needsProviderProfileSetup && (
-          <li>Set up and enable at least one provider profile in Settings.</li>
-        )}
-        {!hasGithub && <li>Set up GitHub access in Settings.</li>}
+        <li>Set up and enable at least one provider profile in Settings.</li>
       </ul>
       <div style={{ marginTop: "12px" }}>
         <a

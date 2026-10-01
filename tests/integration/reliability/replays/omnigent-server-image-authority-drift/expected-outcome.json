@@ -1,6 +1,7 @@
 {
   "invariant": "a bootstrap-owned default policy advances through an immutable version when stock image inputs move, and live server attestation binds actual repository-digest evidence rather than mutable configured tag text",
   "reconciledPolicyIds": [
+    "claude-on-demand",
     "codex-on-demand",
     "codex-static",
     "omnigent-codex",

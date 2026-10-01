@@ -669,8 +669,8 @@ interface OmnigentCodexCatalogReadiness {
     label: string;
     providerId: string;
     runtimeId: "codex_cli" | "claude_code";
+    // A busy profile stays selectable; the workflow waits for its lease.
     busy: boolean;
-    queueWhenBusy: boolean;
   }>;
   ineligibleProviderProfiles: Array<{
     profileId: string;
@@ -716,7 +716,7 @@ interface OmnigentExecutionReadinessV3 {
     supportTier: "experimental" | "supported";
     compatibleProviderProfiles: Array<{
       profileId: string; label: string; providerId: string; runtimeId: string;
-      busy?: boolean; queueWhenBusy?: boolean;
+      busy?: boolean;
     }>;
     compatibleHostClasses: string[];
     policies: string[];
@@ -7526,12 +7526,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : undefined) ||
     (!selectedEligibleOmnigentProfile
       ? "Choose an eligible Provider Profile for the selected execution target."
-      : selectedEligibleOmnigentProfile.busy === true &&
-          selectedEligibleOmnigentProfile.queueWhenBusy !== true
-          ? "The selected Provider Profile is busy and does not support queued waiting."
-          : !selectedOmnigentPolicyAvailable
-            ? "Choose a compatible Omnigent host policy."
-            : null);
+      : !selectedOmnigentPolicyAvailable
+        ? "Choose a compatible Omnigent host policy."
+        : null);
   const selectedProfileMissing = Boolean(providerProfile) && !providerProfilesQuery.isPending && !selectedConfiguredProfile;
   const runtimeProfileMismatch = selectedConfiguredProfile?.runtime_id && runtime !== "omnigent" &&
     selectedConfiguredProfile.runtime_id !== runtime
@@ -7555,8 +7552,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   );
   const omnigentSelectionEligible = runtime !== "omnigent" || (
     Boolean(selectedConfiguredProfile) && selectedConfiguredProfile?.enabled !== false &&
-    selectedConfiguredProfile?.launch_ready !== false && !selectedConfiguredProfile?.execution_selection_error && !configurationSelectionError && !configurationDetailsUnavailable &&
-    (selectedProfileIsGenericV2 || !(selectedEligibleOmnigentProfile?.busy && !selectedEligibleOmnigentProfile?.queueWhenBusy))
+    selectedConfiguredProfile?.launch_ready !== false && !selectedConfiguredProfile?.execution_selection_error && !configurationSelectionError && !configurationDetailsUnavailable
   );
 
   const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
@@ -9555,11 +9551,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         setSubmitMessage(
           "The selected Omnigent host policy is no longer compatible. Choose an available policy explicitly.",
         );
-        clearSubmitBusy();
-        return;
-      }
-      if (eligibleProfile.busy && !eligibleProfile.queueWhenBusy) {
-        setSubmitMessage("The selected Provider Profile is busy and does not support queued waiting.");
         clearSubmitBusy();
         return;
       }
@@ -12996,6 +12987,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         {runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? (
           <div className="notice error small" role="alert">
             Omnigent cannot be submitted: {profileSelectionError}
+          </div>
+        ) : null}
+        {runtime.trim().toLowerCase() === "omnigent" && omnigentSelectionEligible && !profileSelectionError && selectedEligibleOmnigentProfile?.busy ? (
+          <div className="notice small" role="status">
+            This Provider Profile is busy. This workflow will wait for it to become available.
           </div>
         ) : null}
 

@@ -10,46 +10,91 @@ state and converges only unfinished work toward the same target: a lost
 result never repeats a completed apply, and an already-running Compose child
 is reconciled (left alone) rather than competed with.
 """
+
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import os
 import re
+import socketserver
+import threading
+from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+from wsgiref.simple_server import WSGIServer, make_server
 
 import engine
 import lock as lock_mod
 import record as record_mod
-from redact import redact_mapping
+from redact import redact_mapping, redact_text
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
+OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
+OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
+# The deployment checkout bootstrap mounts read-only at its host path.
+TARGET_REPO_ENV = "MOONMIND_CONTROLLER_TARGET_REPO"
+# The MoonMind Compose project bootstrap recorded in the controller identity
+# (--target-project, COMPOSE_PROJECT_NAME, or the checkout name).
+TARGET_PROJECT_ENV = "MOONMIND_CONTROLLER_TARGET_PROJECT"
+TARGET_CONFIG_TIMEOUT_SECONDS = 120
+# The Docker transport substrate is never recreated through an update, the
+# same exclusion the host entrypoint applies to its explicit target.
+DEFAULT_EXCLUDED_SERVICES = ("docker-proxy", "sandbox-egress-proxy")
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _MAX_IMAGE_CHARS = 1024
+DEFAULT_LIST_LIMIT = 10
+MAX_LIST_LIMIT = 50
+
+
+class ThreadingWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
+    """Serve status and log reads while a submission applies.
+
+    A submission holds its request thread for the whole apply, so a
+    single-threaded server would leave every observer (and a client that
+    lost its acknowledgment) blocked until the apply ends.
+    """
+
+    daemon_threads = True
+
+
+def make_http_server(host: str, port: int, app) -> WSGIServer:
+    """Build the production HTTP server for the controller endpoint."""
+    return make_server(host, port, app, server_class=ThreadingWSGIServer)
 
 
 class LegacyWriterUnknown(RuntimeError):
     """Docker state could not be read, so legacy ownership is unverified."""
 
 
-def parse_legacy_mutation_ps(output: str) -> bool:
+def parse_legacy_mutation_ps(
+    output: str, *, controller_operations: dict[str, str] | None = None
+) -> bool:
     """Return True when `docker ps` output shows an active legacy mutation.
 
     The steady-state ``temporal-worker-deployment-control`` service runs
     continuously with ``restart: unless-stopped``, so mere container
     existence is not evidence of an active writer. Only a running one-off
     updater container (``com.docker.compose.oneoff=true``) for the legacy
-    control service counts as an owned mutation in progress.
+    control service counts as an owned mutation in progress. A controller
+    helper is excluded only with its recorded operation and target project.
     """
     for line in (output or "").splitlines():
-        name, _, oneoff = line.strip().partition("\t")
-        if not name:
+        fields = line.strip().split("\t")
+        name, oneoff = (fields + ["", ""])[:2]
+        if not name or oneoff.strip().lower() not in ("true", "1", "yes"):
             continue
-        if oneoff.strip().lower() in ("true", "1", "yes"):
-            return True
+        if len(fields) >= 4:
+            project, operation_id = fields[2:4]
+            if (
+                operation_id
+                and (controller_operations or {}).get(operation_id) == project
+            ):
+                continue
+        return True
     return False
 
 
@@ -74,7 +119,9 @@ def default_legacy_writer_probe() -> bool:
                 "--filter",
                 f"label=com.docker.compose.service={LEGACY_CONTROL_SERVICE}",
                 "--format",
-                '{{.Names}}\t{{.Label "com.docker.compose.oneoff"}}',
+                '{{.Names}}\t{{.Label "com.docker.compose.oneoff"}}'
+                '\t{{.Label "com.docker.compose.project"}}'
+                f'\t{{{{.Label "{OMNIGENT_OPERATION_LABEL}"}}}}',
             ],
             capture_output=True,
             text=True,
@@ -83,10 +130,23 @@ def default_legacy_writer_probe() -> bool:
     except (OSError, subprocess.SubprocessError) as exc:
         raise LegacyWriterUnknown(f"cannot inspect Docker state: {exc}") from exc
     if completed.returncode != 0:
-        raise LegacyWriterUnknown(
-            f"docker ps failed (exit {completed.returncode})"
+        raise LegacyWriterUnknown(f"docker ps failed (exit {completed.returncode})")
+    store = record_mod.OperationStore(
+        os.environ.get("MOONMIND_CONTROLLER_STATE_DIR", "/var/lib/moonmind-controller")
+    )
+    # A label from an old operation is not authority. Only a current
+    # release step protected by the controller's kernel lock is excluded;
+    # orphaned, failed and superseded one-offs remain competing writers.
+    operations = {
+        operation["operationId"]: str(
+            (operation.get("target") or {}).get("project") or ""
         )
-    return parse_legacy_mutation_ps(completed.stdout)
+        for operation in (*store.list_open(), *store.list_terminal())
+        if operation.get("omnigentStep") in ("select", "migrate")
+        and operation.get("status") in (*record_mod.OPEN_STATUSES, "succeeded")
+        and lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
+    }
+    return parse_legacy_mutation_ps(completed.stdout, controller_operations=operations)
 
 
 def _read_secret(secret: str | None, secret_file: str | None) -> str:
@@ -115,8 +175,19 @@ def _json_response(start_response, status: str, payload: Any) -> list:
     return [body]
 
 
+def _redact_strings(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _redact_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_strings(item) for item in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
 def _public_operation(operation: dict) -> dict:
-    return redact_mapping(operation)
+    """Redact sensitive keys and credential material inside free-form text."""
+    return _redact_strings(redact_mapping(operation))
 
 
 def _compose_child_alive(state_dir: str) -> int | None:
@@ -329,7 +400,110 @@ def _validate_submission(body: dict) -> str | None:
         or any(char.isspace() for char in image)
     ):
         return "desiredImage must be a single bounded image reference"
+    operation_id = body.get("operationId")
+    if operation_id is not None:
+        try:
+            record_mod.check_operation_id(operation_id)
+        except ValueError:
+            return "operationId must be a bounded safe identifier"
     return None
+
+
+def _compose_files_for_repo(repo: str, env: dict) -> list:
+    """Resolve the deployment-owned Compose file set inside the checkout."""
+    selection = str(env.get("COMPOSE_FILE") or "").strip()
+    if selection:
+        files = [part.strip() for part in re.split(r"[;:]", selection) if part.strip()]
+    else:
+        files = ["docker-compose.yaml"]
+        for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+            if os.path.isfile(os.path.join(repo, name)):
+                files.append(name)
+                break
+    for name in files:
+        parts = name.split("/")
+        if (
+            name.startswith("/")
+            or ".." in parts
+            or not all(_SAFE_NAME_RE.match(part) for part in parts)
+            or not os.path.isfile(os.path.join(repo, name))
+        ):
+            raise ValueError(f"unusable compose file in the deployment checkout: {name!r}")
+    return files
+
+
+def default_target(
+    stack: str, *, repo: str, recorded_project: str = "", runner=None
+) -> dict:
+    """Derive the Compose target from the mounted deployment checkout.
+
+    Callers without host knowledge (Settings Operations) submit only the
+    stack and image; the controller reads what the deployment already
+    determines: the Compose project bootstrap recorded for the deployment
+    (else ``COMPOSE_PROJECT_NAME``), ``COMPOSE_FILE`` from the
+    deployment-owned ``.env`` (else ``docker-compose.yaml`` plus its
+    override), and the services Compose renders for that selection, minus
+    the Docker transport substrate.
+    """
+    if not repo or not os.path.isdir(repo):
+        raise ValueError("no deployment checkout is mounted for the controller")
+    env_path = os.path.join(repo, ".env")
+    env = read_env_file(env_path)
+    files = _compose_files_for_repo(repo, env)
+    project = str(
+        recorded_project or env.get("COMPOSE_PROJECT_NAME") or stack
+    ).strip()
+    if not _SAFE_NAME_RE.match(project):
+        raise ValueError(f"unsafe Compose project name: {project!r}")
+    env_files = [env_path] if os.path.isfile(env_path) else None
+    base = engine.compose_base(
+        project=project,
+        project_dir=repo,
+        compose_files=files,
+        env_files=env_files,
+    )
+    try:
+        result = engine.run_command(
+            runner or engine.subprocess_runner(),
+            (*base, "config", "--services"),
+            timeout_seconds=TARGET_CONFIG_TIMEOUT_SECONDS,
+        )
+    except engine.CommandError as exc:
+        raise ValueError(
+            f"compose config failed (exit {exc.exit_status}): "
+            + redact_text(str(exc.output or ""))[-500:]
+        ) from None
+    except OSError as exc:
+        raise ValueError(f"compose is unavailable to the controller: {exc}") from None
+    if int(result.get("exit", 0)) != 0:
+        raise ValueError(
+            "compose config failed: "
+            + redact_text(str(result.get("output", "")))[-500:]
+        )
+    services = [
+        name
+        for name in str(result.get("output", "")).split()
+        if name not in DEFAULT_EXCLUDED_SERVICES
+    ]
+    if not services:
+        raise ValueError("the deployment checkout renders no services to update")
+    target = {
+        "project": project,
+        "projectDir": repo,
+        "composeFiles": files,
+        "services": services,
+    }
+    if env_files:
+        target["envFile"] = env_path
+    return target
+
+
+def production_target_resolver(stack: str) -> dict:
+    return default_target(
+        stack,
+        repo=os.environ.get(TARGET_REPO_ENV, ""),
+        recorded_project=os.environ.get(TARGET_PROJECT_ENV, ""),
+    )
 
 
 def _apply_with_bounded_retries(
@@ -365,6 +539,27 @@ def _apply_with_bounded_retries(
                 raise
 
 
+def _apply_recording_failure(
+    store: record_mod.OperationStore,
+    operation_id: str,
+    run_apply: Callable[[dict], Any],
+) -> dict:
+    """Apply within the bounded budget; a recorded failure is a result.
+
+    Exhausted staging/apply attempts leave a terminal ``failed`` record with
+    every attempt error, so the caller receives that operation (not an
+    internal error) and can offer an explicit Retry. Unexpected exceptions
+    still propagate.
+    """
+    try:
+        return _apply_with_bounded_retries(store, operation_id, run_apply)
+    except (engine.StageError, engine.ApplyError):
+        operation = store.load(operation_id)
+        if operation.get("status") != "failed":
+            raise
+        return operation
+
+
 def build_app(
     *,
     store: record_mod.OperationStore,
@@ -372,10 +567,16 @@ def build_app(
     secret_file: str | None = None,
     applier: Callable[[dict], Any] | None = None,
     legacy_writer_probe: Callable[[], bool] | None = None,
+    target_resolver: Callable[[str], dict] | None = None,
 ):
-    """Build the WSGI application. The secret is deployment-owned."""
+    """Build the WSGI application. The secret is deployment-owned.
+
+    ``target_resolver`` derives the Compose target for a submission that
+    names none (see :func:`default_target`).
+    """
     bearer = _read_secret(secret, secret_file)
     run_apply = applier or (lambda operation: production_apply(store, operation))
+    submission_guard = threading.Lock()
 
     def app(environ, start_response):
         if not _authorized(environ, bearer):
@@ -396,6 +597,8 @@ def build_app(
 
         if method == "POST" and path == "/v1/operations":
             return _submit(start_response, body)
+        if method == "GET" and path == "/v1/operations":
+            return _list(start_response, environ.get("QUERY_STRING", ""))
         if path.startswith("/v1/operations/"):
             rest = path[len("/v1/operations/") :]
             operation_id, _, action = rest.partition("/")
@@ -425,25 +628,50 @@ def build_app(
             return _json_response(
                 start_response, "400 Bad Request", {"error": rejection}
             )
+        requested_id = body.get("operationId")
         try:
-            lock_mod.ensure_no_competing_writer(store.state_dir, stack)
-            cutover_block = check_legacy_cutover(legacy_writer_probe)
-            if cutover_block is not None:
-                return _json_response(start_response, "409 Conflict", {"error": cutover_block})
-            operation = store.begin(
-                stack=stack,
-                desired_image=desired_image,
-                source_revision=source_revision,
-                reason=body.get("reason", ""),
-                target=body.get("target") if isinstance(body.get("target"), dict) else None,
-            )
-            already_installed = (operation.get("installed") or {}).get("image") == desired_image and operation.get(
-                "status"
-            ) in ("succeeded", "partially_verified")
-            if not already_installed and operation.get("status") in ("pending", "staged", "applying"):
-                candidate = lock_mod.StackLock(store.state_dir, stack)
-                with candidate.acquire():
-                    operation = _apply_with_bounded_retries(
+            with contextlib.ExitStack() as held:
+                # Decide ownership under one guard so two concurrent
+                # submissions cannot both start an operation for the stack.
+                with submission_guard:
+                    decision = _submission_decision(
+                        stack, desired_image, requested_id
+                    )
+                    if decision is not None:
+                        status_line, payload = decision
+                        return _json_response(start_response, status_line, payload)
+                    cutover_block = check_legacy_cutover(legacy_writer_probe)
+                    if cutover_block is not None:
+                        return _json_response(start_response, "409 Conflict", {"error": cutover_block})
+                    target = body.get("target") if isinstance(body.get("target"), dict) else None
+                    reattachable = any(
+                        (op.get("desired") or {}).get("image") == desired_image
+                        for op in store.list_open(stack=stack)
+                    ) or store.find_completed(stack=stack, desired_image=desired_image)
+                    if target is None and target_resolver is not None and not reattachable:
+                        try:
+                            target = target_resolver(stack)
+                        except ValueError as exc:
+                            return _json_response(
+                                start_response,
+                                "400 Bad Request",
+                                {"error": f"deployment target could not be derived: {redact_text(str(exc))}"},
+                            )
+                    operation = store.begin(
+                        stack=stack,
+                        desired_image=desired_image,
+                        source_revision=source_revision,
+                        reason=body.get("reason", ""),
+                        target=target,
+                        operation_id=requested_id,
+                    )
+                    needs_apply = operation.get("status") in record_mod.OPEN_STATUSES
+                    if needs_apply:
+                        held.enter_context(
+                            lock_mod.StackLock(store.state_dir, stack).acquire()
+                        )
+                if needs_apply:
+                    operation = _apply_recording_failure(
                         store, operation["operationId"], run_apply
                     )
         except lock_mod.LockBusyError:
@@ -453,6 +681,68 @@ def build_app(
             return _json_response(start_response, "500 Internal Server Error", {"error": "internal error"})
         return _json_response(start_response, "202 Accepted", _public_operation(operation))
 
+    def _submission_decision(stack, desired_image, requested_id):
+        """Reattach or refuse without starting another writer.
+
+        Returns ``None`` when the submission may start (or resume) its
+        operation, otherwise the ``(status line, body)`` to answer with. A
+        caller's own identity always reattaches to its record; a duplicate
+        for the target the stack is already applying reattaches to that
+        operation; a changed target is refused while another writer owns
+        the stack, naming the operation that owns it.
+        """
+        if requested_id is not None:
+            try:
+                existing = store.load(requested_id)
+            except KeyError:
+                existing = None
+            if existing is not None:
+                if existing.get("stack") != stack or (
+                    existing.get("desired") or {}
+                ).get("image") != desired_image:
+                    return "409 Conflict", {"error": "operation id names a different request"}
+                if existing.get("status") not in record_mod.OPEN_STATUSES:
+                    return "202 Accepted", _public_operation(existing)
+        busy = lock_mod.StackLock(store.state_dir, stack).probe()
+        if not busy:
+            # Nobody is applying: a recorded open operation resumes.
+            return None
+        opens = store.list_open(stack=stack)
+        for operation in opens:
+            if (operation.get("desired") or {}).get("image") == desired_image:
+                return "202 Accepted", _public_operation(operation)
+        active = max(
+            opens,
+            key=lambda op: (str(op.get("createdAt") or ""), op["operationId"]),
+            default=None,
+        )
+        return "409 Conflict", {
+            "error": "stack is owned by another writer",
+            "activeOperationId": active["operationId"] if active else None,
+        }
+
+    def _list(start_response, query_string):
+        query = parse_qs(query_string or "")
+        stack = (query.get("stack") or [""])[0] or None
+        try:
+            limit = int((query.get("limit") or [DEFAULT_LIST_LIMIT])[0])
+        except ValueError:
+            return _json_response(start_response, "400 Bad Request", {"error": "limit must be an integer"})
+        limit = max(1, min(limit, MAX_LIST_LIMIT))
+        operations = [*store.list_open(stack=stack), *store.list_terminal(stack=stack)]
+        operations.sort(
+            key=lambda op: (
+                str(op.get("createdAt") or ""),
+                store.record_mtime_ns(op["operationId"]),
+            ),
+            reverse=True,
+        )
+        return _json_response(
+            start_response,
+            "200 OK",
+            {"operations": [_public_operation(op) for op in operations[:limit]]},
+        )
+
     def _status(start_response, operation_id):
         try:
             return _json_response(start_response, "200 OK", _public_operation(store.load(operation_id)))
@@ -461,16 +751,23 @@ def build_app(
 
     def _retry(start_response, operation_id):
         try:
-            operation = store.begin_retry(operation_id)
-        except KeyError:
-            return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
-        except RuntimeError:
-            # Constant body: retry-budget internals never reach the response.
-            return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
-        try:
-            candidate = lock_mod.StackLock(store.state_dir, operation["stack"])
-            with candidate.acquire():
-                operation = _apply_with_bounded_retries(
+            with contextlib.ExitStack() as held:
+                with submission_guard:
+                    try:
+                        operation = store.load(operation_id)
+                    except KeyError:
+                        return _json_response(start_response, "404 Not Found", {"error": "unknown operation"})
+                    # Hold the stack before touching the record, so a Retry
+                    # can never rewrite an operation another writer applies.
+                    held.enter_context(
+                        lock_mod.StackLock(store.state_dir, operation["stack"]).acquire()
+                    )
+                    try:
+                        store.begin_retry(operation_id)
+                    except RuntimeError:
+                        # Constant body: refusal reasons (status, budget) never reach the response.
+                        return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
+                operation = _apply_recording_failure(
                     store, operation_id, run_apply
                 )
         except lock_mod.LockBusyError:
@@ -492,7 +789,7 @@ def build_app(
             "verification": operation.get("verification", []),
             "reportingFailures": operation.get("reportingFailures", []),
         }
-        return _json_response(start_response, "200 OK", redact_mapping(logs))
+        return _json_response(start_response, "200 OK", _public_operation(logs))
 
     return app
 
@@ -503,8 +800,8 @@ def _env_files_for_apply(target: dict, overlay: str) -> list:
     The deployment-owned `.env` (explicit ``target.envFile`` or
     ``<projectDir>/.env`` when present) stays first so Compose keeps
     operator authentication, bindings, and infrastructure versions; the
-    generated image overlay comes last and overrides only the release
-    selection.
+    release-owned ``.env.deploy`` follows it, and the generated image
+    overlay comes last and overrides only the MoonMind release selection.
     """
     files: list[str] = []
     explicit = (target or {}).get("envFile")
@@ -515,8 +812,11 @@ def _env_files_for_apply(target: dict, overlay: str) -> list:
         candidate = os.path.join(str(project_dir), ".env") if project_dir else ""
         if candidate and os.path.isfile(candidate):
             files.append(candidate)
+    release_env = _release_env_for_target(target)
+    if release_env and os.path.isfile(release_env):
+        files.append(release_env)
     files.append(overlay)
-    return files
+    return list(dict.fromkeys(files))
 
 
 def write_image_overlay(state_dir: str, operation_id: str, image: str) -> str:
@@ -591,6 +891,29 @@ def read_env_file(path: str) -> dict:
     return values
 
 
+def _release_env_for_target(target: dict) -> str:
+    """Map the deployment service's desired-state mount to the checkout."""
+    project_dir = str((target or {}).get("projectDir") or "")
+    if not project_dir:
+        return ""
+    operator_env = str(target.get("envFile") or os.path.join(project_dir, ".env"))
+    configured = (
+        read_env_file(operator_env).get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE")
+        or "/workspace/deployment_state/.env.deploy"
+    )
+    for mounted, local in (
+        ("/workspace/deployment_state/", os.path.join(project_dir, "deploy", "state")),
+        ("/workspace/host_project/", project_dir),
+    ):
+        if configured.startswith(mounted):
+            return os.path.join(local, configured[len(mounted) :])
+    return (
+        configured
+        if os.path.isabs(configured)
+        else os.path.join(project_dir, configured)
+    )
+
+
 def omnigent_channels_for_target(target: dict) -> list:
     """Return the configured Omnigent channel keys for a deployment target."""
     explicit = (target or {}).get("envFile")
@@ -602,9 +925,126 @@ def omnigent_channels_for_target(target: dict) -> list:
     for candidate in candidates:
         for key, value in read_env_file(candidate).items():
             seen.setdefault(key, value)
-    return [
+    channels = [
         key for key in OMNIGENT_CHANNEL_KEYS if str(seen.get(key) or "").strip()
     ]
+    # Compose supplies the documented defaults even with no .env. A rendered
+    # Omnigent service therefore requires the same release convergence.
+    if not channels and "omnigent" in (target.get("services") or ()):
+        return list(OMNIGENT_CHANNEL_KEYS)
+    return channels
+
+
+def run_omnigent_step(
+    store: record_mod.OperationStore,
+    operation: dict,
+    *,
+    runner,
+    overlay: str,
+    phase: str,
+    selected_revision: int | None = None,
+) -> dict:
+    """Delegate one release step to the selected image, never a full updater.
+
+    The controller retains stack ownership while the existing app-side
+    release helpers resolve images or converge catalog/policy state. A
+    one-off runs without dependencies and cannot enter the legacy updater.
+    """
+    target = operation.get("target") or {}
+    operation_id = record_mod.check_operation_id(operation["operationId"])
+    project = target.get("project", operation.get("stack"))
+    # A timed-out compose client can leave its one-off alive. Observe that
+    # exact operation/project before any retry launches another process.
+    active = engine.run_command(
+        runner,
+        (
+            "docker",
+            "ps",
+            "--filter",
+            f"label={OMNIGENT_OPERATION_LABEL}={operation_id}",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--format",
+            "{{.ID}}",
+        ),
+        timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS,
+    )
+    if int(active.get("exit", 0)) != 0 or str(active.get("output") or "").strip():
+        raise LegacyWriterUnknown(
+            "Omnigent release step is still running or its ownership is unverified"
+        )
+    helper_config = os.path.join(
+        str(store.state_dir), "image-overlays", f"{operation_id}-omnigent.json"
+    )
+    record_mod._atomic_write_json(
+        Path(helper_config),
+        {
+            "services": {
+                LEGACY_CONTROL_SERVICE: {
+                    "image": operation["desired"]["image"],
+                    "user": "0:0",
+                    "environment": {
+                        "DOCKER_HOST": "unix:///var/run/docker.sock",
+                        "SYSTEM_DOCKER_HOST": "unix:///var/run/docker.sock",
+                    },
+                    "volumes": ["/var/run/docker.sock:/var/run/docker.sock:ro"],
+                }
+            }
+        },
+    )
+    base = engine.compose_base(
+        project=target.get("project", operation.get("stack")),
+        project_dir=target.get("projectDir", ""),
+        compose_files=(
+            *target.get("composeFiles", ("docker-compose.yaml",)),
+            helper_config,
+        ),
+        env_files=_env_files_for_apply(target, overlay),
+    )
+    request = {
+        "operationId": operation_id,
+        "moonmindImage": operation["desired"]["image"],
+        "target": target,
+    }
+    if selected_revision is not None:
+        request["selectedRevision"] = selected_revision
+    store.record_omnigent_step(operation_id, phase)
+    try:
+        result = engine.run_command(
+            runner,
+            (
+                *base,
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "--pull",
+                "always" if phase == "select" else "never",
+                "--label",
+                f"{OMNIGENT_OPERATION_LABEL}={operation_id}",
+                "--entrypoint",
+                "python",
+                LEGACY_CONTROL_SERVICE,
+                "-m",
+                "moonmind.workflows.skills.deployment_release",
+                f"--omnigent-{phase}",
+                json.dumps(request, sort_keys=True),
+            ),
+            timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
+        )
+    finally:
+        store.record_omnigent_step(operation_id, None)
+    output = str(result.get("output") or "")
+    if int(result.get("exit", 0)) != 0:
+        raise engine.CommandError(
+            f"omnigent-{phase}", int(result.get("exit", 1)), redact_text(output)[-2000:]
+        )
+    for line in reversed(output.splitlines()):
+        if line.startswith(OMNIGENT_RESULT_PREFIX):
+            receipt = json.loads(line[len(OMNIGENT_RESULT_PREFIX) :])
+            if isinstance(receipt, dict):
+                return receipt
+    raise ValueError(f"Omnigent {phase} returned no release receipt")
 
 
 def production_apply(
@@ -613,6 +1053,7 @@ def production_apply(
     *,
     dispatch_probe: Callable[[], bool | None] | None = None,
     omnigent_migrator: Callable[[dict], Any] | None = None,
+    omnigent_selector: Callable[[dict], Any] | None = None,
 ) -> dict:
     """Default applier: stage images, apply, verify, and record the result."""
     target = operation.get("target") or {}
@@ -624,13 +1065,51 @@ def production_apply(
         old_service_health={},
     )
     if not checks["admitted"]:
-        store.record_attempt_error(operation["operationId"], error="; ".join(checks["problems"]))
+        store.record_attempt_error(
+            operation["operationId"], error="; ".join(checks["problems"])
+        )
         return {"status": "refused", "problems": checks["problems"]}
     store.mark_stage(operation["operationId"], stage="staged")
     runner = engine.subprocess_runner()
     overlay = write_image_overlay(
         str(store.state_dir), operation["operationId"], operation["desired"]["image"]
     )
+    channels = omnigent_channels_for_target(target)
+    selection = store.load(operation["operationId"]).get("omnigentSelection") or {}
+    if channels and not selection:
+        try:
+            selection = (
+                omnigent_selector(operation)
+                if omnigent_selector is not None
+                else run_omnigent_step(
+                    store, operation, runner=runner, overlay=overlay, phase="select"
+                )
+            )
+            if not isinstance(selection, dict) or selection.get("status") == "failed":
+                raise ValueError(f"invalid Omnigent selection receipt: {selection!r}")
+            if selection.get("status") != "skipped" and not isinstance(
+                selection.get("revision"), int
+            ):
+                raise ValueError("Omnigent selection did not record a revision")
+            store.record_omnigent_selection(operation["operationId"], selection)
+        except Exception as exc:
+            detail = f"Omnigent selection failed: {exc} {getattr(exc, 'output', '')}"
+            store.record_attempt_error(
+                operation["operationId"], error=redact_text(detail)
+            )
+            raise engine.StageError("omnigent-select", 1, redact_text(detail)) from exc
+    if channels and omnigent_migrator is None:
+
+        def omnigent_migrator(summary):
+            return run_omnigent_step(
+                store,
+                operation,
+                runner=runner,
+                overlay=overlay,
+                phase="migrate",
+                selected_revision=selection.get("revision"),
+            )
+
     env_files = _env_files_for_apply(target, overlay)
     try:
         outcome = engine.apply(
@@ -643,12 +1122,18 @@ def production_apply(
             env_files=env_files,
         )
     except engine.StageError as exc:
-        store.record_attempt_error(operation["operationId"], error=f"staging failed: {exc} {exc.output}")
+        store.record_attempt_error(
+            operation["operationId"], error=f"staging failed: {exc} {exc.output}"
+        )
         raise
     except engine.ApplyError as exc:
-        store.record_attempt_error(operation["operationId"], error=f"apply failed: {exc} {exc.output}")
+        store.record_attempt_error(
+            operation["operationId"], error=f"apply failed: {exc} {exc.output}"
+        )
         raise
-    store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+    store.confirm_installed(
+        operation["operationId"], image=operation["desired"]["image"]
+    )
     verification = _verify_applied_release(
         store,
         operation,
@@ -689,6 +1174,7 @@ def _verify_applied_release(
     target = operation.get("target") or {}
     services = tuple(target.get("services", ()))
     operation_id = operation["operationId"]
+    completed_services: list = []
     try:
         base = engine.compose_base(
             project=project,
@@ -698,6 +1184,7 @@ def _verify_applied_release(
         )
         observed = engine.observe_services(runner, base, services)
         services_running = observed["services"]
+        completed_services = list(observed.get("completed") or ())
     except Exception as exc:
         store.record_verification(
             operation_id,
@@ -729,6 +1216,7 @@ def _verify_applied_release(
         services_running=services_running,
         dispatch_ok=dispatch_ok,
         operator_access=operator_access or None,
+        completed_services=completed_services,
     )
     recorded = list(result["checks"])
     if dispatch_probe is None:
@@ -787,8 +1275,8 @@ def _verify_omnigent_release(
             "status": "unavailable",
             "detail": (
                 f"Omnigent channels configured ({', '.join(channels)}) but no "
-                "migrator is delegated; re-run ./tools/update-moonmind.sh to "
-                "converge the installed Omnigent release"
+                "migrator is delegated; the controller release-step capability "
+                "must be restored before this update can verify"
             ),
         }
         store.record_verification(operation_id, **check)
@@ -806,11 +1294,17 @@ def _verify_omnigent_release(
         check = {
             "name": "omnigent-migration",
             "status": "failed",
-            "detail": f"Omnigent migration did not converge: {exc}",
+            "detail": redact_text(
+                f"Omnigent migration did not converge: {exc} {getattr(exc, 'output', '')}"
+            ),
         }
         store.record_verification(operation_id, **check)
         return check
-    if not receipt or (isinstance(receipt, dict) and receipt.get("status") not in ("migrated", "aligned", "skipped", "ok", "succeeded")):
+    if not receipt or (
+        isinstance(receipt, dict)
+        and receipt.get("status")
+        not in ("migrated", "converged", "aligned", "skipped", "ok", "succeeded")
+    ):
         check = {
             "name": "omnigent-migration",
             "status": "failed",
@@ -829,7 +1323,6 @@ def _verify_omnigent_release(
 
 def main(argv=None) -> int:
     import argparse
-    from wsgiref.simple_server import make_server
 
     parser = argparse.ArgumentParser(description="Standalone MoonMind deployment controller.")
     parser.add_argument("--state-dir", default=os.environ.get("MOONMIND_CONTROLLER_STATE_DIR", "/var/lib/moonmind-controller"))
@@ -845,8 +1338,13 @@ def main(argv=None) -> int:
     store = record_mod.OperationStore(args.state_dir)
     probe = None if args.no_legacy_probe else default_legacy_writer_probe
     converge_on_restart(store, lambda operation: production_apply(store, operation), legacy_writer_probe=probe)
-    app = build_app(store=store, secret_file=secret_file, legacy_writer_probe=probe)
-    httpd = make_server("0.0.0.0", args.port, app)
+    app = build_app(
+        store=store,
+        secret_file=secret_file,
+        legacy_writer_probe=probe,
+        target_resolver=production_target_resolver,
+    )
+    httpd = make_http_server("0.0.0.0", args.port, app)
     print(f"moonmind-controller listening on 0.0.0.0:{args.port}", flush=True)
     httpd.serve_forever()
     return 0

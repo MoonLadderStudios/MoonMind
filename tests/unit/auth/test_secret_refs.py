@@ -56,10 +56,22 @@ def test_parse_secret_ref_invalid_env() -> None:
     with pytest.raises(SecretReferenceError, match="invalid env locator format"):
         parse_secret_ref("env://my-key-with-dashes")
 
-def test_parse_secret_ref_invalid_db() -> None:
-    """Parser should reject invalid db locators."""
+def test_parse_secret_ref_accepts_issued_managed_secret_slugs() -> None:
+    """The Secrets System issues ``db://<slug>`` for slugs such as GITHUB_TOKEN."""
+    for slug in ("GITHUB_TOKEN", "OPENAI_API_KEY", "My_Key_With_Uppercase"):
+        parsed = parse_secret_ref(f"db://{slug}")
+        assert parsed.backend == SecretBackend.DB_ENCRYPTED
+        assert parsed.locator == slug
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["db://bad key", "db://../escape", "db://-leading", "db://trailing/", "db://a//b"],
+)
+def test_parse_secret_ref_invalid_db(ref: str) -> None:
+    """Parser should reject malformed db locators."""
     with pytest.raises(SecretReferenceError, match="invalid db locator format"):
-        parse_secret_ref("db://My_Key_With_Uppercase")
+        parse_secret_ref(ref)
 
 def test_parse_secret_ref_invalid_exec() -> None:
     """Parser should reject invalid exec locators."""

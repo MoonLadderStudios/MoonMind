@@ -806,6 +806,17 @@ async def reconcile_local_claims(
                     }:
                         raise ValueError("retry_lineage_requires_recovery")
                     remaining = min(handoff.retry_remaining, lineage.retry_remaining)
+                    if runtime_unavailable and any(
+                        item.get("attemptId") == receipt.attempt_id
+                        for item in (lineage.retry or {}).get("chargedAttempts", ())
+                    ):
+                        # A fast capacity backoff is finalized while its own
+                        # handoff still reads in_progress under a live lease,
+                        # so lineage charged it. Its runtime_unavailable
+                        # outcome is never charged, so neither is the record.
+                        remaining = min(
+                            handoff.retry_remaining, lineage.retry_remaining + 1
+                        )
                     result.update(
                         await finalize_failed_attempt(
                             repository=receipt.repository,

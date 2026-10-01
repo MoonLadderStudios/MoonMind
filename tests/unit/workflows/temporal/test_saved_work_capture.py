@@ -13,11 +13,17 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from api_service.db.models import Base, TemporalArtifact, TemporalArtifactStatus
 from moonmind.config.settings import SecuritySettings, settings
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.schemas.managed_checkpoint_models import (
@@ -35,6 +41,7 @@ from moonmind.schemas.saved_work_models import (
     parse_git_diff_raw_to_deltas,
     redacted_preview_is_restorable,
     resolve_saved_work_format_profile,
+    saved_work_artifact_metadata,
     scan_saved_work_export,
     scan_saved_work_export_stream,
     snapshot_capture_generation,
@@ -46,6 +53,11 @@ from moonmind.workflows.executions.runtime_capabilities import (
 )
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 
@@ -134,11 +146,20 @@ def _capture_harness(tmp_path, files: dict[str, bytes | str]):
             workspacePath=str(repo),
         )
     )
-    activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
-    )
     stored: dict[str, tuple[bytes, str, str]] = {}
     put_links: list[object] = []
+    execution_links: list[tuple[str, object]] = []
+
+    async def link_artifact(*, artifact_id, principal, execution_ref):
+        assert principal == "system"
+        assert artifact_id in {item[2] for item in stored.values()}
+        execution_links.append((artifact_id, execution_ref))
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store,
+        artifact_service=SimpleNamespace(link_artifact=link_artifact),
+        client_adapter=object(),
+    )
 
     async def put(
         payload: bytes, content_type: str, kind: str, link: object = None
@@ -150,8 +171,170 @@ def _capture_harness(tmp_path, files: dict[str, bytes | str]):
 
     activities._put_managed_checkpoint_artifact = put
     activities.captured_put_links = put_links
+    activities.captured_execution_links = execution_links
     digest = resolve_runtime_execution_capabilities("codex_cli").capability_digest
     return repo, activities, stored, digest
+
+
+@asynccontextmanager
+async def _artifact_capture_harness(tmp_path):
+    """Capture into the real database and object store to inspect visibility."""
+    engine = create_async_engine(
+        "sqlite+aiosqlite://", future=True, poolclass=StaticPool
+    )
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    try:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            repo, activities, _stored, digest = _capture_harness(
+                tmp_path, {"tracked.txt": "recoverable evidence\n"}
+            )
+            del activities._put_managed_checkpoint_artifact
+            activities._artifact_service = service
+            yield repo, activities, service, session, digest
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_stage", ["derivative_scan", "dependency_validation", "manifest_commit"]
+)
+async def test_failed_capture_preserves_uploads_without_listing_saved_work(
+    tmp_path, monkeypatch, failure_stage
+) -> None:
+    monkeypatch.setattr(settings.temporal, "namespace", "saved-work-capture-test")
+    if failure_stage == "derivative_scan":
+        original_scan = activity_runtime_module.scan_outbound_bundle
+
+        def reject_derivative(items, **kwargs):
+            if any(item.location == "checkpoint.saved-work" for item in items):
+                return SimpleNamespace(allowed=False)
+            return original_scan(items, **kwargs)
+
+        monkeypatch.setattr(
+            activity_runtime_module, "scan_outbound_bundle", reject_derivative
+        )
+        expected_error = "derivative metadata failed"
+    elif failure_stage == "dependency_validation":
+
+        def reject_dependencies(_dependencies):
+            raise ValueError("capture dependency validation failed")
+
+        monkeypatch.setattr(
+            activity_runtime_module,
+            "_validate_saved_work_dependency_entries",
+            reject_dependencies,
+        )
+        expected_error = "dependencies are not committable"
+    else:
+        monkeypatch.setattr(
+            activity_runtime_module,
+            "commit_saved_work_manifest",
+            lambda *_args, **_kwargs: {
+                "status": "incomplete",
+                "reason": "capture commit failed",
+            },
+        )
+        expected_error = "manifest is not committable"
+
+    async with _artifact_capture_harness(tmp_path) as state:
+        repo, activities, service, session, digest = state
+        with pytest.raises(Exception, match=expected_error):
+            await activities.agent_runtime_capture_workspace_checkpoint(
+                _request(digest=digest)
+            )
+
+        # Failures retain both the authoritative workspace and completed uploads.
+        assert (repo / "tracked.txt").read_text() == "recoverable evidence\n"
+        uploaded = list((await session.execute(select(TemporalArtifact))).scalars())
+        kinds = {
+            (artifact.metadata_json or {}).get("artifact_kind") for artifact in uploaded
+        }
+        assert {"checkpoint_archive", "checkpoint_manifest", "checkpoint_delta"} <= kinds
+        assert ("saved_work_manifest" in kinds) == (failure_stage != "derivative_scan")
+        for artifact in uploaded:
+            assert artifact.status is TemporalArtifactStatus.COMPLETE
+            _metadata, payload = await service.read(
+                artifact_id=artifact.artifact_id, principal="system"
+            )
+            assert payload
+        record_root = activities._run_store.store_root / "checkpoint_captures"
+        assert not list(record_root.glob("*.json"))
+        # COMPLETE upload identity is not evidence of a committed saved result.
+        assert await service.list_for_execution(
+            namespace="saved-work-capture-test",
+            workflow_id="wf-1",
+            run_id="run-1",
+            principal="system",
+        ) == []
+
+
+@pytest.mark.asyncio
+async def test_capture_links_manifest_last_and_retries_failed_linking(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings.temporal, "namespace", "saved-work-capture-test")
+    async with _artifact_capture_harness(tmp_path) as state:
+        _repo, activities, service, session, digest = state
+        original_link = service.link_artifact
+        calls = []
+
+        async def fail_second_link(**kwargs):
+            calls.append(kwargs["artifact_id"])
+            if len(calls) == 2:
+                raise RuntimeError("capture link failed")
+            return await original_link(**kwargs)
+
+        monkeypatch.setattr(service, "link_artifact", fail_second_link)
+        request = _request(digest=digest)
+        with pytest.raises(RuntimeError, match="capture link failed"):
+            await activities.agent_runtime_capture_workspace_checkpoint(request)
+
+        uploaded = list((await session.execute(select(TemporalArtifact))).scalars())
+        assert any(
+            (artifact.metadata_json or {}).get("artifact_kind") == "saved_work_manifest"
+            for artifact in uploaded
+        )
+        listed = await service.list_for_execution(
+            namespace="saved-work-capture-test",
+            workflow_id="wf-1",
+            run_id="run-1",
+            principal="system",
+        )
+        assert listed
+        assert all(
+            (artifact.metadata_json or {}).get("artifact_kind") != "saved_work_manifest"
+            for artifact in listed
+        )
+
+        monkeypatch.setattr(service, "link_artifact", original_link)
+        result = await activities.agent_runtime_capture_workspace_checkpoint(request)
+        listed = await service.list_for_execution(
+            namespace="saved-work-capture-test",
+            workflow_id="wf-1",
+            run_id="run-1",
+            principal="system",
+        )
+        ids = {artifact.artifact_id for artifact in listed}
+        assert result["savedWorkRef"] in ids
+        assert result["workspace"]["archiveRef"] in ids
+        assert set(result["diagnosticRefs"]) <= ids
+        # Retry preserves the original failed attempt's recoverable content.
+        for artifact in uploaded:
+            _metadata, payload = await service.read(
+                artifact_id=artifact.artifact_id, principal="system"
+            )
+            assert payload
+        assert (
+            await activities.agent_runtime_capture_workspace_checkpoint(request)
+            == result
+        )
 
 
 def test_saved_work_manifest_records_provenance_without_copied_policy() -> None:
@@ -184,6 +367,97 @@ def test_saved_work_manifest_records_provenance_without_copied_policy() -> None:
     assert "acl" not in manifest
     with pytest.raises(ValueError, match="dependencies"):
         describe_output_claim(fmt="exact_baseline_delta", status="requires_dependencies")
+
+
+def test_saved_work_artifact_metadata_projects_the_manifest_without_paths() -> None:
+    manifest = build_saved_work_manifest(
+        capture_id="capture-1",
+        identity={"workflowId": "wf-1", "boundary": "after_execution"},
+        source={"kind": "managed-code-workspace", "baselineCommit": "abc"},
+        content_digest="sha256:" + "a" * 64,
+        file_manifest_digest="sha256:" + "b" * 64,
+        capture_policy={"includeUntracked": True},
+        required_formats=["full_snapshot"],
+        optional_formats=["exact_baseline_delta"],
+        outputs=[
+            describe_output_claim(
+                fmt="full_snapshot",
+                status="self_contained",
+                ref="artifact://art-archive",
+                digest="sha256:" + "a" * 64,
+                size_bytes=10,
+            ),
+            describe_output_claim(
+                fmt="exact_baseline_delta",
+                status="requires_dependencies",
+                ref="art-delta",
+                dependencies=["git-baseline:abc"],
+            ),
+            describe_output_claim(fmt="selected_history", status="inapplicable"),
+        ],
+        exclusions=[
+            {"path": ".env", "reason": "sensitive-filename-policy"},
+            {"path": "node_modules/x", "reason": "sensitive-path-policy"},
+            {"path": "node_modules/y", "reason": "sensitive-path-policy"},
+        ],
+        scan={"disposition": "clean"},
+        dependencies=["git-baseline:abc"],
+        retention_ref="artifact-ownership",
+    )
+    manifest["limitations"] = ["target-platform path/case collisions present"]
+    payload = json.dumps(manifest).encode()
+
+    metadata = saved_work_artifact_metadata("saved_work_manifest", payload)
+
+    assert metadata == {
+        "saved_work_summary": {
+            "capture_id": "capture-1",
+            "required_formats": ["full_snapshot"],
+            "outputs": [
+                {
+                    "format": "full_snapshot",
+                    "status": "self_contained",
+                    "artifact_id": "art-archive",
+                },
+                {
+                    "format": "exact_baseline_delta",
+                    "status": "requires_dependencies",
+                    "artifact_id": "art-delta",
+                },
+                {"format": "selected_history", "status": "inapplicable"},
+            ],
+            "exclusion_count": 3,
+            "exclusion_reasons": [
+                {"reason": "sensitive-filename-policy", "count": 1},
+                {"reason": "sensitive-path-policy", "count": 2},
+            ],
+            "limitations": ["target-platform path/case collisions present"],
+            "retention_ref": "artifact-ownership",
+            "scan_disposition": "clean",
+            "quiescence_verified": False,
+        }
+    }
+    # Excluded paths stay inside the scanned manifest bytes, never metadata.
+    assert ".env" not in json.dumps(metadata)
+
+    checkpoint = {
+        "archive": {"ref": "artifact://art-archive"},
+        "git": {"indexPatch": {"ref": "art-index"}},
+        "entries": [{"path": "secret-name.txt"}],
+    }
+    assert saved_work_artifact_metadata(
+        "checkpoint_manifest", json.dumps(checkpoint).encode()
+    ) == {
+        "checkpoint_parts": {
+            "archive_artifact_id": "art-archive",
+            "index_patch_artifact_id": "art-index",
+        }
+    }
+    # Unknown kinds, other formats, or unreadable bytes add nothing rather
+    # than a permissive default.
+    assert saved_work_artifact_metadata("checkpoint_archive", payload) == {}
+    assert saved_work_artifact_metadata("saved_work_manifest", b"not json") == {}
+    assert saved_work_artifact_metadata("saved_work_manifest", b"[]") == {}
 
 
 def test_format_profile_never_synthesizes_git_for_report_only() -> None:
@@ -633,8 +907,9 @@ async def test_capture_uses_configured_outbound_policy(
 
 @pytest.mark.asyncio
 async def test_capture_links_saved_work_artifacts_to_owning_execution(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "namespace", "moonmind-4020")
     _repo, activities, _stored, digest = _capture_harness(
         tmp_path, {"tracked.txt": "evidence\n"}
     )
@@ -642,11 +917,15 @@ async def test_capture_links_saved_work_artifacts_to_owning_execution(
         _request(digest=digest)
     )
     assert result["status"] == "captured"
-    # Archive, manifest, delta, and saved-work uploads each carry the
-    # capture identity/namespace so the workflow owner keeps read access.
+    # Completed uploads stay unlinked until the save commits. Every part
+    # then links to the owning execution in its Temporal namespace, with the
+    # saved-work manifest last. The storage namespace is not an execution.
     assert len(activities.captured_put_links) == 5
-    for link in activities.captured_put_links:
-        assert link.namespace == "step-checkpoints/implement"
+    assert all(link is None for link in activities.captured_put_links)
+    assert len(activities.captured_execution_links) == 5
+    assert activities.captured_execution_links[-1][0] == result["savedWorkRef"]
+    for _artifact_ref, link in activities.captured_execution_links:
+        assert link.namespace == "moonmind-4020"
         assert link.workflow_id == "wf-1"
         assert link.run_id == "run-1"
         assert link.link_type == "output.checkpoint"

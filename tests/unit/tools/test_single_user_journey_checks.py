@@ -333,3 +333,301 @@ def test_api_bypasses_egress_proxy_for_loopback(
 
     info = journey.Api(base).json("GET", "/api/ui/info")
     assert info["dashboardConfig"]["system"]["defaultRepository"] == "o/r"
+
+
+STACK_PATH = "/api/v1/operations/deployment/stacks/moonmind"
+REPOSITORY = "ghcr.io/moonladderstudios/moonmind"
+
+
+class _Operations:
+    """Settings Operations and execution reads for the controller journey."""
+
+    def __init__(self) -> None:
+        self.update_response: dict[str, Any] = {
+            "deploymentUpdateRunId": "depupd_run1",
+            "taskId": "mm:legacy",
+            "workflowId": "mm:legacy",
+            "operationId": None,
+            "owner": "workflow",
+            "status": "QUEUED",
+        }
+        self.execution: dict[str, Any] = {"workflowId": "mm:legacy", "status": "canceled"}
+        self.controller: dict[str, Any] = {"installed": False, "reachable": False}
+        self.actions: list[dict[str, Any]] = []
+        self.requests: list[tuple[str, str]] = []
+
+    def stack(self) -> dict[str, Any]:
+        return {
+            "stack": "moonmind",
+            "controller": self.controller,
+            "recentActions": self.actions,
+        }
+
+
+def _history_row(status: str = "CANCELED") -> dict[str, Any]:
+    return {
+        "id": "depupd_run1",
+        "owner": "workflow",
+        "status": status,
+        "requestedImage": f"{REPOSITORY}:journey-history",
+        "runDetailUrl": "/workflows/mm:legacy",
+        "operationId": None,
+    }
+
+
+def _controller_row(**overrides: Any) -> dict[str, Any]:
+    return {
+        "id": "ctl-ui-1",
+        "owner": "controller",
+        "operationId": "ui-1",
+        "status": "FAILED",
+        "requestedImage": f"{REPOSITORY}:journey-controller",
+        "installedImage": None,
+        "errorSummary": "attempt 1: staging failed (latest attempt 6: staging failed)",
+        "attempts": [{"attempt": 1, "error": "staging failed", "at": None}],
+        "attemptGroup": 2,
+        "retryAllowed": True,
+        "runDetailUrl": None,
+        **overrides,
+    }
+
+
+@pytest.fixture
+def operations_api():
+    operations = _Operations()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def _send(self, status: int, body: Any) -> None:
+            payload = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            operations.requests.append(("GET", self.path))
+            if self.path == STACK_PATH:
+                self._send(200, operations.stack())
+            elif self.path.startswith("/api/v1/operations/deployment/image-targets"):
+                self._send(200, {"repositories": [{"repository": REPOSITORY}]})
+            elif self.path.startswith("/api/executions/"):
+                self._send(200, operations.execution)
+            else:
+                self._send(404, {})
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            operations.requests.append(("POST", self.path))
+            if self.path == "/api/v1/operations/deployment/update":
+                self._send(202, operations.update_response)
+            elif self.path.endswith("/cancel"):
+                self._send(202, operations.execution)
+            else:
+                self._send(404, {})
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", operations
+    finally:
+        server.shutdown()
+
+
+def _phase(phase, base, state_file):
+    return journey.main(
+        [phase, "--api-base", base, "--state-file", str(state_file), "--timeout", "5"]
+    )
+
+
+def test_history_records_a_workflow_backed_update_before_the_controller(
+    operations_api, tmp_path
+):
+    base, operations = operations_api
+    operations.actions = [_history_row()]
+    state_file = tmp_path / "state.json"
+
+    assert _phase("deployment_history", base, state_file) == 0
+    state = json.loads(state_file.read_text())
+    assert state["deploymentHistory"] == {
+        "workflowId": "mm:legacy",
+        "status": "CANCELED",
+        "runDetailUrl": "/workflows/mm:legacy",
+    }
+    assert state["controller"]["repository"] == REPOSITORY
+    assert ("POST", "/api/executions/mm%3Alegacy/cancel") in operations.requests
+
+
+def test_history_update_already_owned_by_a_controller_fails(
+    operations_api, tmp_path, capsys
+):
+    base, operations = operations_api
+    operations.update_response = {
+        **operations.update_response,
+        "owner": "controller",
+        "operationId": "ui-early",
+        "workflowId": None,
+    }
+    state_file = tmp_path / "state.json"
+
+    assert _phase("deployment_history", base, state_file) == 1
+    assert "transitional workflow updater" in capsys.readouterr().err
+
+
+def test_history_update_that_completed_fails(operations_api, tmp_path, capsys):
+    """No application-owned updater may run while the journey holds history."""
+    base, operations = operations_api
+    operations.execution = {"workflowId": "mm:legacy", "status": "completed"}
+    state_file = tmp_path / "state.json"
+
+    assert _phase("deployment_history", base, state_file) == 1
+    assert "completed" in capsys.readouterr().err
+
+
+def _dashboard_controller_state(state_file, **controller: Any) -> None:
+    state_file.write_text(
+        json.dumps(
+            {
+                "deploymentHistory": {
+                    "workflowId": "mm:legacy",
+                    "status": "CANCELED",
+                    "runDetailUrl": "/workflows/mm:legacy",
+                },
+                "controller": {
+                    "repository": REPOSITORY,
+                    "reference": "journey-controller",
+                    "operationId": "ui-1",
+                    "reloadedOperationId": "ui-1",
+                    "dashboardSubmissions": 1,
+                    "submission": {
+                        "owner": "controller",
+                        "operationId": "ui-1",
+                        "workflowId": None,
+                        "taskId": None,
+                    },
+                    "retry": {
+                        "owner": "controller",
+                        "operationId": "ui-1",
+                        "workflowId": None,
+                        "taskId": None,
+                    },
+                    **controller,
+                },
+            }
+        )
+    )
+
+
+def _installed(operations, *actions):
+    operations.controller = {"installed": True, "reachable": True}
+    operations.actions = list(actions)
+
+
+def test_controller_journey_with_one_owner_and_the_first_failure_passes(
+    operations_api, tmp_path
+):
+    base, operations = operations_api
+    _installed(operations, _controller_row(), _history_row())
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(state_file)
+
+    assert _phase("controller", base, state_file) == 0
+
+
+def test_second_controller_operation_is_a_second_mutation_owner(
+    operations_api, tmp_path, capsys
+):
+    base, operations = operations_api
+    _installed(
+        operations,
+        _controller_row(operationId="ui-2", id="ctl-ui-2"),
+        _controller_row(),
+        _history_row(),
+    )
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(state_file)
+
+    assert _phase("controller", base, state_file) == 1
+    assert "one mutation owner" in capsys.readouterr().err
+
+
+def test_retry_that_lost_the_first_failure_fails(operations_api, tmp_path, capsys):
+    base, operations = operations_api
+    _installed(
+        operations,
+        _controller_row(errorSummary="attempt 4: staging failed"),
+        _history_row(),
+    )
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(state_file)
+
+    assert _phase("controller", base, state_file) == 1
+    assert "first failure" in capsys.readouterr().err
+
+
+def test_retry_without_a_fresh_attempt_group_fails(operations_api, tmp_path):
+    base, operations = operations_api
+    _installed(operations, _controller_row(attemptGroup=1), _history_row())
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(state_file)
+
+    assert _phase("controller", base, state_file) == 1
+
+
+def test_controller_submission_that_created_a_workflow_fails(
+    operations_api, tmp_path, capsys
+):
+    base, operations = operations_api
+    _installed(operations, _controller_row(), _history_row())
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(
+        state_file,
+        submission={
+            "owner": "controller",
+            "operationId": "ui-1",
+            "workflowId": "mm:revived",
+            "taskId": "mm:revived",
+        },
+    )
+
+    assert _phase("controller", base, state_file) == 1
+    assert "workflow" in capsys.readouterr().err
+
+
+def test_new_workflow_backed_update_after_the_controller_fails(
+    operations_api, tmp_path, capsys
+):
+    base, operations = operations_api
+    revived = {**_history_row("RUNNING"), "id": "depupd_run2", "runDetailUrl": "/workflows/mm:new"}
+    _installed(operations, _controller_row(), revived, _history_row())
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(state_file)
+
+    assert _phase("controller", base, state_file) == 1
+    assert "workflow-backed" in capsys.readouterr().err
+
+
+def test_reload_that_did_not_reconnect_fails(operations_api, tmp_path, capsys):
+    base, operations = operations_api
+    _installed(operations, _controller_row(), _history_row())
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(state_file, reloadedOperationId=None)
+
+    assert _phase("controller", base, state_file) == 1
+    assert "reload" in capsys.readouterr().err
+
+
+def test_dashboard_that_submitted_again_after_reconnecting_fails(
+    operations_api, tmp_path, capsys
+):
+    base, operations = operations_api
+    _installed(operations, _controller_row(), _history_row())
+    state_file = tmp_path / "state.json"
+    _dashboard_controller_state(state_file, dashboardSubmissions=2)
+
+    assert _phase("controller", base, state_file) == 1
+    assert "submitted 2 updates" in capsys.readouterr().err

@@ -21,6 +21,15 @@ from .deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS,
 )
+from .deployment_controller import (
+    ControllerEndpoint,
+    ControllerTransportError,
+    DeploymentOperationError,
+    controller_action_status,
+    observe_controller_operation,
+    resolve_controller_endpoint,
+    submit_controller_update,
+)
 from .tool_plan_contracts import ToolFailure, ToolResult
 
 DEPLOYMENT_RUNNER_MODES = frozenset(
@@ -3685,6 +3694,133 @@ def build_compose_command_plan(
     )
 
 
+# Observing an installed controller's operation: bounded ordinary reads for
+# at most the controller's pull and apply budgets plus margin.
+CONTROLLER_OBSERVE_INTERVAL_SECONDS: float = 10
+CONTROLLER_OBSERVE_TIMEOUT_SECONDS: float = 2100
+_CONTROLLER_OPEN_STATUSES = frozenset({"QUEUED", "RUNNING"})
+
+
+def _controller_failure(exc: DeploymentOperationError) -> ToolFailure:
+    return ToolFailure(
+        error_code=exc.code.upper(),
+        message=exc.message,
+        # An unavailable controller is retried by observing again under the
+        # same identity; a refusal is a decision, not a transient failure.
+        retryable=exc.status_code == 503,
+        details={**exc.details, "failureClass": "deployment_controller"},
+    )
+
+
+def _controller_tool_result(operation: Mapping[str, Any], requested_image: str) -> ToolResult:
+    status = controller_action_status(str(operation.get("status") or ""))
+    installed = operation.get("installed") if isinstance(operation.get("installed"), Mapping) else {}
+    installed_image = str((installed or {}).get("image") or "") or None
+    verification = [
+        {"name": str(check.get("name")), "status": str(check.get("status")), "detail": check.get("detail")}
+        for check in list(operation.get("verification") or [])
+        if isinstance(check, Mapping)
+    ]
+    outputs: dict[str, Any] = {
+        "owner": "controller",
+        "operationId": str(operation.get("operationId") or ""),
+        "status": status,
+        "requestedImage": requested_image,
+        "installedImage": installed_image,
+        "resolvedDigest": (
+            installed_image.rsplit("@", 1)[1] if installed_image and "@" in installed_image else None
+        ),
+        "verification": verification,
+        "retryAllowed": status == "FAILED",
+    }
+    if status != "SUCCEEDED":
+        reason = str(
+            operation.get("errorSummary")
+            or operation.get("supersededReason")
+            or "; ".join(
+                f"{check['name']}: {check['status']}"
+                for check in verification
+                if check["status"] != "passed"
+            )
+            or "The controller did not verify the requested deployment."
+        )
+        outputs["failure"] = {
+            "class": "verification_failure" if status == "PARTIALLY_VERIFIED" else "deployment_failure",
+            "reason": _redact_sensitive(reason),
+            "retryable": False,
+        }
+    return ToolResult(
+        status="COMPLETED" if status == "SUCCEEDED" else "FAILED",
+        outputs=_redact_sensitive(outputs),
+        progress={"percent": 100, "state": status, "message": f"Controller operation {outputs['operationId']}: {status}"},
+    )
+
+
+async def _execute_through_controller(
+    endpoint: ControllerEndpoint,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> ToolResult:
+    """Submit and observe the installed controller's operation.
+
+    The workflow is only a submit/observe adapter: it never runs its own
+    Compose mutation beside the controller. Its durable execution identity
+    names the controller operation, so an activity retry reattaches and an
+    exhausted operation is retried only through the controller's explicit
+    Retry, not by redelivering this activity.
+    """
+    parsed = _parse_inputs(inputs)
+    image = parsed["image"]
+    requested_image = (
+        f"{image['repository']}@{image['resolvedDigest']}"
+        if image.get("resolvedDigest")
+        else _requested_image(parsed)
+    )
+    identity = str(context.get("idempotency_key") or context.get("workflow_id") or "").strip()
+    if not identity:
+        raise ToolFailure(
+            "INVALID_INPUT",
+            "A controller-owned update requires a durable execution identity.",
+            False,
+            details={"failureClass": "invalid_input"},
+        )
+    operation_id = "wf-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+    try:
+        operation = await asyncio.to_thread(
+            submit_controller_update,
+            endpoint,
+            operation_id=operation_id,
+            stack=parsed["stack"],
+            desired_image=requested_image,
+            reason=parsed["reason"] or "",
+        )
+        observed_id = str(operation.get("operationId") or operation_id)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + CONTROLLER_OBSERVE_TIMEOUT_SECONDS
+        while controller_action_status(str(operation.get("status") or "")) in _CONTROLLER_OPEN_STATUSES:
+            if loop.time() > deadline:
+                raise ToolFailure(
+                    "DEPLOYMENT_CONTROLLER_OBSERVATION_TIMEOUT",
+                    f"Controller operation {observed_id} is still running; observe it in "
+                    "Settings Operations.",
+                    True,
+                    details={"operationId": observed_id, "failureClass": "deployment_controller"},
+                )
+            await asyncio.sleep(CONTROLLER_OBSERVE_INTERVAL_SECONDS)
+            try:
+                latest = await asyncio.to_thread(
+                    observe_controller_operation, endpoint, observed_id
+                )
+            except ControllerTransportError:
+                # An observer outage is not a failed update; keep observing.
+                continue
+            if latest is not None:
+                operation = latest
+    except DeploymentOperationError as exc:
+        raise _controller_failure(exc) from None
+    return _controller_tool_result(operation, requested_image)
+
+
 def build_deployment_update_handler(
     executor: DeploymentUpdateExecutor | None = None,
 ):
@@ -3699,6 +3835,9 @@ def build_deployment_update_handler(
         inputs: Mapping[str, Any], context: Mapping[str, Any] | None = None
     ) -> ToolResult:
         context = dict(context or {})
+        endpoint = resolve_controller_endpoint()
+        if endpoint is not None:
+            return await _execute_through_controller(endpoint, inputs, context)
         context_executor = None
         candidate = context.get("deployment_update_executor")
         if isinstance(candidate, DeploymentUpdateExecutor):
