@@ -18,6 +18,8 @@ from pathlib import Path
 
 from moonmind.workflows.skills.deployment_execution import (
     DEPLOYMENT_CONTROL_SERVICE as CONTROL_SERVICE,
+)
+from moonmind.workflows.skills.deployment_execution import (
     DEPLOYMENT_TRANSPORT_SERVICE,
     ToolFailure,
     ToolResult,
@@ -769,9 +771,7 @@ async def verify_installed_fleet(runner, image, *, expected=None, attempts=60):
 
 def _omnigent_release_store():
     """Return the durable desired-state store, or None when there is none."""
-    from moonmind.workflows.skills.deployment_execution import (
-        FileDesiredStateStore,
-    )
+    from moonmind.workflows.skills.deployment_execution import FileDesiredStateStore
 
     env_file = str(
         os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
@@ -840,6 +840,111 @@ async def migrate_omnigent(
         actor=actor,
         selected_revision=selected_revision,
     )
+
+
+async def run_controller_omnigent_step(phase, payload):
+    """Run the existing Omnigent helper under the standalone controller.
+
+    This narrow CLI boundary does not construct a deployment executor or
+    launch the legacy full updater. Selection receipts survive lost command
+    acknowledgments and preserve the exact revision migration must finish.
+    """
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+    from moonmind.workflows.skills.omnigent_release import (
+        _deployment_lock,
+        read_omnigent_release,
+    )
+
+    if phase not in ("select", "migrate"):
+        raise ValueError("Unknown controller Omnigent release step")
+    operation_id = str(payload["operationId"])
+    target = dict(payload["target"])
+    image = str(payload["moonmindImage"])
+    store = _omnigent_release_store()
+    if store is None:
+        raise ValueError("Controller Omnigent steps require durable deployment state")
+    project_dir = str(target["projectDir"])
+    local_dir = Path(
+        os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
+        or "/workspace/host_project"
+    )
+    files = list(target.get("composeFiles") or ["docker-compose.yaml"])
+
+    def local_file(name):
+        path = Path(name)
+        if path.is_absolute():
+            path = path.relative_to(project_dir)
+        if ".." in path.parts:
+            raise ValueError("Compose file escapes the deployment checkout")
+        return str(local_dir / path)
+
+    runner = HostDockerComposeRunner(
+        project_dir=project_dir,
+        project_name=str(target["project"]),
+        local_project_dir=str(local_dir),
+        compose_file=local_file(files[0]),
+        override_files=tuple(local_file(name) for name in files[1:]),
+        env_file=store.env_file_path,
+    )
+    key = hashlib.sha256(operation_id.encode()).hexdigest()[:32]
+    directory = Path(store.env_file_path).parent / "controller-omnigent-jobs" / key
+    directory.mkdir(parents=True, exist_ok=True)
+    identity = {"operationId": operation_id, "moonmindImage": image, "target": target}
+    if reserve_record(directory / "request.json", identity) != identity:
+        raise ValueError(
+            "Controller operation was reused with different release inputs"
+        )
+    selection_file = directory / "selection.json"
+    owner = f"controller:{operation_id}"
+    if phase == "select":
+        async with _deployment_lock():
+            if selection_file.is_file():
+                return json.loads(selection_file.read_text())
+            # Selection can commit desired state before its acknowledgment
+            # is saved. Reconcile that same operation's confirmed write
+            # rather than resolving a moved channel after interruption.
+            env_entries, record_doc = store.read()
+            recorded = read_omnigent_release(env_entries, record_doc)
+            if recorded is not None and recorded.updated_by == owner:
+                selection = {
+                    "status": "advanced",
+                    "revision": recorded.revision,
+                    "serverImageRef": recorded.server_image_ref,
+                    "hostImageRefs": {
+                        kind: ref
+                        for kind, ref in recorded.host_image_refs.items()
+                        if ref
+                    },
+                }
+            else:
+                selection = await select_omnigent(runner, owner, image, actor=owner)
+            write_record(selection_file, selection)
+            return selection
+    if not selection_file.is_file():
+        raise ValueError("Controller migration has no durable Omnigent selection")
+    selection = json.loads(selection_file.read_text())
+    revision = selection.get("revision")
+    if payload.get("selectedRevision") != revision:
+        raise ValueError("Controller migration differs from its durable selection")
+    if selection.get("status") == "skipped":
+        return selection
+    return await migrate_omnigent(
+        runner, owner, image, actor=owner, selected_revision=revision
+    )
+
+
+async def controller_omnigent_cli(phase, payload):
+    import sys
+
+    result = await run_controller_omnigent_step(phase, payload)
+    # The controller merges stdout then stderr before bounding its log tail.
+    # Put the final receipt after migration diagnostics on that merged tail.
+    print(
+        "MOONMIND_OMNIGENT_RESULT=" + json.dumps(result, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )
+    return 0
 
 
 async def verify_operator_access(image, urls, owner, *, expected_release=None):
@@ -1276,6 +1381,14 @@ async def submit(payload):
 if __name__ == "__main__":
     import sys
 
+    if sys.argv[1] in ("--omnigent-select", "--omnigent-migrate"):
+        raise SystemExit(
+            asyncio.run(
+                controller_omnigent_cli(
+                    sys.argv[1].removeprefix("--omnigent-"), json.loads(sys.argv[2])
+                )
+            )
+        )
     if sys.argv[1] == "--submit":
         raise SystemExit(asyncio.run(submit(json.loads(sys.argv[2]))))
     asyncio.run(run_job(Path(sys.argv[1])))

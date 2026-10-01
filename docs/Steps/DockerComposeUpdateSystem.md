@@ -5,7 +5,7 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-09-30
+**Last Updated:** 2026-10-01
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
 
@@ -215,6 +215,26 @@ agent runtime worker; already-running static host profiles follow a changed
 shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
 with no suitable new Omnigent image for a configured channel leaves the installed release in place.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
+
+The standalone controller delegates selection and migration to the existing
+`deployment_release --omnigent-select` and `--omnigent-migrate` helpers in
+bounded, dependency-free Compose one-offs from the selected MoonMind image.
+Those trusted one-offs receive the controller's deployment-owned Docker
+transport, so repair does not require the target project's proxy to be running.
+It keeps the deployment lock while those helpers run; they do not launch the
+legacy full updater. Selection completes before the main Compose pass, which
+layers the operator `.env`, release-owned `.env.deploy`, and controller image
+overlay in that order. After installation, migration finishes the durable
+selected revision without resolving a moved channel again. The default
+rendered Omnigent service follows this path even when `.env` is absent. A
+selection failure leaves the fleet untouched; migration failure retains the
+confirmed installation and records the original error as failed verification.
+Lost acknowledgments reuse the saved selection, including a desired-state
+write confirmed before its selection receipt was saved. A still-running
+one-off is observed before another attempt can launch. Only a helper whose operation,
+project, current step and kernel lock match the controller's record is excluded
+from legacy-writer detection; orphaned or terminal competing writers continue
+to block cutover.
 
 Reconcile uncertain recreations before repeating them. Future launches follow
 the installed runtime while preserving explicit harness/provider choices and

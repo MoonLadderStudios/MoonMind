@@ -12,6 +12,7 @@ group with prior diagnostics retained. Reporting or cleanup failures are
 recorded alongside the result and can never erase a confirmed installation
 or hide failed mandatory verification.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -330,6 +331,20 @@ class OperationStore:
         operation["attemptGroup"] = operation.get("attemptGroup", 1) + 1
         operation["autoAttemptsExhausted"] = False
         operation["status"] = "pending"
+        return self._write(operation)
+
+    def record_omnigent_step(self, operation_id: str, phase: str | None) -> dict:
+        """Identify the one-off this kernel-owned controller is awaiting."""
+        operation = self.load(operation_id)
+        operation["omnigentStep"] = phase
+        return self._write(operation)
+
+    def record_omnigent_selection(
+        self, operation_id: str, selection: Mapping[str, Any]
+    ) -> dict:
+        """Keep the selected revision across apply retries and restarts."""
+        operation = self.load(operation_id)
+        operation["omnigentSelection"] = dict(selection)
         return self._write(operation)
 
     def confirm_installed(self, operation_id: str, *, image: str) -> dict:

@@ -1,7 +1,9 @@
 """Authenticated local endpoint + restart convergence (REQ-02, REQ-04)."""
+
 import json
 import threading
 import urllib.request
+from pathlib import Path
 from wsgiref.simple_server import make_server
 
 from conftest import load
@@ -456,22 +458,39 @@ def test_submit_accepts_relative_compose_subpaths(controller_path, tmp_path):
         thread.join(timeout=10)
 
 
-def test_env_files_layer_deployment_env_under_the_overlay(
-    controller_path, tmp_path
-):
+def test_env_files_layer_deployment_env_under_the_overlay(controller_path, tmp_path):
     server_mod = load("server")
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
     (project_dir / ".env").write_text("AUTH_PROVIDER=disabled\n")
+    release_dir = project_dir / "deploy" / "state"
+    release_dir.mkdir(parents=True)
+    (release_dir / ".env.deploy").write_text("OMNIGENT_IMAGE_REF=server@sha256:old\n")
     layered = server_mod._env_files_for_apply(
         {"projectDir": str(project_dir)}, "/state/image-overlays/op.env"
     )
-    assert layered == [str(project_dir / ".env"), "/state/image-overlays/op.env"]
+    assert layered == [
+        str(project_dir / ".env"),
+        str(release_dir / ".env.deploy"),
+        "/state/image-overlays/op.env",
+    ]
+    # Compose's default also applies to an explicitly empty setting.
+    (project_dir / ".env").write_text("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE=\n")
+    assert (
+        server_mod._env_files_for_apply(
+            {"projectDir": str(project_dir)}, "/state/image-overlays/op.env"
+        )
+        == layered
+    )
     explicit = server_mod._env_files_for_apply(
         {"projectDir": str(project_dir), "envFile": "/custom/dep.env"},
         "/state/image-overlays/op.env",
     )
-    assert explicit == ["/custom/dep.env", "/state/image-overlays/op.env"]
+    assert explicit == [
+        "/custom/dep.env",
+        str(release_dir / ".env.deploy"),
+        "/state/image-overlays/op.env",
+    ]
     bare_dir = tmp_path / "bare"
     bare_dir.mkdir()
     assert server_mod._env_files_for_apply(
@@ -670,33 +689,142 @@ def test_production_apply_partially_verifies_failed_operator_access(
     assert access and access[0]["status"] == "failed"
 
 
-def test_production_apply_records_omnigent_gap_without_migrator(
+def test_production_apply_delegates_omnigent_selection_and_migration(
     controller_path, tmp_path, monkeypatch
 ):
     record = load("record")
     server_mod = load("server")
-    (tmp_path / ".env").write_text("OMNIGENT_IMAGE_TAG=v1\n", encoding="utf-8")
-    store = record.OperationStore(tmp_path / "state")
+    (tmp_path / ".env").write_text("OMNIGENT_IMAGE_TAG=latest\n", encoding="utf-8")
+    store = record.OperationStore(tmp_path / "controller-state")
     target = {
-        "project": "moonmind",
+        "project": "moonmind-test-recorded-project",
         "projectDir": str(tmp_path),
-        "composeFiles": ["docker-compose.yaml"],
-        "services": ["api"],
+        "composeFiles": ["docker-compose.yaml", "docker-compose.override.yaml"],
+        "services": ["api", "omnigent"],
     }
     op = _begin_op(record, store, target)
-    monkeypatch.setattr(
-        server_mod.engine,
-        "subprocess_runner",
-        lambda: _verification_runner(server_mod.engine),
-    )
+    commands = []
+    phase = []
+    release_env = tmp_path / "deploy" / "state" / ".env.deploy"
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            commands.append(tuple(args))
+            assert 0 < timeout_seconds <= 900
+            if "run" in args:
+                assert args[args.index("--project-name") + 1] == target["project"]
+                assert "--no-deps" in args and "--rm" in args and "-T" in args
+                assert args[args.index("--entrypoint") + 1] == "python"
+                assert (
+                    f"moonmind.controller.omnigent.operation={op['operationId']}"
+                    in args
+                )
+                assert "temporal-worker-deployment-control" in args
+                helper_files = [
+                    args[i + 1] for i, part in enumerate(args) if part == "-f"
+                ]
+                helper = json.loads(Path(helper_files[-1]).read_text())["services"][
+                    "temporal-worker-deployment-control"
+                ]
+                assert helper["image"] == op["desired"]["image"]
+                # Selection must work while the target project's proxy and
+                # workers are stopped. Only this trusted one-off receives
+                # the controller-owned daemon transport.
+                assert (
+                    helper["environment"]["DOCKER_HOST"]
+                    == "unix:///var/run/docker.sock"
+                )
+                assert (
+                    helper["environment"]["SYSTEM_DOCKER_HOST"]
+                    == "unix:///var/run/docker.sock"
+                )
+                assert (
+                    "/var/run/docker.sock:/var/run/docker.sock:ro" in helper["volumes"]
+                )
+                assert args[-3] == "moonmind.workflows.skills.deployment_release"
+                payload = json.loads(args[-1])
+                assert payload["operationId"] == op["operationId"]
+                assert payload["target"] == target
+                assert payload["moonmindImage"] == op["desired"]["image"]
+                if args[-2] == "--omnigent-select":
+                    assert "up" not in phase
+                    phase.append("select")
+                    release_env.parent.mkdir(parents=True, exist_ok=True)
+                    release_env.write_text("OMNIGENT_IMAGE_REF=server@sha256:new\n")
+                    receipt = {"status": "advanced", "revision": 7}
+                else:
+                    assert args[-2] == "--omnigent-migrate"
+                    assert phase == ["select", "pull", "up"]
+                    assert payload["selectedRevision"] == 7
+                    phase.append("migrate")
+                    receipt = {"status": "converged", "revision": 7}
+                return {
+                    "exit": 0,
+                    "output": "migration log\nMOONMIND_OMNIGENT_RESULT="
+                    + json.dumps(receipt),
+                }
+            if "pull" in args or "up" in args:
+                phase.append("pull" if "pull" in args else "up")
+                assert str(release_env) in args
+                files = [
+                    args[i + 1] for i, part in enumerate(args) if part == "--env-file"
+                ]
+                assert files[0] == str(tmp_path / ".env")
+                assert files[1] == str(release_env)
+                assert files[-1].endswith(f"{op['operationId']}.env")
+            if "ps" in args:
+                return {
+                    "exit": 0,
+                    "output": json.dumps(
+                        [
+                            {"Service": name, "State": "running"}
+                            for name in target["services"]
+                        ]
+                    ),
+                }
+            return {"exit": 0, "output": "ok"}
+
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: Runner())
     result = server_mod.production_apply(store, op)
-    assert result["status"] == "partially_verified", result
-    omnigent = [
-        check
-        for check in store.load(op["operationId"])["verification"]
-        if check["name"] == "omnigent-migration"
-    ]
-    assert omnigent and omnigent[0]["status"] == "unavailable"
+    assert result["status"] == "succeeded", result
+    assert phase == ["select", "pull", "up", "migrate"]
+    stored = store.load(op["operationId"])
+    assert stored["omnigentSelection"]["revision"] == 7
+    assert stored["status"] == "succeeded"
+    assert all(check["status"] == "passed" for check in stored["verification"])
+
+
+def test_legacy_probe_only_excludes_recorded_controller_one_offs(controller_path):
+    server_mod = load("server")
+    known = {"operation-1": "moonmind-test-owned"}
+    own = "controller-step\ttrue\tmoonmind-test-owned\toperation-1\n"
+    assert (
+        server_mod.parse_legacy_mutation_ps(own, controller_operations=known) is False
+    )
+    assert server_mod.parse_legacy_mutation_ps(own, controller_operations={}) is True
+    assert (
+        server_mod.parse_legacy_mutation_ps(
+            "foreign-step\ttrue\tmoonmind-test-other\toperation-1\n",
+            controller_operations=known,
+        )
+        is True
+    )
+    assert (
+        server_mod.parse_legacy_mutation_ps(
+            own + "legacy-step\ttrue\tmoonmind-test-owned\t\n",
+            controller_operations=known,
+        )
+        is True
+    )
+
+
+def test_default_compose_omnigent_service_requires_migration_without_env(
+    controller_path,
+):
+    server_mod = load("server")
+    assert server_mod.omnigent_channels_for_target({"services": ["api", "omnigent"]})
 
 
 def test_conflict_bodies_never_expose_error_detail(
@@ -1268,3 +1396,169 @@ def test_resubmitting_an_orphaned_open_operation_resumes_it(controller_path, tmp
         assert (status, resumed["status"], applied) == (202, "succeeded", ["op-orphan"])
     finally:
         harness.close()
+
+
+def test_omnigent_command_failure_keeps_the_original_migration_error(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    (tmp_path / ".env").write_text("OMNIGENT_IMAGE_TAG=latest\n")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(
+        record,
+        store,
+        {
+            "project": "moonmind-test",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api"],
+        },
+    )
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            if "--omnigent-select" in args:
+                return {
+                    "exit": 0,
+                    "output": "MOONMIND_OMNIGENT_RESULT="
+                    + json.dumps({"status": "advanced", "revision": 3}),
+                }
+            if "--omnigent-migrate" in args:
+                return {"exit": 1, "output": "Omnigent catalog unavailable"}
+            if "ps" in args:
+                return {
+                    "exit": 0,
+                    "output": json.dumps({"Service": "api", "State": "running"}),
+                }
+            return {"exit": 0, "output": "ok"}
+
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: Runner())
+    result = server_mod.production_apply(store, op)
+    assert result["status"] == "partially_verified"
+    operation = store.load(op["operationId"])
+    assert operation["installed"]["image"] == op["desired"]["image"]
+    checks = [c for c in operation["verification"] if c["name"] == "omnigent-migration"]
+    assert checks[-1]["status"] == "failed"
+    assert "Omnigent catalog unavailable" in checks[-1]["detail"]
+
+
+def test_omnigent_selection_failure_never_recreates_the_fleet(
+    controller_path, tmp_path, monkeypatch
+):
+    import pytest
+
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(
+        record,
+        store,
+        {
+            "project": "moonmind-test",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api", "omnigent"],
+        },
+    )
+    commands = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            commands.append(args)
+            return {"exit": 1, "output": "Omnigent image unavailable"}
+
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: Runner())
+    with pytest.raises(server_mod.engine.StageError):
+        server_mod.production_apply(store, op)
+    operation = store.load(op["operationId"])
+    assert operation["installed"] is None
+    assert "Omnigent image unavailable" in operation["errorSummary"]
+    assert not any("up" in command for command in commands)
+
+
+def test_default_legacy_probe_keeps_orphaned_and_terminal_mutators_observable(
+    controller_path, tmp_path, monkeypatch
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    record = load("record")
+    lock_mod = load("lock")
+    server_mod = load("server")
+    state_dir = tmp_path / "state"
+    store = record.OperationStore(state_dir)
+    op = _begin_op(
+        record,
+        store,
+        {
+            "project": "moonmind-test-owned",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api"],
+        },
+    )
+    # A labelled one-off is not enough: the current record and kernel owner
+    # must both prove it belongs to the in-progress controller step.
+    store.record_omnigent_step(op["operationId"], "select")
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(state_dir))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=f"step\ttrue\tmoonmind-test-owned\t{op['operationId']}\n",
+        ),
+    )
+    assert server_mod.default_legacy_writer_probe() is True
+    with lock_mod.StackLock(state_dir, "moonmind").acquire():
+        assert server_mod.default_legacy_writer_probe() is False
+        store.supersede(
+            op["operationId"], reason="a different operation now owns recovery"
+        )
+        assert server_mod.default_legacy_writer_probe() is True
+
+
+def test_uncertain_omnigent_launch_is_observed_before_a_bounded_retry(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(
+        record,
+        store,
+        {
+            "project": "moonmind-test",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api", "omnigent"],
+        },
+    )
+    launches = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": "still-running-helper" if launches else ""}
+            if "--omnigent-select" in args:
+                launches.append(args)
+                raise server_mod.engine.CommandError(
+                    "run", 124, "acknowledgment timed out"
+                )
+            raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: Runner())
+    result = server_mod._apply_recording_failure(
+        store,
+        op["operationId"],
+        lambda operation: server_mod.production_apply(store, operation),
+    )
+    assert result["status"] == "failed"
+    assert len(launches) == 1
+    assert "acknowledgment timed out" in result["errorSummary"]
+    assert "still running" in result["attempts"][-1]["error"]
