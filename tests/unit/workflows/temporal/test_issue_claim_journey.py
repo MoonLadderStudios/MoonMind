@@ -1,6 +1,7 @@
 """Escaped own-claim regression through HTTP, production tools and durable SQL."""
 
 import asyncio
+import hashlib
 import json
 import threading
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -54,10 +55,12 @@ async def journey(tmp_path, monkeypatch, request):
         def log_message(self, *_args):
             pass
 
-        def respond(self, payload, status=200):
+        def respond(self, payload, status=200, headers=None):
             raw = json.dumps(payload).encode()
             self.send_response(status)
             self.send_header("Content-Length", str(len(raw)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(raw)
 
@@ -94,13 +97,28 @@ async def journey(tmp_path, monkeypatch, request):
                     self.respond({"message": "temporary comparison outage"}, 503)
                 else:
                     payload, status = state["comparison_provider"](unquote(path.rsplit("/compare/", 1)[1]))
-                    self.respond(payload, status)
+                    # GitHub-style validator: an unchanged comparison answers
+                    # a conditional request with an uncounted 304.
+                    etag = '"%s"' % hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+                    if status == 200 and self.headers.get("If-None-Match") == etag:
+                        state["compare_not_modified"] = state.get("compare_not_modified", 0) + 1
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.end_headers()
+                    else:
+                        self.respond(payload, status, {"ETag": etag})
             elif path.endswith("/issues"):
                 if state.get("scan_entries"):
                     query = parse_qs(urlsplit(self.path).query)
                     per_page = int(query.get("per_page", [100])[0])
                     page = int(query.get("page", [1])[0])
-                    self.respond(state["scan_entries"][(page - 1) * per_page : page * per_page])
+                    # A listing carries the same live labels as the issue read.
+                    self.respond(
+                        [
+                            self.issue() if item["number"] == 3970 else item
+                            for item in state["scan_entries"][(page - 1) * per_page : page * per_page]
+                        ]
+                    )
                     return
                 if int(parse_qs(urlsplit(self.path).query).get("page", [1])[0]) > 1:
                     self.respond([])

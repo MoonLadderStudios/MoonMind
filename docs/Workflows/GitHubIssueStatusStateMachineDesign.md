@@ -268,10 +268,19 @@ API startup registers `MoonMind.GitHubIssueReconcile` every five minutes, enable
 by default. The existing API schedule observer retries a failed registration
 every 30 seconds without depending on the workflow queue it is registering.
 Its empty-input maintenance route discovers repositories from configured scope,
-durable claim receipts, and its persisted repository list. It rotates through
+durable claim receipts, and its persisted repository list, compared
+case-insensitively so each repository is swept once under its configured
+spelling. It rotates through
 at most three repositories per sweep with a 40-second limit per repository and
 at most 25 issues per scan, with ten seconds per issue; persisted issue/page cursors prevent a busy prefix
 from permanently starving later issues. Shared lease decisions use GitHub only.
+The scan classifies each issue from the open-issue listing first: an issue
+outside the scan's lifecycle scope costs no per-issue read. An issue whose last
+outcome was a no-op decided from issue state alone (`settled_status_retained`,
+or `no_interrupted_transition` with no claim, PR, or pending effect) is not
+re-read while its listing `updated_at` is unchanged; any label or comment change
+moves `updated_at`. Issues with pending effects, and every issue the reconciler
+might change, are re-read before acting.
 The same route additionally rotates through at most 25 local claims, including
 claims whose advisory labels are missing. A failed controlling execution and all
 of its descendants must have been closed for at least five minutes before release
@@ -296,8 +305,10 @@ matching, digest-validated runtime bindings with completed fenced cleanup. The
 workspace owner binds a clean-worktree observation, including untracked files,
 to the preserved checkpoint's archive digest and exact revision. The reconciler
 then verifies through GitHub that this revision is still reachable from the
-recorded source branch. The comparison grants no branch-write, PR, or completion
-authority. Remote read failures defer to a subsequent sweep without another agent
+recorded source branch. Repeat sweeps send that comparison as a conditional
+request with the stored `ETag`; a `304` reuses the stored verdict and does not
+count against the shared GitHub rate limit. The comparison grants no
+branch-write, PR, or completion authority. Remote read failures defer to a subsequent sweep without another agent
 turn. A run that never started an agent can release its unused reservation or
 confirmed announcement after the same terminal checks.
 
