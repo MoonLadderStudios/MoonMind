@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -289,6 +290,19 @@ def _evidence_payload(
 def _write_payload(payload: Mapping[str, Any], *, artifacts_dir: Path) -> Path:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     path = artifacts_dir / "publish_result.json"
+    prior = _read_json_optional(path)
+    if (
+        prior.get("schemaVersion") == SCHEMA_VERSION
+        and prior.get("status") == "verified"
+        and prior.get("remoteVerified") is True
+        and (prior.get("pushed") is True or prior.get("merged") is True)
+        and prior != dict(payload)
+    ):
+        confirmed = path.read_bytes()
+        digest = hashlib.sha256(confirmed).hexdigest()
+        (artifacts_dir / f"publish_result.confirmed.{digest}.json").write_bytes(
+            confirmed
+        )
     path.write_text(json.dumps(dict(payload), indent=2) + "\n", encoding="utf-8")
     return path
 
@@ -616,6 +630,51 @@ def from_pr_resolver_result(
     branch = _resolver_branch(result, snapshot)
     pr_url = _resolver_pr_url(result, snapshot)
 
+    if status in {"blocked", "failed", "attempts_exhausted"}:
+        # Publication and PR resolution are different confirmed outcomes. A
+        # later CI wait must not erase this step's already verified repair push.
+        # Recheck its exact head rather than inferring a push from an attempt.
+        prior = _read_json_optional(artifacts_dir / "publish_result.json")
+        if (
+            prior.get("schemaVersion") == SCHEMA_VERSION
+            and prior.get("executionRef") == _execution_ref("pr-resolver")
+            and prior.get("skillId")
+            in {"pr-resolver", "fix-ci", "fix-comments", "fix-merge-conflicts"}
+            and prior.get("repository") == repo
+            and prior.get("branch") == branch
+            and prior.get("status") == "verified"
+            and prior.get("action") == "push"
+            and prior.get("pushed") is True
+            and prior.get("remoteVerified") is True
+        ):
+            try:
+                local_head, remote_head, commands = _verify_exact_remote_head(branch)
+            except PublishEvidenceError:
+                pass
+            else:
+                if (
+                    local_head
+                    == prior.get("localHead")
+                    == prior.get("remoteBranchHead")
+                ):
+                    return _write_payload(
+                        _evidence_payload(
+                            skill_id="pr-resolver",
+                            status="verified",
+                            action="push",
+                            repository=repo,
+                            branch=branch,
+                            local_head=local_head,
+                            remote_branch_head=remote_head,
+                            remote_verified=True,
+                            pushed=True,
+                            merged=False,
+                            pr_url=pr_url or None,
+                            verification_commands=commands,
+                        ),
+                        artifacts_dir=artifacts_dir,
+                    )
+
     if disposition in {"merged", "already_merged"} or status == "merged":
         pr_url = _resolve_verified_merged_pr_url(result, snapshot)
         if not pr_url:
@@ -697,9 +756,11 @@ def from_pr_resolver_result(
             skill_id="pr-resolver",
             repo=repo,
             branch=branch,
-            reason=reason
-            if reason != "unknown"
-            else f"unresolved_pr_resolver_state:{status}",
+            reason=(
+                reason
+                if reason != "unknown"
+                else f"unresolved_pr_resolver_state:{status}"
+            ),
             artifacts_dir=artifacts_dir,
         )
 
@@ -774,12 +835,14 @@ def from_pr_resolver_result(
         skill_id="pr-resolver",
         repo=repo,
         branch=branch,
-        reason=reason
-        if (
-            status in {"blocked", "attempts_exhausted"}
-            or disposition in {"manual_review", "blocked"}
-        )
-        else f"unsupported_pr_resolver_state:{status or disposition or 'unknown'}",
+        reason=(
+            reason
+            if (
+                status in {"blocked", "attempts_exhausted"}
+                or disposition in {"manual_review", "blocked"}
+            )
+            else f"unsupported_pr_resolver_state:{status or disposition or 'unknown'}"
+        ),
         artifacts_dir=artifacts_dir,
     )
 

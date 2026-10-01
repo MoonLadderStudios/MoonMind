@@ -105,6 +105,138 @@ def pr_resolve_contract_module() -> dict[str, Any]:
         )
     )
 
+
+@pytest.mark.parametrize(
+    "required,state,running,failed",
+    [
+        ([], "pending", False, False),
+        (["GitBook"], "pending", True, False),
+        (None, "pending", True, False),
+        (["GitBook"], "failure", False, True),
+    ],
+)
+def test_snapshot_reconciles_current_head_legacy_statuses(
+    pr_resolve_snapshot_module, monkeypatch, tmp_path, required, state, running, failed
+):
+    """Run the actual snapshot path: a green check-run cannot erase commit statuses."""
+    main = pr_resolve_snapshot_module["main"]
+    globals_ = main.__globals__
+    pr = {
+        "number": 2776,
+        "url": "https://github.com/owner/repo/pull/2776",
+        "state": "OPEN",
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "UNSTABLE",
+        "headRefOid": "current-head",
+        "baseRefName": "main",
+        "statusCheckRollup": [
+            {"name": "Unreal", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"context": "GitBook", "state": state.upper()},
+        ],
+    }
+
+    def read_api(command, *args):
+        endpoint = " ".join(command)
+        if "/check-runs" in endpoint:
+            return {
+                "check_runs": [
+                    {"name": "Unreal", "status": "completed", "conclusion": "success"}
+                ]
+            }
+        if "/statuses" in endpoint:
+            # The API returns newest first; older results for the same context
+            # must not overturn the latest observation.
+            return [
+                {
+                    "context": "GitBook",
+                    "state": state,
+                    "target_url": "https://example.test/current",
+                },
+                {
+                    "context": "GitBook",
+                    "state": "failure",
+                    "target_url": "https://example.test/old",
+                },
+            ]
+        if "/branches/main/protection" in endpoint:
+            return (
+                None
+                if required is None
+                else {"required_status_checks": {"contexts": required}}
+            )
+        if "/rules/branches/main" in endpoint:
+            return None if required is None else []
+        if "/branches/main" in endpoint:
+            return {"protected": required != []}
+        return None
+
+    monkeypatch.setitem(globals_, "fetch_pr_data", lambda _: (pr, "2776", []))
+    monkeypatch.setitem(globals_, "run_command_optional", read_api)
+    monkeypatch.setitem(globals_, "run_command", lambda *args: {"comments": []})
+    monkeypatch.setitem(globals_, "_fetch_previous_commit_sha", lambda **kwargs: None)
+    path = tmp_path / "snapshot.json"
+    monkeypatch.setattr(
+        "sys.argv", ["snapshot", "--pr", "2776", "--snapshot-path", str(path)]
+    )
+
+    main()
+
+    snapshot = json.loads(path.read_text())
+    ci = snapshot["ci"]
+    assert ci["isRunning"] is running
+    assert ci["hasAuthoritativeFailures"] is failed
+    assert ci["requiredChecksKnown"] is (required is not None)
+    assert ci["signalQuality"] == "ok"
+    if required == []:
+        assert ci["advisoryStatuses"][0]["context"] == "GitBook"
+    assert not any(
+        check.get("url", "").endswith("/old") for check in ci["failedChecks"]
+    )
+
+
+def test_unprotected_branch_supplies_required_check_policy_without_protection_api(
+    pr_resolve_snapshot_module, monkeypatch
+):
+    fetch = pr_resolve_snapshot_module["_fetch_required_status_checks"]
+    calls = []
+
+    def read(command):
+        calls.append(command)
+        return {"protected": False} if command[-1].endswith("/branches/main") else None
+
+    monkeypatch.setitem(fetch.__globals__, "run_command_optional", read)
+    assert fetch(pr_repo="owner/repo", base_branch="main") == []
+
+
+def test_required_checks_include_app_bound_contexts_and_branch_rules(
+    pr_resolve_snapshot_module, monkeypatch
+):
+    fetch = pr_resolve_snapshot_module["_fetch_required_status_checks"]
+
+    def read(command):
+        endpoint = command[-1]
+        if endpoint == "repos/owner/repo/branches/main":
+            return {"protected": True}
+        if endpoint.endswith("/protection"):
+            return {
+                "required_status_checks": {
+                    "contexts": [],
+                    "checks": [{"context": "CI Gate", "app_id": 123}],
+                }
+            }
+        if "/rules/branches/" in endpoint:
+            return [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": "Policy"}]},
+                }
+            ]
+        return None
+
+    monkeypatch.setitem(fetch.__globals__, "run_command_optional", read)
+    assert fetch(pr_repo="owner/repo", base_branch="main") == ["CI Gate", "Policy"]
+
+
 def test_parse_remote_url_accepts_https_and_ssh_urls(
     get_pr_comments_module: dict[str, Any],
 ) -> None:
@@ -1133,6 +1265,59 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert sleeps == [60]
 
 
+def test_orchestrate_returns_ci_wait_to_durable_owner_without_sleeping(
+    pr_resolve_orchestrate_module,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "resolver-step-1")
+    continuation = {
+        "schemaVersion": "gated-continuation/v1",
+        "gateType": "merge_automation",
+        "action": "reenter_gate",
+        "executionRef": "resolver-step-1",
+        "headSha": "abcdef1",
+        "retryAfterSeconds": 60,
+    }
+    sleeps = []
+    result, code = pr_resolve_orchestrate_module["run_orchestration"](
+        finalize_runner=lambda _: {
+            "status": "blocked",
+            "reason": "ci_running",
+            "gatedContinuation": continuation,
+        },
+        full_runner=lambda *_: pytest.fail("running CI is not implementation work"),
+        sleep_fn=sleeps.append,
+        monotonic_fn=lambda: 0,
+        finalize_max_retries=60,
+        fix_max_iterations=5,
+        base_sleep_seconds=30,
+        max_sleep_seconds=120,
+        max_elapsed_seconds=7200,
+        merge_not_ready_grace_retries=1,
+        return_to_gate=True,
+    )
+    assert code == pr_resolve_orchestrate_module["EXIT_CODE_BLOCKED"]
+    assert result["mergeAutomationDisposition"] == "reenter_gate"
+    assert result["gatedContinuation"] == continuation
+    assert result["attempt_count"] == 1
+    assert sleeps == []
+    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(json.dumps(result))
+    evaluated = evaluate_terminal_evidence(
+        {
+            "contractId": "pr_resolver_terminal.v1",
+            "relativePath": "var/pr_resolver/result.json",
+            "executionRef": "resolver-step-1",
+        },
+        workspace_path=str(tmp_path),
+    )
+    assert evaluated.outcome == "continuation_requested"
+
+
 def test_orchestrate_codex_review_grace_waits_then_merges(
     pr_resolve_orchestrate_module: dict[str, Any],
 ) -> None:
@@ -1576,6 +1761,32 @@ def test_full_result_emits_typed_reenter_gate_contract(
     assert payload["gatedContinuation"]["executionRef"]
     assert payload["gatedContinuation"]["headSha"] == "abcdef1234567890"
     assert payload["gatedContinuation"]["retryAfterSeconds"] == 60
+
+
+def test_publish_reporting_failure_preserves_a_confirmed_receipt(
+    pr_resolve_orchestrate_module,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    confirmed = {
+        "schemaVersion": "moonmind.publish.auto.v1",
+        "status": "verified",
+        "remoteVerified": True,
+        "pushed": True,
+    }
+    path = artifacts / "publish_result.json"
+    path.write_text(json.dumps(confirmed), encoding="utf-8")
+    pr_resolve_orchestrate_module["_write_publish_evidence_fallback"](
+        "publish_evidence_generation_failed"
+    )
+    assert json.loads(path.read_text(encoding="utf-8")) == confirmed
+    diagnostic = json.loads(
+        (artifacts / "publish_result.diagnostics.json").read_text(encoding="utf-8")
+    )
+    assert diagnostic["blockedReason"] == "publish_evidence_generation_failed"
 
 
 def test_direct_finalizer_preserves_original_codex_review_deadline(

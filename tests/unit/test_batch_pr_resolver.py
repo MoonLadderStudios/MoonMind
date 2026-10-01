@@ -12,43 +12,63 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import unquote
 
 import pytest
 
 
-@pytest.mark.parametrize("runtime,profile_runtime", [
-    ("codex_cli", "codex_cli"), ("claude_code", "claude_code"),
-    ("omnigent", "omnigent"), ("codex", "codex_cli"), ("claude", "claude_code"),
-])
+@pytest.mark.parametrize(
+    "runtime,profile_runtime",
+    [
+        ("codex_cli", "codex_cli"),
+        ("claude_code", "claude_code"),
+        ("omnigent", "omnigent"),
+        ("codex", "codex_cli"),
+        ("claude", "claude_code"),
+    ],
+)
 def test_portable_bundle_replays_discovery_submission_and_verification(
-    tmp_path: Path, runtime: str, profile_runtime: str,
+    tmp_path: Path,
+    runtime: str,
+    profile_runtime: str,
 ) -> None:
     """Run the shipped CLI across process/HTTP/artifact boundaries without the API package."""
     repo_root = Path(__file__).resolve().parents[2]
-    incident = json.loads((repo_root / "tests/integration/reliability/replays"
-                           / "batch-pr-resolver-portable-startup/manifest.json").read_text())
+    incident = json.loads(
+        (
+            repo_root
+            / "tests/integration/reliability/replays"
+            / "batch-pr-resolver-portable-startup/manifest.json"
+        ).read_text()
+    )
     bundle = tmp_path / "skills_active" / "batch-pr-resolver"
     shutil.copytree(repo_root / ".agents/skills/batch-pr-resolver", bundle)
     shared = bundle.parent / "_shared"
     shared.mkdir()
-    shutil.copy2(repo_root / ".agents/skills/_shared/workflow_execution_client.py", shared)
+    shutil.copy2(
+        repo_root / ".agents/skills/_shared/workflow_execution_client.py", shared
+    )
     helper = bundle / "bin/batch_pr_resolver.py"
     discovery = [
-        {**pr, "isCrossRepository": False,
-         "headRepository": {"name": "Tactics"},
-         "headRepositoryOwner": {"login": "MoonLadderStudios"}}
+        {
+            **pr,
+            "isCrossRepository": False,
+            "headRepository": {"name": "Tactics"},
+            "headRepositoryOwner": {"login": "MoonLadderStudios"},
+        }
         for pr in incident["pullRequests"]
     ]
     gh = tmp_path / "gh"
     gh.write_text(f"#!{sys.executable}\nprint({json.dumps(discovery)!r})\n")
     gh.chmod(0o755)
     context = tmp_path / "task_context.json"
-    runtime_config = {"mode": runtime, "model": "test-model-exact",
-                      "effort": "xhigh"}
-    context.write_text(json.dumps({"repository": incident["repository"],
-                                   "runtimeConfig": runtime_config}))
+    runtime_config = {"mode": runtime, "model": "test-model-exact", "effort": "xhigh"}
+    context.write_text(
+        json.dumps(
+            {"repository": incident["repository"], "runtimeConfig": runtime_config}
+        )
+    )
     capability_file = tmp_path / "fanout-capability"
     capability_file.write_text("test-scoped-capability")
     submissions: list[dict[str, Any]] = []
@@ -62,7 +82,10 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
         def respond(self, body: dict[str, Any], status: int = 200) -> None:
             assert self.headers["Authorization"] == "Bearer test-scoped-capability"
             assert self.headers["X-MoonMind-Execution-Fanout"] == "v1"
-            assert self.headers["X-MoonMind-Task-Workflow-Id"] == incident["incidentWorkflowId"]
+            assert (
+                self.headers["X-MoonMind-Task-Workflow-Id"]
+                == incident["incidentWorkflowId"]
+            )
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -73,15 +96,24 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             submissions.append(body)
             key = body["payload"]["idempotencyKey"]
-            record = records.setdefault(key, {"workflowId": f"mm:test-child-{len(records)}",
-                                              "runId": f"test-run-{len(records)}",
-                                              "state": "running"})
+            record = records.setdefault(
+                key,
+                {
+                    "workflowId": f"mm:test-child-{len(records)}",
+                    "runId": f"test-run-{len(records)}",
+                    "state": "running",
+                },
+            )
             self.respond(record, 201)
 
         def do_GET(self) -> None:
             workflow_id = unquote(self.path.removeprefix("/api/executions/"))
             descriptions.append(workflow_id)
-            self.respond(next(row for row in records.values() if row["workflowId"] == workflow_id))
+            self.respond(
+                next(
+                    row for row in records.values() if row["workflowId"] == workflow_id
+                )
+            )
 
     # Block installed server packages as well as checkout imports. Ordinary
     # in-process tests can hide this regression by importing MoonMind first.
@@ -112,9 +144,20 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     try:
         for _ in range(2):
             result = subprocess.run(
-                [sys.executable, "-I", "-c", isolated_entrypoint, str(helper),
-                 "--task-context-path", str(context)],
-                cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    isolated_entrypoint,
+                    str(helper),
+                    "--task-context-path",
+                    str(context),
+                ],
+                cwd=tmp_path,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             assert result.returncode == 0, result.stdout + result.stderr
             summary = json.loads((spool / "batch_pr_resolver_result.json").read_text())
@@ -143,10 +186,12 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             assert payload["repository"] == incident["repository"]
             assert payload["runtimeInheritance"] == "caller"
             assert payload["task"]["runtime"] == {
-                "mode": runtime, "model": runtime_config["model"],
-                "effort": "xhigh", "executionProfileRef": "test-profile-exact",
+                "mode": runtime,
+                "model": runtime_config["model"],
+                "effort": "xhigh",
+                "executionProfileRef": "test-profile-exact",
             }
-            assert payload["task"]["publish"] == {"mode": "auto"}
+            assert payload["task"]["taskTemplate"]["slug"] == "pr-review-resolve"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -165,6 +210,43 @@ def _load_module() -> dict[str, Any]:
             / "batch_pr_resolver.py"
         )
     )
+
+
+def test_batch_children_adopt_existing_prs_with_durable_merge_ownership():
+    module = _load_module()
+    request = module["_build_queue_request"](
+        "owner/repo",
+        42,
+        "saved-branch",
+        runtime=module["RuntimeSelection"](
+            mode="omnigent",
+            model="chosen-model",
+            effort="high",
+            provider_profile="chosen-profile",
+        ),
+        merge_method="rebase",
+        max_iterations=7,
+        priority=2,
+        max_attempts=3,
+        batch_scope="mm:batch",
+        inherit_runtime_from_caller=True,
+    )
+    payload = request["payload"]
+    task = payload["task"]
+    assert task["taskTemplate"]["slug"] == "pr-review-resolve"
+    assert task["taskTemplate"]["inputs"] == {
+        "repository": "owner/repo",
+        "pull_request": "42",
+        "review_provider": "none",
+        "finish_with_pr_resolver": True,
+        "merge_method": "rebase",
+        "max_iterations": 7,
+    }
+    assert "skill" not in task
+    assert "git" not in task
+    assert "publish" not in task  # The resolved coordinator policy owns this.
+    assert payload["runtimeInheritance"] == "caller"
+    assert task["runtime"]["executionProfileRef"] == "chosen-profile"
 
 
 def test_discovery_failure_replaces_previous_success_evidence(tmp_path, monkeypatch):
@@ -290,7 +372,8 @@ def test_removed_fork_compat_options_are_rejected():
     assert "--include-forks" not in skill_doc
     assert "--skip-existing-only" not in skill_doc
 
-def test_build_queue_request_sets_none_publish_with_matching_branches():
+
+def test_build_queue_request_preserves_runtime_and_existing_pr_locator():
     module = _load_module()
     build_queue_request = module["_build_queue_request"]
     runtime_selection = module["RuntimeSelection"]
@@ -299,7 +382,12 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
         "MoonLadderStudios/MoonMind",
         pr_number=42,
         branch="feature/example",
-        runtime=runtime_selection(mode="codex", model="gpt-5-codex", effort="high", provider_profile="test-profile"),
+        runtime=runtime_selection(
+            mode="codex",
+            model="gpt-5-codex",
+            effort="high",
+            provider_profile="test-profile",
+        ),
         merge_method="squash",
         max_iterations=3,
         priority=0,
@@ -308,7 +396,6 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
 
     payload = request["payload"]
     task = payload["task"]
-    git = task["git"]
 
     assert payload["targetRuntime"] == "codex"
     assert task["runtime"]["mode"] == "codex"
@@ -317,10 +404,9 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["executionProfileRef"] == "test-profile"
     assert "providerProfile" not in task["runtime"]
     assert task["title"] == "feature/example"
-    assert task["publish"]["mode"] == "auto"
-    assert git["startingBranch"] == "feature/example"
-    assert git["branch"] == "feature/example"
-    assert "targetBranch" not in git
+    assert task["taskTemplate"]["inputs"]["pull_request"] == "42"
+    assert task["taskTemplate"]["inputs"]["finish_with_pr_resolver"] is True
+
 
 def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
     module = _load_module()
@@ -402,11 +488,12 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
         max_attempts=4,
     )
 
-    # Assert directly on the raw Temporal-contract payload. normalize_queue_job_payload
-    # uses the legacy queue-worker contract (skill.id) and will fail on the new
-    # skill.name shape.  Publish and skill identity assertions are covered by the
-    # dedicated contract tests below.
-    assert request["payload"]["task"]["publish"]["mode"] == "auto"
+    # The preset resolves the existing PR before configuring its coordinator.
+    assert (
+        request["payload"]["task"]["taskTemplate"]["inputs"]["finish_with_pr_resolver"]
+        is True
+    )
+
 
 def test_resolve_artifacts_dir_prefers_managed_session_spool(
     monkeypatch: Any,
@@ -1025,33 +1112,21 @@ def _build_request(module: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     kwargs.update(overrides)
     return build("MoonLadderStudios/MoonMind", 42, "feature/test", **kwargs)
 
-def test_build_queue_request_skill_contract() -> None:
-    """skill.name is present; legacy identity fields and args are absent."""
+
+def test_build_queue_request_adoption_contract() -> None:
+    """The existing PR coordinator owns the resolver and publication policy."""
     module = _load_module()
     req = _build_request(module)
     task = req["payload"]["task"]
-    skill = task["skill"]
+    assert "skill" not in task
+    assert "git" not in task
+    assert "publish" not in task
+    inputs = task["taskTemplate"]["inputs"]
+    assert inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert inputs["pull_request"] == "42"
+    assert inputs["merge_method"] == "squash"
+    assert inputs["max_iterations"] == 3
 
-    # Correct fields per SkillInvocation contract
-    assert skill.get("name") == "pr-resolver", "skill.name must be 'pr-resolver'"
-
-    # Legacy / wrong fields must NOT be present
-    assert "version" not in skill, "skill.version must not be sent to Temporal"
-    assert (
-        "id" not in skill
-    ), "skill.id is the legacy field; must not be sent to Temporal"
-    assert (
-        "args" not in skill
-    ), "skill.args is legacy; inputs now live at task-node level"
-
-    # inputs live at the task-node level, not inside skill
-    inputs = task.get("inputs")
-    assert isinstance(inputs, dict), "inputs must be a top-level key on task node"
-    assert inputs.get("repo") == "MoonLadderStudios/MoonMind"
-    assert inputs.get("pr") == "42"
-    assert inputs.get("branch") == "feature/test"
-    assert inputs.get("mergeMethod") == "squash"
-    assert inputs.get("maxIterations") == 3
 
 def test_build_queue_request_required_capabilities_toplevel() -> None:
     """requiredCapabilities must live at payload level, not inside skill."""
@@ -1064,10 +1139,7 @@ def test_build_queue_request_required_capabilities_toplevel() -> None:
     assert payload.get("requiredCapabilities") == ["gh"]
 
     # Wrong nesting must NOT be present
-    skill = task["skill"]
-    assert (
-        "requiredCapabilities" not in skill
-    ), "requiredCapabilities must not be nested inside skill"
+    assert "requiredCapabilities" not in task["taskTemplate"]
 
 
 def test_terminal_failure_states_include_terminated() -> None:

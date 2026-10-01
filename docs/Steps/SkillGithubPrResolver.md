@@ -4,7 +4,7 @@
 **Viewpoint:** Module Contract Specification  
 **Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-06  
+**Updated:** 2026-10-01\
 **Audience:** Workflow/runtime authors, dashboard and API contributors, and operators  
 **Authority:** MoonMind authoring, target binding, runtime handoff, and result integration for PR Resolver. Resolver decisions and procedures belong to the immutable portable Skill bundle, not this integration document.  
 **Owning Surface:** PR Resolver admission and ordinary Skill execution/result boundaries  
@@ -31,7 +31,7 @@ The checked-in Skill is portable. Its provider-neutral models, normalization, cl
 * New dashboard/API authoring uses `task.publish.mode = default` or omission, displayed as Auto. Trusted compilation resolves the declared Skill-owned publisher and emits worker-facing `publishMode = auto` with owner agent. A new request never uses an old ingress decoder to make authored literal `auto` valid.
 * Explicit None is incompatible with the resolver's push/merge objective. `fix_only` still remediates and pushes and does not make None compatible.
 * Publishing ownership and implementation hosting are independent. Compiled Auto does not authorize native Temporal replacement of the Skill.
-* New publication evidence uses `moonmind.publish.repository.v1` for managed and Skill-owned operations alike. Old `moonmind.publish.auto.v1` and `acceptedRepositoryEvidence` are frozen historical-read contracts only.
+* The target publication protocol uses `moonmind.publish.repository.v1` for managed and Skill-owned operations alike. The checked-in portable writer still emits `moonmind.publish.auto.v1`; migration of its producers and consumers is not yet complete. Retained evidence remains readable during that transition.
 
 ---
 
@@ -91,6 +91,7 @@ New MoonMind submissions supply one explicit structured PR locator through the s
 | `requireFreshReview` | bool | false | Require current-head review under the selected provider contract. |
 | `finishMode` | enum | merge | merge or fix_only. Only omission takes the default; invalid values fail without granting merge authority. |
 | `maxIterations` | int | 5 | Bounded Skill loop. |
+| `returnToGate` | bool | false outside an admitted parent | Derived child handoff intent: stop the agent turn after producing execution-bound external-wait evidence. It grants no standalone continuation authority. |
 | `finalizeMaxRetries` | int | 60 | Orchestration retries, including finalize waits/remediation. |
 | `finalizeBackoffSeconds` | int | 30 | Initial bounded exponential-backoff delay. |
 | `finalizeMaxSleepSeconds` | int | 120 | Per-sleep cap. |
@@ -102,7 +103,9 @@ The Skill enforces its loop values. Runtime timeout/intervention remains an oute
 
 Snapshot and result projections may be stored as `artifacts/pr_resolver_snapshot.json` and `artifacts/pr_resolver_result.json`. The portable terminal result at `var/pr_resolver/result.json` and publication output at `artifacts/publish_result.json` supply objective and repository evidence respectively.
 
-The latter's new-write payload is `moonmind.publish.repository.v1`, as owned by [Lore VCS Integration Design section 3.13](../Workflows/LoreVcsIntegrationDesign.md#313-unified-repository-publication-evidence). It includes the canonical provider/revision, admitted connection/client, action/status, scan, and exact remote proof. The shared writer and validators move together; renaming an old payload's schema label is not conversion. The output path can remain stable without retaining a parallel schema.
+The target payload is `moonmind.publish.repository.v1`, as owned by [Lore VCS Integration Design section 3.13](../Workflows/LoreVcsIntegrationDesign.md#313-unified-repository-publication-evidence). It includes the canonical provider/revision, admitted connection/client, action/status, scan, and exact remote proof. The shared writer and validators move together; renaming an old payload's schema label is not conversion. The output path can remain stable without retaining a parallel schema.
+
+The current portable writer preserves a confirmed repair push independently of an unresolved PR. It only promotes the current receipt after matching execution, repository, branch, and exact local/remote heads. When a later probe is unavailable or the candidate changed, the prior confirmed receipt survives under `artifacts/publish_result.confirmed.<content-sha256>.json`; the current outcome stays blocked. Reporting failure cannot erase confirmed publication or imply merge success.
 
 The existing terminal-contract/artifact ownership boundary binds those refs to the exact current workflow/run/Step Execution/attempt and resolved target. A restored old artifact, process exit, or assistant claim is not current completion evidence.
 
@@ -131,6 +134,8 @@ The resolved bundle owns PR metadata, complete comment/review/thread collection,
 MoonMind may validate initial target identity and read compact external scheduling state under its own typed contracts. Those checks do not replace the Skill's fresh semantic snapshot or authorize a merge.
 
 ---
+
+The portable snapshot and GitHub readiness adapter combine current-head check runs with the newest legacy commit status for each context. GitHub-confirmed `protected=false` means no legacy status contexts are required; otherwise both branch-protection and active rules must be available to prove the required contexts. Unknown policy keeps every status gating. Advisory statuses stay visible, all current-head CI check runs still gate, and a missing required context remains pending. Confirmed `MERGEABLE` with an aggregate `UNSTABLE` projection is resolved from this concrete evidence rather than becoming an unbounded unknown state. Tactics CI remains on self-hosted runners.
 
 ## 6. Decision Engine
 

@@ -20,7 +20,7 @@ Create one queue task per open pull request so each PR branch can be resolved by
 
 This parent batch skill does not publish repository changes itself. It records
 child workflow queueing evidence in `artifacts/batch_pr_resolver_result.json`;
-each queued `pr-resolver` child owns its repository publishing outcome.
+each queued existing-PR coordinator delegates repository publication to its `pr-resolver` children and owns their durable external waits.
 The coordinator's execution-local publish mode `none` does not override the
 children's `auto` publishing contract. Preserve any explicit user restriction
 on child publishing; do not infer one from the coordinator's local mode.
@@ -97,10 +97,10 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
      - `type: "task"`
      - `payload.idempotencyKey`: stable per parent batch run and PR, hash-backed and capped to the execution persistence limit, so rerunning the same batch task does not create duplicate resolver workflows.
      - `payload.repository`: target repo
-     - `payload.task.git.startingBranch`: PR head branch
-     - `payload.task.publish.mode`: `auto`
-     - `payload.task.skill.name`: `pr-resolver`
-     - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
+     - `payload.task.taskTemplate.slug`: `pr-review-resolve`
+     - `payload.task.taskTemplate.inputs`: `{ repository: repo, pull_request: pr_number, review_provider: "none", finish_with_pr_resolver: true, merge_method: mergeMethod, max_iterations: maxIterations }`
+     - inherited runtime, model, effort, and Provider Profile fields.
+   - Trusted preset expansion resolves the existing PR branch and publication scope. The coordinator publishes nothing itself; its ordinary `pr-resolver` children own fixes and merge. CI/provider waits return to that enclosing durable gate so queued self-hosted Tactics checks do not consume an agent slot. Preserve all Tactics CI on self-hosted runners.
    - Submit via the internal Temporal execution API (`POST /api/executions`),
      require the canonical `workflowId` in the response, and verify that ID via
      `GET /api/executions/{workflowId}` before counting it as queued;

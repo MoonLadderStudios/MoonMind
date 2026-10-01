@@ -143,19 +143,7 @@ async def test_finish_with_pr_resolver_enables_the_final_merge_pass(tmp_path) ->
     assert config.finish_mode == "merge"
 
 
-async def test_merge_method_is_not_an_operator_control(tmp_path) -> None:
-    """The merge method is a fixed detail of the finish pass, not an input."""
-
-    template = await _template(tmp_path)
-
-    assert "merge_method" not in template["inputSchema"]["properties"]
-    assert "merge_method" not in template["uiSchema"]
-    assert "merge_method" not in template["defaults"]
-    assert "merge_method" not in {
-        str(entry.get("name")) for entry in template["inputs"]
-    }
-    assert "finish_with_pr_resolver" in template["inputSchema"]["properties"]
-
+async def test_existing_pr_adoption_preserves_explicit_merge_method(tmp_path) -> None:
     expanded = await _expand(
         tmp_path,
         {
@@ -165,7 +153,81 @@ async def test_merge_method_is_not_an_operator_control(tmp_path) -> None:
         },
     )
 
-    assert expanded["publish"]["mergeAutomation"]["mergeMethod"] == "squash"
+    assert expanded["publish"]["mergeAutomation"]["mergeMethod"] == "rebase"
+
+
+@pytest.mark.parametrize("payload_key", ["task", "workflow"])
+async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
+    tmp_path, payload_key
+):
+    import runpy
+
+    from moonmind.workflows.temporal.workflows.merge_gate import (
+        build_resolver_run_request,
+    )
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    helper = runpy.run_path(
+        str(_REPO_ROOT / ".agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py")
+    )
+    request = helper["_build_queue_request"](
+        "owner/repo",
+        42,
+        "saved-branch",
+        runtime=helper["RuntimeSelection"](
+            mode="codex_cli",
+            model="chosen-model",
+            effort="high",
+            provider_profile="chosen-profile",
+        ),
+        merge_method="rebase",
+        max_iterations=7,
+        priority=0,
+        max_attempts=3,
+    )
+    template = request["payload"]["task"]["taskTemplate"]
+    expanded = await _expand(tmp_path, template["inputs"])
+    policy = expanded["publish"]["mergeAutomation"]
+    assert policy["automatedReview"] == "disabled"
+    assert policy["reviewLoop"]["enabled"] is False
+    assert policy["finishMode"] == "merge"
+    workflow = MoonMindRunWorkflow()
+    workflow._workflow_patch_enabled = lambda _patch: True
+    workflow._repo = "owner/repo"
+    workflow._publish_context.update({"branch": "saved-branch", "baseRef": "main"})
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "none",
+            "targetRuntime": "codex_cli",
+            payload_key: {
+                "publish": expanded["publish"],
+                "runtime": request["payload"]["task"]["runtime"],
+            },
+        },
+        pull_request_url="https://github.com/owner/repo/pull/42",
+        head_sha="abcdef1",
+        parent_workflow_id="mm:batch-child",
+        parent_run_id="run-1",
+    )
+    assert payload is not None
+    child = build_resolver_run_request(
+        parent_workflow_id="merge-owner",
+        pull_request=payload["pullRequest"],
+        jira_issue_key=None,
+        merge_method=payload["mergeAutomationConfig"]["resolver"]["mergeMethod"],
+        resolver_template=payload["resolverTemplate"],
+        finish_mode="merge",
+    )
+    inputs = child["initial_parameters"]["task"]["skill"]["args"]
+    assert inputs["mergeMethod"] == "rebase"
+    assert inputs["maxIterations"] == 7
+    assert inputs["returnToGate"] is True
+    assert inputs["finishMode"] == "merge"
+    assert "requireFreshReview" not in inputs
+    runtime = child["initial_parameters"]["task"]["runtime"]
+    assert runtime["executionProfileRef"] == "chosen-profile"
+    assert runtime["model"] == "chosen-model"
+    assert runtime["effort"] == "high"
 
 
 async def test_operator_overrides_flow_into_the_review_loop(tmp_path) -> None:
