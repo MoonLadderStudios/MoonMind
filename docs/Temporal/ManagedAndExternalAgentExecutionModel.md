@@ -170,7 +170,12 @@ and terminal verdicts. The generic host supplies bounded same-session delivery
 and cumulative budgets. Evidence read retries do not launch another provider
 turn. A Skill's explicit continuation remains intermediate until its declared
 terminal evidence is validated; authority-sensitive terminal decisions remain
-terminal.
+terminal. When a same-session continuation reports the same progress key, the
+Skill's recorded manual-review or failed disposition becomes its terminal
+verdict, so the parent step does not repeat an attempt that cannot progress.
+Evidence that names no execution is malformed and repaired by rerunning the
+Skill's own result helper; only evidence bound to a different execution is
+stale.
 
 Save, restore and publication deliveries share a database-owned finalization
 lock and re-read committed receipts after acquiring it. Waiting deliveries do

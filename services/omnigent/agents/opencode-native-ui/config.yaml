@@ -18,4 +18,8 @@ os_env:
   cwd: .
   sandbox:
     type: none
+    # File tools may read the run's read-only active Skill snapshot, which
+    # the agent is instructed to follow (MOONMIND_ACTIVE_SKILLS_DIR).
+    read_paths:
+      - /opt/moonmind-skills
 

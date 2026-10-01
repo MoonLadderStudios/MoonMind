@@ -423,7 +423,8 @@ async def test_rollover_detach_proceeds_without_handoffs() -> None:
 
 
 @pytest.mark.parametrize("capacity", CAPACITIES)
-def test_withdraw_maintenance_waiter_removes_only_the_waiter(
+@pytest.mark.asyncio
+async def test_withdraw_maintenance_waiter_removes_only_the_waiter(
     capacity: int,
 ) -> None:
     """Giving up a turn must not free capacity the owner still holds."""
@@ -441,17 +442,17 @@ def test_withdraw_maintenance_waiter_removes_only_the_waiter(
     )
     assert profile.maintenance_queue_position("repair-gone") == 0
 
-    wf.withdraw_maintenance_waiter(
+    await wf.withdraw_maintenance_waiter(
         {"profile_id": PROFILE_ID, "requester_workflow_id": "repair-gone"}
     )
     assert profile.maintenance_queue_position("repair-gone") == -1
     assert profile.current_leases == ["agent-run-0"]
 
     # Unknown owners and missing fields are harmless no-ops.
-    wf.withdraw_maintenance_waiter(
+    await wf.withdraw_maintenance_waiter(
         {"profile_id": PROFILE_ID, "requester_workflow_id": "nobody"}
     )
-    wf.withdraw_maintenance_waiter({"profile_id": PROFILE_ID})
+    await wf.withdraw_maintenance_waiter({"profile_id": PROFILE_ID})
     assert profile.current_leases == ["agent-run-0"]
 
 

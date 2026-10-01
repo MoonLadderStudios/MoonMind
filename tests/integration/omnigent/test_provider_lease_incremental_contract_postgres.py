@@ -918,6 +918,8 @@ async def _restore_manager(monkeypatch: pytest.MonkeyPatch) -> _RestartedManager
     manager._durable_maintenance_queue = True
     manager._lease_transition_contract = True
     manager._purpose_aware_capacity_ledger = True
+    # Handlers act on this manager as on a running one past its restore.
+    manager._startup_restored = True
     for profile_ref in (PROFILE_REF, OTHER_PROFILE_REF):
         manager._profiles[profile_ref] = ProfileSlotState(
             profile_id=profile_ref,
@@ -1218,7 +1220,7 @@ async def test_recorded_remediation_grant_resumes_unchanged_after_schema_upgrade
         capacity_scope_ref=grant["capacity_scope_ref"],
     )
     manager._lease_grant_sequence = 107
-    manager.request_slot(
+    await manager.request_slot(
         {
             "requester_workflow_id": owner,
             "runtime_id": payload["runtime_id"],
@@ -1267,7 +1269,7 @@ async def test_recorded_remediation_grant_resumes_unchanged_after_schema_upgrade
     )
     assert await restarted._load_leases_from_db() is True
     assert (owner, grant["profile_id"], 108) in restarted.reconnected
-    inspection = restarted.inspect_credential_lease({"lease_id": owner})
+    inspection = await restarted.inspect_credential_lease({"lease_id": owner})
     assert inspection["idempotencyKey"] == grant["idempotencyKey"]
     assert inspection["stepExecutionId"] == grant["stepExecutionId"]
     released = await _run(

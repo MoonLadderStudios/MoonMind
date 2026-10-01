@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,14 @@ from pr_resolve_contract import (  # noqa: E402
     now_utc_iso,
     remediation_next_step,
 )
+
+# GitHub Actions platform outages are rerun on the same head, never "fixed".
+# A run gets this many attempts in total, the first one included.
+INFRASTRUCTURE_MAX_RUN_ATTEMPTS = 3
+# The artifact quota is recalculated every 6-12 hours, so rerunning at once only
+# burns runner time; lost runners and service errors rerun immediately.
+_INFRASTRUCTURE_RERUN_DELAY_SECONDS = {"artifact_storage_quota": 1800}
+_INFRASTRUCTURE_POLL_SECONDS = 60
 
 CONFLICTING_MERGEABLE = {"CONFLICTING", "DIRTY"}
 DIRECT_MERGE_STATE = {"CLEAN"}
@@ -120,8 +130,110 @@ def _is_conflicting(pr: dict[str, Any]) -> bool:
     mergeable_text = normalize_text(mergeable).upper()
     return mergeable_text in CONFLICTING_MERGEABLE
 
+def _infrastructure_ci(snapshot: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    """Return (failures, runs) when the snapshot proved an Actions-only outage."""
+
+    ci = snapshot.get("ci") if isinstance(snapshot.get("ci"), dict) else {}
+    if ci.get("infrastructureOnly") is not True:
+        return [], []
+    failures = [
+        item for item in ci.get("infrastructureFailures") or [] if isinstance(item, dict)
+    ]
+    runs = []
+    for run in ci.get("infrastructureRuns") or []:
+        if not isinstance(run, dict):
+            return [], []
+        try:
+            runs.append({**run, "runAttempt": int(run.get("runAttempt") or 1)})
+        except (TypeError, ValueError):
+            return [], []
+    return failures, runs
+
+
+def _infrastructure_summary(snapshot: dict[str, Any], *, exhausted: bool) -> str:
+    failures, runs = _infrastructure_ci(snapshot)
+    pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
+    details = "; ".join(
+        f"{item.get('name') or 'check'} ({item.get('kind')}): "
+        + (normalize_text(item.get("message")).splitlines() or ["no message"])[0]
+        for item in failures
+    )
+    attempts = ", ".join(
+        f"run {run.get('runId')} attempt {run['runAttempt']} of "
+        f"{INFRASTRUCTURE_MAX_RUN_ATTEMPTS}"
+        for run in runs
+    )
+    head = normalize_text(pr.get("headRefOid"))[:12] or "unknown head"
+    if exhausted:
+        return (
+            "GitHub Actions infrastructure failure persisted after "
+            f"{INFRASTRUCTURE_MAX_RUN_ATTEMPTS} attempts on {head}; no PR change "
+            f"can clear it. {details} ({attempts})"
+        )
+    return f"GitHub Actions infrastructure failure on {head}: {details} ({attempts})"
+
+
+def plan_infrastructure_reruns(
+    snapshot: dict[str, Any], *, now: datetime
+) -> dict[str, Any]:
+    """Decide which failed runs to rerun now and how long to wait otherwise."""
+
+    _failures, runs = _infrastructure_ci(snapshot)
+    due: list[int] = []
+    waits: list[int] = []
+    for run in runs:
+        if run["runAttempt"] >= INFRASTRUCTURE_MAX_RUN_ATTEMPTS:
+            continue
+        if normalize_text(run.get("status")).lower() != "completed":
+            # A rerun is already in flight; the next snapshot reports it.
+            waits.append(_INFRASTRUCTURE_POLL_SECONDS)
+            continue
+        delay = max(
+            (
+                _INFRASTRUCTURE_RERUN_DELAY_SECONDS.get(str(kind), 0)
+                for kind in run.get("kinds") or []
+            ),
+            default=0,
+        )
+        try:
+            finished = datetime.fromisoformat(
+                normalize_text(run.get("updatedAt")).replace("Z", "+00:00")
+            )
+        except ValueError:
+            finished = None
+        if finished is None or finished.tzinfo is None:
+            elapsed = delay
+        else:
+            elapsed = int((now - finished).total_seconds())
+        if elapsed >= delay:
+            due.append(int(run["runId"]))
+        else:
+            waits.append(delay - elapsed)
+    retry_after = (
+        _INFRASTRUCTURE_POLL_SECONDS
+        if due or not waits
+        else max(1, min(waits))
+    )
+    return {"dueRunIds": due, "retryAfterSeconds": retry_after}
+
+
 def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
     decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+    if decision.classification == "ci_failures":
+        _failures, runs = _infrastructure_ci(snapshot)
+        if runs:
+            # Only a finished final attempt exhausts the budget; while it is
+            # queued the head still reports the prior attempt's failures.
+            if any(
+                run["runAttempt"] >= INFRASTRUCTURE_MAX_RUN_ATTEMPTS
+                and normalize_text(run.get("status")).lower() == "completed"
+                for run in runs
+            ):
+                return {"action": "blocked", "reason": "ci_infra_rerun_exhausted"}
+            return {
+                "action": "rerun_infrastructure_ci",
+                "reason": "ci_infra_transient",
+            }
     if decision.classification == "already_merged":
         return {"action": "already_merged", "reason": "already_merged"}
     if decision.classification == "review_grace":
@@ -169,6 +281,39 @@ def _read_snapshot(path: Path) -> dict[str, Any]:
     return payload
 
 
+_RERUN_ALREADY_STARTED = re.compile(
+    r"already running|is in progress|has not completed", re.IGNORECASE
+)
+
+
+def _rerun_failed_jobs(repository: str, run_id: int) -> tuple[bool, str]:
+    """Rerun the failed jobs of one completed run on its original head.
+
+    Returns ``(started, error)``. A rerun another resolver already started is
+    neither; any other refusal (permissions, authentication, a broken run) is
+    returned so the blocker names it instead of waiting on an impossible rerun.
+    """
+
+    cmd = ["gh", "run", "rerun", str(run_id), "--failed", "--repo", repository]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=60
+        )
+    except subprocess.TimeoutExpired:
+        # The request may have landed; the next snapshot observes it.
+        print(f"Rerun of run {run_id} timed out", file=sys.stderr)
+        return False, ""
+    except OSError as exc:
+        return False, str(exc)
+    if result.returncode == 0:
+        return True, ""
+    detail = normalize_text(result.stderr) or normalize_text(result.stdout)
+    if _RERUN_ALREADY_STARTED.search(detail):
+        print(f"Rerun of run {run_id} is already in flight: {detail}", file=sys.stderr)
+        return False, ""
+    return False, detail or f"gh run rerun exited {result.returncode}"
+
+
 def _merge_pr(pr_selector: str, merge_method: str, expected_head: str) -> None:
     if not expected_head:
         raise RuntimeError("Cannot merge without the verified PR head")
@@ -192,6 +337,7 @@ def _write_result(
     merge_outcome: str,
     status: str,
     reason: str | None = None,
+    retry_after_seconds: int | None = None,
 ) -> None:
     pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
     next_step = "done"
@@ -250,6 +396,7 @@ def _write_result(
                 snapshot,
                 reason=reason or "resolver_wait",
                 execution_ref=payload["executionRef"] or "local:pr_resolve_finalize",
+                retry_after_seconds=retry_after_seconds,
             )
         except ValueError:
             # Missing/stale identity or timing evidence is not a handoff.  In
@@ -516,10 +663,62 @@ def main() -> None:
             print("PR merged.")
             sys.exit(EXIT_CODE_MERGED)
 
+        if action == "rerun_infrastructure_ci":
+            plan = plan_infrastructure_reruns(snapshot, now=datetime.now(UTC))
+            repository = normalize_text(snapshot.get("repository"))
+            rerun_ids: list[int] = []
+            rerun_errors: list[str] = []
+            for run_id in plan["dueRunIds"] if repository else []:
+                started, error = _rerun_failed_jobs(repository, run_id)
+                if started:
+                    rerun_ids.append(run_id)
+                elif error:
+                    rerun_errors.append(f"run {run_id}: {error}")
+            summary = _infrastructure_summary(snapshot, exhausted=False)
+            if rerun_errors:
+                reason = "ci_infra_rerun_failed"
+                summary += "; GitHub refused the rerun: " + "; ".join(rerun_errors)
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision=summary,
+                    merge_outcome="blocked",
+                    status="blocked",
+                    reason=reason,
+                )
+                print(f"Blocked: {reason}: {summary}")
+                sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
+            if rerun_ids:
+                summary += (
+                    "; reran failed jobs in run(s) "
+                    + ", ".join(str(run_id) for run_id in rerun_ids)
+                )
+            else:
+                summary += "; waiting before rerunning the failed jobs"
+            _write_result(
+                result_path,
+                snapshot=snapshot,
+                decision=summary,
+                merge_outcome="blocked",
+                status="blocked",
+                reason=reason,
+                retry_after_seconds=(
+                    _INFRASTRUCTURE_POLL_SECONDS
+                    if rerun_ids
+                    else plan["retryAfterSeconds"]
+                ),
+            )
+            print(f"Blocked: {reason}: {summary}")
+            sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
+
         _write_result(
             result_path,
             snapshot=snapshot,
-            decision="blocked",
+            decision=(
+                _infrastructure_summary(snapshot, exhausted=True)
+                if reason == "ci_infra_rerun_exhausted"
+                else "blocked"
+            ),
             merge_outcome="blocked",
             status="blocked",
             reason=reason,

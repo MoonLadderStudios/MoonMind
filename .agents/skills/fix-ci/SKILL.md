@@ -73,6 +73,13 @@ If no inputs are provided, investigate the failing CI checks for the current bra
   Continue safe authorized work and report any remaining verification gap.
 
 3. Fix the underlying issue.
+- If every failure is a GitHub Actions platform failure with no code defect
+  (for example `Artifact storage quota has been hit`, a lost runner, or an
+  Actions service error) and any downstream gate failed only because that
+  job's artifact is missing, there is nothing to fix. Do not edit code,
+  rerun CI, or recommend manual review: write the no-op publish evidence
+  from step 6 and return to the caller. `pr-resolver` finalize classifies
+  this as `ci_infra_transient` and reruns the failed jobs after its backoff.
 - Analyze the error output.
 - Apply surgical code changes to fix the build error or test failure.
 - Ensure the fix doesn't break other existing functionality.

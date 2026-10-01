@@ -191,6 +191,8 @@ class TestProviderProfileManagerHelpers:
     def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
         wf = MoonMindProviderProfileManagerWorkflow()
         wf._runtime_id = "claude_code"
+        # A running manager: startup already restored its ledger.
+        wf._startup_restored = True
         return wf
 
     def test_restore_state(self):
@@ -562,7 +564,7 @@ class TestProviderProfileManagerHelpers:
                     ]
                 }
             )
-            wf.request_slot(
+            await wf.request_slot(
                 {
                     "requester_workflow_id": "resolver-run:agent:node-1",
                     "runtime_id": "codex_cli",
@@ -1191,21 +1193,22 @@ class TestProviderProfileManagerHelpers:
             }
         }
 
-    def test_request_slot_dedupes_by_requester(self):
+    @pytest.mark.asyncio
+    async def test_request_slot_dedupes_by_requester(self):
         wf = self._make_workflow()
 
         with patch(
             "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
         ) as mock_wf:
             mock_wf.patched.return_value = True
-            wf.request_slot(
+            await wf.request_slot(
                 {
                     "requester_workflow_id": "run-1:agent:step-1",
                     "runtime_id": "claude_code",
                     "lease_group_id": "run-1",
                 }
             )
-            wf.request_slot(
+            await wf.request_slot(
                 {
                     "requester_workflow_id": "run-1:agent:step-1",
                     "runtime_id": "claude_code",
@@ -1218,14 +1221,15 @@ class TestProviderProfileManagerHelpers:
         assert wf._pending_requests[0].execution_profile_ref == "p2"
         assert wf._pending_requests[0].lease_group_id == "run-1"
 
-    def test_request_slot_records_queue_metadata(self):
+    @pytest.mark.asyncio
+    async def test_request_slot_records_queue_metadata(self):
         wf = self._make_workflow()
 
         with patch(
             "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
         ) as mock_wf:
             mock_wf.patched.return_value = True
-            wf.request_slot(
+            await wf.request_slot(
                 {
                     "requester_workflow_id": "run-1:agent:step-1",
                     "runtime_id": "codex_cli",
@@ -2303,6 +2307,7 @@ class TestProviderProfileManagerHelpers:
     ):
         """Replay the startup race that previously granted duplicate capacity."""
         wf = MoonMindProviderProfileManagerWorkflow()
+        request_handlers: list[asyncio.Task] = []
 
         async def load_profiles(*_args, **_kwargs) -> bool:
             if not wf._profiles:
@@ -2314,21 +2319,30 @@ class TestProviderProfileManagerHelpers:
                     enabled=True,
                     is_default=True,
                 )
-                wf.request_slot(
-                    {
-                        "requester_workflow_id": "waiting-agent-run",
-                        "runtime_id": "codex_cli",
-                    }
+                # A signal handler runs as its own task.
+                request_handlers.append(
+                    asyncio.ensure_future(
+                        wf.request_slot(
+                            {
+                                "requester_workflow_id": "waiting-agent-run",
+                                "runtime_id": "codex_cli",
+                            }
+                        )
+                    )
                 )
             return True
 
         async def load_leases() -> bool:
-            assert [
-                request.requester_workflow_id for request in wf._pending_requests
-            ] == ["waiting-agent-run"]
+            # The request waits for the restored ledger instead of deciding
+            # against the startup state.
+            assert wf._pending_requests == []
             wf._profiles["p1"].current_leases.append("active-agent-run")
             wf._shutdown_requested = True
             return True
+
+        async def wait_condition(predicate, timeout=None):
+            while not predicate():
+                await asyncio.sleep(0)
 
         wf._load_profiles_from_db = AsyncMock(side_effect=load_profiles)
         wf._load_leases_from_db = AsyncMock(side_effect=load_leases)
@@ -2337,8 +2351,10 @@ class TestProviderProfileManagerHelpers:
             "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
         ) as mock_wf:
             mock_wf.patched.return_value = True
+            mock_wf.wait_condition.side_effect = wait_condition
             mock_wf.info.return_value = SimpleNamespace(continued_run_id=None)
             result = await wf.run({"runtime_id": "codex_cli"})
+            await asyncio.gather(*request_handlers)
 
         assert result["status"] == "shutdown"
         assert wf._profiles["p1"].current_leases == ["active-agent-run"]
@@ -2971,6 +2987,8 @@ class TestDBLeaseSync:
     def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
         wf = MoonMindProviderProfileManagerWorkflow()
         wf._runtime_id = "claude_code"
+        # A running manager: startup already restored its ledger.
+        wf._startup_restored = True
         return wf
 
     def _make_profile(
@@ -4209,6 +4227,8 @@ class TestSharedThrottleOwnership3882:
     def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
         wf = MoonMindProviderProfileManagerWorkflow()
         wf._runtime_id = "opencode"
+        # A running manager: startup already restored its ledger.
+        wf._startup_restored = True
         return wf
 
     def test_profile_scope_reassignment_deferred_while_leases_active(self):
@@ -4404,7 +4424,8 @@ class TestSharedThrottleOwnership3882:
         assert wf._scopes["s"].backpressure_state == "healthy"
         assert wf._scopes["s"].generation == 3
 
-    def test_report_cooldown_duplicate_report_id_is_fully_idempotent(self):
+    @pytest.mark.asyncio
+    async def test_report_cooldown_duplicate_report_id_is_fully_idempotent(self):
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             CapacityScopeState,
         )
@@ -4428,14 +4449,14 @@ class TestSharedThrottleOwnership3882:
         }
         patcher, _mock_wf = _shared_ownership_moment(now)
         try:
-            wf.report_cooldown(dict(payload))
+            await wf.report_cooldown(dict(payload))
             assert wf._scopes["scope-a"].effective_limit == 5
             first_cooldown = wf._scopes["scope-a"].cooldown_until
             assert first_cooldown is not None
             # The scope owns the episode: no duplicate per-profile halving.
             assert wf._profiles["p1"].effective_limit == 8
             assert wf._profiles["p1"].cooldown_until is None
-            wf.report_cooldown(dict(payload))
+            await wf.report_cooldown(dict(payload))
             assert wf._scopes["scope-a"].effective_limit == 5
             assert wf._scopes["scope-a"].cooldown_until == first_cooldown
             assert wf._profiles["p1"].effective_limit == 8
@@ -4443,7 +4464,8 @@ class TestSharedThrottleOwnership3882:
         finally:
             patcher.stop()
 
-    def test_report_cooldown_wrong_scope_report_ignored(self):
+    @pytest.mark.asyncio
+    async def test_report_cooldown_wrong_scope_report_ignored(self):
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             CapacityScopeState,
         )
@@ -4461,7 +4483,7 @@ class TestSharedThrottleOwnership3882:
         )
         patcher, _mock_wf = _shared_ownership_moment(now)
         try:
-            wf.report_cooldown(
+            await wf.report_cooldown(
                 {
                     "profile_id": "p1",
                     "requester_workflow_id": "wf-1",
@@ -4477,7 +4499,8 @@ class TestSharedThrottleOwnership3882:
         assert wf._scopes["scope-b"].effective_limit == 8
         assert wf._profiles["p1"].effective_limit == 8
 
-    def test_report_cooldown_superseded_generation_ignored(self):
+    @pytest.mark.asyncio
+    async def test_report_cooldown_superseded_generation_ignored(self):
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             CapacityScopeState,
         )
@@ -4495,7 +4518,7 @@ class TestSharedThrottleOwnership3882:
         )
         patcher, _mock_wf = _shared_ownership_moment(now)
         try:
-            wf.report_cooldown(
+            await wf.report_cooldown(
                 {
                     "profile_id": "p1",
                     "requester_workflow_id": "wf-1",
@@ -4511,7 +4534,8 @@ class TestSharedThrottleOwnership3882:
         assert wf._scopes["scope-a"].effective_limit == 10
         assert wf._scopes["scope-a"].cooldown_until is None
 
-    def test_report_cooldown_unknown_attempt_ignored(self):
+    @pytest.mark.asyncio
+    async def test_report_cooldown_unknown_attempt_ignored(self):
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             CapacityScopeState,
         )
@@ -4526,7 +4550,7 @@ class TestSharedThrottleOwnership3882:
         )
         patcher, _mock_wf = _shared_ownership_moment(now)
         try:
-            wf.report_cooldown(
+            await wf.report_cooldown(
                 {
                     "profile_id": "p1",
                     "requester_workflow_id": "ghost-attempt",
@@ -4542,7 +4566,8 @@ class TestSharedThrottleOwnership3882:
         assert wf._scopes["scope-a"].cooldown_until is None
         assert wf._profiles["p1"].effective_limit == 8
 
-    def test_report_cooldown_second_report_in_episode_does_not_rehalve(self):
+    @pytest.mark.asyncio
+    async def test_report_cooldown_second_report_in_episode_does_not_rehalve(self):
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             CapacityScopeState,
         )
@@ -4557,7 +4582,7 @@ class TestSharedThrottleOwnership3882:
         )
         patcher, _mock_wf = _shared_ownership_moment(now)
         try:
-            wf.report_cooldown(
+            await wf.report_cooldown(
                 {
                     "profile_id": "p1",
                     "requester_workflow_id": "wf-1",
@@ -4571,7 +4596,7 @@ class TestSharedThrottleOwnership3882:
             first_cooldown = wf._scopes["scope-a"].cooldown_until
             later = now + timedelta(seconds=10)
             _mock_wf.now.return_value = later
-            wf.report_cooldown(
+            await wf.report_cooldown(
                 {
                     "profile_id": "p1",
                     "requester_workflow_id": "wf-1",

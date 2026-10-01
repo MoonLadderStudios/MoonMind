@@ -747,7 +747,7 @@ The ticket binds the whole authority the Activity must positively establish: the
 
 The ProviderProfileManager records the same plan, step, request and credential-generation identity on the durable lease row, so the fence survives a manager restart. Consumption fails closed — before any host or credential side effect — when the inspection is empty or malformed, reports no active lease, or names another profile, owner, plan, step or request, or when the lease has expired, the credential generation has rotated, or the Provider Profile's capacity scope has changed since admission. A changed scope matters for the same reason a rotated generation does: the manager admits and accounts a queued grant under the scope in force, so binding the ticket's stale scope would record a capacity authority different from the ledger that admitted the run. Absence of evidence is never acceptance.
 
-A failure of this kind is recoverable, not terminal: the run returns to durable waiting under the same owner and is re-admitted with a bumped epoch, bounded by a small number of attempts. Nothing leaks, because provider capacity is already released when the failure is observed, and no duplicate host is created, because the host lease is keyed by the run's stable runtime binding.
+A failure of this kind is recoverable, not terminal: the run returns to durable waiting under the same owner and is re-admitted with a bumped epoch, bounded by a small number of attempts. Nothing leaks: provider capacity is released when the failure is observed, and no duplicate host is created, because the host lease is keyed by the run's stable runtime binding. When an interrupted earlier attempt of the same admission already launched a host — a worker restart kills the attempt, then its retry finds the lease gone — the failing execution drains that binding through its ordinary cleanup before reporting the loss. The re-admission never resumes that binding, and its owner is still running, so no janitor would reclaim the host.
 
 Re-admission re-reads the admission authority before it builds the next ticket. The frozen decision names the generation and scope this attempt was already refused for, so re-admitting against it could only re-observe the same fence until the attempt budget was gone. Refreshing is a recovery, never a substitution: a plan whose execution realizer or capacity-acquisition owner changed while the run waited fails closed instead of executing somewhere else.
 
@@ -1830,6 +1830,7 @@ OMNIGENT_SKILL_DELIVERY_MISMATCH
 OMNIGENT_CAPABILITY_REQUIRED_UNSUPPORTED
 OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN
 OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH
+OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE
 OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT
 OMNIGENT_CREDENTIAL_SLOT_UNBOUND
 OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE

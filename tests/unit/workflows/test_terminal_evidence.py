@@ -700,6 +700,103 @@ def test_pr_resolver_terminal_rejects_stale_execution(tmp_path: Path) -> None:
     assert result.failure_code == "STALE_TERMINAL_EVIDENCE"
 
 
+def test_pr_resolver_terminal_without_execution_ref_is_malformed(
+    tmp_path: Path,
+) -> None:
+    """A result that never names its execution is repairable, not stale."""
+
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps({"mergeAutomationDisposition": "manual_review", "status": "blocked"}),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "current-step",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.satisfied is False
+    assert result.failure_code == "MALFORMED_TERMINAL_EVIDENCE"
+
+
+def _write_intermediate_resolver_receipt(
+    workspace: Path, *, disposition: str = "manual_review"
+) -> None:
+    result_path = workspace / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "executionRef": "step-1",
+                "mergeAutomationDisposition": disposition,
+                "status": "blocked",
+                "reason": "ci_failures",
+                "final_reason": "ci_failures",
+                "next_step": "run_full_remediation",
+                "phase": "intermediate",
+                "skillContinuation": {
+                    "schemaVersion": "skill-continuation/v1",
+                    "executionRef": "step-1",
+                    "action": "resume_skill",
+                    "progressKey": "head:ci_failures:run_full_remediation",
+                    "instructions": "Continue the resolved pr-resolver Skill.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_stalled_pr_resolver_continuation_reports_the_skill_verdict(
+    tmp_path: Path,
+) -> None:
+    _write_intermediate_resolver_receipt(tmp_path)
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+
+    pending = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+    stalled = evaluate_terminal_evidence(
+        contract, workspace_path=str(tmp_path), continuation_stalled=True
+    )
+
+    # While continuation can still make progress the receipt is not completion.
+    assert pending.failure_code == "SKILL_CONTINUATION_REQUIRED"
+    # Once a same-session continuation made no progress, the Skill's own
+    # recorded disposition is its terminal answer.
+    assert stalled.outcome == "terminal_failure"
+    assert stalled.failure_code == "PR_RESOLVER_MANUAL_REVIEW"
+    assert stalled.metadata["mergeAutomationDisposition"] == "manual_review"
+    assert stalled.metadata["prResolverReason"] == "ci_failures"
+    assert stalled.metadata["prResolverNextStep"] == "run_full_remediation"
+
+
+def test_stalled_continuation_without_a_verdict_disposition_is_not_upgraded(
+    tmp_path: Path,
+) -> None:
+    _write_intermediate_resolver_receipt(tmp_path, disposition="merged")
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+
+    stalled = evaluate_terminal_evidence(
+        contract, workspace_path=str(tmp_path), continuation_stalled=True
+    )
+
+    assert stalled.failure_code == "SKILL_CONTINUATION_REQUIRED"
+
+
 def test_pr_resolver_review_clean_requires_publish_evidence(tmp_path: Path) -> None:
     """fix_only success still has to prove its verified branch head."""
 

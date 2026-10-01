@@ -203,6 +203,19 @@ metadata flag.
      base branch (`inputs.base`), then push the synchronized branch. Never
      substitute `origin/main` for a PR targeting another base.
    - `ci_failures`: follow `fix-ci` completely.
+   - `ci_infra_transient`: every failed check on this head is a GitHub Actions
+     platform failure (artifact storage quota, lost runner, Actions service
+     error) that no PR change can fix. Finalize already reran the failed jobs
+     on the same head when they were due, and its `gatedContinuation` carries
+     the wait. Do not start `fix-ci`, edit code, or rerun CI yourself; wait the
+     reported `retryAfterSeconds` (or return `reenter_gate` to an owning gate)
+     and return to step 2.
+   - `ci_infra_rerun_exhausted`: the same platform failure persisted through
+     the bounded reruns. Publish the finalize result unchanged; its `decision`
+     names the outage and the attempts.
+   - `ci_infra_rerun_failed`: GitHub refused the rerun itself (for example the
+     token lacks Actions write access). Publish the finalize result unchanged;
+     its `decision` carries GitHub's error.
    - `actionable_comments`: follow `fix-comments` completely, including fresh
      comment retrieval, its disposition ledger, push verification, and resolving
      handled current review threads on GitHub.
@@ -318,7 +331,8 @@ When a delegated remediation step cannot publish, overwrite `var/pr_resolver/res
 
 - `merge_conflicts`, including a conflict-free PR reported as `BEHIND`, selects
   `fix-merge-conflicts` once.
-- `ci_failures` selects `fix-ci` once.
+- `ci_failures` selects `fix-ci` once. Infrastructure-only CI failures are
+  `ci_infra_transient`, never `ci_failures`, and never launch `fix-ci`.
 - `actionable_comments` selects `fix-comments` once.
 - `fresh_review_required_after_remediation` never launches a remediation turn;
   it is a typed request to the owning gate.
@@ -349,7 +363,7 @@ python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_full.py" --pr <pr_number_or_branc
 ```
 
 ## Constraints
-- Keep `pr_resolve_finalize.py` as a gate checker; do not add remediation mutations there.
+- Keep `pr_resolve_finalize.py` as a gate checker; do not add remediation mutations there. Its only CI write is rerunning the failed jobs of an infrastructure-only failure on the unchanged head (at most three attempts per run, quota failures after a 30-minute backoff); that maintains the gate and never changes the PR.
 - Do NOT invent custom conflict/CI/comment workflows; always execute the specialized skill instructions.
 - Do not ask MoonMind or another host to collect, summarize, or classify GitHub comments for this Skill.
 - Respect retry caps; if retries are exhausted, return `attempts_exhausted` and stop.

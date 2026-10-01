@@ -168,22 +168,7 @@ def run_command(
             if output.strip() == "" and not paginated:
                 return {}
             if paginated:
-                # gh --paginate emits consecutive JSON arrays, including on the
-                # distribution-provided CLI. Do not require the newer --slurp.
-                decoder = json.JSONDecoder()
-                records = []
-                remaining = output.strip()
-                if not remaining:
-                    raise ValueError("empty paginated response")
-                while remaining:
-                    page, end = decoder.raw_decode(remaining)
-                    if not isinstance(page, list) or any(
-                        not isinstance(item, dict) for item in page
-                    ):
-                        raise ValueError("expected an array of records on every page")
-                    records.extend(page)
-                    remaining = remaining[end:].strip()
-                return records
+                return _decode_paginated_records(output)
             return json.loads(output)
         except FileNotFoundError:
             print(f"Command not found: {resolved_cmd[0]}", file=sys.stderr)
@@ -1109,6 +1094,222 @@ def summarize_ci_checks(checks: list[dict]) -> dict:
         "missingRequiredChecks": [],
     }
 
+# GitHub Actions platform failures that no change to the PR can fix. Only the
+# platform's own wording counts, so an application error that merely mentions a
+# server error stays a real CI failure.
+_INFRASTRUCTURE_FAILURE_PATTERNS = (
+    (
+        "artifact_storage_quota",
+        re.compile(r"artifact storage quota has been hit", re.IGNORECASE),
+    ),
+    (
+        "runner_lost",
+        re.compile(
+            r"runner has received a shutdown signal"
+            r"|runner: .+ lost communication with the server",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "github_service_error",
+        re.compile(
+            r"GitHub Actions has encountered an internal error"
+            r"|Failed to (?:Create|Finalize)Artifact: .*\((?:500|502|503|504)\)",
+            re.IGNORECASE,
+        ),
+    ),
+)
+# A job that failed only because an upstream job in the same run could not
+# upload its artifact (for example a CI gate reading a result manifest).
+_MISSING_UPSTREAM_ARTIFACT_PATTERN = re.compile(
+    r"Unable to download artifact\(s\): Artifact not found", re.IGNORECASE
+)
+_GENERIC_EXIT_PATTERN = re.compile(
+    r"^Process completed with exit code \d+\.?$", re.IGNORECASE
+)
+_ACTIONS_JOB_URL_PATTERN = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
+
+
+def _classify_failure_annotations(annotations: list[dict]) -> str | None:
+    """Return the infrastructure kind when every failure annotation is one.
+
+    ``missing_upstream_artifact`` is provisional: it only counts when another
+    job in the same run has a confirmed infrastructure failure. A generic step
+    exit is tolerated only beside that gate case; next to a platform failure it
+    may be a real test failure followed by an ``if: always()`` upload, so the
+    job fails closed.
+    """
+
+    messages = [
+        str(item.get("message") or "").strip()
+        for item in annotations
+        if isinstance(item, dict)
+        and str(item.get("annotation_level") or "").strip().lower() == "failure"
+    ]
+    kinds: set[str] = set()
+    generic_exit = False
+    for message in messages:
+        if _GENERIC_EXIT_PATTERN.match(message):
+            generic_exit = True
+            continue
+        kind = next(
+            (
+                name
+                for name, pattern in _INFRASTRUCTURE_FAILURE_PATTERNS
+                if pattern.search(message)
+            ),
+            None,
+        )
+        if kind is None and _MISSING_UPSTREAM_ARTIFACT_PATTERN.search(message):
+            kind = "missing_upstream_artifact"
+        if kind is None:
+            return None
+        kinds.add(kind)
+    platform_kinds = sorted(kinds - {"missing_upstream_artifact"})
+    if platform_kinds:
+        return None if generic_exit else platform_kinds[0]
+    if kinds:
+        return "missing_upstream_artifact"
+    return None
+
+
+def summarize_ci_infrastructure(
+    failed_check_runs: list[dict],
+    *,
+    fetch_annotations,
+    fetch_run,
+) -> dict:
+    """Decide whether every failed check is a GitHub Actions platform failure.
+
+    Fails closed: a check without failure annotations, outside GitHub Actions,
+    or with any non-platform failure keeps the PR on the ``ci_failures`` path.
+    """
+
+    classified: list[dict] = []
+    for check in failed_check_runs:
+        match = _ACTIONS_JOB_URL_PATTERN.search(
+            str(check.get("details_url") or check.get("detailsUrl") or "")
+        )
+        check_id = check.get("id")
+        if match is None or check_id is None:
+            return {"infrastructureOnly": False}
+        annotations = fetch_annotations(check_id)
+        kind = _classify_failure_annotations(
+            annotations if isinstance(annotations, list) else []
+        )
+        if kind is None:
+            return {"infrastructureOnly": False}
+        message = next(
+            (
+                str(item.get("message") or "").strip()
+                for item in annotations
+                if str(item.get("annotation_level") or "").lower() == "failure"
+                and not _GENERIC_EXIT_PATTERN.match(
+                    str(item.get("message") or "").strip()
+                )
+            ),
+            "",
+        )
+        classified.append(
+            {
+                "name": _check_name(check),
+                "kind": kind,
+                "message": message[:300],
+                "runId": int(match.group(1)),
+            }
+        )
+
+    platform_runs = {
+        item["runId"]
+        for item in classified
+        if item["kind"] != "missing_upstream_artifact"
+    }
+    if not platform_runs or any(
+        item["runId"] not in platform_runs for item in classified
+    ):
+        return {"infrastructureOnly": False}
+
+    runs: list[dict] = []
+    for run_id in sorted(platform_runs):
+        run = fetch_run(run_id)
+        if not isinstance(run, dict):
+            return {"infrastructureOnly": False}
+        try:
+            run_attempt = int(run.get("run_attempt") or 1)
+        except (TypeError, ValueError):
+            return {"infrastructureOnly": False}
+        runs.append(
+            {
+                "runId": run_id,
+                "runAttempt": run_attempt,
+                "status": str(run.get("status") or "").strip().lower(),
+                "updatedAt": str(run.get("updated_at") or "").strip(),
+                "kinds": sorted(
+                    {item["kind"] for item in classified if item["runId"] == run_id}
+                ),
+            }
+        )
+    return {
+        "infrastructureOnly": True,
+        "infrastructureFailures": classified,
+        "infrastructureRuns": runs,
+    }
+
+
+def _decode_paginated_records(output: str) -> list[dict]:
+    """Flatten ``gh api --paginate`` output, which is consecutive JSON arrays.
+
+    The distribution-provided CLI predates ``--slurp``, so pages are decoded
+    one after another rather than requiring a single document.
+    """
+
+    decoder = json.JSONDecoder()
+    records: list[dict] = []
+    remaining = output.strip()
+    if not remaining:
+        raise ValueError("empty paginated response")
+    while remaining:
+        page, end = decoder.raw_decode(remaining)
+        if not isinstance(page, list) or any(
+            not isinstance(item, dict) for item in page
+        ):
+            raise ValueError("expected an array of records on every page")
+        records.extend(page)
+        remaining = remaining[end:].strip()
+    return records
+
+
+def _fetch_check_run_annotations(*, pr_repo: str, check_id: object) -> list[dict]:
+    """Every annotation page, or nothing; a partial view must not pass as complete."""
+
+    cmd = _resolve_command(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{pr_repo}/check-runs/{check_id}/annotations?per_page=100",
+        ]
+    )
+    try:
+        completed = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_build_subprocess_env(),
+        )
+        if completed.returncode != 0:
+            return []
+        return _decode_paginated_records(completed.stdout)
+    except (OSError, ValueError):
+        return []
+
+
+def _fetch_actions_run(*, pr_repo: str, run_id: int) -> dict | None:
+    payload = run_command_optional(["gh", "api", f"repos/{pr_repo}/actions/runs/{run_id}"])
+    return payload if isinstance(payload, dict) else None
+
+
 def _fetch_required_status_checks(
     *,
     pr_repo: str | None,
@@ -1295,6 +1496,7 @@ def main():
     # by fetching REST API check-runs for the exact HEAD SHA and comparing
     # against the rollup.
     head_sha = str(pr_data.get("headRefOid") or "").strip()
+    head_check_runs: list[dict] = []
     if head_sha and pr_repo:
         head_check_runs = _fetch_commit_check_runs(
             pr_repo=pr_repo, commit_sha=head_sha
@@ -1365,6 +1567,32 @@ def main():
                         "url": "",
                     }
                 )
+
+    # Distinguish a GitHub Actions platform outage from a failure the PR can
+    # fix. Only authoritative failures on the exact head with a clean signal
+    # qualify; everything else stays on the ``ci_failures`` path.
+    ci_summary["infrastructureOnly"] = False
+    if (
+        pr_repo
+        and ci_summary.get("hasAuthoritativeFailures")
+        and ci_summary.get("signalQuality") == "ok"
+        and int(ci_summary.get("headShaNonSecurityCheckCount") or 0) > 0
+    ):
+        ci_summary.update(
+            summarize_ci_infrastructure(
+                [
+                    run
+                    for run in head_check_runs
+                    if _check_state(run) in _FAILURE_CHECK_STATES
+                ],
+                fetch_annotations=lambda check_id: _fetch_check_run_annotations(
+                    pr_repo=pr_repo, check_id=check_id
+                ),
+                fetch_run=lambda run_id: _fetch_actions_run(
+                    pr_repo=pr_repo, run_id=run_id
+                ),
+            )
+        )
 
     # 3. Fetch Comments from the required sibling skill in this active snapshot.
     comments_script = _sibling_skill_file(
