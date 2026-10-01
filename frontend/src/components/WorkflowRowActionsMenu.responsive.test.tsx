@@ -64,7 +64,7 @@ describe('WorkflowRowActionsMenu responsive layout', () => {
     expect(popoverBlock).toContain('max-height: none;');
   });
 
-  it('lets the actions cluster span the full card width on mobile', () => {
+  it('lets the actions menu span the full card width on mobile', () => {
     const rowBlock = mobileRuleBlock('.queue-card-actions .workflow-row-actions');
     expect(rowBlock).toContain('width: 100%;');
     expect(rowBlock).toContain('align-items: stretch;');
@@ -72,31 +72,6 @@ describe('WorkflowRowActionsMenu responsive layout', () => {
     const menuBlock = mobileRuleBlock('.queue-card-actions .td-workflow-actions-menu');
     expect(menuBlock).toContain('width: 100%;');
     expect(menuBlock).toContain('flex-direction: column;');
-  });
-});
-
-describe('Promoted row action buttons', () => {
-  it('gives the icon-only row actions the same square footprint as the kebab trigger', () => {
-    // The promoted Cancel/Rerun/Remediate controls render an icon instead of a
-    // word, so they must be square and centered rather than keeping the
-    // text-button padding that made the actions column wide and ragged.
-    const buttonBlock = cssRuleBlock('.workflow-row-actions-inline-button');
-    expect(buttonBlock).toContain('justify-content: center;');
-    expect(buttonBlock).toContain('padding: 0;');
-
-    const triggerBlock = cssRuleBlock('.td-workflow-actions-trigger-compact');
-    for (const declaration of ['width: 2rem;', 'height: 2rem;', 'border-radius: 0.45rem;']) {
-      expect(buttonBlock).toContain(declaration);
-      expect(triggerBlock).toContain(declaration);
-    }
-
-    // Text-button leftovers would either re-widen the control or shrink the glyph.
-    expect(buttonBlock).not.toContain('font-size:');
-    expect(buttonBlock).not.toContain('white-space:');
-
-    const iconBlock = cssRuleBlock('.workflow-row-actions-inline-icon');
-    expect(iconBlock).toContain('width: 1.05rem;');
-    expect(iconBlock).toContain('height: 1.05rem;');
   });
 });
 

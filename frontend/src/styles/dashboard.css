@@ -2675,6 +2675,13 @@ tbody tr:hover {
   overflow: visible;
 }
 
+/* The table also inherits overflow: hidden, which clips the menu in Firefox. */
+.workflow-list-data-slab .queue-table-wrapper table:has(
+  .td-workflow-actions-popover
+) {
+  overflow: visible;
+}
+
 .workflow-list-data-slab .queue-table-wrapper:has(
   .workflow-list-column-filter-popover
 ) {
@@ -9308,48 +9315,6 @@ button.workflow-workspace-sidebar-row:active {
 
 .queue-card-actions .workflow-row-actions {
   align-items: flex-start;
-}
-
-.workflow-row-actions-controls {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: nowrap;
-}
-
-/*
- * Promoted row actions (Cancel, Rerun, Remediate) are icon-only so the actions
- * column stays narrow. Match the kebab trigger's square footprint so the whole
- * cluster reads as one row of equal-sized controls.
- */
-.workflow-row-actions-inline-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  width: 2rem;
-  height: 2rem;
-  padding: 0;
-  border-radius: 0.45rem;
-  line-height: 1;
-}
-
-.workflow-row-actions-inline-icon {
-  display: block;
-  width: 1.05rem;
-  height: 1.05rem;
-  stroke-width: 2;
-}
-
-.workflow-row-actions-inline-button--danger {
-  border-color: rgb(var(--mm-danger) / 0.5);
-  color: rgb(var(--mm-danger));
-}
-
-.workflow-row-actions-inline-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .td-workflow-actions-trigger-compact {
