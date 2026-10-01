@@ -6,11 +6,11 @@ this profile serves is the canonical external-agent identity `agentKind=external
 `agentId=omnigent`, nested harness `codex-native`, reconciled end-to-end by
 [NormalCodexProductPathReconciliation.md](../Omnigent/NormalCodexProductPathReconciliation.md).
 
-**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md)
+**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Provider Profile Model and Effort Tiers](./ProviderProfileModelEffortTiers.md), [Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md)
 
 Status: **Desired-State Design**
 Owners: MoonMind Engineering
-Last Updated: 2026-06-23
+Last Updated: 2026-10-01
 
 > [!NOTE]
 > This document replaces the older **Auth Profiles** framing with **Provider Profiles**.
@@ -307,9 +307,11 @@ The exact persisted `SecretRef` schema is owned by the Secrets System. The examp
 
 ### 5.5 Default Model Ownership
 
-Provider Profiles are the correct place to express the default model intent for a runtime/provider combination.
+Provider Profiles express model and effort policy through `model_tiers` and `default_model_tier`. The default is a tier index, not a separately persisted model/effort pair. Null tier fields use compatible runtime defaults, and full-pair Custom intent follows the [canonical resolution contract](./ProviderProfileModelEffortTiers.md#92-resolution-order).
 
-Examples:
+The current implementation still exposes scalar `default_model` and `default_effort` readers and writers. The desired-state schema, persistence, and examples below supersede those fields under [Provider Profile Tier Settings §15.2](../UI/ProviderProfileModelEffortTierSettings.md#152-tier-only-persistence); their removal remains implementation work. Backfill genuinely pre-tier rows once, preserve existing tier arrays/defaults, and remove scalar API/database fields and their callers together. Seeding writes canonical tiers, and materializers/strategies consume the existing resolver's result instead of a scalar mirror. Historical attempt values and active work remain intact.
+
+Examples of tier-owned model intent:
 
 - Claude Code + MiniMax defaulting to `MiniMax-M2.7`
 - Codex CLI + MiniMax defaulting to profile `m27`
@@ -384,9 +386,10 @@ ManagedAgentProviderProfile:
   last_validated_at:             timestamp | null
   last_auth_method:              str | null     # oauth_volume | secret_ref | manual | null
 
-  # default runtime/provider intent
-  default_model:                 str | null
-  model_overrides:               dict[str, str] # runtime-specific named model defaults
+  # canonical runtime/provider model and effort policy
+  model_tiers:                   [ProviderModelEffortTier] # non-empty; owned by the tier design
+  default_model_tier:            int           # one-based index within model_tiers
+  model_overrides:               dict[str, str] # runtime-specific named configuration
 
   # concurrency / rate limiting
   max_parallel_runs:             int
@@ -1885,8 +1888,8 @@ The launcher must build the final runtime environment in a predictable, layered 
 
 1. Start from a sane base environment.
 2. Apply runtime-global defaults.
-3. Load the selected Provider Profile.
-4. Re-check launch readiness at the launch boundary.
+3. Load the selected Provider Profile and its canonical tier policy.
+4. Re-check launch readiness and resolve model/effort through the existing canonical resolver.
 5. Remove or blank `clear_env_keys`.
 6. Resolve `secret_refs` into ephemeral launch-only values where needed.
 7. Materialize `file_templates`.
@@ -1895,6 +1898,8 @@ The launcher must build the final runtime environment in a predictable, layered 
 10. Apply runtime strategy shaping.
 11. Build command.
 12. Launch subprocess.
+
+When file or environment templates need model/effort policy, render the canonical resolved attempt values. Do not refill explicit Custom nulls or null tier fields from removed scalar defaults. Existing compatible runtime defaults remain owned by runtime configuration.
 
 ### 12.2 Critical rule: layer, do not replace
 
@@ -1909,7 +1914,7 @@ Otherwise, essential variables such as `PATH`, `HOME`, and runtime process conte
 Provider Profiles do not eliminate runtime strategies. Instead:
 
 - Provider Profiles define the data needed to prepare environment variables and files.
-- Runtime strategies interpret `command_behavior`, `default_model`, and runtime-specific launch rules.
+- Runtime strategies interpret `command_behavior`, canonical resolved model/effort, and runtime-specific launch rules. They do not independently read or reconstruct scalar profile defaults.
 
 Examples:
 
@@ -1923,7 +1928,7 @@ Examples:
 
 ### 13.1 Table
 
-The provider-aware registry uses `managed_agent_provider_profiles`.
+The provider-aware registry uses `managed_agent_provider_profiles`. This target schema includes tier-only model policy; it does not assert that scalar-default removal is already implemented (§5.5).
 
 ```sql
 CREATE TABLE managed_agent_provider_profiles (
@@ -1948,7 +1953,8 @@ CREATE TABLE managed_agent_provider_profiles (
     last_validated_at                 TIMESTAMPTZ,
     last_auth_method                  TEXT,
 
-    default_model                     TEXT,
+    model_tiers                       JSONB NOT NULL,
+    default_model_tier                INTEGER NOT NULL DEFAULT 1,
     model_overrides                   JSONB NOT NULL DEFAULT '{}'::jsonb,
 
     volume_ref                        TEXT,
@@ -2352,7 +2358,11 @@ disabled_reason: null
 tags: ["minimax", "m27"]
 priority: 120
 
-default_model: "MiniMax-M2.7"
+model_tiers:
+  - label: MiniMax default
+    model: "MiniMax-M2.7"
+    effort: null
+default_model_tier: 1
 model_overrides:
   small_fast: "MiniMax-M2.7"
   sonnet_equivalent: "MiniMax-M2.7"
@@ -2378,7 +2388,7 @@ env_template:
     from_secret_ref: provider_api_key
   API_TIMEOUT_MS: "3000000"
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
-  ANTHROPIC_MODEL: "MiniMax-M2.7"
+  ANTHROPIC_MODEL: "{{resolved_model}}"
   ANTHROPIC_SMALL_FAST_MODEL: "MiniMax-M2.7"
   ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M2.7"
   ANTHROPIC_DEFAULT_OPUS_MODEL: "MiniMax-M2.7"
@@ -2411,7 +2421,11 @@ disabled_reason: null
 tags: ["minimax", "m27"]
 priority: 120
 
-default_model: "codex-MiniMax-M2.7"
+model_tiers:
+  - label: MiniMax default
+    model: "codex-MiniMax-M2.7"
+    effort: null
+default_model_tier: 1
 model_overrides:
   codex_profile_name: "m27"
 
@@ -2450,7 +2464,7 @@ file_templates:
           stream_idle_timeout_ms: 300000
       profiles:
         m27:
-          model: "codex-MiniMax-M2.7"
+          model: "{{resolved_model}}"
           model_provider: "minimax"
 
 home_path_overrides: {}
@@ -2510,6 +2524,12 @@ command_behavior:
     - show first-party setup cards
     - expose Connect OAuth and Add API key actions
     - auto-enable after successful user-initiated setup
+
+11. Complete tier-only persistence under §5.5 and the owning tier designs:
+    - convert only pre-tier rows, preserving existing authored policy,
+    - remove `default_model`/`default_effort` from schema, profile API, and all readers/writers,
+    - update seeds, materialization, and runtime strategies to use canonical policy/resolution,
+    - preserve historical resolved values and active work rather than retaining a second default mirror.
 
 ---
 
