@@ -80,6 +80,8 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
 
     manager = MoonMindProviderProfileManagerWorkflow()
     manager._runtime_id = "codex_cli"
+    # A running manager whose startup restore already completed.
+    manager._startup_restored = True
     manager._profiles["profile"] = ProfileSlotState(
         profile_id="profile",
         max_parallel_runs=1,
@@ -130,14 +132,14 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
         # and durable lease persistence, not the legacy fallback.
         temporal_workflow.patched.return_value = True
         # Both tier choices result in the same profile-owned slot request.
-        manager.request_slot(
+        await manager.request_slot(
             {
                 "requester_workflow_id": "run-tier-1",
                 "runtime_id": "codex_cli",
                 "execution_profile_ref": "profile",
             }
         )
-        manager.request_slot(
+        await manager.request_slot(
             {
                 "requester_workflow_id": "run-tier-2",
                 "runtime_id": "codex_cli",
@@ -161,6 +163,8 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
 async def test_tier_policy_refresh_does_not_change_profile_slot_leasing() -> None:
     manager = MoonMindProviderProfileManagerWorkflow()
     manager._runtime_id = "codex_cli"
+    # A running manager whose startup restore already completed.
+    manager._startup_restored = True
     manager._profiles["profile"] = ProfileSlotState(
         profile_id="profile",
         max_parallel_runs=2,

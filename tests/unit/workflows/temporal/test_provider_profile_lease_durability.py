@@ -885,7 +885,7 @@ async def test_the_evidence_identity_is_recorded_on_the_lease_contract(
                 evidence_identity=identity,
             )
         )
-        inspected = wf.inspect_credential_lease({"lease_id": "probe-a"})
+        inspected = await wf.inspect_credential_lease({"lease_id": "probe-a"})
 
     assert granted["lease_mode"] == "single_flight_validation"
     assert inspected["evidenceIdentity"] == identity

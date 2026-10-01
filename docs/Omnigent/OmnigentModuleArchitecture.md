@@ -74,12 +74,21 @@ Account-status and duplicate permission queries are not launch prerequisites.
 Repository-free tool projections attest only local credential availability.
 
 Transient transport failures and HTTP 5xx responses receive up to four attempts
-on the same host and credential, with bounded backoff. Authentication,
-authorization, identity, and permission failures fail closed; rate-limit
-responses are surfaced without a tight retry loop. Cancellation propagates.
-Generic-host failures preserve redacted attempt evidence and the original
-diagnostic even if artifact storage is unavailable, and report a host capability
-failure instead of directing credential rematerialization. Hermetic coverage
+on the same host and credential, with bounded backoff. A rate-limited probe
+reads the reset from the response headers of one REST and one GraphQL request
+(GitHub's `/rate_limit` endpoint can report an untouched budget while requests
+are rejected) and waits in place once: for `Retry-After` when present,
+otherwise for the exhausted resource's reset (at most 15 minutes; one minute
+when neither is reported). Authentication,
+authorization, identity, and permission failures fail closed. Cancellation
+propagates. Generic-host failures preserve redacted attempt evidence and the
+original diagnostic even if artifact storage is unavailable. A rejected
+credential, identity, or permission reports a host capability failure instead
+of directing credential rematerialization. A transport failure or rate limit
+that outlasts in-place recovery reports
+`OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE` with `retry_step_execution`: no session
+exists yet, so the parent's existing bounded step retry starts a fresh Step
+Execution instead of failing the workflow. Hermetic coverage
 lives in `test_mounted_tool_preflight.py` and the full handoff regression in
 `test_generic_platform_production_services.py`.
 | `moonmind/omnigent/legacy_retirement.py`, `session_migration_inventory.py`, `session_supervisor_rollback.py` | #3712 retirement inventory, migration inventory, rollback authority | Governance |

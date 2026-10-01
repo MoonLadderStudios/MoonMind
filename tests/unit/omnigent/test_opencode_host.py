@@ -537,3 +537,19 @@ def test_image_does_not_install_unrelated_harnesses():
     # emitted by opencode-auth-json@1 (``key``, not the obsolete ``apiKey``).
     assert ".get('key')" in check_source
     assert "'apiKey'" not in check_source
+
+
+def test_opencode_agent_file_tools_can_read_the_active_skill_snapshot():
+    """The agent is told to read its selected Skill from the read-only mount."""
+
+    from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
+
+    spec = yaml.safe_load(
+        Path("services/omnigent/agents/opencode-native-ui/config.yaml").read_text()
+    )
+    sandbox = spec["os_env"]["sandbox"]
+
+    # ``sandbox.type: none`` file tools reach only cwd plus declared grants;
+    # a read grant admits reads and never writes of the snapshot.
+    assert OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR in sandbox.get("read_paths", [])
+    assert OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR not in sandbox.get("write_paths", [])

@@ -276,6 +276,33 @@ class GenericOmnigentHostRealizer:
                     idempotency_key=request.idempotency_key,
                     admitted_capacity=admitted_capacity,
                 )
+            except HarnessPlatformError as exc:
+                if (
+                    prior is not None
+                    and exc.code
+                    == HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE
+                ):
+                    # This admission lost its provider lease, so the AgentRun
+                    # re-admits under a new epoch and never resumes this
+                    # binding. Its owner is still running, so no janitor will
+                    # reclaim the host an interrupted attempt launched for it:
+                    # this execution drains it through the cleanup below.
+                    # Cleanup must see every persisted resource, or it would
+                    # mark the binding cleaned while its host lease still
+                    # counts; on a partial load the binding stays recoverable.
+                    try:
+                        resources = await self._bound_cleanup_resources(prior)
+                    except Exception:
+                        logger.warning(
+                            "Could not load cleanup resources for binding %s "
+                            "after its provider lease was lost",
+                            prior.bindingId,
+                            exc_info=True,
+                        )
+                    else:
+                        binding = prior
+                        credential_handles, host_lease, host_context = resources
+                raise
             finally:
                 # The observed wait covers capacity queueing and any provider
                 # cooldown the coordinator enforced, on the failing path too.
@@ -362,15 +389,11 @@ class GenericOmnigentHostRealizer:
                 RuntimeBindingState.cleanup_pending,
                 RuntimeBindingState.failed,
             }:
-                credential_handles = await self._credentials.load_cleanup_handles(
-                    binding.providerLeases, binding.credentialRuntimeHandles
-                )
-                host_lease = (
-                    await self._host_leases.get(binding.hostLeaseRef)
-                    if binding.hostLeaseRef
-                    else None
-                )
-                host_context = self._persisted_host_context(binding, host_lease)
+                (
+                    credential_handles,
+                    host_lease,
+                    host_context,
+                ) = await self._bound_cleanup_resources(binding)
                 if binding.state in {
                     RuntimeBindingState.host_ready,
                     RuntimeBindingState.session_creating,
@@ -795,6 +818,25 @@ class GenericOmnigentHostRealizer:
                     "attested host retry identity conflicts with the execution plan",
                     code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
                 )
+
+    async def _bound_cleanup_resources(
+        self, binding: StableRuntimeBinding
+    ) -> tuple[tuple[CredentialRuntimeHandle, ...], Any | None, dict[str, Any] | None]:
+        """Load what a persisted binding needs to resume or clean up."""
+
+        credential_handles = await self._credentials.load_cleanup_handles(
+            binding.providerLeases, binding.credentialRuntimeHandles
+        )
+        host_lease = (
+            await self._host_leases.get(binding.hostLeaseRef)
+            if binding.hostLeaseRef
+            else None
+        )
+        return (
+            credential_handles,
+            host_lease,
+            self._persisted_host_context(binding, host_lease),
+        )
 
     @staticmethod
     def _persisted_host_context(

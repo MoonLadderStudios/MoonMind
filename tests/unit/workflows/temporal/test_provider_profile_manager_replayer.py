@@ -1,13 +1,18 @@
 """Production replay and worker-boundary coverage for slot-manager cleanup."""
 
 import asyncio
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 from temporalio import activity, exceptions, workflow
-from temporalio.client import WorkflowHistory
+from temporalio.client import (
+    WithStartWorkflowOperation,
+    WorkflowHistory,
+    WorkflowUpdateStage,
+)
+from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.converter import DataConverter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
@@ -1127,3 +1132,266 @@ async def test_opencode_506_boundary_replays_patched_and_fails_prefix() -> None:
             workflows=[_PreRedriveManagerWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ).replay_workflow(history)
+
+
+class _HeldLeaseActivities(_ProfileActivities):
+    """A durable ledger that already records one live workflow-owned lease."""
+
+    HOLDER = "test-held-agent-run"
+
+    def __init__(self) -> None:
+        super().__init__("opencode", fail_cleanup=False)
+        self.rows = [
+            {
+                "profile_id": "test-default",
+                "workflow_id": self.HOLDER,
+                "lease_id": self.HOLDER,
+                "granted_at": datetime.now(UTC).isoformat(),
+                "purpose": "execution_omnigent",
+                "fencingGeneration": 496,
+                "ownerIsWorkflow": True,
+                "workflowId": self.HOLDER,
+            }
+        ]
+
+    @activity.defn(name="provider_profile.sync_slot_leases")
+    async def sync_leases(self, request: dict[str, Any]) -> dict[str, Any]:
+        action = request["action"]
+        self.actions.append(action)
+        if action == "load":
+            return {"leases": self.rows, "max_fencing_generation": 496}
+        if action == "release_one":
+            self.rows = []
+            self.released.set()
+            return {
+                "released": True,
+                "outcome": LeaseTransitionOutcome.RELEASED.value,
+            }
+        return {"leases": self.rows, "synced": len(request.get("leases", []))}
+
+
+def _first_task_workers(
+    env: WorkflowEnvironment, activities: Any, queue: str
+) -> tuple[Worker, Worker]:
+    return (
+        Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[MoonMindProviderProfileManagerWorkflow, _SlotRequester],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ),
+    )
+
+
+async def _shutdown_and_fetch_history(
+    env: WorkflowEnvironment, manager: Any
+) -> WorkflowHistory:
+    with env.auto_time_skipping_disabled():
+        await manager.signal("shutdown")
+        assert (await manager.result())["status"] == "shutdown"
+    return await manager.fetch_history()
+
+
+async def _replay(history: WorkflowHistory) -> None:
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_a_lease_inspection_in_the_first_task_sees_the_restored_ledger() -> None:
+    """An Update delivered with a run's first task must not read an empty ledger.
+
+    2026-09-30 deadlock: a worker restart rolled the manager over while an
+    execution Activity's retry inspected its admitted lease. The Update ran
+    before ``run()`` restored the ledger, reported the live lease inactive, and
+    the AgentRun gave its provider slot away while still holding its host.
+    """
+
+    activities = _HeldLeaseActivities()
+    queue = "test-first-task-inspection"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        workflow_worker, activity_worker = _first_task_workers(env, activities, queue)
+        async with workflow_worker, activity_worker:
+            start = WithStartWorkflowOperation(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue=queue,
+                id_conflict_policy=WorkflowIDConflictPolicy.FAIL,
+            )
+            inspected = await env.client.execute_update_with_start_workflow(
+                "InspectCredentialLease",
+                {"lease_id": activities.HOLDER},
+                start_workflow_operation=start,
+            )
+            history = await _shutdown_and_fetch_history(
+                env, await start.workflow_handle()
+            )
+
+    assert inspected["active"] is True
+    assert inspected["profile_id"] == "test-default"
+    assert inspected["fencingGeneration"] == 496
+    await _replay(history)
+
+
+@pytest.mark.asyncio
+async def test_a_release_in_the_first_task_frees_the_restored_lease() -> None:
+    """A release that arrives before restore must not leave a ghost lease.
+
+    Releasing against the unrestored ledger deleted the durable row, then the
+    restore put the Continue-As-New snapshot's lease back in memory, so the
+    slot stayed spent for a run that had already given it up.
+    """
+
+    activities = _HeldLeaseActivities()
+    profile = (await activities.list_profiles({"runtime_id": "opencode"}))[
+        "profiles"
+    ][0]
+    snapshot = {
+        "runtime_id": "opencode",
+        "profiles": [profile],
+        "leases": {"test-default": [activities.HOLDER]},
+        "lease_granted_at": {
+            "test-default": {activities.HOLDER: activities.rows[0]["granted_at"]}
+        },
+        "lease_metadata": {
+            "test-default": {
+                activities.HOLDER: {
+                    "leaseId": activities.HOLDER,
+                    "ownerId": activities.HOLDER,
+                    "purpose": "execution_omnigent",
+                    "ownerIsWorkflow": True,
+                    "workflowId": activities.HOLDER,
+                    "fencingGeneration": 496,
+                }
+            }
+        },
+        "lease_grant_sequence": 496,
+    }
+    queue = "test-first-task-release"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        workflow_worker, activity_worker = _first_task_workers(env, activities, queue)
+        async with workflow_worker, activity_worker:
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                snapshot,
+                id="provider-profile-manager:opencode",
+                task_queue=queue,
+                start_signal="release_slot",
+                start_signal_args=[
+                    {
+                        "profile_id": "test-default",
+                        "requester_workflow_id": activities.HOLDER,
+                        "fencing_generation": 496,
+                    }
+                ],
+            )
+            await asyncio.wait_for(activities.released.wait(), timeout=15)
+            state = await manager.query("get_state")
+            history = await _shutdown_and_fetch_history(env, manager)
+
+    assert state["profiles"]["test-default"]["current_leases"] == []
+    await _replay(history)
+
+
+@pytest.mark.asyncio
+async def test_a_slot_request_in_the_first_task_is_not_dropped_by_restore() -> None:
+    """A request that arrives before restore keeps its place in the queue."""
+
+    activities = _ProfileActivities("opencode", fail_cleanup=False)
+    queue = "test-first-task-request"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        workflow_worker, activity_worker = _first_task_workers(env, activities, queue)
+        async with workflow_worker, activity_worker:
+            requester = await env.client.start_workflow(
+                _SlotRequester.run,
+                id="test-first-task-requester",
+                task_queue=queue,
+            )
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue=queue,
+                start_signal="request_slot",
+                start_signal_args=[
+                    {
+                        "requester_workflow_id": requester.id,
+                        "runtime_id": "opencode",
+                    }
+                ],
+            )
+            async with asyncio.timeout(15):
+                while (
+                    assignment := await requester.query(_SlotRequester.assigned)
+                ) is None:
+                    await asyncio.sleep(0.05)
+            history = await _shutdown_and_fetch_history(env, manager)
+            with env.auto_time_skipping_disabled():
+                await requester.signal(_SlotRequester.shutdown)
+                await requester.result()
+
+    assert assignment["profile_id"] == "test-default"
+    await _replay(history)
+
+
+@pytest.mark.asyncio
+async def test_a_maintenance_lease_in_the_first_task_waits_for_restored_consumers() -> None:
+    """Exclusive maintenance must not be granted beside an unrestored consumer.
+
+    Before the restore fence, the Update synthesized a placeholder profile with
+    no consumers and granted credential repair while the restored ledger still
+    recorded a live execution lease on the same profile.
+    """
+
+    activities = _HeldLeaseActivities()
+    queue = "test-first-task-maintenance"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        workflow_worker, activity_worker = _first_task_workers(env, activities, queue)
+        async with workflow_worker, activity_worker:
+            start = WithStartWorkflowOperation(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue=queue,
+                id_conflict_policy=WorkflowIDConflictPolicy.FAIL,
+            )
+            with env.auto_time_skipping_disabled():
+                maintenance = await env.client.start_update_with_start_workflow(
+                    "AcquireCredentialMaintenanceLease",
+                    {
+                        "requester_workflow_id": "test-credential-repair",
+                        "owner_id": "test-credential-repair",
+                        "runtime_id": "opencode",
+                        "execution_profile_ref": "test-default",
+                        "purpose": "credential_repair",
+                        "metadata": {
+                            "ownerIsWorkflow": False,
+                            "workflowId": "http:test-credential-repair",
+                        },
+                    },
+                    start_workflow_operation=start,
+                    wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+                )
+                pending = asyncio.ensure_future(maintenance.result())
+                done, _ = await asyncio.wait({pending}, timeout=3)
+                pending.cancel()
+                assert not done, pending.result()
+            manager = await start.workflow_handle()
+            state = await manager.query("get_state")
+            history = await _shutdown_and_fetch_history(env, manager)
+
+    assert state["profiles"]["test-default"]["current_leases"] == [activities.HOLDER]
+    await _replay(history)

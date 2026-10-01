@@ -17,6 +17,7 @@ FULL_REMEDIATION_REASONS = {
 
 FINALIZE_ONLY_RETRY_REASONS = {
     "automated_review_wait",
+    "ci_infra_transient",
     "ci_running",
     "codex_review_grace_wait",
     "comments_unavailable",
@@ -31,6 +32,8 @@ REVIEW_REQUEST_REASONS = {
 }
 
 NON_RETRYABLE_REASONS = {
+    "ci_infra_rerun_exhausted",
+    "ci_infra_rerun_failed",
     "comment_policy_not_enforced",
     "deferred_comments",
     "merge_not_ready",
@@ -140,6 +143,7 @@ def build_gated_continuation(
     *,
     reason: str,
     execution_ref: str,
+    retry_after_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Build the typed handoff from the Skill's already-recorded gate state."""
     if normalize_text(reason) in REVIEW_REQUEST_REASONS:
@@ -184,7 +188,11 @@ def build_gated_continuation(
             "+00:00", "Z"
         )
     else:
-        poll_seconds = grace.get("pollSeconds", 60)
+        poll_seconds = (
+            retry_after_seconds
+            if retry_after_seconds is not None
+            else grace.get("pollSeconds", 60)
+        )
         try:
             if isinstance(poll_seconds, bool):
                 raise ValueError
@@ -245,6 +253,8 @@ def remediation_next_step(reason: str) -> str:
     if normalized == "snapshot_refresh_failed":
         return "retry_finalize_after_backoff"
     if normalized == "external_state_transient":
+        return "retry_finalize_after_backoff"
+    if normalized == "ci_infra_transient":
         return "retry_finalize_after_backoff"
     if normalized == "ci_running":
         return "wait_for_ci_and_retry_finalize"

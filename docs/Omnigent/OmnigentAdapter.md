@@ -272,7 +272,7 @@ When the daemon shares the worker filesystem (`WORKFLOW_DOCKER_DAEMON_MODE=local
 | Codex OAuth home | `/home/app/.codex` | Profile-bound, read/write, generation-checked, exclusive |
 | Omnigent host state | `/home/app/.omnigent` | Separate host or lease-owned state; never the OAuth volume |
 | Workflow workspace | `/workspaces/run` for on-demand | Workflow-scoped, policy-resolved, daemon-visible |
-| Resolved skills | `/opt/moonmind-skills` | Immutable run snapshot, read-only |
+| Resolved skills | `/opt/moonmind-skills` | Immutable run snapshot, read-only; the OpenCode agent's file tools hold a read grant for it |
 | Versioned tools | `/opt/moonmind-tools` | Pinned bundle, read-only |
 | Runtime capability files | `/opt/moonmind/capabilities` | Lease-owned, read-only, created only for policy-authorized requirements |
 | Artifact handoff | Policy-selected path or gateway | Never conflated with the OAuth or host-state volume |

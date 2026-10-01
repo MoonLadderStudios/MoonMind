@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 from moonmind.omnigent.mounted_tool_preflight import (
+    RATE_LIMIT_LOOKUP_COMMAND,
     MountedToolPreflightError,
     _digest_check_command,
     preflight_github_access,
@@ -296,21 +297,147 @@ async def test_repository_identity_and_requested_permission_fail_closed(
         "HTTP 401: Bad credentials",
         "HTTP 403: Forbidden",
         "HTTP 404: Not Found",
-        "HTTP 429: rate limit exceeded",
     ],
 )
 @pytest.mark.asyncio
-async def test_permanent_rejection_and_rate_limits_do_not_tight_loop(
-    error, monkeypatch
-):
+async def test_permanent_rejection_fails_closed_without_retry(error, monkeypatch):
     sleep = AsyncMock()
     monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
     runner = AsyncMock(side_effect=[(0, "", ""), (1, "", error)])
-    with pytest.raises(MountedToolPreflightError, match=error):
+    with pytest.raises(MountedToolPreflightError, match=error) as raised:
         await preflight_github_access(
             repository="owner/repo", boundaries={"runner": runner}
         )
     sleep.assert_not_awaited()
+    assert raised.value.transient is False
+
+
+def _headers(status: int, resource: str, remaining: int, reset: int, **extra) -> str:
+    lines = [
+        f"HTTP/2.0 {status} {'OK' if status == 200 else 'Forbidden'}",
+        f"X-Ratelimit-Remaining: {remaining}",
+        f"X-Ratelimit-Reset: {reset}",
+        f"X-Ratelimit-Resource: {resource}",
+        *(f"{name.replace('_', '-')}: {value}" for name, value in extra.items()),
+    ]
+    return "\n".join(lines) + "\n\n"
+
+
+def _rate_limited_runner(*, limited_responses: int, lookup_headers: str):
+    calls: list[str] = []
+
+    async def runner(command: str) -> tuple[int, str, str]:
+        calls.append(command)
+        if command.startswith("gh auth token"):
+            return 0, "", ""
+        if command == RATE_LIMIT_LOOKUP_COMMAND:
+            return 0, lookup_headers, ""
+        if sum(item.startswith("gh repo view") for item in calls) <= limited_responses:
+            return 1, "", "GraphQL: API rate limit exceeded for user ID 16808547."
+        return (
+            0,
+            json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "WRITE"}),
+            "",
+        )
+
+    return runner, calls
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_waits_for_reported_reset_then_recovers_in_place(
+    monkeypatch,
+):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.time.time", lambda: 1_000.0
+    )
+    runner, calls = _rate_limited_runner(
+        limited_responses=1,
+        # /rate_limit can report an untouched budget while requests are
+        # rejected, so the reset comes from real response headers.
+        lookup_headers=_headers(200, "core", 4100, 4_000)
+        + _headers(403, "graphql", 0, 1_090),
+    )
+
+    result = await preflight_github_access(
+        repository="owner/repo", boundaries={"host": runner}
+    )
+
+    assert result["status"] == "ready"
+    # Wait for the exhausted resource's reported reset, not a tight loop and
+    # not the unrelated core window.
+    sleep.assert_awaited_once_with(91.0)
+    assert calls.count(RATE_LIMIT_LOOKUP_COMMAND) == 1
+    assert not any(call.startswith("gh api rate_limit") for call in calls)
+    limited = [item for item in result["probes"] if item["status"] == "rate_limited"]
+    assert len(limited) == 1
+    assert limited[0]["error"].startswith("GraphQL: API rate limit exceeded")
+    assert limited[0]["retryAfterSeconds"] == 91.0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_without_reported_reset_waits_bounded_default(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    # A secondary rate limit leaves every primary resource with budget left.
+    runner, _calls = _rate_limited_runner(
+        limited_responses=1,
+        lookup_headers=_headers(200, "core", 4100, 4_000)
+        + _headers(200, "graphql", 12, 1),
+    )
+
+    result = await preflight_github_access(
+        repository="owner/repo", boundaries={"host": runner}
+    )
+
+    assert result["status"] == "ready"
+    sleep.assert_awaited_once_with(60.0)
+
+
+@pytest.mark.asyncio
+async def test_secondary_rate_limit_waits_for_retry_after(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    runner, _calls = _rate_limited_runner(
+        limited_responses=1,
+        lookup_headers=_headers(403, "core", 4100, 4_000, Retry_After=120),
+    )
+
+    result = await preflight_github_access(
+        repository="owner/repo", boundaries={"host": runner}
+    )
+
+    assert result["status"] == "ready"
+    sleep.assert_awaited_once_with(120.0)
+
+
+@pytest.mark.asyncio
+async def test_persistent_rate_limit_is_reported_as_transient_with_original_error(
+    monkeypatch,
+):
+    sleep = AsyncMock()
+    monkeypatch.setattr("moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.time.time", lambda: 1_000.0
+    )
+    runner, _calls = _rate_limited_runner(
+        limited_responses=100,
+        # A nonsensical far-future reset is still bounded by the cap.
+        lookup_headers=_headers(403, "core", 0, 99_999),
+    )
+
+    with pytest.raises(MountedToolPreflightError) as raised:
+        await preflight_github_access(
+            repository="owner/repo", boundaries={"host": runner}
+        )
+
+    assert raised.value.code == "github_rate_limited"
+    assert raised.value.transient is True
+    assert "API rate limit exceeded" in str(raised.value)
+    # One bounded in-place wait, well inside the launch activity's budget;
+    # longer outages are left to the parent's fresh Step Execution.
+    sleep.assert_awaited_once_with(900.0)
 
 
 @pytest.mark.asyncio
@@ -333,6 +460,7 @@ async def test_transient_exhaustion_retains_all_redacted_attempts(monkeypatch):
         )
     assert len(raised.value.evidence["probes"]) == 5
     assert sleep.await_count == 3
+    assert raised.value.transient is True
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(raised.value)
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(raised.value.evidence)
 

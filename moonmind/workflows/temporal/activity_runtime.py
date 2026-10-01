@@ -13341,12 +13341,21 @@ class TemporalAgentRuntimeActivities:
             selected_skill = str(request.get("selectedSkill") or "").strip()
             if selected_skill:
                 contract_payload["skillId"] = selected_skill
+        runtime_metadata = dict(result.metadata or {})
         evaluation = evaluate_terminal_evidence(
             contract_payload,
             workspace_path=workspace_path,
             artifact_spool_path=artifact_spool_path,
+            # The runtime binding owns the continuation budget; only it can
+            # report that a same-session continuation made no progress.
+            continuation_stalled=(
+                runtime_metadata.get("terminalContractRecoveryOwner")
+                == "runtime_binding"
+                and runtime_metadata.get("terminalContractContinuationStalled")
+                is True
+            ),
         )
-        metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
+        metadata = {**runtime_metadata, **dict(evaluation.metadata)}
         metadata["terminalContractId"] = str(contract.get("contractId") or "")
         metadata["terminalContractAuthority"] = "MoonMind.AgentRun"
         metadata["terminalContractOutcome"] = evaluation.outcome

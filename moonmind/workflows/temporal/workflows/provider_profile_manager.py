@@ -148,6 +148,11 @@ ORPHANED_VALIDATION_CLEANUP_PATCH = (
     "provider-profile-manager-orphaned-validation-cleanup-v1"
 )
 VALIDATION_LEASE_EXPIRY_PATCH = "provider-profile-manager-validation-lease-expiry-v1"
+# Signals and Updates delivered with a run's first workflow task execute before
+# ``run()`` restores the ledger. Without this marker an inspection reported a
+# live lease as gone, a release deleted a durable row that the restore then put
+# back in memory, and a slot request was overwritten by the restored queue.
+HANDLERS_AWAIT_RESTORE_PATCH = "provider-profile-manager-handlers-await-restore-v1"
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -1233,11 +1238,28 @@ class MoonMindProviderProfileManagerWorkflow:
             return {}
         return {"lease_fencing_generation": int(fencing_generation)}
 
+    async def _await_restored_ledger(self) -> None:
+        """Hold a handler until ``run()`` has restored the ledger.
+
+        Signals and Updates delivered with a run's first workflow task execute
+        before ``run()``, against empty in-memory state. Deciding there loses
+        authority the ledger still records (see HANDLERS_AWAIT_RESTORE_PATCH).
+        Once restored this returns without yielding, so ordinary deliveries
+        keep their recorded command order.
+        """
+
+        if self._startup_restored:
+            return
+        if not self._workflow_patch_enabled(HANDLERS_AWAIT_RESTORE_PATCH):
+            return
+        await workflow.wait_condition(lambda: self._startup_restored)
+
     # -- Signals ---------------------------------------------------------------
 
     @workflow.signal
-    def request_slot(self, payload: dict[str, Any]) -> None:
+    async def request_slot(self, payload: dict[str, Any]) -> None:
         """An AgentRun requests a profile slot for this runtime family."""
+        await self._await_restored_ledger()
         self._event_count += 1
         self._has_new_events = True
         priority = self._normalize_request_priority(payload.get("priority"))
@@ -1286,6 +1308,7 @@ class MoonMindProviderProfileManagerWorkflow:
     @workflow.signal
     async def release_slot(self, payload: dict[str, Any]) -> None:
         """An AgentRun releases its profile slot."""
+        await self._await_restored_ledger()
         self._event_count += 1
         self._has_new_events = True
         profile_id = payload["profile_id"]
@@ -1442,6 +1465,7 @@ class MoonMindProviderProfileManagerWorkflow:
         and never reaches the ledger through this path.
         """
 
+        await self._await_restored_ledger()
         self._event_count += 1
         self._has_new_events = True
         lease_id = self._normalize_optional_string(
@@ -1806,7 +1830,7 @@ class MoonMindProviderProfileManagerWorkflow:
         return claimed != held
 
     @workflow.signal
-    def withdraw_maintenance_waiter(self, payload: dict[str, Any]) -> None:
+    async def withdraw_maintenance_waiter(self, payload: dict[str, Any]) -> None:
         """Withdraw one caller's pending exclusive-maintenance request.
 
         The client sends this when its bounded rollover-reattach budget is
@@ -1818,6 +1842,7 @@ class MoonMindProviderProfileManagerWorkflow:
         released here, so a grant that won the race against the give-up keeps
         its authority.
         """
+        await self._await_restored_ledger()
         self._event_count += 1
         self._has_new_events = True
         owner_id = self._normalize_optional_string(
@@ -1834,8 +1859,9 @@ class MoonMindProviderProfileManagerWorkflow:
                 return
 
     @workflow.signal
-    def report_cooldown(self, payload: dict[str, Any]) -> None:
+    async def report_cooldown(self, payload: dict[str, Any]) -> None:
         """Report a 429-triggered cooldown on a profile."""
+        await self._await_restored_ledger()
         self._event_count += 1
         self._has_new_events = True
         profile_id = payload["profile_id"]
@@ -2089,6 +2115,7 @@ class MoonMindProviderProfileManagerWorkflow:
         preserving the existing signal protocol for AgentRun workflows.
         """
 
+        await self._await_restored_ledger()
         requester_id = self._normalize_optional_string(
             payload.get("requester_workflow_id")
         )
@@ -2272,6 +2299,9 @@ class MoonMindProviderProfileManagerWorkflow:
           existing credential consumer to drain (invariant 4).
         """
 
+        # Before restore the ledger has no consumers, so an exclusive grant
+        # here could sit beside a live lease the snapshot still records.
+        await self._await_restored_ledger()
         requester_id = self._normalize_optional_string(
             payload.get("requester_workflow_id") or payload.get("owner_id")
         )
@@ -2751,7 +2781,13 @@ class MoonMindProviderProfileManagerWorkflow:
         )
 
     @workflow.update(name="InspectCredentialLease")
-    def inspect_credential_lease(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def inspect_credential_lease(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        # An execution Activity retried across a manager rollover inspects its
+        # admitted lease here; a pre-restore "inactive" answer made the run
+        # give up a slot it still held.
+        await self._await_restored_ledger()
         lease_id = self._normalize_optional_string(
             payload.get("lease_id") or payload.get("owner_id")
         )

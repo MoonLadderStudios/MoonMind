@@ -1141,9 +1141,16 @@ class DockerOmnigentHostAttestor:
                         "Could not persist GitHub preflight evidence; original failure: %s",
                         exc,
                     )
+                # A GitHub outage or rate limit that outlasted in-place
+                # recovery is not a host defect; no session exists yet, so it
+                # authorizes a fresh Step Execution instead of ending the run.
                 raise HarnessPlatformError(
                     detail,
-                    code=HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH,
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE
+                        if exc.transient
+                        else HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH
+                    ),
                 ) from exc
             repository_probe = next(
                 (

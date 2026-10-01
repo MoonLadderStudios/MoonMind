@@ -107,6 +107,34 @@ PR_RESOLVER_VERDICT_FAILURE_CODES = frozenset(
     {"PR_RESOLVER_MANUAL_REVIEW", "PR_RESOLVER_FAILED"}
 )
 
+# Evidence a Skill must regenerate with its own helper rather than by hand.
+_TERMINAL_EVIDENCE_PRODUCERS = {
+    "pr_resolver_terminal.v1": (
+        "$MOONMIND_ACTIVE_SKILLS_DIR/pr-resolver/bin/pr_resolve_finalize.py"
+    ),
+}
+
+
+def terminal_evidence_repair_instruction(
+    contract_id: str, *, relative_path: str, missing_evidence: tuple[str, ...] = ()
+) -> str:
+    """Continuation text for a turn whose declared terminal evidence is unusable."""
+
+    evidence = ", ".join(missing_evidence) or f"`{relative_path}` is missing or invalid"
+    instruction = (
+        "Continue the resolved Skill in this same workspace. Its declared terminal "
+        f"evidence is incomplete: {evidence}. Preserve immutable inputs and "
+        "authority; finish and verify the remaining work."
+    )
+    producer = _TERMINAL_EVIDENCE_PRODUCERS.get(contract_id)
+    if producer:
+        instruction += (
+            f' Produce `{relative_path}` by rerunning `python3 "{producer}"` for the '
+            "same target from the active Skill snapshot; never write or edit that "
+            "file by hand."
+        )
+    return instruction
+
 
 def _first_compact_verdict_text(*values: Any) -> str:
     for value in values:
@@ -281,8 +309,19 @@ def _evaluate_batch_pr_fanout_evidence(
 
 
 def evaluate_terminal_evidence(
-    contract: Mapping[str, Any], *, workspace_path: str, artifact_spool_path: str = ""
+    contract: Mapping[str, Any],
+    *,
+    workspace_path: str,
+    artifact_spool_path: str = "",
+    continuation_stalled: bool = False,
 ) -> TerminalEvidenceEvaluation:
+    """Classify agent-owned terminal evidence for one compiled contract.
+
+    ``continuation_stalled`` is set once a same-session continuation of a
+    resolver ``phase: intermediate`` receipt made no progress. The receipt's
+    own manual-review/failed disposition is then the Skill's terminal answer.
+    """
+
     contract_id = str(contract.get("contractId") or contract.get("contract_id") or "")
     if contract_id not in {
         "auto_publish_terminal.v1",
@@ -347,15 +386,22 @@ def evaluate_terminal_evidence(
             or len(continuation["progressKey"]) > 512
         ):
             return _failure("MALFORMED_TERMINAL_EVIDENCE")
-        # The intermediate envelope has its own version above. A portable
-        # Skill may retain a numeric diagnostic schema while the declared
-        # terminal contract names a semantic version; neither is completion.
-        return _failure(
-            "SKILL_CONTINUATION_REQUIRED",
-            (continuation["instructions"],),
-            {"terminalContractRetryable": True, "skillContinuation": continuation,
-             "terminalContractEvidencePath": normalized_relative},
+        stalled_verdict = (
+            continuation_stalled
+            and contract_id == "pr_resolver_terminal.v1"
+            and str(payload.get("mergeAutomationDisposition") or "").strip()
+            in {"manual_review", "failed"}
         )
+        if not stalled_verdict:
+            # The intermediate envelope has its own version above. A portable
+            # Skill may retain a numeric diagnostic schema while the declared
+            # terminal contract names a semantic version; neither is completion.
+            return _failure(
+                "SKILL_CONTINUATION_REQUIRED",
+                (continuation["instructions"],),
+                {"terminalContractRetryable": True, "skillContinuation": continuation,
+                 "terminalContractEvidencePath": normalized_relative},
+            )
     if contract_id == "auto_publish_terminal.v1":
         return _evaluate_auto_publish_evidence(
             payload,
@@ -382,6 +428,10 @@ def evaluate_terminal_evidence(
             "terminalContractExecutionRef": expected_execution,
             "mergeAutomationDisposition": disposition,
         }
+        if expected_execution and not evidence_execution:
+            # A result that names no execution (for example a hand-written
+            # file) is repairable by rerunning the Skill's own finalizer.
+            return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
         if not expected_execution or evidence_execution != expected_execution:
             return _failure("STALE_TERMINAL_EVIDENCE", metadata=metadata)
         if disposition not in {

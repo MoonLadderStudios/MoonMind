@@ -44,6 +44,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+    remediation_for,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, get_launch_policy
 from moonmind.omnigent.harness_platform.planning_service import (
@@ -2046,7 +2047,9 @@ async def test_writer_ref_rejects_unqualified_same_repo_fallback(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("github_failure", [None, "denied", "diagnostics_unavailable"])
+@pytest.mark.parametrize(
+    "github_failure", [None, "denied", "diagnostics_unavailable", "rate_limited"]
+)
 async def test_sha_drift_replay_advances_digest_through_full_handoff(
     tmp_path, monkeypatch, github_failure
 ) -> None:
@@ -2330,8 +2333,21 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
             rest = command[3:]
             if "gh" in rest and "status" in rest:
                 return 1, "", "account endpoint temporarily unavailable"
+            if any("x-ratelimit" in str(arg).lower() or "--include" in str(arg) for arg in rest):
+                return (
+                    0,
+                    "HTTP/2.0 403 Forbidden\nX-Ratelimit-Remaining: 0\n"
+                    "X-Ratelimit-Reset: 1\nX-Ratelimit-Resource: graphql\n\n",
+                    "",
+                )
             if any("gh repo view" in str(arg) for arg in rest):
                 github_attempts.append(command)
+                if github_failure == "rate_limited":
+                    return (
+                        1,
+                        "",
+                        "GraphQL: API rate limit exceeded for user ID 16808547.",
+                    )
                 if github_failure:
                     return (
                         1,
@@ -2453,6 +2469,19 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
         credential_handles=[],
         egress_attestation=egress_attestation,
     )
+    if github_failure == "rate_limited":
+        # A temporarily unavailable GitHub API is not a host capability defect:
+        # the typed code authorizes a fresh pre-session Step Execution, and the
+        # original provider text survives for the operator.
+        with pytest.raises(HarnessPlatformError, match="API rate limit") as raised:
+            await attestor.attest(**attest_kwargs)
+        assert (
+            raised.value.code
+            == HarnessPlatformFailure.OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE
+        )
+        assert remediation_for(raised.value.code) == "retry_step_execution"
+        assert "diagnosticsRef:" in str(raised.value)
+        return
     if github_failure:
         with pytest.raises(HarnessPlatformError, match="HTTP 401") as raised:
             await attestor.attest(**attest_kwargs)
