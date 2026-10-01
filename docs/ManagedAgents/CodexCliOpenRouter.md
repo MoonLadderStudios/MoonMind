@@ -1,10 +1,10 @@
 # Codex CLI via OpenRouter
 
-**Related design documents:** [../Security/ProviderProfiles.md](../Security/ProviderProfiles.md), [SharedManagedAgentAbstractions.md](./SharedManagedAgentAbstractions.md), [../Temporal/ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+**Related design documents:** [../Security/ProviderProfiles.md](../Security/ProviderProfiles.md), [SharedManagedAgentAbstractions.md](./SharedManagedAgentAbstractions.md), [../Temporal/ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md), [Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md)
 
 Status: **Proposed Design**  
 Owners: MoonMind Engineering  
-Last Updated: 2026-04-03
+Last Updated: 2026-10-01
 
 > **Environment default (MoonLadderStudios/MoonMind#4538):** setting
 > `OPENROUTER_API_KEY` in `.env` no longer seeds the Codex/Qwen stock profile
@@ -111,7 +111,7 @@ MoonMind already has most of the pieces needed for this integration, but they do
 
 Today it carries through fields like:
 
-- `default_model`
+- `default_model` (legacy plumbing, superseded by the tier-only contract in §7)
 - `model_overrides`
 - `secret_refs`
 - `clear_env_keys`
@@ -217,7 +217,7 @@ This keeps provider shaping in runtime support state, where it belongs.
 
 ## 7. Provider profile shape
 
-The target provider-profile record for the example OpenRouter + Qwen profile should look like this.
+The target manually configured OpenRouter + Qwen profile uses the canonical tier policy. Scalar `default_model`/`default_effort` fields are superseded by [Provider Profile Tier Settings §15.2](../UI/ProviderProfileModelEffortTierSettings.md#152-tier-only-persistence) and are removed with their schema, materializer, and seed callers; this desired-state example does not claim that cleanup is implemented.
 
 ```yaml
 profile_id: codex_openrouter_qwen36_plus
@@ -231,7 +231,11 @@ enabled: true
 tags: ["openrouter", "qwen", "codex", "openai-compatible"]
 priority: 100
 
-default_model: qwen/qwen3.6-plus
+model_tiers:
+  - label: Qwen example
+    model: qwen/qwen3.6-plus
+    effort: high
+default_model_tier: 1
 model_overrides: {}
 
 max_parallel_runs: 4
@@ -264,8 +268,8 @@ file_templates:
     merge_strategy: replace
     content_template:
       model_provider: openrouter
-      model_reasoning_effort: high
-      model: qwen/qwen3.6-plus
+      model_reasoning_effort: "{{resolved_effort}}"
+      model: "{{resolved_model}}"
       profile: openrouter_qwen36_plus
       model_providers:
         openrouter:
@@ -276,7 +280,7 @@ file_templates:
       profiles:
         openrouter_qwen36_plus:
           model_provider: openrouter
-          model: qwen/qwen3.6-plus
+          model: "{{resolved_model}}"
 
 home_path_overrides:
   CODEX_HOME: "{{runtime_support_dir}}/codex-home"
@@ -288,7 +292,7 @@ command_behavior:
 ### Notes on the example
 
 - `provider_id` is **`openrouter`**, not `openai`, because MoonMind should track routing, cooldown, and UI choice against the actual upstream surface.
-- `default_model` stays on the provider profile because it expresses the default intent for this provider/runtime pairing.
+- `model_tiers` and `default_model_tier` own profile model/effort intent. The template variables `resolved_model` and `resolved_effort` denote the existing canonical resolver's attempt result, including Custom and runtime-default resolution; they are not persisted profile-default mirrors. The materializer must omit model/effort keys when no compatible resolved value exists rather than stringify null or fall back to a removed scalar field.
 - `env_template.OPENROUTER_API_KEY` should be created from the resolved secret role rather than persisted directly.
 - `file_templates` write a **real Codex config file** into the per-run Codex home.
 - `home_path_overrides.CODEX_HOME` points Codex at the generated config bundle.
@@ -298,7 +302,7 @@ command_behavior:
 
 ## 8. Generated Codex config
 
-The rendered config file should be equivalent to:
+For the illustrative Tier 1 resolution (`qwen/qwen3.6-plus`, `high`), the rendered config is shown below. Each attempt renders its actual canonical resolved values; this output is not a second persisted profile policy:
 
 ```toml
 model_provider = "openrouter"
@@ -419,10 +423,11 @@ Update the managed-runtime contract plumbing so the richer provider-profile fiel
    - `home_path_overrides`
    - `clear_env_keys`
    - `secret_refs`
-   - `default_model`
+   - `model_tiers`
+   - `default_model_tier`
    - `model_overrides`
 
-2. If the persisted provider-profile row is still legacy-shaped in some environments, add the missing fields and migration path needed to reach the Provider Profiles contract in `docs/Security/ProviderProfiles.md`.
+2. Reuse the owning tier migration to convert genuinely pre-tier rows without replacing existing tier policy. Remove scalar `default_model`/`default_effort` fields and readers/writers together. Carry the canonical resolver's model/effort result to materialization and launch; do not reintroduce those fields as adapter defaults.
 
 ### 11.2 Path-aware file materialization
 
@@ -445,7 +450,7 @@ Upgrade `ProviderProfileMaterializer` from “anonymous temp files keyed by env 
    - `runtime_support_dir`
    - `workspace_path`
 
-3. Render structured TOML content for Codex config.
+3. Render structured TOML content using canonical resolved model/effort for each attempt, supplying §7's resolved-value variables and omitting unresolved keys. The selected tier or Custom pair must not be replaced by a copied profile default.
 
 4. Keep cleanup behavior for generated files.
 
@@ -480,19 +485,15 @@ Teach the Codex strategy to cooperate with provider-profile-driven config.
 
 ### 11.5 Seeding and management
 
-Add a convenient bootstrap path for local/dev deployments.
+Follow the existing environment-default owner described at the top of this document; the Codex/Qwen example is an explicitly configured profile.
 
 #### Changes
 
-1. If `OPENROUTER_API_KEY` is present at service startup, auto-seed a default provider profile:
-   - `profile_id = codex_openrouter_qwen36_plus`
-   - `provider_id = openrouter`
-   - `default_model = qwen/qwen3.6-plus`
-   - `secret_refs.provider_api_key = env://OPENROUTER_API_KEY`
+1. `OPENROUTER_API_KEY` startup enrollment keeps the model-neutral `opencode-openrouter` profile. Its canonical seed policy is one runtime-default tier (`model: null`, `effort: null`) with `default_model_tier: 1`; it does not seed a scalar default or the manual Codex/Qwen profile.
 
-2. Also support creating/editing the profile through the dashboard / REST so production deployments can use `db_encrypted`, `vault://...`, or other secret backends.
+2. Support explicit creation/editing of the Codex/OpenRouter profile through the existing dashboard / REST with §7's canonical tiers and supported secret backends. Any explicit bootstrap helper uses the same tier policy, never `default_model`/`default_effort` mirrors.
 
-3. Keep the auto-seeded profile separate from any OpenAI-backed Codex profile.
+3. Keep the manually configured profile separate from any OpenAI-backed Codex profile. Preserve operator-authored tier policy during repeat enrollment.
 
 ---
 
@@ -605,7 +606,7 @@ When credentials are present in a non-CI environment, run a smoke test against t
 - plumb rich provider-profile fields through adapter -> launcher
 - add path-aware file materialization
 - add `CODEX_HOME` support via `home_path_overrides`
-- add `codex_openrouter_qwen36_plus` seed path
+- retain model-neutral OpenCode/OpenRouter enrollment and support explicitly configured tier-based Codex/OpenRouter profiles
 - verify exact-profile launch works
 
 ### Phase 2 — dynamic routing and polish
