@@ -13,6 +13,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     resolve_execution_budget,
 )
+from moonmind.workflows.terminal_evidence import terminal_evidence_repair_instruction
 
 MAX_CONTINUATIONS = 2
 VERIFICATION_READ_BUDGET_SECONDS = 90
@@ -185,30 +186,31 @@ async def complete_skill_turns(
             "INVALID_TERMINAL_EVIDENCE",
         }
         progress = (continuation or {}).get("progressKey")
-        exhausted = ordinal == MAX_CONTINUATIONS or (
-            progress is not None and progress == previous_progress
-        )
+        stalled = progress is not None and progress == previous_progress
+        exhausted = ordinal == MAX_CONTINUATIONS or stalled
         if not recoverable or exhausted:
-            return result.model_copy(
-                update={
-                    "metadata": {
-                        **(result.metadata or {}),
-                        "terminalContractRecoveryOwner": "runtime_binding",
-                        "terminalContractContinuationCount": ordinal,
-                        "terminalContractRecoveryOutcome": (
-                            "exhausted" if exhausted else "skill_terminal_verdict"
-                        ),
-                    }
-                }
-            )
+            metadata = {
+                **(result.metadata or {}),
+                "terminalContractRecoveryOwner": "runtime_binding",
+                "terminalContractContinuationCount": ordinal,
+                "terminalContractRecoveryOutcome": (
+                    "exhausted" if exhausted else "skill_terminal_verdict"
+                ),
+            }
+            if stalled:
+                # The Skill reported the same blocker after a continuation, so
+                # its recorded disposition is the answer (see terminal_evidence).
+                metadata["terminalContractContinuationStalled"] = True
+            return result.model_copy(update={"metadata": metadata})
         if not sink.binding.omnigentSessionId:
             raise ValueError("Contract continuation has no authoritative session")
         previous_progress = progress
-        instruction = (continuation or {}).get("instructions") or (
-            "Continue the resolved Skill in this same workspace. Its declared terminal "
-            "evidence is incomplete: "
-            + ", ".join(evaluation.missing_evidence)
-            + ". Preserve immutable inputs and authority; finish and verify the remaining work."
+        instruction = (continuation or {}).get(
+            "instructions"
+        ) or terminal_evidence_repair_instruction(
+            request.terminal_contract.contract_id,
+            relative_path=request.terminal_contract.relative_path,
+            missing_evidence=tuple(evaluation.missing_evidence),
         )
         # Persist the actual instruction before dispatch. Retry never substitutes
         # a newly observed instruction for a turn that might already be running.

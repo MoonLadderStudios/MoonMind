@@ -7263,6 +7263,77 @@ async def test_terminal_evidence_activity_names_stale_pr_resolver_evidence(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stalled", [False, True])
+async def test_stalled_resolver_continuation_is_the_skills_final_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stalled: bool
+) -> None:
+    """A no-progress continuation reports the Skill's verdict, not a retry."""
+
+    from moonmind.workflows.temporal.workflows import run as run_workflow_module
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    execution_ref = _RECORDED_BLOCKED_RESOLVER_RESULT["executionRef"]
+    result_path.write_text(
+        json.dumps(
+            {
+                **_RECORDED_BLOCKED_RESOLVER_RESULT,
+                "phase": "intermediate",
+                "skillContinuation": {
+                    "schemaVersion": "skill-continuation/v1",
+                    "executionRef": execution_ref,
+                    "action": "resume_skill",
+                    "progressKey": "d71492a5:ci_failures:run_full_remediation",
+                    "instructions": "Continue the resolved pr-resolver Skill.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_metadata: dict[str, Any] = {
+        "terminalContractRecoveryOwner": "runtime_binding",
+        "terminalContractContinuationCount": 1,
+        "terminalContractRecoveryOutcome": "exhausted",
+    }
+    if stalled:
+        runtime_metadata["terminalContractContinuationStalled"] = True
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {
+                "summary": "Omnigent session completed",
+                "metadata": runtime_metadata,
+            },
+        }
+    )
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    retryable = workflow._activity_result_retryable(
+        workflow._map_agent_run_result(result),
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+    assert result.failure_class == "execution_error"
+    if stalled:
+        assert result.provider_error_code == "PR_RESOLVER_MANUAL_REVIEW"
+        assert result.metadata["terminalContractRecoveryOutcome"] == (
+            "skill_terminal_verdict"
+        )
+        assert result.metadata["prResolverReason"] == "ci_failures"
+        assert retryable is False
+    else:
+        # Continuation still had a chance to progress; a fresh step may recover.
+        assert result.provider_error_code == "SKILL_CONTINUATION_REQUIRED"
+        assert retryable is True
+
+
+@pytest.mark.asyncio
 async def test_terminal_evidence_activity_enriches_existing_helper_failure(
     tmp_path: Path,
 ) -> None:

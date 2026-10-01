@@ -414,3 +414,147 @@ async def test_publication_exhaustion_preserves_valid_save_without_republishing(
     )
     assert resumed == finished
     assert published == [1, 1, 1]
+
+
+async def _session_ready_sink(idempotency_key: str):
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    store = InMemoryStableRuntimeBindingStore()
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
+        idempotency_key=idempotency_key,
+        provider_leases={},
+    )
+    for state in (
+        RuntimeBindingState.credentials_materialized,
+        RuntimeBindingState.host_allocating,
+        RuntimeBindingState.host_ready,
+        RuntimeBindingState.session_creating,
+    ):
+        binding = await store.update(
+            binding.bindingId,
+            expected_revision=binding.revision,
+            expected_fencing_generation=binding.fencingGeneration,
+            state=state,
+        )
+    return RuntimeBindingSessionAuthoritySink(store, binding)
+
+
+def _resolver_request(idempotency_key: str) -> AgentExecutionRequest:
+    return AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "workflow-1",
+            "idempotencyKey": idempotency_key,
+            "terminalContract": {
+                "contractId": "pr_resolver_terminal.v1",
+                "relativePath": "var/pr_resolver/result.json",
+                "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+                "executionRef": "step:1",
+            },
+        }
+    )
+
+
+def _intermediate_receipt(progress_key: str) -> dict:
+    return {
+        "executionRef": "step:1",
+        "phase": "intermediate",
+        "mergeAutomationDisposition": "manual_review",
+        "status": "blocked",
+        "reason": "ci_failures",
+        "skillContinuation": {
+            "schemaVersion": "skill-continuation/v1",
+            "executionRef": "step:1",
+            "action": "resume_skill",
+            "progressKey": progress_key,
+            "instructions": "Continue the resolved Skill's CI remediation.",
+        },
+    }
+
+
+def _inspect_workspace(workspace: Path):
+    async def inspect(request):
+        return evaluate_terminal_evidence(
+            request.terminal_contract.model_dump(by_alias=True),
+            workspace_path=str(workspace),
+        )
+
+    return inspect
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("progressing", [False, True])
+async def test_exhausted_continuation_records_whether_progress_stalled(
+    tmp_path: Path, progressing: bool
+):
+    request = _resolver_request(f"stall-{progressing}")
+    sink = await _session_ready_sink(request.idempotency_key)
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    calls = []
+
+    async def driver(request, *, session_authority_sink, **kwargs):
+        calls.append(1)
+        await session_authority_sink.session_created("same-session")
+        progress = f"head-{len(calls)}:ci" if progressing else "head:ci"
+        result_path.write_text(json.dumps(_intermediate_receipt(progress)))
+        return AgentRunResult(summary="diagnostic")
+
+    result = await complete_skill_turns(
+        request=request,
+        sink=sink,
+        driver=driver,
+        inspect_terminal=_inspect_workspace(tmp_path),
+    )
+
+    assert result.metadata["terminalContractRecoveryOutcome"] == "exhausted"
+    if progressing:
+        # Each turn moved the Skill forward; only the budget ran out.
+        assert len(calls) == 3
+        assert "terminalContractContinuationStalled" not in result.metadata
+    else:
+        assert len(calls) == 2
+        assert result.metadata["terminalContractContinuationStalled"] is True
+
+
+@pytest.mark.asyncio
+async def test_malformed_resolver_result_continuation_names_the_finalize_helper(
+    tmp_path: Path,
+):
+    request = _resolver_request("malformed-result")
+    sink = await _session_ready_sink(request.idempotency_key)
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    instructions = []
+
+    async def driver(request, *, session_authority_sink, **kwargs):
+        await session_authority_sink.session_created("same-session")
+        if kwargs.get("first_message_text"):
+            instructions.append(kwargs["first_message_text"])
+            payload = {
+                "executionRef": "step:1",
+                "mergeAutomationDisposition": "manual_review",
+            }
+        else:
+            # A hand-merged result that names no execution.
+            payload = {"mergeAutomationDisposition": "manual_review"}
+        result_path.write_text(json.dumps(payload))
+        return AgentRunResult(summary="turn")
+
+    result = await complete_skill_turns(
+        request=request,
+        sink=sink,
+        driver=driver,
+        inspect_terminal=_inspect_workspace(tmp_path),
+    )
+
+    assert len(instructions) == 1
+    assert "var/pr_resolver/result.json" in instructions[0]
+    assert (
+        "$MOONMIND_ACTIVE_SKILLS_DIR/pr-resolver/bin/pr_resolve_finalize.py"
+        in instructions[0]
+    )
+    assert "never write or edit" in instructions[0]
+    assert result.metadata["terminalContractContinuationCount"] == 1
