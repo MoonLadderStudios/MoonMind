@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.client import WorkflowUpdateStage
+from temporalio.client import WorkflowExecutionStatus, WorkflowUpdateStage
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
@@ -158,15 +158,20 @@ async def _running_manager(runtime_id: str):
                 )
                 for owner in ("first-run", "first-waiter", "second-run", "second-next")
             }
-            try:
-                yield manager, activities, owners
-            finally:
-                await manager.signal("shutdown")
-                await asyncio.wait_for(manager.result(), timeout=15)
-                for owner in owners.values():
-                    await owner.signal("finish")
-                    await owner.result()
-            history = await manager.fetch_history()
+            # Result waits must not fast-forward other live owners or their cooldowns.
+            with env.auto_time_skipping_disabled():
+                try:
+                    yield manager, activities, owners
+                finally:
+                    await manager.signal("shutdown")
+                    await asyncio.wait_for(manager.result(), timeout=15)
+                    for owner in owners.values():
+                        if (
+                            await owner.describe()
+                        ).status == WorkflowExecutionStatus.RUNNING:
+                            await owner.signal("finish")
+                        await owner.result()
+                history = await manager.fetch_history()
 
     await Replayer(
         workflows=[MoonMindProviderProfileManagerWorkflow],
@@ -278,3 +283,16 @@ async def test_full_or_cooling_profile_does_not_block_another_profile(
         await release("first-waiter", "first")
         await release("second-next", "second")
         assert activities.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_completed_lease_owner_does_not_break_manager_cleanup() -> None:
+    """Cleanup reconciles an owner that completed before the manager stopped."""
+    async with _running_manager("codex_cli") as (_, _, owners):
+        await owners["first-run"].signal("finish")
+        await owners["first-run"].result()
+        for owner_id, owner in owners.items():
+            if owner_id != "first-run":
+                assert (
+                    await owner.describe()
+                ).status == WorkflowExecutionStatus.RUNNING
