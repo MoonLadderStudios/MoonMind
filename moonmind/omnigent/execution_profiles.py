@@ -336,7 +336,13 @@ def resolve_policy_image_refs(policy: OmnigentLaunchPolicy) -> tuple[str, str]:
                 try:
                     host_ref = resolve_shared_host_image_ref()
                 except HarnessPlatformError:
-                    host_ref = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
+                    # Codex fails closed: the legacy upstream host would only
+                    # fail the launch tool preflight.
+                    host_ref = (
+                        ""
+                        if policy.policy_id.startswith("codex-")
+                        else os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
+                    )
             else:
                 host_ref = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
     return server_ref, host_ref

@@ -255,6 +255,10 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setenv(
         "OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64
     )
+    # Codex policies launch the deployment's shared host image.
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64
+    )
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
     monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "/evidence/matrix.json")
