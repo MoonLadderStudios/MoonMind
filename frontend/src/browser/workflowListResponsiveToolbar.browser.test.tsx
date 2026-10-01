@@ -137,6 +137,14 @@ describe('workflow list row actions', () => {
       expect(bounds.bottom).toBeLessThanOrEqual(cardBounds.bottom);
     }
 
+    const cancelItem = within(menu).getByRole('menuitem', { name: 'Cancel' });
+    const cancelBounds = cancelItem.getBoundingClientRect();
+    const hitTarget = document.elementFromPoint(
+      cancelBounds.left + cancelBounds.width / 2,
+      cancelBounds.top + cancelBounds.height / 2,
+    );
+    expect(cancelItem.contains(hitTarget)).toBe(true);
+
     await page.getByRole('menuitem', { name: 'Cancel', exact: true }).click();
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(([url]) => String(url) === '/api/executions/task-123/cancel');
