@@ -1007,6 +1007,7 @@ class SavedWorkPublicationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     savedWorkRef: str = Field(..., min_length=1, max_length=500)
+    sourceRunId: str | None = Field(None, min_length=1, max_length=255)
     destination: SavedWorkPublicationDestination
     pullRequestTitle: str | None = Field(None, max_length=256)
     pullRequestBody: str | None = Field(None, max_length=20_000)
@@ -20105,6 +20106,44 @@ def _saved_work_publication_error(
     )
 
 
+def _require_publishable_saved_work_artifact(
+    *,
+    artifact: Any,
+    read_policy: Any,
+    content_type: str,
+    digest: str,
+    size_bytes: int | None = None,
+) -> None:
+    """Use the artifact owner's availability and raw-read policy at admission."""
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+
+    recorded_digest = str(artifact.sha256 or "")
+    recorded_size = artifact.size_bytes
+    availability = TemporalArtifactService.saved_work_availability_of(
+        artifact,
+        digest_mismatch=(
+            digest != f"sha256:{recorded_digest}"
+            or (size_bytes is not None and recorded_size != size_bytes)
+        ),
+        never_verified_complete=(
+            re.fullmatch(r"[0-9a-fA-F]{64}", recorded_digest) is None
+            or not isinstance(recorded_size, int)
+            or recorded_size < 0
+        ),
+    )
+    if (
+        availability != "available"
+        or _enum_value(artifact.status) != "complete"
+        or artifact.content_type != content_type
+        or getattr(read_policy, "raw_access_allowed", False) is not True
+    ):
+        raise _saved_work_publication_error(
+            status.HTTP_409_CONFLICT,
+            "saved_work_unavailable",
+            "Saved work includes content that is unavailable for publication.",
+        )
+
+
 async def _admit_saved_work_publication(
     *,
     canonical: TemporalExecutionCanonicalRecord,
@@ -20115,8 +20154,9 @@ async def _admit_saved_work_publication(
     """Verify saved-work ownership and freeze one publication decision (#4018).
 
     The saved result must be a readable saved-work manifest linked to this
-    execution. Its digest, the destination policy, and a deterministic commit
-    identity are frozen so duplicate submissions map to one operation and a
+    exact source run, with a raw-readable snapshot/delta closure. Its digest,
+    the destination policy, and a deterministic commit identity are frozen
+    so duplicate submissions map to one operation and a
     retry rebuilds the same candidate. No credential enters the contract.
     """
 
@@ -20124,13 +20164,14 @@ async def _admit_saved_work_publication(
     from moonmind.publish.saved_candidate import SavedPublicationError
     from moonmind.publish.saved_work_source import (
         SAVED_WORK_MANIFEST_CONTENT_TYPE,
+        parse_saved_work_publication_manifest,
         saved_work_artifact_id,
     )
 
     principal = _execution_principal(user)
     try:
         artifact_id = saved_work_artifact_id(request.savedWorkRef)
-        artifact, links, _pinned, _policy = await artifact_service.get_metadata(
+        artifact, links, _pinned, read_policy = await artifact_service.get_metadata(
             artifact_id=artifact_id, principal=principal
         )
         _artifact, manifest_bytes = await artifact_service.read(
@@ -20158,17 +20199,59 @@ async def _admit_saved_work_publication(
             "saved_work_invalid",
             "The referenced artifact is not a saved-work manifest.",
         )
-    if not any(
+    source_run_id = (
+        request.sourceRunId
+        if request.sourceRunId is not None
+        else str(canonical.run_id or "")
+    )
+    if not source_run_id or not any(
         str(getattr(link, "workflow_id", "") or "") == canonical.workflow_id
+        and str(getattr(link, "run_id", "") or "") == source_run_id
         for link in links
     ):
         raise _saved_work_publication_error(
             status.HTTP_409_CONFLICT,
             "saved_work_source_mismatch",
-            "Saved work does not belong to this execution.",
+            "Saved work does not belong to this execution run.",
         )
-    destination = request.destination
     saved_work_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+    _require_publishable_saved_work_artifact(
+        artifact=artifact,
+        read_policy=read_policy,
+        content_type=SAVED_WORK_MANIFEST_CONTENT_TYPE,
+        digest=saved_work_digest,
+        size_bytes=len(manifest_bytes),
+    )
+    try:
+        _manifest, publication_objects = parse_saved_work_publication_manifest(
+            manifest_bytes
+        )
+        for publication_object in publication_objects:
+            part, _links, _pinned, part_policy = await artifact_service.get_metadata(
+                artifact_id=saved_work_artifact_id(publication_object.ref),
+                principal=principal,
+            )
+            _require_publishable_saved_work_artifact(
+                artifact=part,
+                read_policy=part_policy,
+                content_type=publication_object.content_type,
+                digest=publication_object.digest,
+            )
+    except SavedPublicationError as exc:
+        raise _saved_work_publication_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "saved_work_invalid", str(exc)
+        ) from exc
+    except (
+        TemporalArtifactNotFoundError,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactStateError,
+    ) as exc:
+        raise _saved_work_publication_error(
+            status.HTTP_409_CONFLICT,
+            "saved_work_unavailable",
+            "Saved work includes content that is unavailable for publication.",
+        ) from exc
+    destination = request.destination
     git_name, git_email = resolve_git_identity()
     # The source execution's creation time is immutable, so a resubmitted
     # decision rebuilds the byte-identical candidate instead of a new commit.
@@ -20179,7 +20262,7 @@ async def _admit_saved_work_publication(
     try:
         return SavedWorkPublicationContract(
             sourceWorkflowId=canonical.workflow_id,
-            sourceRunId=str(canonical.run_id or ""),
+            sourceRunId=source_run_id,
             savedWorkRef=request.savedWorkRef,
             savedWorkDigest=saved_work_digest,
             admittedPrincipal=principal,

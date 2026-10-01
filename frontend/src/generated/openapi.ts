@@ -12878,6 +12878,8 @@ export interface components {
         SavedWorkPublicationRequest: {
             /** Savedworkref */
             savedWorkRef: string;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
             destination: components["schemas"]["SavedWorkPublicationDestination"];
             /** Pullrequesttitle */
             pullRequestTitle?: string | null;

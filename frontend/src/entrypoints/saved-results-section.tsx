@@ -302,7 +302,7 @@ export function SavedResultsSection({
     ? 'Workflow actions are disabled.'
     : !terminalSource
       ? 'Continue is available once the source run is terminal.'
-      : capturedEvidenceQuery.isLoading
+      : capturedEvidenceQuery.isFetching
         ? 'Loading the evidence this continuation may carry.'
         : null;
 
@@ -341,7 +341,10 @@ export function SavedResultsSection({
       if (!applies()) return;
       if (err instanceof ContinuationRequestError) {
         setContinueOp({ status: 'failed', error: errorMessage(err) });
-        if (admissionChanged(err)) onRefresh();
+        if (admissionChanged(err)) {
+          void capturedEvidenceQuery.refetch();
+          onRefresh();
+        }
       } else {
         setContinueOp({ status: 'uncertain', error: errorMessage(err) });
       }
@@ -369,7 +372,10 @@ export function SavedResultsSection({
     if (!publishTarget || publishInFlight.current || !publication.available) {
       return;
     }
-    const request = buildSavedWorkPublicationRequest(publishTarget, draft);
+    const request: SavedWorkPublicationRequest = {
+      ...buildSavedWorkPublicationRequest(publishTarget, draft),
+      sourceRunId: runId,
+    };
     if (!request.destination.repository || !request.destination.headBranch) {
       return;
     }
@@ -385,7 +391,11 @@ export function SavedResultsSection({
       setPublishOp({ status: 'started', request, result });
     } catch (err) {
       if (!applies()) return;
-      if (err instanceof SavedWorkPublicationError) {
+      if (
+        err instanceof SavedWorkPublicationError &&
+        err.status < 500 &&
+        err.status !== 408
+      ) {
         setPublishOp({ status: 'failed', request, error: errorMessage(err) });
         // A policy refusal means the projected availability is out of date.
         if (admissionChanged(err) || err.code === 'publication_retry_not_admitted') onRefresh();
@@ -398,7 +408,10 @@ export function SavedResultsSection({
   };
 
   const currentPublishIdentity = publishTarget
-    ? savedWorkPublicationIdentity(buildSavedWorkPublicationRequest(publishTarget, draft))
+    ? savedWorkPublicationIdentity({
+        ...buildSavedWorkPublicationRequest(publishTarget, draft),
+        sourceRunId: runId,
+      })
     : null;
   const destinationChanged = Boolean(
     publishOp &&
@@ -409,7 +422,12 @@ export function SavedResultsSection({
   const publishPending = publishOp?.status === 'pending';
   const continuePending = continueOp?.status === 'pending';
   const updateDraft = (patch: Partial<SavedWorkDestinationDraft>) =>
-    setDraft((current) => ({ ...current, ...patch }));
+    setDraft((current) => {
+      const next = { ...current, ...patch };
+      return next.strategy === 'empty_initialization'
+        ? { ...next, objective: 'branch', baseBranch: '' }
+        : next;
+    });
   const publicationUnavailable = publication.available
     ? null
     : savedWorkPublicationUnavailableMessage(publication.reason);
@@ -615,6 +633,7 @@ export function SavedResultsSection({
                 <span className="small">Publish as</span>
                 <select
                   value={draft.objective}
+                  disabled={initializesEmpty}
                   onChange={(event) =>
                     updateDraft({
                       objective: event.target.value as SavedWorkDestinationDraft['objective'],
@@ -674,7 +693,11 @@ export function SavedResultsSection({
                       }
                     >
                       {(Object.keys(STRATEGY_LABELS) as SavedWorkStrategy[]).map((strategy) => (
-                        <option key={strategy} value={strategy}>
+                        <option
+                          key={strategy}
+                          value={strategy}
+                          disabled={strategy === 'empty_initialization' && !publication.allowedModes.includes('branch')}
+                        >
                           {STRATEGY_LABELS[strategy]}
                         </option>
                       ))}
@@ -779,7 +802,7 @@ export function SavedResultsSection({
               <div className="actions">
                 <button
                   type="submit"
-                  disabled={continuePending || !continueInstructions.trim()}
+                  disabled={continuePending || Boolean(continueDisabledReason) || !continueInstructions.trim()}
                 >
                   {continuePending ? 'Starting continuation...' : 'Start continuation'}
                 </button>
