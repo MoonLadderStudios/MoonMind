@@ -1292,6 +1292,12 @@ RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
 RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH = (
     "run-container-job-derived-idempotency-key-v1"
 )
+# Tool steps receive the run's runtime selection so issue search can check
+# provider capacity before claiming work. Replay-gated so histories that
+# recorded the old tool Activity arguments keep replaying them.
+RUN_TOOL_RUNTIME_SELECTION_CONTEXT_PATCH = (
+    "run-tool-runtime-selection-context-v1"
+)
 # PR #4557 review: bound resolved reference payloads carried in workflow
 # history so one large upstream output cannot grow every downstream command.
 PLAN_REF_RESOLVED_VALUE_SIZE_LIMIT_BYTES = 512 * 1024
@@ -13540,10 +13546,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 "workflow_id": workflow.info().workflow_id,
                                 "run_id": workflow.info().run_id,
                                 "node_id": node_id,
-                                # Issue search checks this profile's capacity
-                                # before claiming work the run cannot start.
-                                "runtime_selection": dict(
-                                    self._runtime_inheritance_parameters
+                                **(
+                                    # Issue search checks this profile's
+                                    # capacity before claiming work the run
+                                    # cannot start.
+                                    {
+                                        "runtime_selection": dict(
+                                            self._runtime_inheritance_parameters
+                                        )
+                                    }
+                                    if workflow.patched(
+                                        RUN_TOOL_RUNTIME_SELECTION_CONTEXT_PATCH
+                                    )
+                                    else {}
                                 ),
                                 **self._skill_remediation_context(),
                             },
