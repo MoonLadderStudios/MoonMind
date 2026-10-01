@@ -4,7 +4,7 @@
 
 Status: **Desired-state design. The tier-or-custom authoring changes below require implementation.**
 Owners: MoonMind Engineering
-Last Updated: 2026-09-30
+Last Updated: 2026-10-01
 
 > [!NOTE]
 > A tier is a profile-local policy entry that maps a small integer such as `1`, `2`, or `3` to a runtime-specific model and optional effort level. Presets and workflow steps retain tier references. The backend resolves the final model and effort at submit or launch time.
@@ -51,7 +51,7 @@ The identifiers in examples are illustrative, not a maintained model catalog.
 
 A preset remains portable because it asks for `modelTier: 2`, not a particular model string with a particular effort. If the profile owner changes Tier 2, future launches use the updated policy without editing every preset.
 
-A new, otherwise unconfigured workflow selects the profile's default tier and shows its model and effort. Selecting another numbered tier replaces both displayed values. Editing either field, or selecting Custom directly, detaches the pair from tier policy. Custom preserves both displayed field values and does not edit the Provider Profile.
+A new, otherwise unconfigured workflow shows the profile's default tier and its model/effort as previews while leaving authored selection omitted. An untouched save continues to follow the profile default. Explicitly selecting a numbered tier authors its reference and replaces both displayed values. Editing either field, or selecting Custom directly, detaches the pair from tier policy. Custom preserves both displayed field values and does not edit the Provider Profile.
 
 ---
 
@@ -363,7 +363,9 @@ runtime:
 
 Explicit nulls and omitted fields have different meanings for these newly authored selections. Do not strip the full Custom pair into an empty object, infer Custom only from a non-empty model, or allow generic inheritance merging to refill its null fields. Preserve authored presence through the existing runtime-intent and execution contracts rather than adding another persistent policy system.
 
-The implementation must normalize legacy partial/mixed payloads at the owning boundary using their existing provenance and resolution rules. Do not reinterpret every historical null as newly authored Custom. An editable legacy override is shown as Custom with its effective pair preserved. Historical records and active attempts remain unchanged. A safe canonical save must not guess an unresolved companion value.
+Saved legacy partial/mixed payloads retain their original model-selection fields and field presence on hydration and unrelated saves, using their existing provenance and resolution rules. For example, `modelTier: 2` with only `effort: high` keeps the model dynamic under Tier 2; displaying its effective pair does not authorize replacing that intent with concrete Custom strings. Do not reinterpret historical nulls or resolved launch values as newly authored Custom.
+
+Show a concise saved-source explanation and, where no canonical dropdown value represents the payload, a nonselectable saved-selection placeholder as specified by the UI contract. Normalize to a numbered tier or full-pair Custom only after an explicit selector edit or a separately authorized migration that preserves intent. A canonical Custom save must not guess an unresolved companion value. Legacy shapes remain saved-input compatibility, not shapes newly authored by the replacement selector. Historical records and active attempts remain unchanged.
 
 Changing back to a numbered tier removes Custom overrides. Changing to Custom removes active tier intent and tier-only preview/fallback fields. Legacy strict policy is handled explicitly under §9.4. Explicit non-model runtime parameters, credential references, and unrelated settings are preserved.
 
@@ -385,7 +387,7 @@ The frontend previews tier resolution. The backend resolves policy authoritative
 
 1. Show Tier, Model, and Effort using one shared workflow/step selector behavior.
 2. Populate the Tier dropdown from the selected profile's configured numbers plus Custom. Do not offer arbitrary numbers, a fallback selector, or another Default mode.
-3. Initialize a new unconfigured workflow from `default_model_tier`, which need not be 1. Preserve presets, drafts, reruns, and inherited step selections.
+3. Initialize previews for a new unconfigured workflow from `default_model_tier`, which need not be 1, while keeping authored selection omitted until a user change. Preserve presets, drafts, reruns, legacy partial/mixed payloads, and inherited step selections.
 4. Populate both fields on numbered-tier selection without submitting them as overrides.
 5. Enter Custom on a user edit of either field and preserve the other field. Selecting Custom directly preserves both fields.
 6. Keep Custom selected until the user explicitly selects a tier, even if its values match a tier.
@@ -448,11 +450,11 @@ Resolve selection before resolving individual values:
 
 `default_model` and `default_effort` are not a second desired-state source. Their retirement and data migration must agree with the tier-only persistence contract in the Settings design. Do not claim that a blank means Runtime default while allowing an old compatibility field to supply it instead.
 
-The current implementation at the time of this design still distinguishes model-only and effort-only overrides and can read legacy scalar defaults. These are implementation gaps, not permission to retain conflicting behavior in the new selector.
+The current implementation at the time of this design still distinguishes model-only and effort-only overrides and can read legacy scalar defaults. New canonical authoring must close those gaps. Untouched saved partial/mixed inputs retain their documented legacy meaning under §7.2 rather than being silently rewritten into the new shapes.
 
 ### 9.3 Tier fallback
 
-New UI-authored numbered selections omit `tierFallback` and use the existing backend clamp:
+Newly authored numbered selections omit `tierFallback` and use the existing backend clamp:
 
 ```python
 def effective_tier(requested_tier: int | None, *, default_tier: int, tier_count: int) -> int:
@@ -487,7 +489,11 @@ Until its consumers are migrated, retain the existing rejection when that reques
 
 The new form does not generate strict policy and does not expose a fallback selector in Advanced mode. Loading a saved strict request shows a concise explanation of its retained requirement. Editing unrelated fields preserves that requirement. Explicitly selecting a numbered tier or Custom replaces the old model selection under the new rules and makes that consequence clear.
 
-The implementation must identify legacy producers and saved consumers across presets, workflow drafts, schedules, and API/runtime paths. Reuse existing compatibility handling rather than creating a new registry or migration framework. Remove backend strict support only after those consumers no longer require it or a separately authorized migration preserves their intent. Removing strict globally is not a prerequisite for this UI change and is not authorized by hiding the selector.
+The authoring cutoff is deployment of the replacement submission/validation path. In the same change, remove strict generation from all producers and reject newly authored `tierFallback: strict` at public API submission and preset/draft/schedule creation or model-selection replacement. Reject it with an actionable validation error; do not silently strip it or clamp it. A raw copy of a legacy payload or a caller-supplied legacy flag/timestamp is not proof of saved provenance.
+
+Preserve unrelated updates to existing saved strict records by loading the stored record and verifying that its model-selection fields, including field presence, are unchanged. Existing recurring launches, reruns, recovery, and replay may obtain strict intent from the server-resolved saved record or previously accepted durable execution payload. Use those existing trusted source paths, not a new public bypass mode. Creating a new template or replacing selection must use the new canonical choices. If a client-only draft has no trusted saved source, retain the draft and explain the required replacement rather than silently weakening it.
+
+Identify the remaining saved consumers across presets, drafts, schedules, and accepted in-flight executions. Retire backend strict handling only after these sources have drained or a separately authorized migration preserves their intent. Reuse existing saved-record and compatibility owners rather than creating a registry or migration framework. The cutoff must survive restart and retry without accepting caller-asserted provenance or rewriting retained histories. Global strict retirement is not a prerequisite for the UI replacement.
 
 ### 9.5 Output
 
@@ -508,7 +514,7 @@ ResolvedModelEffort:
 
 Numbered/default selection uses requested or profile-default tier sources as appropriate. Custom has no active requested/effective tier or tier fallback. Explicit strings use the existing task-override source; nulls report runtime-default or no-value sources honestly. Retain old source values in historical records instead of renaming them during this change.
 
-Effort application remains one of applied, unsupported, metadata-only, emulated, or unknown according to the runtime's actual behavior.
+Keep the exact serialized effort-application tokens: `applied`, `not_supported`, `metadata_only`, `emulated`, or `unknown`, according to the runtime's actual behavior. Human-readable labels such as Unsupported or Metadata only do not rename wire values or persisted diagnostics.
 
 ---
 
@@ -570,7 +576,7 @@ Do not re-add already implemented schema or migrations from this desired-state d
 
 Convert a genuinely pre-tier profile's legacy default model/effort into one canonical tier, or create a runtime-default tier when neither exists. Set the default to 1 only for that backfill. Never replace an existing authored tier array or reset its default during a repeated migration.
 
-Remove obsolete profile default read/write fields and callers with the tier-only persistence work owned jointly with [Provider Profile Tier Settings §15.2](../UI/ProviderProfileModelEffortTierSettings.md#152-tier-only-persistence). Do not maintain indefinite denormalized mirrors or teach the new frontend to reconstruct missing tiers from them.
+Remove obsolete profile default read/write fields and callers with the tier-only persistence work owned jointly with [Provider Profile Tier Settings §15.2](../UI/ProviderProfileModelEffortTierSettings.md#152-tier-only-persistence). [Provider Profiles §5.5](./ProviderProfiles.md#55-default-model-ownership) and [Codex CLI via OpenRouter §7](../ManagedAgents/CodexCliOpenRouter.md#7-provider-profile-shape) use this same target contract for schema, runtime materialization, and seeding. Do not maintain indefinite denormalized mirrors or teach the new frontend to reconstruct missing tiers from them.
 
 This profile-data conversion is distinct from preserving legacy strict workflow requests under §9.4. Historical execution values and active work must survive both transitions.
 
@@ -639,7 +645,7 @@ This is illustrative resolution metadata, not a replacement route or exact exist
 
 ### 13.4 Runtime intent
 
-Use §7.2's mutually exclusive authored shapes in workflow and step payloads. Preserve omitted versus explicitly null Custom fields through validation, scheduling, preset expansion, edit/rerun, and runtime parameter construction. New UI requests omit fallback settings. Existing saved strict policy remains readable and honored until its documented removal boundary.
+Use §7.2's mutually exclusive shapes for new workflow and step authoring. Preserve omitted versus explicitly null Custom fields through validation, scheduling, preset expansion, edit/rerun, and runtime parameter construction. Untouched saved legacy mixed fields retain their original meaning. New authoring omits fallback settings, and the submission boundary rejects newly authored strict intent. Existing saved strict policy remains readable and honored through the trusted unchanged-save/replay paths in §9.4 until its documented removal boundary.
 
 ---
 
@@ -690,7 +696,7 @@ custom is never accepted as the value of modelTier
 new numbered selections do not carry hard model/effort overrides
 new Custom selections have no active modelTier and retain the complete nullable pair
 omission remains distinguishable from explicitly authored runtime-default values
-legacy strict requests remain valid and retain their behavior while supported
+new strict intent is rejected at authoring/submission; trusted saved strict intent retains its behavior under §9.4
 ```
 
 Existing unknown model/effort strings remain visible and round-trippable where backend policy permits. Missing advisory catalog evidence alone must not erase input or create a new validation gate. Genuine provider/runtime constraints remain authoritative.
@@ -709,7 +715,7 @@ This section describes remaining outcomes, not a new multi-phase rollout framewo
 2. Replace workflow and step numeric/fallback/hard-override controls with one shared Tier/Model/Effort interaction. Preserve keyboard focus, mobile layout, explicit choices, and late-response safety.
 3. Complete the runtime-intent path across preset expansion, workflow submit, edit/rerun, schedules, inheritance, preview, and launch. Reuse the canonical backend resolver.
 4. Make runtime-default labels truthful by removing conflicting legacy-default resolution on the new path and coordinating with existing tier-only persistence work. Do not rebuild completed Settings work.
-5. Preserve saved strict requests with the visible explanation and replacement behavior in §9.4. Identify their consumers and removal condition without making global strict retirement a prerequisite.
+5. Enforce the strict-authoring cutoff at the API and every producer while preserving trusted saved strict requests, unchanged edits, recurring/recovery/replay paths, and the visible replacement behavior in §9.4. Identify remaining consumers and the removal condition without making global strict retirement a prerequisite.
 6. Remove obsolete UI state, payload generation, tests, and guidance together. Keep coverage for surviving behavior and migration. Do not move removed controls to Advanced mode.
 
 Do not rewrite retained Temporal histories or active attempts. Test replay-sensitive changes or use the existing controlled compatibility boundary. Broader verification belongs in GitHub Actions under `AGENTS.md`; no mandatory human visual signoff or documentation unit tests are introduced.
@@ -731,7 +737,9 @@ Do not rewrite retained Temporal histories or active attempts. Test replay-sensi
 - Omitted selection uses workflow inheritance and then the profile default.
 - Requested Tier 2 resolves to `model_tiers[1]`.
 - Requested Tier 3 on a two-tier profile clamps to Tier 2 with recorded requested/effective values.
-- Explicit legacy strict Tier 3 still rejects on a two-tier profile.
+- Explicit legacy strict Tier 3 from a trusted saved source still rejects on a two-tier profile.
+- Public API submissions and new preset/draft/schedule authoring reject strict intent, including raw legacy copies and forged provenance; trusted unchanged saved updates and recurring/recovery/replay paths preserve it across restart.
+- Saved Tier 2 plus only an effort override survives unrelated saves and follows a later Tier 2 model change; an explicit selection edit alone replaces that mixed intent.
 - Custom uses the complete authored pair, including effort-only edits with the original model preserved.
 - One-null and both-null Custom pairs use runtime defaults without profile-tier, scalar-default, or parent-field leakage.
 - Null tier fields use runtime defaults, not obsolete profile defaults.
@@ -740,7 +748,7 @@ Do not rewrite retained Temporal histories or active attempts. Test replay-sensi
 
 ### Frontend/backend contract
 
-- A new unconfigured workflow initializes from a non-1 default tier when configured.
+- A new unconfigured workflow previews a non-1 default tier without authoring selection; an untouched recurring save follows a later change to the profile default.
 - The dropdown contains only configured numbers plus Custom.
 - Numbered selection fills both fields but submits a tier reference, not overrides.
 - Editing either field enters Custom and preserves the companion value.
@@ -748,7 +756,7 @@ Do not rewrite retained Temporal histories or active attempts. Test replay-sensi
 - Returning to a numbered tier removes Custom overrides.
 - Profile changes and delayed responses never overwrite user edits.
 - Missing profile data does not invent tiers or erase a draft.
-- Saved requested tiers and explicitly strict policy survive unrelated edits with truthful diagnostics.
+- Saved requested tiers and explicitly strict policy survive unrelated edits with truthful diagnostics; an unavailable-request placeholder lets the operator explicitly replace requested Tier 3 with effective Tier 2.
 - No fallback selector exists in normal or Advanced workflow/step controls.
 
 ### Persistence and launch
@@ -757,7 +765,7 @@ Do not rewrite retained Temporal histories or active attempts. Test replay-sensi
 - Tier schedules use current tier policy, while Custom strings stay explicit and Custom nulls use runtime defaults.
 - Viewing inherited steps does not create overrides or pin preview values.
 - Preview mismatch records a diagnostic rather than adding a launch gate.
-- Runtime adapters apply resolved values and report unsupported effort honestly.
+- Runtime adapters apply resolved values and preserve exact `not_supported` and `metadata_only` wire values when reporting effort application.
 - Existing execution history and active work are not rewritten.
 
 Use focused unit/interaction tests plus credential-free integration and browser journeys through production components. Broader suites run in CI. Do not test documentation wording or require manual approval to complete implementation.
@@ -768,7 +776,7 @@ Use focused unit/interaction tests plus credential-free integration and browser 
 
 - Tier fallback is removed from all workflow-authoring UI, not moved to Advanced.
 - New tier requests use the existing backend clamp without authoring a policy setting.
-- Existing explicit strict requests are retained until their consumers can be migrated without silently weakening intent.
+- Newly authored strict intent is rejected at the submission cutoff; existing trusted strict requests are retained until their consumers drain or migrate without silently weakening intent.
 - Tier-based schedules follow current profile policy. No snapshot feature is added.
 - Profile scalar default mirrors are not a permanent alternative to tier policy.
 - Settings owns ordered tier editing and structural-change warnings. This workflow-selector change does not redesign that editor.
