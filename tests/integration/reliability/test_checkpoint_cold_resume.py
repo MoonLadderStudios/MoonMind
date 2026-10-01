@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -93,7 +95,7 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     )
     artifact_store = InMemoryArtifactStore()
     activities = TemporalAgentRuntimeActivities(
-        run_store=run_store, artifact_service=object(), client_adapter=object()
+        run_store=run_store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(

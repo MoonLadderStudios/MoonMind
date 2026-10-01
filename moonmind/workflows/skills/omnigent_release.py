@@ -81,9 +81,9 @@ OMNIGENT_RELEASE_INPUT_DEFAULTS = {
 # one pins. Mirrors `_bootstrap_policy_definitions` without importing the
 # policy module at load time.
 OMNIGENT_RELEASE_POLICIES = (
-    ("omnigent-codex", "codex"),
-    ("codex-static", "codex"),
-    ("codex-on-demand", "codex"),
+    ("omnigent-codex", "shared"),
+    ("codex-static", "shared"),
+    ("codex-on-demand", "shared"),
     ("omnigent-on-demand", "opencode"),
     ("opencode-on-demand", "opencode"),
 )

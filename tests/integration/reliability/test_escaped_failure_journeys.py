@@ -516,6 +516,11 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
     async def live_server(_image_ref: str) -> str:
         return resolved["server"]
 
+    # The deployment image leg's resolved shared host is Codex/Claude authority.
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=resolved["host"]),
+    )
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'policy.db'}")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:
@@ -3709,6 +3714,7 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     )
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -5128,6 +5134,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
     expected = load_replay(replay_id, "expected-outcome.json")
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -5775,7 +5782,7 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
 
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,
-        artifact_service=object(),
+        artifact_service=SimpleNamespace(link_artifact=AsyncMock()),
         client_adapter=object(),
     )
 
@@ -5973,7 +5980,7 @@ async def test_retry_before_execution_captures_terminal_prior_workspace(
     )
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,
-        artifact_service=object(),
+        artifact_service=SimpleNamespace(link_artifact=AsyncMock()),
         client_adapter=object(),
     )
 
@@ -6235,7 +6242,7 @@ async def test_checkpoint_capture_heartbeat_backpressure_replay(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=run_store, artifact_service=object(), client_adapter=object()
+        run_store=run_store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(

@@ -65,6 +65,7 @@ from moonmind.schemas.saved_work_models import (
     describe_output_claim,
     parse_git_diff_raw_to_deltas,
     resolve_saved_work_format_profile,
+    saved_work_artifact_metadata,
     scan_saved_work_export_stream,
     snapshot_capture_generation,
     verify_captured_artifact_evidence,
@@ -341,12 +342,19 @@ def _saved_work_execution_link(model: Any) -> ExecutionRef:
     Artifacts stored without an execution link are readable only by their
     creating principal, so the workflow owner cannot read the returned
     ``savedWorkRef`` and the objects stay absent from execution listings.
-    Linking each saved-work object to the capture identity/namespace keeps
-    ownership resolvable through ``principal_owns_linked_execution``.
+    After manifest commit, linking each saved-work object to the capture
+    identity in the execution's Temporal namespace keeps ownership resolvable
+    through ``principal_owns_linked_execution`` and lists the saved work with the
+    run's artifacts (Workflow Detail Saved Results, #4020). The storage
+    ``artifactNamespace`` is not an execution namespace.
     """
 
+    try:
+        namespace = temporal_activity.info().namespace
+    except RuntimeError:
+        namespace = settings.temporal.namespace
     return ExecutionRef(
-        namespace=model.artifact_namespace,
+        namespace=namespace,
         workflow_id=model.identity.workflow_id,
         run_id=model.identity.run_id,
         link_type="output.checkpoint",
@@ -6944,18 +6952,15 @@ class TemporalAgentRuntimeActivities:
         if history_payload is not None:
             history["ref"] = await self._put_managed_checkpoint_artifact(
                 history_payload, "application/x-git-bundle", "checkpoint_history",
-                link=_saved_work_execution_link(model),
             )
         status = post_status
         index_ref = await self._put_managed_checkpoint_artifact(
             index_payload, "application/vnd.moonmind.git-index-patch", "checkpoint_index",
-            link=_saved_work_execution_link(model),
         ) if index_payload else None
         archive_ref = await self._put_managed_checkpoint_artifact(
             archive_payload,
             "application/vnd.moonmind.worktree-archive",
             "checkpoint_archive",
-            link=_saved_work_execution_link(model),
         )
         created_at = (record.finished_at or record.started_at).isoformat()
         staged_paths = index_paths
@@ -6993,7 +6998,6 @@ class TemporalAgentRuntimeActivities:
             manifest_payload,
             "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             "checkpoint_manifest",
-            link=_saved_work_execution_link(model),
         )
         logger.info("managed_checkpoint_capture_files files=%s", len(entries))
         logger.info("managed_checkpoint_capture_bytes bytes=%s", len(archive_payload))
@@ -7073,7 +7077,6 @@ class TemporalAgentRuntimeActivities:
             delta_payload,
             "application/vnd.moonmind.saved-work-delta+json;version=1",
             "checkpoint_delta",
-            link=_saved_work_execution_link(model),
         )
         lowered_paths: dict[str, str] = {}
         case_collisions: list[str] = []
@@ -7235,7 +7238,6 @@ class TemporalAgentRuntimeActivities:
             saved_work_payload,
             "application/vnd.moonmind.saved-work-manifest+json;version=1",
             "saved_work_manifest",
-            link=_saved_work_execution_link(model),
         )
         # Verify required objects and dependency metadata, then commit the
         # immutable manifest/reference set. An upload without a committed
@@ -7247,8 +7249,8 @@ class TemporalAgentRuntimeActivities:
         # The baseline itself is a git ref (verified at restore via
         # ``git cat-file -e``); artifact-ID dependency authorization and
         # cycle checks run in the retention service validator, and every
-        # capture artifact carries its execution link for retention
-        # traversal.
+        # committed capture artifact receives its execution link for
+        # retention traversal after this gate passes.
         try:
             _validate_saved_work_dependency_entries(
                 saved_work.get("dependencies")
@@ -7274,6 +7276,25 @@ class TemporalAgentRuntimeActivities:
                 type="CHECKPOINT_CAPTURE_INCOMPLETE",
                 non_retryable=True,
             )
+        # Uploads survive failed validation as recoverable objects, but only
+        # a committed capture belongs in the execution's saved-result listing.
+        # Link the saved-work manifest last so interrupted linkage cannot admit
+        # publication before all of its captured dependencies are visible.
+        execution_link = _saved_work_execution_link(model)
+        for artifact_ref in (
+            history.get("ref"),
+            index_ref,
+            archive_ref,
+            manifest_ref,
+            delta_ref,
+            saved_work_ref,
+        ):
+            if artifact_ref:
+                await self._artifact_service.link_artifact(
+                    artifact_id=_artifact_id_from_ref(artifact_ref),
+                    principal="system",
+                    execution_ref=execution_link,
+                )
         compact = ManagedWorkspaceCheckpointCaptureResult(
             status="captured",
             workspace={
@@ -7308,7 +7329,10 @@ class TemporalAgentRuntimeActivities:
                 content_type=content_type,
                 scope=artifact_kind,
                 link=link,
-                metadata_json={"artifact_kind": artifact_kind},
+                metadata_json={
+                    "artifact_kind": artifact_kind,
+                    **saved_work_artifact_metadata(artifact_kind, payload),
+                },
             )
         )
         # Bind the retry to the expected capture candidate: a reused

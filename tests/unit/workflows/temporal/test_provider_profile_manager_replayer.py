@@ -1299,7 +1299,12 @@ async def test_a_release_in_the_first_task_frees_the_restored_lease() -> None:
                 ],
             )
             await asyncio.wait_for(activities.released.wait(), timeout=15)
-            state = await manager.query("get_state")
+            # The Activity event precedes the workflow applying its release result.
+            async with asyncio.timeout(15):
+                while (state := await manager.query("get_state"))["profiles"][
+                    "test-default"
+                ]["current_leases"]:
+                    await asyncio.sleep(0.01)
             history = await _shutdown_and_fetch_history(env, manager)
 
     assert state["profiles"]["test-default"]["current_leases"] == []

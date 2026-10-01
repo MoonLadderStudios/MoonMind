@@ -169,7 +169,8 @@ def _profile(**overrides):
         "runtime_id": "codex_cli",
         "credential_source": SimpleNamespace(value="oauth_volume"),
         "runtime_materialization_mode": SimpleNamespace(value="oauth_home"),
-        "rate_limit_policy": SimpleNamespace(value="queue"),
+        # The seeded/default 429 strategy; it never decides slot queueing.
+        "rate_limit_policy": SimpleNamespace(value="backoff"),
         "max_parallel_runs": 1,
         "owner_user_id": None,
     }
@@ -254,6 +255,10 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "1" * 64)
     monkeypatch.setenv(
         "OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64
+    )
+    # Codex policies launch the deployment's shared host image.
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64
     )
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
@@ -835,7 +840,6 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
             "providerId": "openai",
             "runtimeId": "codex_cli",
             "busy": False,
-            "queueWhenBusy": True,
         }
     ]
     assert body["ineligibleProviderProfiles"] == []
@@ -929,22 +933,15 @@ def test_claude_catalog_capacity_uses_durable_lease_state(
         .json()
     )
 
-    eligible_ids = {item["profileId"] for item in body["eligibleProviderProfiles"]}
-    assert (profile.profile_id not in eligible_ids) is expected_busy
+    eligible = {item["profileId"]: item for item in body["eligibleProviderProfiles"]}
+    assert eligible[profile.profile_id]["busy"] is expected_busy
+    assert body["ineligibleProviderProfiles"] == []
     claude_execution = next(
         item for item in body["executionProfiles"] if item["ref"] == "omnigent-claude@1"
     )
     reason_codes = {reason["code"] for reason in claude_execution["gateReasons"]}
-    assert ("profile_capacity_unavailable" in reason_codes) is expected_busy
+    assert "profile_capacity_unavailable" not in reason_codes
     assert "no_eligible_codex_oauth_profile" not in reason_codes
-    ineligible = {
-        item["profileId"]: item for item in body["ineligibleProviderProfiles"]
-    }
-    assert (profile.profile_id in ineligible) is expected_busy
-    if expected_busy:
-        assert {
-            reason["code"] for reason in ineligible[profile.profile_id]["gateReasons"]
-        } == {"profile_capacity_unavailable"}
 
 
 def test_codex_catalog_uses_configured_host_and_resolved_server_image(monkeypatch):
@@ -1142,10 +1139,10 @@ def test_catalog_requires_authentication():
     assert response.status_code in {401, 403}
 
 
-def test_catalog_reports_mixed_profile_reconnect_and_capacity(monkeypatch):
+def test_catalog_reports_mixed_profile_reconnect_and_busy(monkeypatch):
     reconnect = _profile(profile_id="reconnect")
     busy = _profile(
-        profile_id="busy", rate_limit_policy=SimpleNamespace(value="reject")
+        profile_id="busy", rate_limit_policy=SimpleNamespace(value="backoff")
     )
     slot = SimpleNamespace(
         profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
@@ -1167,20 +1164,31 @@ def test_catalog_reports_mixed_profile_reconnect_and_capacity(monkeypatch):
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
-    assert body["eligibleProviderProfiles"] == []
+    assert [
+        (item["profileId"], item["busy"]) for item in body["eligibleProviderProfiles"]
+    ] == [("busy", True)]
     assert {
         item["profileId"]: {reason["code"] for reason in item["gateReasons"]}
         for item in body["ineligibleProviderProfiles"]
-    } == {
-        "reconnect": {"profile_reconnect_required"},
-        "busy": {"profile_capacity_unavailable"},
-    }
+    } == {"reconnect": {"profile_reconnect_required"}}
 
 
-def test_busy_profile_is_eligible_when_queueing_is_permitted(monkeypatch):
-    profile = _profile(profile_id="busy")
+@pytest.mark.parametrize("rate_limit_policy", ["backoff", "queue", "fail_fast"])
+def test_busy_profile_stays_selectable_and_waits_for_its_lease(
+    monkeypatch, rate_limit_policy
+):
+    """A busy profile is eligible; new work waits on the Provider Profile Manager.
+
+    Codex OAuth profiles allow exactly one parallel run and seeded profiles use
+    the ``backoff`` 429 strategy, so treating anything but ``queue`` as
+    "cannot wait" refused every second Codex or Claude Omnigent workflow.
+    """
+
+    profile = _profile(rate_limit_policy=SimpleNamespace(value=rate_limit_policy))
     slot = SimpleNamespace(
-        profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
+        profile_id=profile.profile_id,
+        lease_state="held",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
     )
     body = (
         TestClient(_app(monkeypatch, session=_Session([profile], slots=[slot])))
@@ -1188,8 +1196,24 @@ def test_busy_profile_is_eligible_when_queueing_is_permitted(monkeypatch):
         .json()
     )
 
-    assert body["eligibleProviderProfiles"][0]["busy"] is True
-    assert body["eligibleProviderProfiles"][0]["queueWhenBusy"] is True
+    assert body["eligibleProviderProfiles"] == [
+        {
+            "profileId": "codex-oauth",
+            "label": "OpenAI subscription",
+            "providerId": "openai",
+            "runtimeId": "codex_cli",
+            "busy": True,
+        }
+    ]
+    assert body["ineligibleProviderProfiles"] == []
+    codex = next(
+        item for item in body["executionProfiles"] if item["ref"] == "omnigent-codex@1"
+    )
+    assert codex["available"] is True
+    assert codex["gateReasons"] == []
+    assert body["available"] is True
+    assert body["admissionReadiness"]["transientBlocking"] == []
+    assert body["admissionReadiness"]["waitForCapacity"] is False
 
 
 @pytest.mark.parametrize(
@@ -2138,51 +2162,3 @@ def test_support_reasons_flag_unversioned_projection(monkeypatch, tmp_path):
     )
     codes = {reason.code for reason in catalog._support_reasons()}
     assert "live_verification_stale" in codes
-
-
-def test_a_queueing_busy_profile_is_not_reported_as_capacity_pressure(monkeypatch):
-    """MoonLadderStudios/MoonMind#3885: queued work is not saturation.
-
-    A busy profile that queues can still accept new work, so the readiness
-    projection must not report the deployment as capacity-blocked.
-    """
-
-    profile = _profile(profile_id="busy")
-    slot = SimpleNamespace(
-        profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
-    )
-    body = (
-        TestClient(_app(monkeypatch, session=_Session([profile], slots=[slot])))
-        .get("/api/omnigent/codex-catalog-readiness")
-        .json()
-    )
-
-    admission = body["admissionReadiness"]
-    assert admission["transientBlocking"] == []
-    assert admission["waitForCapacity"] is False
-
-
-def test_a_saturated_deployment_waits_instead_of_reporting_unsupported(monkeypatch):
-    """Every launch-ready profile busy and non-queueing is a capacity wait."""
-
-    profile = _profile(
-        profile_id="busy", rate_limit_policy=SimpleNamespace(value="reject")
-    )
-    slot = SimpleNamespace(
-        profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
-    )
-    body = (
-        TestClient(_app(monkeypatch, session=_Session([profile], slots=[slot])))
-        .get("/api/omnigent/codex-catalog-readiness")
-        .json()
-    )
-
-    admission = body["admissionReadiness"]
-    assert admission["transientBlocking"] == ["provider_capacity"]
-    assert admission["waitForCapacity"] is True
-    # The installation stays structurally qualified while it is merely full, so
-    # nothing reads this as a reason to substitute another profile or runtime.
-    assert admission["structurallySupported"] is True
-    assert "provider_capacity" not in admission["structuralBlocking"]
-    codes = {reason["code"] for reason in body["gateReasons"]}
-    assert "omnigent_admission_readiness_failed" not in codes
