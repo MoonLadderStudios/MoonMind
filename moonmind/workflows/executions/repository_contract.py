@@ -44,7 +44,6 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default"
-LEGACY_REPOSITORY_DECODER_VERSION = "moonmind.repository-legacy-history.v1"
 REPOSITORY_CAPABILITY_UNKNOWN = "REPOSITORY_CAPABILITY_UNKNOWN"
 REPOSITORY_CONNECTION_MISMATCH = "REPOSITORY_CONNECTION_MISMATCH"
 REPOSITORY_CLIENT_MISMATCH = "REPOSITORY_CLIENT_MISMATCH"
@@ -349,7 +348,11 @@ class RepositoryConnection(BaseModel):
 
 
 def compile_repository_target(value: object) -> AuthoredRepositoryTarget:
-    """Compile a UI draft, injecting only the well-known common Git connection."""
+    """Compile a UI draft, injecting only the well-known common Git connection.
+
+    An omitted Git ``connectionRef`` selects the deployment default
+    connection, the same as authoring it explicitly.
+    """
 
     if not isinstance(value, Mapping):
         raise RepositoryContractError(
@@ -451,7 +454,11 @@ def repository_branch_from_value(value: object) -> str:
 def decode_legacy_repository_history_v1(
     repository: str, branch: str | None = None
 ) -> AuthoredGitRepositoryTarget:
-    """Frozen decoder for already-recorded histories; never call for authoring."""
+    """Frozen decoder for already-recorded histories; never call for authoring.
+
+    Its only caller is ``decode_recorded_legacy_workflow_history_v1``. Remove
+    both once no retained history predates canonical repository targets.
+    """
 
     return AuthoredGitRepositoryTarget(
         provider="git",
@@ -483,7 +490,12 @@ def reconcile_default_git_connection(
     *,
     client_policy: RepositoryClientPolicy,
 ) -> RepositoryConnection:
-    """Return the deployment-owned connection selecting the existing resolver."""
+    """Derive the default connection from the deployment's GitHub declaration.
+
+    Used only when no ``repository-connection:git-default`` is recorded; a
+    recorded connection (for example the #4023 migration's typed SecretRef)
+    always wins and is never replaced by this derivation.
+    """
 
     return RepositoryConnection(
         schemaVersion="moonmind.repository-connection.v1",
@@ -1395,13 +1407,12 @@ def publish_connection_snapshot(
 
 
 def load_connection_snapshot(
-    path: Path, *, minimum_revision: int = 1, allow_stale: bool = False
+    path: Path, *, minimum_revision: int = 1
 ) -> RepositoryConnectionSnapshot:
     """Load a snapshot; fail on stale/digest mismatch, never silently use it.
 
     Consumers must never prefer a stale filesystem record because the
-    database is temporarily unavailable; pass ``allow_stale=True`` only for
-    the classified-legacy-input path owned by #4023.
+    database is temporarily unavailable.
     """
 
     try:
@@ -1423,7 +1434,7 @@ def load_connection_snapshot(
     )
     if _snapshot_digest(envelope) != snapshot.digest:
         raise RepositoryRouteError(REPOSITORY_STALE_SNAPSHOT, "snapshot digest mismatch")
-    if snapshot.revision < minimum_revision and not allow_stale:
+    if snapshot.revision < minimum_revision:
         raise RepositoryRouteError(
             REPOSITORY_STALE_SNAPSHOT, "snapshot is stale; refresh from the database"
         )
@@ -1442,7 +1453,6 @@ __all__ = [
     "CONNECTION_SNAPSHOT_SCHEMA_VERSION",
     "DEFAULT_GIT_CONNECTION_REF",
     "GitHubAppCredential",
-    "LEGACY_REPOSITORY_DECODER_VERSION",
     "REPOSITORY_DENIED",
     "REPOSITORY_ENDPOINT_RETARGET",
     "REPOSITORY_ID_REUSE",

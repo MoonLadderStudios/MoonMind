@@ -5701,3 +5701,91 @@ async def test_worker_startup_does_not_persist_an_always_on_default_alias(tmp_pa
     assert not (
         store.store_root.parent / "repository_connections" / "git-default.json"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_recorded_schedule_target_reads_the_migrated_default_connection(
+    tmp_path, monkeypatch
+):
+    """A schedule recorded before #4023 keeps its target bytes and identity.
+
+    Its ``repository-connection:git-default`` reference resolves to the
+    migrated typed connection; no schedule recreation is required and the
+    ambient token is not used.
+    """
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "db", "key": "GITHUB_TOKEN"},
+                },
+            )
+        },
+    )
+    resolved_refs: list[str] = []
+
+    async def _fake_secret(ref: str, **_kwargs) -> str:
+        resolved_refs.append(ref)
+        return "migrated-settings-token"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_managed_api_key_reference",
+        _fake_secret,
+    )
+    recorded_schedule_target = json.loads(
+        '{"provider": "git", "connectionRef": "repository-connection:git-default",'
+        ' "repository": {"name": "MoonLadderStudios/MoonMind"},'
+        ' "branch": {"name": "main"}}'
+    )
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "repositoryTarget": recorded_schedule_target,
+        },
+        parameters={"publishMode": "none"},
+    )
+    launcher = _ready_launcher(tmp_path)
+
+    resolved = await launcher._ensure_repository_ready_for_launch(request, None)
+    token = await launcher._resolve_request_github_token(request)
+
+    assert resolved is not None
+    assert resolved.connection_ref == "repository-connection:git-default"
+    assert token == "migrated-settings-token"
+    assert set(resolved_refs) == {"db://GITHUB_TOKEN"}
+    assert request.workspace_spec["repositoryTarget"] == recorded_schedule_target
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_default_suspends_only_authenticated_repository_work(
+    tmp_path, monkeypatch
+):
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    for name in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN",
+        "GITHUB_TOKEN_SECRET_REF",
+        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        "MOONMIND_GITHUB_TOKEN_REF",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    launcher = _ready_launcher(tmp_path)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ) as excinfo:
+        await launcher._ensure_repository_ready_for_launch(
+            _git_target_request("repository-connection:git-default"), None
+        )
+
+    assert "GITHUB_TOKEN" in str(excinfo.value)
+    assert launcher._request_uses_github(_make_request()) is False
