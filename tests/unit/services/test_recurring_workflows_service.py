@@ -2060,3 +2060,132 @@ async def test_manual_request_persists_before_rpc_and_resumes_observation_withou
                 assert run.dispatch_after is None
                 assert await observer.reconcile_manual_runs() == 0
             mock_temporal_adapter.trigger_schedule.assert_awaited_once()
+
+
+def _retrieval_retirement_target(location, field, value):
+    from copy import deepcopy
+
+    parameters = {"targetRuntime": "codex", "task": {"instructions": "Run nightly"}}
+    if location == "parameters":
+        parameters[field] = deepcopy(value)
+    else:
+        parameters.setdefault(location, {"instructions": "Run nightly"})[field] = (
+            deepcopy(value)
+        )
+    return {"workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters}
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize("location", ["parameters", "task", "workflow"])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("rag", {"collections": ["docs"]}),
+        ("followUpRetrieval", {"enabled": True}),
+        ("follow_up_retrieval", {"collections": ["docs"]}),
+    ],
+)
+async def test_schedule_authoring_rejects_retired_retrieval_before_side_effects(
+    tmp_path, mock_temporal_adapter, operation, location, field, value
+):
+    from copy import deepcopy
+
+    async with recurring_db(tmp_path) as sessions, sessions() as session:
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        target = _retrieval_retirement_target(location, field, value)
+        original = deepcopy(target)
+        if operation == "update":
+            definition = await _mm3788_create(
+                service,
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {"task": {"instructions": "Original task"}},
+                },
+                owner_user_id=None,
+            )
+            stored_target = deepcopy(definition.target)
+            old_name = definition.name
+            old_version = definition.version
+            mock_temporal_adapter.reset_mock()
+            action = service.update_definition(
+                definition, target=target, name="Rejected edit"
+            )
+        else:
+            action = _mm3788_create(service, target=target, owner_user_id=None)
+
+        with pytest.raises(RecurringWorkflowValidationError, match="retired"):
+            await action
+
+        assert target == original
+        mock_temporal_adapter.create_schedule.assert_not_called()
+        mock_temporal_adapter.update_schedule.assert_not_called()
+        mock_temporal_adapter.pause_schedule.assert_not_called()
+        mock_temporal_adapter.unpause_schedule.assert_not_called()
+        await session.flush()
+        if operation == "update":
+            await session.refresh(definition)
+            assert definition.target == stored_target
+            assert definition.name == old_name
+            assert definition.version == old_version
+        else:
+            assert (
+                await session.execute(select(RecurringWorkflowDefinition))
+            ).scalars().all() == []
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize("location", ["parameters", "task", "workflow"])
+async def test_schedule_authoring_drops_absent_retrieval_and_preserves_input(
+    tmp_path, mock_temporal_adapter, operation, location
+):
+    from copy import deepcopy
+
+    async with recurring_db(tmp_path) as sessions, sessions() as session:
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        target = _retrieval_retirement_target(location, "rag", {})
+        container = (
+            target["initialParameters"]
+            if location == "parameters"
+            else target["initialParameters"][location]
+        )
+        container["followUpRetrieval"] = {"enabled": False}
+        container["follow_up_retrieval"] = None
+        original = deepcopy(target)
+        if operation == "update":
+            definition = await _mm3788_create(
+                service,
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {"task": {"instructions": "Original task"}},
+                },
+                owner_user_id=None,
+            )
+            definition = await service.update_definition(definition, target=target)
+        else:
+            definition = await _mm3788_create(
+                service, target=target, owner_user_id=None
+            )
+
+        await session.refresh(definition)
+        stored = (
+            definition.target["initialParameters"]
+            if location == "parameters"
+            else definition.target["initialParameters"][location]
+        )
+        assert not {"rag", "followUpRetrieval", "follow_up_retrieval"}.intersection(
+            stored
+        )
+        assert target == original
+        expected = deepcopy(original)
+        expected_container = (
+            expected["initialParameters"]
+            if location == "parameters"
+            else expected["initialParameters"][location]
+        )
+        for key in ("rag", "followUpRetrieval", "follow_up_retrieval"):
+            expected_container.pop(key)
+        assert definition.target == expected

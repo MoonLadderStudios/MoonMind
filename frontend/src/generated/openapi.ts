@@ -5167,8 +5167,11 @@ export interface components {
             /** Limitedby */
             limitedBy: string;
         };
-        /** AgentProfileDocument */
-        AgentProfileDocument: {
+        /**
+         * AgentProfileAuthoringDocument
+         * @description Write contract; historical retrieval remains decodable by the base model.
+         */
+        AgentProfileAuthoringDocument: {
             /**
              * Schemaversion
              * @default moonmind.omnigent-agent-profile.v1
@@ -5193,7 +5196,8 @@ export interface components {
             /** Tools */
             tools?: string[];
             capture?: components["schemas"]["CaptureDefaults"];
-            rag?: components["schemas"]["RagDefaults"] | null;
+            /** Rag */
+            rag?: null;
             continuations?: components["schemas"]["ContinuationDefaults"];
             publish?: components["schemas"]["PublishDefaults"];
             /** Policyref */
@@ -7168,7 +7172,7 @@ export interface components {
              * @enum {string}
              */
             visibility: "private" | "deployment";
-            document: components["schemas"]["PolicyDocument"];
+            document: components["schemas"]["PolicyAuthoringDocument"];
             /** Clonesourceref */
             cloneSourceRef?: string | null;
         };
@@ -9997,7 +10001,7 @@ export interface components {
         NewVersion: {
             /** Expectedparentref */
             expectedParentRef: string;
-            document: components["schemas"]["PolicyDocument"];
+            document: components["schemas"]["PolicyAuthoringDocument"];
         };
         /** OAuthSessionResponse */
         OAuthSessionResponse: {
@@ -10315,10 +10319,10 @@ export interface components {
             reason?: string | null;
         };
         /**
-         * PolicyDocument
-         * @description Complete authority consumed at all Omnigent enforcement boundaries.
+         * PolicyAuthoringDocument
+         * @description Write contract; recorded policies retain their historical read model.
          */
-        PolicyDocument: {
+        PolicyAuthoringDocument: {
             /**
              * Schemaversion
              * @default 1
@@ -10336,7 +10340,8 @@ export interface components {
             capture: components["schemas"]["CapturePolicy"];
             checkpoint: components["schemas"]["CheckpointPolicy"];
             remediation: components["schemas"]["RemediationPolicy"];
-            rag?: components["schemas"]["RagPolicy"] | null;
+            /** Rag */
+            rag?: null;
             approvals: components["schemas"]["ApprovalPolicy"];
             retention: components["schemas"]["RetentionPolicy"];
             rollout: components["schemas"]["RolloutPolicy"];
@@ -10864,7 +10869,7 @@ export interface components {
              * @enum {string}
              */
             visibility: "private" | "workspace" | "public";
-            document: components["schemas"]["AgentProfileDocument"];
+            document: components["schemas"]["AgentProfileAuthoringDocument"];
         };
         /** ProfileExecutionConfiguration */
         ProfileExecutionConfiguration: {
@@ -11515,57 +11520,6 @@ export interface components {
             requestedAt?: string | null;
             /** Updatedat */
             updatedAt?: string | null;
-        };
-        /**
-         * RagDefaults
-         * @description Retired native retrieval defaults (MoonLadderStudios/MoonMind#4103).
-         *
-         *     Decoded only so versions persisted before retirement stay readable with
-         *     their recorded digests; new authoring must not carry it.
-         */
-        RagDefaults: {
-            /** Initial */
-            initial?: {
-                [key: string]: unknown;
-            };
-            /** Followup */
-            followUp?: {
-                [key: string]: unknown;
-            };
-            /** Maxtokens */
-            maxTokens?: number | null;
-            /** Maxlatencyms */
-            maxLatencyMs?: number | null;
-        };
-        /**
-         * RagPolicy
-         * @description Retired native retrieval section (MoonLadderStudios/MoonMind#4103).
-         *
-         *     Decoded only so versions persisted before retirement stay readable with
-         *     their recorded digests. New versions must not carry it; see
-         *     :func:`reject_retired_policy_sections`.
-         */
-        RagPolicy: {
-            /** Initialscope */
-            initialScope: string;
-            /** Followupscope */
-            followupScope: string;
-            /** Collectionrefs */
-            collectionRefs: string[];
-            /** Tokenbudget */
-            tokenBudget: number;
-            /**
-             * Latencybudgetms
-             * @default 3000
-             */
-            latencyBudgetMs: number;
-            /**
-             * Fallback
-             * @enum {string}
-             */
-            fallback: "deny" | "empty";
-            /** Credentialref */
-            credentialRef: string;
         };
         /**
          * RecoverExecutionResponse
@@ -14079,7 +14033,7 @@ export interface components {
         };
         /** VersionCreate */
         VersionCreate: {
-            document: components["schemas"]["AgentProfileDocument"];
+            document: components["schemas"]["AgentProfileAuthoringDocument"];
         };
         /**
          * WorkerOperationCommand

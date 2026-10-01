@@ -47,6 +47,9 @@ from api_service.db.models import (
     OmnigentPolicyVersion,
     OmnigentUpstreamAgentProjection,
 )
+from api_service.services.omnigent_agent_profile_selection import (
+    without_retired_profile_sections,
+)
 from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
@@ -839,7 +842,7 @@ async def _reconcile_bootstrap_profile_launch_policy(
     ):
         return True
 
-    document = copy.deepcopy(active.document)
+    document = without_retired_profile_sections(active.document)
     document["execution"]["allowedLaunchPolicyRefs"] = [launch_policy_ref]
     document["policyRef"] = launch_policy_ref
     digest = _digest(document)

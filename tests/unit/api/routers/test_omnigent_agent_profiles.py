@@ -444,3 +444,16 @@ def test_profile_rejects_unknown_model_capture_and_publish_fields():
         payload[section]["unexpected"] = True
         with pytest.raises(ValidationError):
             AgentProfileDocument.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", [ProfileCreate, VersionCreate])
+def test_profile_write_schema_cannot_request_retired_retrieval(request_model):
+    schema = request_model.model_json_schema()
+    reference = schema["properties"]["document"]["$ref"].rsplit("/", 1)[-1]
+    assert schema["$defs"][reference]["properties"]["rag"].get("type") == "null"
+
+
+def test_profile_authoring_accepts_a_parsed_vector_free_document():
+    parsed = document(upstreamId="agent-123")
+    request = VersionCreate(document=parsed)
+    assert _normalized(request.document) == _normalized(parsed)

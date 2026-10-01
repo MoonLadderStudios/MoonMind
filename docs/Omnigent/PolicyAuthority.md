@@ -17,7 +17,9 @@ One version declares `endpoint`, `execution`, `host`, `resources`, `network`,
 MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103).
 A version recorded earlier may also carry a `rag` section; it stays readable
 and executable with its recorded digest, but the policy API rejects `rag` on
-new versions, and bootstrap and release successors omit it.
+new versions. Authoring uses a separate document schema that allows only an
+absent or null `rag`; historical decoding retains the recorded section.
+Bootstrap and release successors omit it.
 
 These sections govern bridge-mode eligibility; execution profile, harness, and
 agent identities; host/backend/architecture admission and immutable images;

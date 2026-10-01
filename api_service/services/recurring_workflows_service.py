@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -38,6 +39,11 @@ from api_service.services.omnigent_agent_profile_selection import (
 from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
     resolve_launch_target_profile_selection,
+)
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    reject_retired_vector_fields,
+    strip_absent_vector_fields,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -286,8 +292,25 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
             "target.initialParameters must be an object when provided"
         )
 
+    initial_parameters = copy.deepcopy(dict(initial_parameters))
+    try:
+        reject_retired_vector_fields(
+            initial_parameters, field_path="target.initialParameters"
+        )
+        strip_absent_vector_fields(initial_parameters)
+        for task_key in ("task", "workflow"):
+            task = initial_parameters.get(task_key)
+            if isinstance(task, Mapping):
+                task = dict(task)
+                reject_retired_vector_fields(
+                    task, field_path=f"target.initialParameters.{task_key}"
+                )
+                initial_parameters[task_key] = strip_absent_vector_fields(task)
+    except WorkflowContractError as exc:
+        raise RecurringWorkflowValidationError(str(exc)) from exc
+
     target["workflowType"] = workflow_type
-    target["initialParameters"] = dict(initial_parameters)
+    target["initialParameters"] = initial_parameters
     target.pop("workflow_type", None)
     target.pop("initial_parameters", None)
 

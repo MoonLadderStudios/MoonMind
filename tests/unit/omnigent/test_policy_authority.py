@@ -63,7 +63,6 @@ def test_digest_and_compilation_are_reproducible_and_cover_every_boundary():
     }
 
 
-
 def historical_retrieval_policy_document() -> dict:
     """A version persisted before native retrieval was retired (#4103)."""
 
@@ -367,3 +366,21 @@ def test_approval_binding_rejects_stale_policy_or_target_state(field, replacemen
     binding[field] = replacement
     with pytest.raises(ValueError, match="stale approval binding"):
         validate_approval_binding(binding, snapshot, target_current_state="ready")
+
+
+@pytest.mark.parametrize("request_model_name", ["CreatePolicy", "NewVersion"])
+def test_policy_write_schema_cannot_request_retired_retrieval(request_model_name):
+    from api_service.api.routers import omnigent_policies
+
+    model = getattr(omnigent_policies, request_model_name)
+    schema = model.model_json_schema()
+    reference = schema["properties"]["document"]["$ref"].rsplit("/", 1)[-1]
+    assert schema["$defs"][reference]["properties"]["rag"].get("type") == "null"
+
+
+def test_policy_authoring_accepts_a_parsed_vector_free_document():
+    from api_service.api.routers.omnigent_policies import NewVersion
+
+    parsed = PolicyDocument.model_validate(policy_document())
+    request = NewVersion(expectedParentRef="p@1", document=parsed)
+    assert normalize_document(request.document) == normalize_document(parsed)

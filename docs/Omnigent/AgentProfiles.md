@@ -45,7 +45,7 @@ A stable `profileId` owns monotonically numbered immutable versions. Each versio
 
 The version document includes endpoint and bridge-mode refs; stable upstream or artifact-backed bundle identity; harness and capabilities; execution and allowed launch policies; credential-free Provider Profile compatibility requirements; legacy model and effort settings (new Profile launches resolve these from Profile tiers and explicit overrides); workspace mutation and capability constraints; Skills and tools; capture, retention, and evidence defaults and ceilings; continuation compatibility; publish default; and versioned policy ref.
 
-MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103). A version recorded earlier may carry a `rag` section; it stays readable with its recorded digest but is never compiled into launch parameters. New versions drop an empty `rag` section and reject explicit retrieval values, and selection rejects an explicit `rag` override.
+MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103). A version recorded earlier may carry a `rag` section; it stays readable with its recorded digest but is never compiled into launch parameters. New authored versions drop an empty `rag` section and reject explicit retrieval values, and their write schemas allow only an absent or null `rag`. Clones and automatic policy-cutover successors omit historical retrieval settings and recompute their own digests; the source versions and in-flight usages remain unchanged. Selection rejects an explicit `rag` override.
 
 Profiles never contain credentials, OAuth homes, registration secrets, Dockerfiles, host paths, volume names, host ids, or privileged launch settings.
 
