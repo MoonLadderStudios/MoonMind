@@ -321,6 +321,18 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
         "moonmind.auth.github_credentials.resolve_github_credential",
         resolved_github_credential,
     )
+
+    # The replay records no repository connection, so the default derives
+    # from the deployment's GitHub declaration (MoonLadderStudios/MoonMind#4023).
+    async def no_recorded_connection(connection_ref: str) -> None:
+        assert connection_ref == "repository-connection:git-default"
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher."
+        "load_repository_connection_for_launch",
+        no_recorded_connection,
+    )
     request = AgentExecutionRequest.model_validate(manifest["request"])
 
     resolved_repository = await launcher._ensure_repository_ready_for_launch(
