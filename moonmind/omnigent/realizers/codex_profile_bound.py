@@ -36,10 +36,12 @@ class CodexProfileBoundRealizer:
         session_factory: Any | None = None,
         coordinator_factory: Any | None = None,
         turn_command_service: Any | None = None,
+        artifact_gateway: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._coordinator_factory = coordinator_factory
         self._turn_commands = turn_command_service
+        self._artifact_gateway = artifact_gateway
 
     async def execute(
         self,
@@ -85,7 +87,7 @@ class CodexProfileBoundRealizer:
         # Delegate to existing coordinator (import lazily to avoid cycles)
         from api_service.db.base import async_session_maker
 
-        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+        from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
         from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
         from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
         from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
@@ -106,7 +108,14 @@ class CodexProfileBoundRealizer:
         from moonmind.omnigent.execute import run_omnigent_execution
 
         session_factory = self._session_factory or async_session_maker
-        artifact_gateway = LocalOmnigentArtifactGateway()
+        # The deployment owns one artifact gateway for the whole Omnigent
+        # execution surface. Codex must run on it: a filesystem-only gateway
+        # cannot dereference the durable ``art_...`` refs an admitted request
+        # carries (its resolved Skill snapshot, an artifact-backed instruction),
+        # and evidence it captured would not survive its host.
+        artifact_gateway = self._artifact_gateway or TemporalOmnigentArtifactGateway(
+            session_factory
+        )
         run_store = OmnigentBridgeSessionStore(session_factory)
 
         # If factory supplied (tests), use it

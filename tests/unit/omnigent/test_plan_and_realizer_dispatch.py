@@ -1,7 +1,11 @@
 """Phase 1: Plan persistence and realizer dispatch."""
 
+import asyncio
+import hashlib
+import json
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -1036,3 +1040,279 @@ def test_stop_all_new_omnigent_work_never_substitutes_another_runtime(monkeypatc
     # The denial names no replacement runtime.
     assert "codex_cli" not in message
     assert "claude_code" not in message
+
+
+# ---- The Codex realizer must run on the deployment's durable artifacts ------
+#
+# mm:1fe51ca8-824c-4e56-ad02-89df8a56751a failed with
+# ``OMNIGENT_GENERIC_DISPATCH_FAILED: ... Unable to dereference artifact ref:
+# art_...``. The realizer handed the profile-bound coordinator a filesystem-only
+# artifact gateway, so host preparation could not read the admitted run's
+# durable resolved Skill snapshot and the run died before any host launched.
+
+
+_DURABLE_SKILL_NAME = "batch-pr-resolver"
+#: ``agent_skill.resolve`` writes the snapshot; the gateway under test only reads.
+_SNAPSHOT_PRODUCER_PRINCIPAL = "agent_workflow"
+
+
+def _durable_skill_payload(name: str) -> bytes:
+    return f"---\nname: {name}\ndescription: fan out PR work\n---\n".encode("utf-8")
+
+
+@pytest.fixture
+def durable_artifact_storage(tmp_path, monkeypatch):
+    """A real durable artifact service: SQLite metadata plus local blob storage."""
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.config.settings import settings as _settings
+
+    monkeypatch.setattr(_settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        _settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "durable-blobs"),
+    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/artifacts.db")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def build_tables():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio.run(build_tables())
+    try:
+        yield factory
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def _durable_skill_snapshot_request(plan):
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        OmnigentExecutionPlanBinding,
+    )
+
+    return AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "workflow-codex-skill",
+            "idempotencyKey": "step-codex-skill",
+            "executionProfileRef": "codex_openai_oauth",
+            "omnigentExecutionPlan": OmnigentExecutionPlanBinding(
+                planRef=plan.planRef,
+                planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+                planArtifactRef="art_plan",
+                taskInputSnapshotRef="art_input",
+                taskInputSnapshotDigest="sha256:" + "f" * 64,
+            ),
+            "parameters": {"executionPlanRef": plan.planRef},
+        }
+    )
+
+
+async def _write_durable_skill_snapshot(
+    session_factory, workflow_id: str, run_id: str
+) -> str:
+    """Persist a Skill snapshot the way ``agent_skill.resolve`` produces one.
+
+    ``AgentSkillsActivities`` writes under ``agent_workflow`` and links the
+    artifact to the executing execution. The reader under test must therefore
+    resolve a snapshot it does not own, or the test would pass on self-ownership
+    alone and never exercise the ref resolution this PR fixes.
+    """
+
+    from moonmind.workflows.temporal.artifacts import (
+        ExecutionRef,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    async with session_factory() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        body = _durable_skill_payload(_DURABLE_SKILL_NAME)
+        skill, _upload = await service.create(
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            content_type="text/markdown",
+            size_bytes=len(body),
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="input.agent_skill_body",
+            ),
+        )
+        await service.write_complete(
+            artifact_id=skill.artifact_id,
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            payload=body,
+            content_type="text/markdown",
+        )
+        snapshot_payload = json.dumps(
+            {
+                "snapshot_id": "skillset_codex_durable",
+                "deployment_id": workflow_id,
+                "resolved_at": datetime.now(tz=UTC).isoformat(),
+                "skills": [
+                    {
+                        "skill_name": _DURABLE_SKILL_NAME,
+                        "content_ref": skill.artifact_id,
+                        "content_digest": "sha256:" + hashlib.sha256(body).hexdigest(),
+                        "format": "markdown",
+                        "provenance": {
+                            "source_kind": "built_in",
+                            "source_path": "/app/.agents/skills/batch-pr-resolver",
+                        },
+                    }
+                ],
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        snapshot, _snapshot_upload = await service.create(
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            content_type="application/json",
+            size_bytes=len(snapshot_payload),
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="input.skill_snapshot",
+            ),
+        )
+        await service.write_complete(
+            artifact_id=snapshot.artifact_id,
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            payload=snapshot_payload,
+            content_type="application/json",
+        )
+    return snapshot.artifact_id
+
+
+@pytest.mark.asyncio
+async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
+    tmp_path, durable_artifact_storage, monkeypatch
+):
+    """An admitted Codex run projects Skills from durable artifact storage.
+
+    Host preparation resolves ``request.resolvedSkillsetRef`` through the
+    artifact gateway the realizer installs. A gateway that cannot dereference
+    durable refs aborts the run before the container launches.
+    """
+
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
+    monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
+
+    plan = compile_execution_plan(**_codex_plan_inputs())
+    request = _durable_skill_snapshot_request(plan)
+    durable_gateway = TemporalOmnigentArtifactGateway(durable_artifact_storage)
+    skillset_ref = await _write_durable_skill_snapshot(
+        durable_artifact_storage,
+        request.correlation_id,
+        "run-codex-skill",
+    )
+    assert skillset_ref.startswith("art_")
+
+    installed: dict[str, Any] = {}
+
+    class _RecordingCoordinator:
+        def __init__(self, **kwargs: Any) -> None:
+            installed.update(kwargs)
+
+        async def execute(self, _request: Any) -> AgentRunResult:
+            return AgentRunResult(summary="codex lifecycle ran")
+
+    realizer = CodexProfileBoundRealizer(
+        session_factory=durable_artifact_storage,
+        coordinator_factory=_RecordingCoordinator,
+        artifact_gateway=durable_gateway,
+    )
+    result = await realizer.execute(request, plan)
+    assert result.summary == "codex lifecycle ran"
+
+    # Exactly the read host preparation performs before it mutates a host.
+    host_runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        network="test-network",
+        workspace_root=tmp_path / "runs",
+    )
+    projection = await host_runtime._prepare_skill_projection(
+        workspace_key="workflow-codex-skill:step-codex-skill",
+        resolved_skillset_ref=skillset_ref,
+        artifact_gateway=installed["artifact_gateway"],
+    )
+
+    assert (projection / "_manifest.json").is_file()
+    assert (projection / _DURABLE_SKILL_NAME / "SKILL.md").is_file()
+
+
+@pytest.mark.asyncio
+async def test_production_composition_installs_the_durable_artifact_gateway(
+    durable_artifact_storage, monkeypatch,
+):
+    """The registered Codex realizer runs on the deployment's durable gateway.
+
+    ``build_generic_omnigent_execution_services`` owns one artifact gateway for
+    the whole execution surface. Every realizer it registers must use it, so no
+    realizer can privately substitute a filesystem-scoped gateway that cannot
+    read durable refs.
+    """
+
+    from moonmind.omnigent import production
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    for key, value in {
+        "MOONMIND_OMNIGENT_HOST_SERVER_URL": "http://omnigent-host:8000",
+        "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": "test-owner",
+        "OMNIGENT_IMAGE_REF": _SERVER_IMAGE_REF,
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(production, "generic_host_enabled", lambda: True)
+    monkeypatch.setattr(production, "resolved_server_url", lambda: "http://omnigent")
+
+    deployment_gateway = object()
+    services = production.build_generic_omnigent_execution_services(
+        session_factory=durable_artifact_storage,
+        artifact_gateway=deployment_gateway,
+        run_store=object(),
+    )
+
+    installed: dict[str, Any] = {}
+
+    class _RecordingCoordinator:
+        def __init__(self, **kwargs: Any) -> None:
+            installed.update(kwargs)
+
+        async def execute(self, _request: Any) -> AgentRunResult:
+            return AgentRunResult(summary="codex lifecycle ran")
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution."
+        "OmnigentProfileBoundExecutionCoordinator",
+        _RecordingCoordinator,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter", object
+    )
+    monkeypatch.setattr(
+        "moonmind.repositories.lore_runtime."
+        "build_lore_repository_adapter_from_environment",
+        object,
+    )
+
+    plan = compile_execution_plan(**_codex_plan_inputs())
+    realizer = services.realizer_registry.require("codex-profile-bound@1")
+    result = await realizer.execute(_durable_skill_snapshot_request(plan), plan)
+
+    assert result.summary == "codex lifecycle ran"
+    assert installed["artifact_gateway"] is deployment_gateway

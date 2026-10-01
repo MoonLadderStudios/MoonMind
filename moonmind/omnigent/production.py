@@ -323,6 +323,7 @@ def build_generic_omnigent_execution_services(
     registry.register(
         CodexProfileBoundRealizer(
             session_factory=session_factory,
+            artifact_gateway=artifacts,
             turn_command_service=CanonicalTurnCommandService(
                 OmnigentControlPlaneStore(session_factory)
             ),
