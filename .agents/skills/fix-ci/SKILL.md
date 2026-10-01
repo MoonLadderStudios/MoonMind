@@ -76,10 +76,26 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - If every failure is a GitHub Actions platform failure with no code defect
   (for example `Artifact storage quota has been hit`, a lost runner, or an
   Actions service error) and any downstream gate failed only because that
-  job's artifact is missing, there is nothing to fix. Do not edit code,
-  rerun CI, or recommend manual review: write the no-op publish evidence
-  from step 6 and return to the caller. `pr-resolver` finalize classifies
-  this as `ci_infra_transient` and reruns the failed jobs after its backoff.
+  job's artifact is missing, there is no code to fix. Do not edit code or
+  recommend manual review. Recover by rerunning the failed jobs on the same
+  head; no other owner reruns CI when this Skill reaches this case:
+  - Read the run's attempt count and completion time with
+    `gh run view <run-id> --json attempt,status,updatedAt`. A run gets at
+    most 3 attempts in total, the same budget `pr-resolver` uses. If a rerun
+    is already in progress, wait for it instead of starting another.
+  - GitHub recalculates the artifact storage quota every 6-12 hours. For a
+    quota failure, rerun only when the failed attempt finished at least 30
+    minutes ago. Otherwise write blocked evidence with
+    `--reason ci_infra_transient` and stop, so the caller retries later.
+    Lost runners and Actions service errors rerun immediately.
+  - Rerun with `gh run rerun <run-id> --failed --repo <owner/repo>`. If
+    GitHub refuses (permissions, authentication), write blocked evidence
+    with `--reason ci_infra_rerun_failed` and GitHub's error.
+  - Then continue at step 6 without a commit. Write no-op publish evidence
+    and wait for the rerun on the same SHA. A rerun that passes finishes
+    successfully. A rerun that exposes a code failure returns to step 2. If
+    the platform failure persists after the third attempt, write blocked
+    evidence with `--reason ci_infra_rerun_exhausted`.
 - Analyze the error output.
 - Apply surgical code changes to fix the build error or test failure.
 - Ensure the fix doesn't break other existing functionality.
