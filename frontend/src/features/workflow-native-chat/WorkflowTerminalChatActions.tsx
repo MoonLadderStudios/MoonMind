@@ -37,6 +37,19 @@ export interface ContinuationIntent {
   idempotencyKey: string;
   instructions: string;
   title?: string;
+  /** Already-authorized source evidence refs to carry (e.g. saved results). */
+  selectedSourceArtifactRefs?: string[];
+}
+
+/** The server answered and did not admit the continuation. */
+export class ContinuationRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ContinuationRequestError';
+    this.status = status;
+  }
 }
 
 function joinApiPath(apiBase: string, path: string): string {
@@ -88,6 +101,11 @@ export async function continueInNewWorkflow(
     instructions: intent.instructions,
   };
   if (intent.title) body.title = intent.title;
+  if (intent.selectedSourceArtifactRefs?.length) {
+    body.selectedSourceArtifactRefs = [...intent.selectedSourceArtifactRefs];
+  }
+  // A transport failure propagates as-is: the continuation may have been
+  // admitted, and the same idempotency key returns the same destination.
   const resp = await fetch(
     joinApiPath(apiBase, `/executions/${encodeURIComponent(workflowId)}/continue`),
     {
@@ -98,7 +116,15 @@ export async function continueInNewWorkflow(
     },
   );
   if (!resp.ok) {
-    throw new Error(`continue request failed (${resp.status})`);
+    const payload = (await resp.json().catch(() => null)) as {
+      detail?: string | { message?: string };
+    } | null;
+    const detail = payload?.detail;
+    const message = typeof detail === 'string' ? detail : detail?.message;
+    throw new ContinuationRequestError(
+      message || `continue request failed (${resp.status})`,
+      resp.status,
+    );
   }
   return (await resp.json()) as ContinueInNewWorkflowResult;
 }

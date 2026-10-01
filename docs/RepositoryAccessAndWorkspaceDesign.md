@@ -338,6 +338,8 @@ The saved-work manifest is a compact index of verified artifact/checkpoint evide
 
 No live token, connection handle, session credential, or executable approval is present. A source connection ID may be audit provenance without granting access. Publication records reference the immutable saved-work digest instead of editing the original result.
 
+After capture commit succeeds, every saved-work object is linked as `output.checkpoint` to the owning workflow run in that execution's Temporal namespace, so the run's artifact listing presents it and owner checks resolve. The saved-work manifest is linked last, after its parts. Uploads from a failed capture remain retained and unlinked for recovery; artifact `COMPLETE` upload status alone does not expose a committed saved result. The storage artifact namespace is not an execution namespace. The manifest artifact's listing metadata carries a compact `saved_work_summary` projected from the committed manifest: format claims with their part artifact IDs, exclusion counts by reason, limitations, scan disposition, and the retention handle. The checkpoint file manifest's metadata names the archive and index patch it indexes. Neither carries paths.
+
 ### QUALITY-004 Portable outputs are useful, bounded, and honest
 
 An output policy selects a small supported format profile instead of independent booleans that allow unusable combinations. A portable workspace-producing result includes verified content and a manifest. Its report uses actual agent output or a factual execution summary. A required-format failure blocks successful save finalization; an inapplicable optional format is not a broken download.
