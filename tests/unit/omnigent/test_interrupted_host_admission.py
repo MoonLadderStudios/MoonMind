@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, TurnSource
 from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupAuthority
 # Imports register pytest fixtures, including session_factory's _engine dependency.
@@ -301,3 +304,98 @@ async def test_only_revoked_delivery_preserves_turn_settlement(
     assert journal[0].status == (
         "claimed" if revoked and cancelled else "delivery_unknown"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_lost_provider_lease_drains_the_host_its_admission_launched(
+    monkeypatch,
+):
+    """A retry that finds its admitted lease gone must not strand the host.
+
+    2026-09-30: a worker restart killed the attempt that launched this
+    admission's host, and its retry found the provider lease inactive. The
+    AgentRun re-admits under a new epoch and never resumes this binding, and
+    its owner is still running, so no janitor reclaims the host either. Left
+    alone it held the machine's only host slot against the run that took the
+    provider slot, and each waited on the other.
+    """
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _plan("opencode-go/model")
+    request = harness.publish_request.model_copy(
+        update={
+            "admitted_provider_capacity": AdmittedProviderCapacity(
+                leaseOwnerId="agent-run-1",
+                profiles=[
+                    {
+                        "providerProfileRef": "opencode-go-primary",
+                        "providerRuntimeId": "opencode",
+                    }
+                ],
+                executionPlanRef=plan.planRef,
+                stepExecutionId="step-1",
+                idempotencyKey=harness.publish_request.idempotency_key,
+                admissionEpoch=1,
+            )
+        }
+    )
+    harness.realizer._artifacts = SimpleNamespace(
+        write_json=AsyncMock(return_value="artifact:verified-cleanup"),
+    )
+
+    async def interrupted(**kwargs):
+        await kwargs["authority_sink"](
+            {
+                "kind": "host",
+                "containerName": "owned-host",
+                "stateVolumeRef": "owned-state",
+                "launchGeneration": 1,
+            }
+        )
+        raise asyncio.CancelledError()
+
+    harness.realizer._host_runtime.realize = interrupted
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: True
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await harness.realizer._execute_lifecycle(request, plan)
+    key = stable_binding_id(
+        execution_plan_ref=plan.planRef,
+        idempotency_key=request.idempotency_key,
+        admission_epoch=1,
+    )
+    stranded = await harness.runtime_store.get(key)
+    assert stranded.state is RuntimeBindingState.host_allocating
+    assert stranded.hostLeaseRef
+    assert "host-cleaned" not in harness.events
+
+    async def lease_lost(**_kwargs):
+        raise HarnessPlatformError(
+            "workflow-admitted provider capacity is not usable for "
+            "opencode-go-primary: the manager does not report an active lease",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+        )
+
+    released: list[tuple] = []
+
+    async def release_all(leases):
+        released.append(tuple(leases))
+
+    harness.realizer._provider_leases.acquire_all = lease_lost
+    harness.realizer._provider_leases.release_all = release_all
+    with pytest.raises(HarnessPlatformError) as raised:
+        await harness.realizer._execute_lifecycle(request, plan)
+
+    # The AgentRun still sees the lease loss and re-admits; nothing it would
+    # never resume is left holding a host.
+    assert raised.value.code == (
+        HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE
+    )
+    assert (await harness.runtime_store.get(key)).state is RuntimeBindingState.cleaned
+    host_lease = await harness.realizer._host_leases.get(stranded.hostLeaseRef)
+    assert host_lease.status == "cleaned"
+    assert "host-cleaned" in harness.events
+    assert "credentials-cleaned" in harness.events
+    # Provider capacity stays with the AgentRun, which releases it last.
+    assert all(not leases for leases in released)
