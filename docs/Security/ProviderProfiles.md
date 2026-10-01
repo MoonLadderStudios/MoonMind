@@ -1324,6 +1324,8 @@ This prevents disabled setup stubs from becoming runnable simply because they ex
 
 If no compatible launch-ready profile is available, the run waits durably in `awaiting_slot` or fails fast according to the request policy.
 
+A profile whose slots are all in use is busy, not unavailable. New work for it queues in the manager whatever the profile's `rate_limit_policy` is, because that field governs provider 429 handling (§11.7), not slot capacity. Launch surfaces such as the Omnigent readiness catalog mark the profile busy and keep it selectable.
+
 The UI and parent workflow should clearly indicate:
 
 - runtime family

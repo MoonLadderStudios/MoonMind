@@ -7798,8 +7798,6 @@ export interface components {
              * @default false
              */
             busy: boolean;
-            /** Queuewhenbusy */
-            queueWhenBusy: boolean;
         };
         /**
          * EmbeddedHostHeartbeatRequest
