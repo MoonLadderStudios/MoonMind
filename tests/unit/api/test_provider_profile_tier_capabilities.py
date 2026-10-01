@@ -5,9 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from api_service.services.provider_profile_tier_capabilities import (
     tier_capabilities_for_draft,
     tier_capabilities_for_profile,
+)
+from moonmind.omnigent.bootstrap.opencode import (
+    DEFAULT_OPENCODE_QUALIFIED,
+    ZEN_FREE_QUALIFIED,
+    validate_effort_for_model,
 )
 
 
@@ -93,3 +100,65 @@ def test_draft_capabilities_are_not_stale():
     result = tier_capabilities_for_draft("codex_cli", "openai")
     assert result["evidence"]["stale"] is False
     assert result["evidence"]["source"] == "runtime_draft"
+
+
+def test_effort_options_offer_max_above_xhigh():
+    for result in (
+        tier_capabilities_for_draft("claude_code", "anthropic"),
+        tier_capabilities_for_profile(_profile()),
+    ):
+        values = [o["value"] for o in result["effort"]["options"]]
+        assert values == ["low", "medium", "high", "xhigh", "max"]
+        max_option = result["effort"]["options"][-1]
+        assert max_option["label"] == "Max"
+        assert max_option["status"] == "available"
+
+
+@pytest.mark.parametrize(
+    "models",
+    [
+        [DEFAULT_OPENCODE_QUALIFIED],
+        [ZEN_FREE_QUALIFIED],
+        [DEFAULT_OPENCODE_QUALIFIED, ZEN_FREE_QUALIFIED],
+        [DEFAULT_OPENCODE_QUALIFIED, "opencode-go/future-model"],
+        ["opencode-go/future-model"],
+    ],
+)
+def test_opencode_advertised_efforts_are_accepted_at_launch(models):
+    result = tier_capabilities_for_profile(
+        _profile(
+            runtime_id="opencode",
+            model_catalog_evidence_json={
+                "models": [{"qualifiedId": model} for model in models]
+            },
+        )
+    )
+    for option in result["effort"]["options"]:
+        for model in models:
+            compatible_models = option["compatible_models"]
+            if option["status"] == "unavailable" or (
+                compatible_models is not None and model not in compatible_models
+            ):
+                continue
+            assert validate_effort_for_model(option["value"], model) == option["value"]
+
+    max_option = next(
+        option for option in result["effort"]["options"] if option["value"] == "max"
+    )
+    for model in models:
+        available = max_option["status"] != "unavailable" and (
+            max_option["compatible_models"] is None
+            or model in max_option["compatible_models"]
+        )
+        assert available is (
+            model not in {DEFAULT_OPENCODE_QUALIFIED, ZEN_FREE_QUALIFIED}
+        )
+
+
+def test_opencode_draft_does_not_offer_max_without_a_compatible_model():
+    result = tier_capabilities_for_draft("opencode", "opencode-go")
+    max_option = next(
+        option for option in result["effort"]["options"] if option["value"] == "max"
+    )
+    assert max_option["status"] == "unavailable"
+    assert max_option["compatible_models"] == []

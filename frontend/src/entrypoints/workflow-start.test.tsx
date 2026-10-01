@@ -18875,6 +18875,20 @@ describe("Task Create runtime command previews", () => {
     window.localStorage.clear();
   });
 
+  it("suggests max as the effort level above xhigh", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await screen.findByText("Step 1");
+    const datalist = document.querySelector<HTMLDataListElement>(
+      "#queue-effort-options",
+    );
+    expect(datalist).not.toBeNull();
+    const efforts = Array.from(datalist?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(efforts.slice(0, 5)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
   it("previews known runtime commands for objective and step instructions", async () => {
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 

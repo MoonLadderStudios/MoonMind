@@ -7638,6 +7638,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             "medium",
             "high",
             "xhigh",
+            "max",
             String(defaultTaskEffortByRuntime[runtime] || ""),
             String(dashboardConfig.system?.defaultEffort || ""),
             String(dashboardConfig.system?.defaultTaskEffort || ""),

@@ -26,6 +26,7 @@ from moonmind.omnigent.bootstrap.opencode import (
     get_supported_efforts,
     resolve_model_by_display,
     resolve_model_exact,
+    validate_effort,
     validate_effort_for_model,
 )
 from moonmind.provider_profiles.isolation_policy import derive_isolation_policy
@@ -256,6 +257,15 @@ def test_validate_effort_for_model_uses_actual_values() -> None:
     assert get_supported_efforts(ZEN_FREE_QUALIFIED) is not None
     with pytest.raises(ValueError):
         validate_effort_for_model("ultra", ZEN_FREE_QUALIFIED)
+
+
+def test_generic_effort_set_includes_max_above_xhigh() -> None:
+    assert validate_effort("max") == "max"
+    assert validate_effort_for_model("MAX", "opencode-go/some-unrecorded-model") == "max"
+    # Recorded per-model values stay authoritative: the seeded models top out
+    # at xhigh, so max fails closed instead of being silently forwarded.
+    with pytest.raises(ValueError, match="selected model"):
+        validate_effort_for_model("max", ZEN_FREE_QUALIFIED)
 
 
 def test_credentialless_isolation_clears_ambient_keys() -> None:

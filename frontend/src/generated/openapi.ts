@@ -10063,7 +10063,7 @@ export interface components {
             /** Model */
             model?: string | null;
             /** Effort */
-            effort?: ("minimal" | "low" | "medium" | "high" | "xhigh") | null;
+            effort?: ("minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
             /** Settings */
             settings?: {
                 [key: string]: string | number | boolean;
