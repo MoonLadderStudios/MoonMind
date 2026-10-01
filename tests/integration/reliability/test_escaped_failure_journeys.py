@@ -503,6 +503,11 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
     async def live_server(_image_ref: str) -> str:
         return resolved["server"]
 
+    # The deployment image leg's resolved shared host is Codex/Claude authority.
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=resolved["host"]),
+    )
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'policy.db'}")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:

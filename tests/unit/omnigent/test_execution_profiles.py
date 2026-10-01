@@ -160,10 +160,10 @@ def test_claude_launch_uses_deployment_resolved_images(monkeypatch, shared_tag) 
     assert launch["hostImageRef"] == shared_ref
 
 
-def test_codex_launch_keeps_its_configured_host_image(monkeypatch) -> None:
-    codex_ref = "example.test/codex-host@sha256:" + "5" * 64
+def test_codex_launch_uses_the_shared_tool_owning_host_image(monkeypatch) -> None:
+    upstream_ref = "example.test/upstream-host@sha256:" + "5" * 64
     shared_ref = "example.test/shared-host@sha256:" + "6" * 64
-    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", codex_ref)
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", upstream_ref)
     monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", shared_ref)
 
     launch = compile_effective_launch(
@@ -172,7 +172,7 @@ def test_codex_launch_keeps_its_configured_host_image(monkeypatch) -> None:
         provider_profile_id="codex-oauth",
     )
 
-    assert launch["hostImageRef"] == codex_ref
+    assert launch["hostImageRef"] == shared_ref
 
 
 def test_workflow_cannot_supply_host_or_credential_authority() -> None:

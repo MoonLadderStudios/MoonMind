@@ -312,6 +312,11 @@ def public_execution_catalog() -> dict[str, Any]:
     }
 
 
+# Codex and Claude hosts launch the shared image that owns the MoonMind tools;
+# the upstream ``omnigent-host`` image does not carry ``/opt/moonmind-tools``.
+_SHARED_HOST_POLICY_PREFIXES = ("claude-", "codex-")
+
+
 def resolve_policy_image_refs(policy: OmnigentLaunchPolicy) -> tuple[str, str]:
     """Resolve built-in policy images from explicit pins or deployment state."""
 
@@ -327,7 +332,7 @@ def resolve_policy_image_refs(policy: OmnigentLaunchPolicy) -> tuple[str, str]:
                 or str(getattr(resolved, "server_image_ref", "") or "").strip()
             )
         if host_ref.startswith("bootstrap://"):
-            if policy.policy_id.startswith("claude-"):
+            if policy.policy_id.startswith(_SHARED_HOST_POLICY_PREFIXES):
                 try:
                     host_ref = resolve_shared_host_image_ref()
                 except HarnessPlatformError:
@@ -370,7 +375,7 @@ def compile_effective_launch(
     server_image_ref, host_image_ref = resolve_policy_image_refs(policy)
     host_image_variable = (
         "OMNIGENT_SHARED_HOST_IMAGE_REF"
-        if policy.policy_id.startswith("claude-")
+        if policy.policy_id.startswith(_SHARED_HOST_POLICY_PREFIXES)
         else "OMNIGENT_HOST_IMAGE_REF"
     )
     for field, variable, value in (
