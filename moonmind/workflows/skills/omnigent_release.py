@@ -26,6 +26,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from moonmind.omnigent.policies import without_retired_policy_sections
+
 # Release-owned desired-state env keys. These live in the release-owned
 # `.env.deploy` file (never the deployment-owned `.env`), so Compose renders
 # the recorded digests and the tag inputs in `.env` stay untouched.
@@ -616,7 +618,8 @@ def build_migrated_policy_document(
 
     Every other field (resources, boundaries, providers, rollout) is carried
     over verbatim so operator customizations survive the migration; only the
-    two digest pins advance to the recorded release.
+    two digest pins advance to the recorded release. The retired retrieval
+    section (#4103) is the one exception: new versions never carry it.
     """
     if not isinstance(document, dict):
         raise OmnigentReleaseError("cut-policies", "policy default has no document")
@@ -629,7 +632,7 @@ def build_migrated_policy_document(
         raise OmnigentReleaseError(
             "cut-policies", "record lacks images for this policy"
         )
-    payload = copy.deepcopy(dict(document))
+    payload = without_retired_policy_sections(document)
     payload["host"] = {**host, "serverImageRef": server_ref, "hostImageRef": host_ref}
     return payload
 

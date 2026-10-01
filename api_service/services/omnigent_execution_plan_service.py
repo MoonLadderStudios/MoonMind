@@ -805,16 +805,7 @@ async def compile_and_persist_execution_plan(
         if isinstance(initial_parameters.get("followUpRetrieval"), Mapping)
         else {}
     )
-    follow_up = compile_follow_up_retrieval_policy(
-        policy_snapshot,
-        initial_parameters,
-        repository=str(initial_parameters.get("repository") or "").strip(),
-        tenant_id=str(
-            authored_follow_up.get("tenantId")
-            or initial_parameters.get("tenantId")
-            or "default"
-        ).strip(),
-    )
+    follow_up = compile_follow_up_retrieval_policy()
     enforce_required_follow_up_retrieval(authored_follow_up, follow_up)
     effective_launch = _compile_persisted_effective_launch(
         policy_snapshot,

@@ -43,7 +43,9 @@ The execution description is read-only and comes from the resolved configuration
 
 A stable `profileId` owns monotonically numbered immutable versions. Each version stores canonical JSON, a SHA-256 digest, parent/clone/supersedes lineage, upstream metadata at selection time, validation results, rollout metadata, actor, and timestamp. Editing always creates a version. Activation only moves the stable profile's active pointer. Disablement and deprecation block new selection without deleting versions or historical snapshots. Deletion is permitted only for an unused draft; referenced profiles and versions are retained.
 
-The version document includes endpoint and bridge-mode refs; stable upstream or artifact-backed bundle identity; harness and capabilities; execution and allowed launch policies; credential-free Provider Profile compatibility requirements; legacy model and effort settings (new Profile launches resolve these from Profile tiers and explicit overrides); workspace mutation and capability constraints; Skills and tools; capture, retention, evidence, and RAG defaults and ceilings; continuation compatibility; publish default; and versioned policy ref.
+The version document includes endpoint and bridge-mode refs; stable upstream or artifact-backed bundle identity; harness and capabilities; execution and allowed launch policies; credential-free Provider Profile compatibility requirements; legacy model and effort settings (new Profile launches resolve these from Profile tiers and explicit overrides); workspace mutation and capability constraints; Skills and tools; capture, retention, and evidence defaults and ceilings; continuation compatibility; publish default; and versioned policy ref.
+
+MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103). A version recorded earlier may carry a `rag` section; it stays readable with its recorded digest but is never compiled into launch parameters. New authored versions drop an empty `rag` section and reject explicit retrieval values, and their write schemas allow only an absent or null `rag`. Clones and automatic policy-cutover successors omit historical retrieval settings and recompute their own digests; the source versions and in-flight usages remain unchanged. Selection rejects an explicit `rag` override.
 
 Profiles never contain credentials, OAuth homes, registration secrets, Dockerfiles, host paths, volume names, host ids, or privileged launch settings.
 
@@ -89,7 +91,7 @@ snapshots remain authoritative for existing runs.
 
 Discovery freshness never filters Profile inventory. Submission persists the
 profile id/version/digest, upstream snapshot, Provider Profile id, execution and
-policy refs, and effective model/workspace/capture/RAG values. Overrides are
+policy refs, and effective model/workspace/capture values. Overrides are
 accepted only after policy validation.
 
 ## Native Workflow Chat capability authority
@@ -133,7 +135,7 @@ An approval or control observation without this evidence is diagnostic input onl
 
 Custom bundles are MoonMind artifacts with immutable content digest, content type, size, provenance, optional license, creator, schema version, and declared capabilities. Validation rejects traversal and forbidden paths, secrets, executable setup, Dockerfiles, privileged assumptions, and unsupported host capabilities. Publishing to an endpoint records its result without changing the profile-to-artifact relationship.
 
-Smoke validation is an operator-triggered bounded preflight. It checks endpoint, exact source, capabilities, Provider Profile readiness/capacity, compiled policy, host mode, image/network/workspace constraints, Skills/tools, capture/RAG settings, and the strongest safe session-start check. Diagnostics are bounded and secret-scanned. Cancellation, failure, and timeout release only validation-owned leases and resources. A pass is readiness evidence, not a workflow-success guarantee.
+Smoke validation is an operator-triggered bounded preflight. It checks endpoint, exact source, capabilities, Provider Profile readiness/capacity, compiled policy, host mode, image/network/workspace constraints, Skills/tools, capture settings, and the strongest safe session-start check. Diagnostics are bounded and secret-scanned. Cancellation, failure, and timeout release only validation-owned leases and resources. A pass is readiness evidence, not a workflow-success guarantee.
 
 Native Workflow Chat validation also proves that the binding-scoped facade can project and enforce the immutable capabilities rather than exposing unfiltered upstream controls.
 

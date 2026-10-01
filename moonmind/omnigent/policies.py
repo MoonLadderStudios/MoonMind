@@ -6,6 +6,7 @@ never credentials, Docker options, or raw host paths.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from enum import StrEnum
@@ -129,6 +130,13 @@ class RemediationPolicy(PolicySection):
 
 
 class RagPolicy(PolicySection):
+    """Retired native retrieval section (MoonLadderStudios/MoonMind#4103).
+
+    Decoded only so versions persisted before retirement stay readable with
+    their recorded digests. New versions must not carry it; see
+    :func:`reject_retired_policy_sections`.
+    """
+
     initial_scope: Ref = Field(alias="initialScope")
     followup_scope: Ref = Field(alias="followupScope")
     collection_refs: list[Ref] = Field(alias="collectionRefs")
@@ -187,7 +195,7 @@ class PolicyDocument(BaseModel):
     capture: CapturePolicy
     checkpoint: CheckpointPolicy
     remediation: RemediationPolicy
-    rag: RagPolicy
+    rag: RagPolicy | None = None
     approvals: ApprovalPolicy
     retention: RetentionPolicy
     rollout: RolloutPolicy
@@ -239,9 +247,39 @@ def require_explicit_policy_resources(document: "PolicyDocument") -> "PolicyDocu
     return document
 
 
+def reject_retired_policy_sections(document: PolicyDocument) -> PolicyDocument:
+    """Reject retired sections for new policy versions (#4103).
+
+    MoonMind no longer ships native retrieval, so accepting a new ``rag``
+    section would be an empty success. Historical versions that carry it stay
+    decodable and executable; only new authoring is refused here.
+    """
+
+    if document.rag is not None:
+        raise ValueError(
+            "rag has been retired (MoonLadderStudios/MoonMind#4103): MoonMind no "
+            "longer provides native retrieval. Remove the rag section; historical "
+            "policy versions remain readable."
+        )
+    return document
+
+
+def without_retired_policy_sections(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a historical document for a successor version without retired sections."""
+
+    payload = copy.deepcopy(dict(document))
+    payload.pop("rag", None)
+    return payload
+
+
 def normalize_document(document: PolicyDocument | Mapping[str, Any]) -> dict[str, Any]:
     parsed = document if isinstance(document, PolicyDocument) else PolicyDocument.model_validate(document)
-    return parsed.model_dump(by_alias=True, mode="json", exclude_none=False)
+    normalized = parsed.model_dump(by_alias=True, mode="json", exclude_none=False)
+    # The absent retired section is omitted rather than recorded as null, so new
+    # documents never mention it and historical digests are unchanged.
+    if normalized.get("rag") is None:
+        normalized.pop("rag", None)
+    return normalized
 
 
 def document_digest(document: PolicyDocument | Mapping[str, Any]) -> str:

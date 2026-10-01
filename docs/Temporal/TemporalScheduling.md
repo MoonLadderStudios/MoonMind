@@ -133,6 +133,13 @@ Catchup, manual triggers, and backfills use the approved definition and fresh oc
 
 The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow uses its normal input contract. (`MoonMind.ManifestIngest` recurring targets were retired by MoonLadderStudios/MoonMind#4192: new targets are rejected; old definitions stay readable as replay/drain evidence.) Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
 
+New recurring definitions and target-changing edits reject explicit `rag` or
+`followUpRetrieval` requirements in `target.initialParameters` and its `task`
+or `workflow` payload before persistence or Temporal mutation. Empty, absent,
+or disabled retrieval values are removed using the ordinary execution
+admission contract. Historical profile snapshots and artifact references are
+retained; rejection does not rewrite an existing definition.
+
 For generic Omnigent schedules, every occurrence resolves the current promoted default —
 Agent Profile snapshot, launch-policy version, and execution plan — exactly like ad-hoc
 work. There is no pinned runtime-provider target on a schedule: the schedule carries no

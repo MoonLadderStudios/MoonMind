@@ -13237,39 +13237,11 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(request.maxAttempts).toBe(3);
   });
 
-  it("hides the Context retrieval (RAG) controls behind the Advanced mode toggle", async () => {
-    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
-
-    await screen.findByLabelText("Instructions");
-    const executionControls = document.querySelector<HTMLElement>(
-      '[data-canonical-create-section="Execution controls"]',
-    );
-    expect(executionControls).not.toBeNull();
-    const controls = executionControls as HTMLElement;
-
-    expect(within(controls).queryByText("Context retrieval (RAG)")).toBeNull();
-    expect(
-      document.querySelector('[data-testid="context-retrieval-controls"]'),
-    ).toBeNull();
-
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    expect(within(controls).getByText("Context retrieval (RAG)")).toBeTruthy();
-    expect(
-      document.querySelector('[data-testid="context-retrieval-controls"]'),
-    ).not.toBeNull();
-
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    expect(within(controls).queryByText("Context retrieval (RAG)")).toBeNull();
-    expect(
-      document.querySelector('[data-testid="context-retrieval-controls"]'),
-    ).toBeNull();
-  });
-
-  it("shows the retired retrieval notice and submits no vector fields while Advanced mode is on", async () => {
+  it("offers no retired retrieval authoring in Advanced mode and submits no vector fields", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
-      target: { value: "Run with narrowed retrieval." },
+      target: { value: "Run without native retrieval." },
     });
     fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
       target: { value: "MoonLadderStudios/MoonMind" },
@@ -13280,11 +13252,11 @@ describe("Task Create MM-641 authoring validation", () => {
     ) as HTMLElement;
     expect(controls).not.toBeNull();
 
+    // Native retrieval is retired (#4103): Advanced mode no longer presents a
+    // retrieval disclosure or advertises it as an advanced capability.
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    // Retired (#4105): no editable retrieval inputs remain, only the notice.
-    expect(
-      screen.getByText(/Built-in vector retrieval has been retired/i),
-    ).toBeTruthy();
+    expect(within(controls).queryByText(/context retrieval/i)).toBeNull();
+    expect(within(controls).queryByText(/\bRAG\b/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -13300,109 +13272,7 @@ describe("Task Create MM-641 authoring validation", () => {
     expect("followUpRetrieval" in payload).toBe(false);
   });
 
-  it("ignores hidden Context retrieval (RAG) authoring when Advanced mode is off", async () => {
-    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
-
-    fireEvent.change(await screen.findByLabelText("Instructions"), {
-      target: { value: "Run with deployment retrieval policy." },
-    });
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
-      target: { value: "MoonLadderStudios/MoonMind" },
-    });
-
-    const controls = document.querySelector<HTMLElement>(
-      '[data-canonical-create-section="Execution controls"]',
-    ) as HTMLElement;
-    expect(controls).not.toBeNull();
-
-    // Retired (#4105): no editable retrieval inputs remain. Opening Advanced
-    // mode shows the retired notice, then hiding the controls again before
-    // submitting still sends no vector fields.
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    expect(
-      screen.getByText(/Built-in vector retrieval has been retired/i),
-    ).toBeTruthy();
-    expect(
-      screen.queryByLabelText(
-        "Require initial context (fail the step if unavailable)",
-      ),
-    ).toBeNull();
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    expect(
-      document.querySelector('[data-testid="context-retrieval-controls"]'),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/executions",
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
-
-    // The hidden authoring is dropped, so the run uses deployment retrieval
-    // policy instead of a value the operator can no longer see.
-    const payload = latestCreateRequest().payload as Record<string, unknown>;
-    expect("rag" in payload).toBe(false);
-    expect("followUpRetrieval" in payload).toBe(false);
-  });
-
-  it("does not restore cleared Context retrieval (RAG) authoring when Advanced mode is re-enabled", async () => {
-    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
-
-    fireEvent.change(await screen.findByLabelText("Instructions"), {
-      target: { value: "Run after clearing retrieval authoring." },
-    });
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
-      target: { value: "MoonLadderStudios/MoonMind" },
-    });
-
-    const controls = document.querySelector<HTMLElement>(
-      '[data-canonical-create-section="Execution controls"]',
-    ) as HTMLElement;
-    expect(controls).not.toBeNull();
-
-    // Retired (#4105): toggling Advanced mode off and on never restores
-    // editable retrieval inputs; only the retired notice renders.
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    expect(
-      screen.getByText(/Built-in vector retrieval has been retired/i),
-    ).toBeTruthy();
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-
-    // The reopened controls show the retired notice instead of editable
-    // retrieval authoring.
-    expect(
-      screen.getByText(/Built-in vector retrieval has been retired/i),
-    ).toBeTruthy();
-    expect(
-      screen.queryByLabelText(
-        "Require initial context (fail the step if unavailable)",
-      ),
-    ).toBeNull();
-    expect(
-      screen.queryByLabelText(
-        "Allow the session to request additional context during the run",
-      ),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/executions",
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
-
-    // Reopening Advanced mode cannot resubmit the cleared retrieval policy.
-    const payload = latestCreateRequest().payload as Record<string, unknown>;
-    expect("rag" in payload).toBe(false);
-    expect("followUpRetrieval" in payload).toBe(false);
-  });
-  it("reveals Advanced mode and strips the inherited retired rerun retrieval policy", async () => {
+  it("strips the inherited retired rerun retrieval policy", async () => {
     window.history.pushState(
       {},
       "Task Rerun",
@@ -13419,24 +13289,6 @@ describe("Task Create MM-641 authoring validation", () => {
         "Rerun a run that authored context retrieval.",
       );
     });
-
-    const controls = document.querySelector<HTMLElement>(
-      '[data-canonical-create-section="Execution controls"]',
-    ) as HTMLElement;
-    expect(controls).not.toBeNull();
-    // Retired (#4105): an inherited rerun retrieval policy no longer forces
-    // Advanced mode open. Enable it explicitly to confirm the retired notice
-    // renders instead of editable controls.
-    const advancedToggle = within(controls).getByLabelText(
-      "Advanced mode",
-    ) as HTMLInputElement;
-    if (!advancedToggle.checked) {
-      fireEvent.click(advancedToggle);
-    }
-    expect(within(controls).getByText("Context retrieval (RAG)")).toBeTruthy();
-    expect(
-      screen.getByText(/Built-in vector retrieval has been retired/i),
-    ).toBeTruthy();
 
     fireEvent.change(instructions, {
       target: { value: "Rerun with the inherited retrieval policy." },

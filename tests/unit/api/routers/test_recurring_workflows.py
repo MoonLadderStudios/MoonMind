@@ -673,3 +673,82 @@ async def test_mm3788_update_route_accepts_a_profile_owned_by_the_target_runtime
         assert updated.target["initialParameters"]["workflow"]["runtime"][
             "providerProfileRef"
         ] == "claude_minimax_team"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize(
+    "retrieval",
+    [{"rag": {"collections": ["docs"]}}, {"followUpRetrieval": {"enabled": True}}],
+)
+async def test_recurring_http_api_rejects_retired_retrieval_without_persisting(
+    tmp_path: Path, operation, retrieval
+):
+    from copy import deepcopy
+    from uuid import UUID
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    app = FastAPI()
+    app.include_router(recurring_router.router)
+    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    for route in recurring_router.router.routes:
+        for dependency in route.dependant.dependencies:
+            if dependency.call.__name__ in {
+                "_strict_current_user",
+                "_optional_current_user",
+            }:
+                app.dependency_overrides[dependency.call] = lambda: user
+
+    async with _mm3788_session(tmp_path) as session:
+        service = _mm3788_service(session)
+        app.dependency_overrides[recurring_router._get_service] = lambda: service
+        clean_target = _mm3788_route_target(
+            target_runtime="claude_code", profile_id="claude_minimax_team"
+        )
+        bad_target = deepcopy(clean_target)
+        bad_target["initialParameters"]["workflow"].update(retrieval)
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            if operation == "update":
+                created = await client.post(
+                    "/api/recurring-workflows",
+                    json=_mm3788_create_payload(clean_target).model_dump(
+                        mode="json", by_alias=True
+                    ),
+                )
+                assert created.status_code == 201, created.text
+                before = created.json()
+                service._adapter.reset_mock()
+                response = await client.patch(
+                    f"/api/recurring-workflows/{before['id']}",
+                    json={
+                        "version": before["version"],
+                        "target": bad_target,
+                        "name": "Rejected edit",
+                    },
+                )
+            else:
+                response = await client.post(
+                    "/api/recurring-workflows",
+                    json=_mm3788_create_payload(bad_target).model_dump(
+                        mode="json", by_alias=True
+                    ),
+                )
+
+        assert response.status_code == 422, response.text
+        assert "retired" in response.text
+        service._adapter.create_schedule.assert_not_called()
+        service._adapter.update_schedule.assert_not_called()
+        if operation == "update":
+            stored = await session.get(RecurringWorkflowDefinition, UUID(before["id"]))
+            await session.refresh(stored)
+            assert stored.target == clean_target
+            assert stored.name == before["name"]
+            assert stored.version == before["version"]
+        else:
+            assert (
+                await session.execute(select(RecurringWorkflowDefinition))
+            ).scalars().all() == []

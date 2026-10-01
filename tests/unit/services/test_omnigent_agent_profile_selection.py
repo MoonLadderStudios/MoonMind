@@ -173,6 +173,7 @@ def test_snapshot_parameter_compiler_keeps_authority_out_of_authored_omnigent() 
         "agentId": "upstream-agent-2",
         "document": {
             "model": {"model": "gpt-5.4", "effort": "high"},
+            # A version recorded before native retrieval was retired (#4103).
             "rag": {"maxTokens": 2000},
             "capture": {"retentionDays": 14},
             "workspace": {"mutation": "allowed"},
@@ -209,7 +210,7 @@ def test_snapshot_parameter_compiler_keeps_authority_out_of_authored_omnigent() 
         "executionTargetRef": "omnigent-codex@2",
         "launchPolicyRef": "on-demand@1",
     }
-    assert compiled["rag"] == {"maxTokens": 2000}
+    assert "rag" not in compiled
     assert compiled["capture"] == {"retentionDays": 14}
     assert compiled["workspace"] == {"mutation": "allowed"}
 
@@ -534,17 +535,49 @@ async def test_resolver_revalidates_effective_override_document():
 
 
 @pytest.mark.asyncio
+async def test_resolver_rejects_explicit_retired_retrieval_override():
+    with pytest.raises(HTTPException) as caught:
+        await resolve_agent_profile_snapshot(
+            _Session(),
+            selection={
+                "profileId": "team-codex",
+                "providerProfileRef": "oauth-team",
+                "overrides": {"rag": {"maxTokens": 100}},
+            },
+            consumer_type="workflow",
+            consumer_id="workflow-1",
+            user=SimpleNamespace(id=uuid4()),
+        )
+    assert caught.value.status_code == 422
+    assert "rag has been retired" in caught.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [{}, {"maxTokens": None}])
+async def test_resolver_ignores_absent_retired_retrieval_override(empty):
+    snapshot = await resolve_agent_profile_snapshot(
+        _Session(),
+        selection={
+            "profileId": "team-codex",
+            "providerProfileRef": "oauth-team",
+            "overrides": {"rag": empty, "model": {"effort": "high"}},
+        },
+        consumer_type="workflow",
+        consumer_id="workflow-1",
+        user=SimpleNamespace(id=uuid4()),
+    )
+    assert snapshot["document"]["model"]["effort"] == "high"
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"rag": {"maxTokens": 2001}},
         {"capture": {"retentionDays": 31}},
         {"publish": {"mode": "auto"}},
     ],
 )
 async def test_resolver_rejects_overrides_above_versioned_ceilings(overrides):
     session = _Session()
-    session.version.document["rag"] = {"maxTokens": 2000}
     session.version.document["capture"] = {"retentionDays": 30}
     session.version.document["publish"] = {"mode": "draft"}
     with pytest.raises(HTTPException, match="policy ceiling"):

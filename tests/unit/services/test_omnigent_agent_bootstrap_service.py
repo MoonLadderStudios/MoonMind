@@ -15,7 +15,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.api.routers.omnigent_agent_profiles import AgentProfileDocument
+from api_service.api.routers.omnigent_agent_profiles import (
+    AgentProfileDocument,
+    VersionCreate,
+)
 from api_service.api.routers.omnigent_agent_profiles import _digest as router_digest
 from api_service.api.routers.omnigent_agent_profiles import _normalized
 from api_service.db.models import (
@@ -114,6 +117,11 @@ async def test_bootstrap_document_matches_router_normalized_form():
     normalized = _normalized(AgentProfileDocument.model_validate(document))
     assert normalized == document
     assert router_digest(document) == router_digest(normalized)
+    # An equivalent operator-authored version persists the same document, which
+    # carries no retired retrieval section (#4103).
+    authored = _normalized(VersionCreate.model_validate({"document": document}).document)
+    assert authored == document
+    assert "rag" not in document
 
 
 async def test_resolves_env_fallback_and_records_use(session):
@@ -1020,3 +1028,67 @@ async def test_no_launch_ready_managed_profile_clears_the_stale_default(
         )
     )
     assert cleared == 1
+
+
+@pytest.mark.parametrize("retrieval", [{}, {"initial": {"collections": ["docs"]}}])
+async def test_bootstrap_policy_successor_retires_retrieval_without_rewriting_history(
+    session, retrieval
+):
+    from copy import deepcopy
+
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        _reconcile_bootstrap_profile_launch_policy,
+    )
+
+    recorded = build_bootstrap_document(
+        "codex-default", launch_policy_ref="codex-on-demand@1"
+    )
+    recorded["rag"] = retrieval
+    recorded_digest = router_digest(recorded)
+    session.add_all(
+        [
+            OmnigentAgentProfile(
+                profile_id=BOOTSTRAP_PROFILE_ID,
+                display_name="Bootstrap",
+                state="active",
+                active_version=1,
+            ),
+            OmnigentAgentProfileVersion(
+                profile_id=BOOTSTRAP_PROFILE_ID,
+                version=1,
+                document=deepcopy(recorded),
+                digest=recorded_digest,
+                rollout_metadata={"origin": "builtin_default"},
+                validation_result={"ready": True},
+            ),
+        ]
+    )
+    await session.commit()
+
+    assert await _reconcile_bootstrap_profile_launch_policy(
+        session,
+        launch_policy_ref="codex-on-demand@2",
+        now=datetime.now(timezone.utc),
+    )
+    await session.commit()
+    session.expire_all()
+    versions = list(
+        (
+            await session.execute(
+                select(OmnigentAgentProfileVersion)
+                .where(
+                    OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID,
+                )
+                .order_by(OmnigentAgentProfileVersion.version)
+            )
+        ).scalars()
+    )
+    assert versions[0].document == recorded
+    assert versions[0].digest == recorded_digest
+    expected = deepcopy(recorded)
+    expected.pop("rag")
+    expected["policyRef"] = "codex-on-demand@2"
+    expected["execution"]["allowedLaunchPolicyRefs"] = ["codex-on-demand@2"]
+    assert versions[1].document == expected
+    assert versions[1].digest == router_digest(expected)
+    assert versions[1].parent_version == 1

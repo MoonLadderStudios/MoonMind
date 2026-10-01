@@ -307,7 +307,7 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
           </div>
           <p>Validation: Needs attention</p>
           <p role="alert">some/path: CODE: a very long diagnostic message that must wrap ${LONG_SUMMARY}</p>
-          <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, RAG, approvals, and retention</h3>
+          <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, approvals, and retention</h3>
           <pre>{"rule": "a-very-long-unbroken-document-string-that-must-not-stretch-the-page-0123456789-abcdef"}</pre>
           <button type="button">Validate against deployment</button>
           <button type="button">Roll back default to policy@2 with a very long action label</button>
