@@ -250,6 +250,99 @@ def workflow_id_for_runtime(runtime_id: str) -> str:
     return f"{WORKFLOW_ID_PREFIX}:{normalized}"
 
 
+def _snapshot_time(value: Any) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def snapshot_admits_new_execution(
+    state: Any, *, execution_profile_ref: str = "", now: datetime
+) -> Optional[bool]:
+    """Whether a ``get_state`` snapshot would admit one new execution request.
+
+    A read-only observation for callers deciding whether to start work that
+    will need a slot, mirroring ``_find_available_profile`` without a
+    selector and ``_profile_admitted_by_capacity``: an explicit profile, or
+    else the configured default (exclusive while one exists), must be
+    enabled, launch-ready, out of cooldown and maintenance, under its
+    effective limits, and in an available capacity scope. Returns ``None``
+    when the snapshot cannot tell. It is not admission authority: the
+    manager still decides when the request arrives.
+    """
+
+    profiles = state.get("profiles") if isinstance(state, dict) else None
+    if not isinstance(profiles, dict) or not profiles:
+        return None
+    scopes = {
+        str(scope.get("scope_ref") or ""): scope
+        for scope in state.get("scopes") or []
+        if isinstance(scope, dict)
+    }
+
+    def scope_ref(profile: dict[str, Any]) -> str:
+        return str(profile.get("capacity_scope_ref") or "") or (
+            f"provider-profile:{profile.get('profile_id')}"
+        )
+
+    def admits(profile: Any) -> Optional[bool]:
+        if not isinstance(profile, dict):
+            return None
+        leases = profile.get("current_leases")
+        capacity = profile.get("effective_capacity")
+        executing = profile.get("execution_lease_count")
+        if not isinstance(leases, list) or not all(
+            type(value) is int for value in (capacity, executing)
+        ):
+            return None
+        if not profile.get("enabled") or profile.get("launch_ready") is False:
+            return False
+        if capacity - executing <= 0 or profile.get("exclusive_maintenance_waiters"):
+            return False
+        cooldown = _snapshot_time(profile.get("cooldown_until"))
+        if cooldown is not None and cooldown > now:
+            return False
+        pending_scope = str(profile.get("pending_capacity_scope_ref") or "")
+        if pending_scope and pending_scope != scope_ref(profile):
+            return False
+        limit = profile.get("effective_limit") or profile.get("max_parallel_runs")
+        if len(leases) >= max(1, limit if type(limit) is int else 1):
+            return False
+        scope = scopes.get(scope_ref(profile))
+        if scope is None:
+            return True
+        if scope.get("backpressure_state") == "disabled":
+            return False
+        scope_cooldown = _snapshot_time(scope.get("cooldown_until"))
+        if scope_cooldown is not None and scope_cooldown > now:
+            return False
+        units = sum(
+            len(other.get("current_leases") or [])
+            for other in profiles.values()
+            if isinstance(other, dict) and scope_ref(other) == scope_ref(profile)
+        )
+        scope_limit = scope.get("effective_limit")
+        return units < max(1, scope_limit if type(scope_limit) is int else 1)
+
+    ref = str(execution_profile_ref or "").strip()
+    if ref:
+        return admits(profiles.get(ref))
+    candidates = [
+        profile
+        for profile in profiles.values()
+        if isinstance(profile, dict)
+        and profile.get("is_default")
+        and profile.get("enabled")
+        and profile.get("launch_ready") is not False
+    ] or list(profiles.values())
+    verdicts = [admits(profile) for profile in candidates]
+    if any(verdict is True for verdict in verdicts):
+        return True
+    return False if verdicts and all(verdict is False for verdict in verdicts) else None
+
+
 # ---------------------------------------------------------------------------
 # Input / Output types
 # ---------------------------------------------------------------------------
