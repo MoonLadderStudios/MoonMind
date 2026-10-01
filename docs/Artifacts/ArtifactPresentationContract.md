@@ -956,21 +956,37 @@ Debug artifacts should be hidden by default in normal user views and shown in op
 
 ### 11.6 Saved-result presentation (Workflow Detail, #4020)
 
-Workflow Detail shows one compact Saved Results section bound to the
-server's actual selected run/attempt/result and committed artifact
-references. Report-only and non-Git output remain useful. The section
-reuses the existing result/artifact projection, the existing Create flow
-for continuation, and the existing publication-only publisher path. It
-introduces no second result store and no recovery wizard.
+Workflow Detail shows one compact Saved Results section on the Artifacts tab,
+bound to the server's actual selected run/result and its committed artifact
+references from the existing run artifact listing. Report-only and non-Git
+output remain useful. The section reuses the existing result/artifact
+projection, the single continuation owner, and the existing publication-only
+publisher path. It introduces no second result store and no recovery wizard.
 
 Rules:
 
-- The section binds requests and displayed state to the exact selected
-  `(workflow_id, run_id)` result/action. Late responses never retarget a
-  historical selection or overwrite a newer operation. Uncertain
-  submissions (lost acknowledgment, reload, double click) reuse the
-  stable per-selection idempotency key and the returned operation ID.
-  Leaving a dialog is not cancellation of accepted remote work.
+- Saved outputs are only artifacts linked as results (`output.*` other
+  than `output.logs`, `report.*`, repository/patch/checkpoint links, or
+  `result`); inputs, runtime logs, and debug evidence are not saved work.
+- A committed saved-work manifest (content type
+  `application/vnd.moonmind.saved-work-manifest+json`) is one saved unit.
+  The snapshot archive, delta, history, file manifest, and index patch it
+  names are listed as its parts, each with its own completeness and raw
+  download, not as separate saved results. Its format claims, exclusion
+  counts by reason, limitations, and retention handle come from the
+  `saved_work_summary` listing metadata the capture path projects from the
+  committed manifest; the browser never parses raw manifest bytes. A
+  manifest listed without that summary is shown with its own status and
+  identity and "format details unavailable".
+- Completeness never comes from a provider exit code, a local directory
+  path, an absent digest, or a permissive generic metadata default. Only
+  a server `COMPLETE` status bound to real content identity (digest plus
+  size) counts as a complete save. For a saved unit, a required format whose
+  claim is not `self_contained`/`requires_dependencies`, or whose listed part
+  is missing, incomplete, or expired, downgrades it to incomplete; summary
+  metadata can never upgrade an incomplete manifest. Available downloads,
+  completeness/exclusions, and retention are shown without requiring every
+  format.
 - Compute, saving, requested publication, and cleanup outcomes stay
   distinct. A failed/canceled run may still show committed saved work; a
   failed requested publication may still show a successful save; pending
@@ -981,41 +997,54 @@ Rules:
   `auxiliaryOutcomes.gitPublication` status first; cleanup reports the
   recorded `hostCleanup`/`providerProfileRelease`/`janitorRequired`
   outcome, or unknown when no evidence exists.
-- Saved outputs are only artifacts linked as results (`output.*` other
-  than `output.logs`, `report.*`, repository/patch/checkpoint links, or
-  `result`); inputs, runtime logs, and debug evidence are not saved work.
-  Continuation submits only complete saved outputs that the source's
-  captured evidence authorizes. Expiry comes from the artifact's
-  `expires_at` (or a `DELETED` status), and expired entries show no
-  Preview/Download affordance.
-- Completeness never comes from a provider exit code, a local directory
-  path, an absent digest, or a permissive generic metadata default. Only
-  a server `COMPLETE` status bound to real content identity (digest plus
-  size) counts as a complete save. Available downloads,
-  completeness/exclusions, and retention are shown without requiring
-  every format.
 - Previews reuse the existing safe-preview path: metadata-first,
   `default_read_ref`-honoring, bounded inert renderers with redaction.
   Preview access never authorizes raw restore/publication; an ArtifactRef
   is an identifier, not a URL or credential. Raw download affordances
-  appear only when `raw_access_allowed === true`. Expired links and
-  hostile generated content never trigger credentialed fetches or
-  workflow controls.
-- Actions reuse existing endpoints with current server authorization and
-  the existing required confirmation: Download via the authorized
-  artifact download endpoint; Continue working via
-  `POST /executions/{workflow_id}/continue` (fresh admitted execution,
-  never a revived session/lease, available for every terminal state
-  including `no_commit`); Publish Saved Work via the publication-only
-  `POST /executions/{workflow_id}/retry-publication` path (no model
-  rerun), enabled only by the server's `canRetryPublication` capability.
-  An idempotency conflict counts as a reused operation only when it
-  returns the confirmed destination. Changing the actual destination/base/content
-  invalidates its old preview approval through the existing destination
-  checks, without a second approval system or routine manual review.
+  appear only when `raw_access_allowed === true`. Expiry comes from the
+  artifact's `expires_at` (or a `DELETED` status), and expired entries show
+  no Preview/Download affordance. Expired links and hostile generated
+  content never trigger credentialed fetches or workflow controls.
+- **Download** uses the authorized artifact download endpoint.
+- **Continue working** submits operator-authored instructions (and an
+  optional title) through `continueInNewWorkflow`, the same owner the
+  terminal Chat actions use: `POST /executions/{workflow_id}/continue`
+  creates a fresh admitted execution and never revives a session or lease.
+  It is available for every terminal state, including `no_commit`, and
+  carries only complete saved outputs the source's captured evidence
+  authorizes.
+- **Publish Saved Work** is offered for a complete, unexpired saved unit
+  whose manifest has raw access. It posts the saved-work body
+  (`savedWorkRef` plus the destination repository, objective, base/head
+  branch, and application strategy, optional PR title) to the
+  publication-only `POST /executions/{workflow_id}/retry-publication` path
+  described in [Publish Saved Work](../Workflows/WorkflowPublishing.md#publish-saved-work),
+  so no model is rerun. The destination form is prefilled from the
+  execution's repository, starting branch, and publish mode. It does not
+  depend on `canRetryPublication`: that capability gates only the body-less
+  recovery of a failed requested publication, which stays in the workflow
+  action menu. The server's ownership, destination, Lore, and rollout
+  checks decide admission, and their rejection is shown as returned. The
+  returned publication workflow and `publicationIdempotencyKey` are
+  displayed with the destination they were admitted for. Changing the
+  destination makes the next submission a new decision; the earlier
+  operation stays visible, and no second approval system is added.
+- Requests and displayed state are bound to the exact selected
+  `(workflow_id, run_id)` result and to the latest request for each action.
+  Late responses never retarget a historical selection or overwrite a newer
+  operation; a selection change discards unfinished local state without
+  cancelling accepted remote work. A double click dispatches once. A
+  transport failure after submission is reported as possibly accepted, not
+  as failure: resubmitting the same continuation intent maps to the same
+  idempotency key (derived from the source run and the authored intent and
+  refs), and resubmitting the same publication request maps to the same
+  server operation, including after a reload. Leaving a form is not
+  cancellation.
 - Instance/resource cache keys stay under the single-user model: no
-  human-user partitions. Protected content is invalidated when admission
-  changes, while machine/resource access restrictions remain effective.
+  human-user partitions. A `401`/`403` from a saved-result action refreshes
+  the protected listing so raw-access affordances follow current
+  authorization, while machine/resource access restrictions remain
+  effective.
 
 ---
 

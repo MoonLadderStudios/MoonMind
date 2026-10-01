@@ -710,6 +710,21 @@ Artifact actions:
 
 For edit-for-rerun flows, unchanged artifact-backed fields reuse their original artifact references. Edited artifact-backed fields create new artifacts with lineage back to the original artifact.
 
+### Saved Results
+
+The Artifacts tab shows a Saved Results section for the selected run. It reads only the run's artifact listing and never needs the original host, workspace, or source credential. It shows:
+
+- Separate Compute, Save, Publication, and Cleanup outcomes. A failed or canceled run can still show committed saved work, a failed requested publication can still show a successful save, and pending cleanup never hides either.
+- Each saved report, non-Git output, and saved-work unit with its completeness, exclusions, and retention. A saved-work unit lists its snapshot, delta, and file-manifest parts with their own downloads.
+- Preview, and Download only when the server allows raw access. Expired or restricted outputs say so instead of offering a link.
+
+Actions:
+
+- **Publish saved work** opens a destination form prefilled from the workflow's repository, starting branch, and publish mode. Submitting publishes the saved work without another model run and shows the returned publication workflow and operation.
+- **Continue working** asks for new instructions and starts a fresh linked Workflow that carries the authorized saved outputs.
+
+If the server rejects an action, its message is shown. If the response is lost, the section says the request may have been accepted, and submitting the same request again reuses the same operation. The full contract is [Artifact Presentation Contract §11.6](../Artifacts/ArtifactPresentationContract.md#116-saved-result-presentation-workflow-detail-4020).
+
 ## Logs section
 
 The logs section is present when:

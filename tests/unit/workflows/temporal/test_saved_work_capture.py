@@ -35,6 +35,7 @@ from moonmind.schemas.saved_work_models import (
     parse_git_diff_raw_to_deltas,
     redacted_preview_is_restorable,
     resolve_saved_work_format_profile,
+    saved_work_artifact_metadata,
     scan_saved_work_export,
     scan_saved_work_export_stream,
     snapshot_capture_generation,
@@ -184,6 +185,97 @@ def test_saved_work_manifest_records_provenance_without_copied_policy() -> None:
     assert "acl" not in manifest
     with pytest.raises(ValueError, match="dependencies"):
         describe_output_claim(fmt="exact_baseline_delta", status="requires_dependencies")
+
+
+def test_saved_work_artifact_metadata_projects_the_manifest_without_paths() -> None:
+    manifest = build_saved_work_manifest(
+        capture_id="capture-1",
+        identity={"workflowId": "wf-1", "boundary": "after_execution"},
+        source={"kind": "managed-code-workspace", "baselineCommit": "abc"},
+        content_digest="sha256:" + "a" * 64,
+        file_manifest_digest="sha256:" + "b" * 64,
+        capture_policy={"includeUntracked": True},
+        required_formats=["full_snapshot"],
+        optional_formats=["exact_baseline_delta"],
+        outputs=[
+            describe_output_claim(
+                fmt="full_snapshot",
+                status="self_contained",
+                ref="artifact://art-archive",
+                digest="sha256:" + "a" * 64,
+                size_bytes=10,
+            ),
+            describe_output_claim(
+                fmt="exact_baseline_delta",
+                status="requires_dependencies",
+                ref="art-delta",
+                dependencies=["git-baseline:abc"],
+            ),
+            describe_output_claim(fmt="selected_history", status="inapplicable"),
+        ],
+        exclusions=[
+            {"path": ".env", "reason": "sensitive-filename-policy"},
+            {"path": "node_modules/x", "reason": "sensitive-path-policy"},
+            {"path": "node_modules/y", "reason": "sensitive-path-policy"},
+        ],
+        scan={"disposition": "clean"},
+        dependencies=["git-baseline:abc"],
+        retention_ref="artifact-ownership",
+    )
+    manifest["limitations"] = ["target-platform path/case collisions present"]
+    payload = json.dumps(manifest).encode()
+
+    metadata = saved_work_artifact_metadata("saved_work_manifest", payload)
+
+    assert metadata == {
+        "saved_work_summary": {
+            "capture_id": "capture-1",
+            "required_formats": ["full_snapshot"],
+            "outputs": [
+                {
+                    "format": "full_snapshot",
+                    "status": "self_contained",
+                    "artifact_id": "art-archive",
+                },
+                {
+                    "format": "exact_baseline_delta",
+                    "status": "requires_dependencies",
+                    "artifact_id": "art-delta",
+                },
+                {"format": "selected_history", "status": "inapplicable"},
+            ],
+            "exclusion_count": 3,
+            "exclusion_reasons": [
+                {"reason": "sensitive-filename-policy", "count": 1},
+                {"reason": "sensitive-path-policy", "count": 2},
+            ],
+            "limitations": ["target-platform path/case collisions present"],
+            "retention_ref": "artifact-ownership",
+            "scan_disposition": "clean",
+            "quiescence_verified": False,
+        }
+    }
+    # Excluded paths stay inside the scanned manifest bytes, never metadata.
+    assert ".env" not in json.dumps(metadata)
+
+    checkpoint = {
+        "archive": {"ref": "artifact://art-archive"},
+        "git": {"indexPatch": {"ref": "art-index"}},
+        "entries": [{"path": "secret-name.txt"}],
+    }
+    assert saved_work_artifact_metadata(
+        "checkpoint_manifest", json.dumps(checkpoint).encode()
+    ) == {
+        "checkpoint_parts": {
+            "archive_artifact_id": "art-archive",
+            "index_patch_artifact_id": "art-index",
+        }
+    }
+    # Unknown kinds, other formats, or unreadable bytes add nothing rather
+    # than a permissive default.
+    assert saved_work_artifact_metadata("checkpoint_archive", payload) == {}
+    assert saved_work_artifact_metadata("saved_work_manifest", b"not json") == {}
+    assert saved_work_artifact_metadata("saved_work_manifest", b"[]") == {}
 
 
 def test_format_profile_never_synthesizes_git_for_report_only() -> None:
@@ -633,8 +725,9 @@ async def test_capture_uses_configured_outbound_policy(
 
 @pytest.mark.asyncio
 async def test_capture_links_saved_work_artifacts_to_owning_execution(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "namespace", "moonmind-4020")
     _repo, activities, _stored, digest = _capture_harness(
         tmp_path, {"tracked.txt": "evidence\n"}
     )
@@ -642,11 +735,13 @@ async def test_capture_links_saved_work_artifacts_to_owning_execution(
         _request(digest=digest)
     )
     assert result["status"] == "captured"
-    # Archive, manifest, delta, and saved-work uploads each carry the
-    # capture identity/namespace so the workflow owner keeps read access.
+    # Archive, manifest, delta, and saved-work uploads each link to the owning
+    # execution in its Temporal namespace, so the run's artifact listing
+    # (Workflow Detail Saved Results, #4020) and owner checks resolve them.
+    # The storage artifactNamespace is not an execution namespace.
     assert len(activities.captured_put_links) == 5
     for link in activities.captured_put_links:
-        assert link.namespace == "step-checkpoints/implement"
+        assert link.namespace == "moonmind-4020"
         assert link.workflow_id == "wf-1"
         assert link.run_id == "run-1"
         assert link.link_type == "output.checkpoint"

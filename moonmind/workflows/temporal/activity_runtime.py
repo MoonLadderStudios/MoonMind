@@ -65,6 +65,7 @@ from moonmind.schemas.saved_work_models import (
     describe_output_claim,
     parse_git_diff_raw_to_deltas,
     resolve_saved_work_format_profile,
+    saved_work_artifact_metadata,
     scan_saved_work_export_stream,
     snapshot_capture_generation,
     verify_captured_artifact_evidence,
@@ -341,12 +342,19 @@ def _saved_work_execution_link(model: Any) -> ExecutionRef:
     Artifacts stored without an execution link are readable only by their
     creating principal, so the workflow owner cannot read the returned
     ``savedWorkRef`` and the objects stay absent from execution listings.
-    Linking each saved-work object to the capture identity/namespace keeps
-    ownership resolvable through ``principal_owns_linked_execution``.
+    Linking each saved-work object to the capture identity in the execution's
+    Temporal namespace keeps ownership resolvable through
+    ``principal_owns_linked_execution`` and lists the saved work with the
+    run's artifacts (Workflow Detail Saved Results, #4020). The storage
+    ``artifactNamespace`` is not an execution namespace.
     """
 
+    try:
+        namespace = temporal_activity.info().namespace
+    except RuntimeError:
+        namespace = settings.temporal.namespace
     return ExecutionRef(
-        namespace=model.artifact_namespace,
+        namespace=namespace,
         workflow_id=model.identity.workflow_id,
         run_id=model.identity.run_id,
         link_type="output.checkpoint",
@@ -7308,7 +7316,10 @@ class TemporalAgentRuntimeActivities:
                 content_type=content_type,
                 scope=artifact_kind,
                 link=link,
-                metadata_json={"artifact_kind": artifact_kind},
+                metadata_json={
+                    "artifact_kind": artifact_kind,
+                    **saved_work_artifact_metadata(artifact_kind, payload),
+                },
             )
         )
         # Bind the retry to the expected capture candidate: a reused
