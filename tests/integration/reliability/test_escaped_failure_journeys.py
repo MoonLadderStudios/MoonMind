@@ -3701,6 +3701,7 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     )
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -5120,6 +5121,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
     expected = load_replay(replay_id, "expected-outcome.json")
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
