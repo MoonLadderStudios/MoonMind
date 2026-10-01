@@ -2539,16 +2539,23 @@ describe('Workflows Entrypoint', () => {
       },
     };
 
-    renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+    const { container } = renderWithClient(<WorkflowListPage payload={actionsPayload} />);
 
     await screen.findAllByText('Example task');
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeTruthy();
     const triggers = screen.getAllByRole('button', { name: 'More actions' });
     expect(triggers.length).toBeGreaterThanOrEqual(1);
 
+    for (const selector of ['.queue-table-cell-actions', '.queue-card-actions']) {
+      const actions = container.querySelector(`${selector} .workflow-row-actions`) as HTMLElement;
+      expect(within(actions).getAllByRole('button')).toHaveLength(1);
+      expect(within(actions).getByRole('button', { name: 'More actions' })).toBeTruthy();
+      expect(within(actions).queryByRole('menu')).toBeNull();
+    }
+
     // Opening the menu lazily fetches the workflow's action capabilities.
     const detailCallsBefore = fetchSpy.mock.calls.filter(([url]) =>
-      String(url).endsWith('/executions/task-123'),
+      /\/executions\/task-123(?:\?|$)/.test(String(url)),
     );
     expect(detailCallsBefore).toHaveLength(0);
   });
