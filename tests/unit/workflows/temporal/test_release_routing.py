@@ -7,6 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 from temporalio.api.enums.v1 import TaskQueueType
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+from temporalio.exceptions import TimeoutType
 from temporalio.service import RPCError, RPCStatusCode
 
 from moonmind.workflows.temporal import release_routing
@@ -59,6 +62,11 @@ class _FakeServer:
         self.on_canary_start = None
         self.canary_result = None
         self.fail_ordinary_canaries = False
+        self.canary_log = []
+        # Activity queues whose only slot ordinary work takes as soon as
+        # routing moves to the target, as the deployment update's own
+        # supervising Activity does on the singleton deployment-control fleet.
+        self.busy_after_promotion = set()
 
     def add_version(self, build, *, queues=()):
         version = f"{self.deployment}.{build}"
@@ -173,10 +181,13 @@ class _FakeWorkflowService:
 
 
 class _FakeHandle:
-    def __init__(self, payload):
+    def __init__(self, payload=None, *, error=None):
         self._payload = payload
+        self._error = error
 
     async def result(self):
+        if self._error is not None:
+            raise self._error
         return self._payload
 
 
@@ -190,15 +201,37 @@ class _FakeClient:
         server = self._server
         execution_id = kwargs.get("id")
         server.canaries_started.append(execution_id)
+        (name, arg) = args[:2]
+        assert name == "MoonMind.ReleaseCanary"
+        digest = arg["digest"] if isinstance(arg, dict) else arg
+        server.canary_log.append(
+            {
+                "id": execution_id,
+                "taskQueues": arg["taskQueues"] if isinstance(arg, dict) else None,
+                "pinned": kwargs.get("versioning_override") is not None,
+                "currentAtStart": server.current,
+            }
+        )
         if server.on_canary_start is not None:
             server.on_canary_start()
         if server.canary_result is not None:
             return _FakeHandle(server.canary_result)
         if server.fail_ordinary_canaries and "-ordinary-" in str(execution_id):
             return _FakeHandle({"digest": "mismatch", "status": "rejected"})
-        (name, arg) = args[:2]
-        assert name == "MoonMind.ReleaseCanary"
-        digest = arg["digest"] if isinstance(arg, dict) else arg
+        if (
+            isinstance(arg, dict)
+            and server.current == f"{server.deployment}.{digest}"
+            and server.busy_after_promotion & set(arg["taskQueues"])
+        ):
+            return _FakeHandle(
+                error=WorkflowFailureError(
+                    cause=TemporalTimeoutError(
+                        "activity ScheduleToStart timeout",
+                        type=TimeoutType.SCHEDULE_TO_START,
+                        last_heartbeat_details=[],
+                    )
+                )
+            )
         return _FakeHandle({"digest": digest, "status": "verified"})
 
     def get_workflow_handle(self, workflow_id):
@@ -600,6 +633,112 @@ async def test_steward_reraises_failed_ordinary_verification(monkeypatch):
         await bootstrap_version_routing(_FakeClient(server), _spec("new"))
     assert server.current == new
     assert server.set_current_calls == [new]
+
+
+def _release_pair(old_queues, new_queues):
+    server = _FakeServer()
+    old = server.add_version("old", queues=old_queues)
+    new = server.add_version("new", queues=new_queues)
+    server.current = old
+    return server, old, new
+
+
+_WORKFLOW_QUEUE = {
+    ("mm.workflow.user.v2", TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
+    ("mm.workflow.user.v2", TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["steward", "reverify"])
+async def test_startup_does_not_wait_on_update_holding_singleton_fleet(
+    monkeypatch, path
+):
+    """mm:05575e5f: a Settings update deadlocked on its own Activity.
+
+    Promotion releases ordinary work onto the target. On the singleton
+    deployment-control fleet that includes the update's supervising Activity,
+    which holds the only slot until this workflow fleet reports ready. A
+    probe of that queue after promotion can never start, so its
+    ScheduleToStart timeout crashed the workflow worker and Compose --wait
+    failed the update. The deployment queue is still qualified, pinned,
+    before routing moves and before any ordinary work can reach it.
+    """
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    _use_fake_clock(monkeypatch)
+    deployment_queue = (
+        "mm.activity.deployment",
+        TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY,
+    )
+    server, old, new = _release_pair(
+        _WORKFLOW_QUEUE | {deployment_queue}, _WORKFLOW_QUEUE | {deployment_queue}
+    )
+    server.busy_after_promotion = {"mm.activity.deployment"}
+    client = _FakeClient(server)
+    if path == "reverify":
+        # The merge-automation process in the same incident lost its
+        # promotion acknowledgement and re-verified the already-current
+        # target through the startup retry loop.
+        describe = client.workflow_service.describe_worker_deployment
+        failures = []
+
+        async def overloaded(request):
+            if server.current == new and not failures:
+                failures.append(True)
+                raise RPCError(
+                    "consistent query buffer is full",
+                    RPCStatusCode.RESOURCE_EXHAUSTED,
+                    None,
+                )
+            return await describe(request)
+
+        monkeypatch.setattr(
+            client.workflow_service, "describe_worker_deployment", overloaded
+        )
+
+    result = await bootstrap_version_routing(client, _spec("new"))
+
+    assert result["status"] == "current"
+    assert server.current == new
+    assert server.set_current_calls == [new]
+    pinned = [entry for entry in server.canary_log if entry["pinned"]]
+    assert len(pinned) == 1
+    assert pinned[0]["currentAtStart"] == old
+    assert "mm.activity.deployment" in pinned[0]["taskQueues"]
+    ordinary = [entry for entry in server.canary_log if not entry["pinned"]]
+    assert ordinary
+    assert all(entry["currentAtStart"] == new for entry in ordinary)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current", ["old", "__unversioned__"])
+async def test_pinned_canary_qualifies_every_target_activity_queue(
+    monkeypatch, current
+):
+    """Cross-fleet identity is proven before routing moves.
+
+    Ordinary verification proves unpinned workflow routing on each workflow
+    queue against its own worker, so the pinned canary must cover every
+    Activity queue the target registered: on first routing, and on
+    stewardship even when the outgoing route never served that queue (a
+    fleet added by this release).
+    """
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    _use_fake_clock(monkeypatch)
+    added = ("mm.activity.llm", TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY)
+    server, _old, new = _release_pair(_WORKFLOW_QUEUE, _WORKFLOW_QUEUE | {added})
+    if current != "old":
+        server.current = current
+
+    result = await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+
+    assert result == {"status": "current", "currentVersion": new}
+    pinned = [entry for entry in server.canary_log if entry["pinned"]]
+    assert len(pinned) == 1
+    assert pinned[0]["currentAtStart"] != new
+    assert pinned[0]["taskQueues"] == ["mm.activity.llm", "mm.workflow.user.v2"]
+    ordinary = [entry for entry in server.canary_log if not entry["pinned"]]
+    assert [entry["taskQueues"] for entry in ordinary] == [["mm.workflow.user.v2"]]
 
 
 def test_routing_aging_uses_scoped_time_with_production_windows_intact():

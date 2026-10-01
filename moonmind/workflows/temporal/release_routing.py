@@ -166,7 +166,7 @@ async def await_registered_queues(
                 for item in response.worker_deployment_version_info.task_queue_infos
             }
             if required <= registered:
-                return
+                return registered
         except RPCError as exc:
             if exc.status != RPCStatusCode.NOT_FOUND:
                 raise
@@ -177,7 +177,18 @@ async def await_registered_queues(
 
 
 async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=120):
-    """Prove ordinary unpinned traffic on every registered workflow queue."""
+    """Prove ordinary unpinned traffic on every registered workflow queue.
+
+    Each canary checks the release identity with an Activity on its own
+    workflow queue. The pinned canary in ``promote_version`` checks the other
+    fleets' Activity queues before routing moves, while no ordinary work can
+    reach them. Once routing moves, work that was waiting (for example
+    retried Activities) goes to the target. On the single-slot
+    deployment-control fleet, that includes the update's own supervising
+    Activity, which waits for this fleet to report ready. A probe of that
+    queue here cannot tell an unrouted queue from a busy one, and it deadlocks
+    the update.
+    """
     import hashlib
 
     from temporalio.api.enums.v1 import TaskQueueType
@@ -193,13 +204,11 @@ async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=1
     deployment = info.deployment_version.deployment_name or info.deployment_name
     digest = version.removeprefix(deployment + ".")
     queues = info.task_queue_infos
-    activities = sorted(
-        {
-            item.name
-            for item in queues
-            if item.type == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
-        }
-    )
+    activities = {
+        item.name
+        for item in queues
+        if item.type == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+    }
     workflows = sorted(
         {
             item.name
@@ -207,9 +216,10 @@ async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=1
             if item.type == TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW
         }
     )
-    if not workflows or not activities:
+    if not workflows or not set(workflows) <= activities:
         raise ValueError(
-            "Ordinary release qualification requires workflow and Activity queues"
+            "Ordinary release qualification requires release.inspect on every"
+            " workflow queue"
         )
     if current_version(await routing_snapshot(client, deployment)) != version:
         raise ValueError(
@@ -222,7 +232,7 @@ async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=1
         try:
             handle = await client.start_workflow(
                 "MoonMind.ReleaseCanary",
-                {"digest": digest, "taskQueues": activities},
+                {"digest": digest, "taskQueues": [queue]},
                 id=execution_id,
                 task_queue=queue,
                 id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -239,7 +249,6 @@ async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=1
         "version": version,
         "status": "verified",
         "workflowQueues": workflows,
-        "activityQueues": activities,
         "canaryId": canary_id,
     }
 
@@ -267,25 +276,34 @@ async def promote_version(
         raise ValueError(
             "Release routing changed after qualification; re-evaluate the candidate"
         )
-    await await_registered_queues(
+    registered = await await_registered_queues(
         client,
         version=f"{deployment}.{build_id}",
         workflow_queue=task_queue,
         activity_queues=task_queues or (task_queue,),
         workflow_queues=workflow_queues,
     )
+    from temporalio.api.enums.v1 import TaskQueueType
     from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
+    # Check every Activity queue the target registered, not only the ones
+    # the caller named. Before routing moves, no ordinary work can reach the
+    # target, so a busy fleet cannot be mistaken for an unrouted one.
+    # Ordinary verification after promotion checks only workflow queues.
+    qualified = sorted(
+        set(task_queues)
+        | {
+            name
+            for name, kind in registered
+            if kind == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+        }
+    )
     execution_id = canary_id or f"mm-release-canary-{uuid4()}"
     try:
         handle = await client.start_workflow(
             "MoonMind.ReleaseCanary",
-            (
-                {"digest": build_id, "taskQueues": list(task_queues)}
-                if task_queues
-                else build_id
-            ),
+            {"digest": build_id, "taskQueues": qualified},
             id=execution_id,
             task_queue=task_queue,
             # A failed canary must not pin this ID forever. REJECT_DUPLICATE
@@ -296,7 +314,7 @@ async def promote_version(
             # USE_EXISTING still dedupes concurrent stewards.
             id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-            execution_timeout=timedelta(seconds=max(90, 65 * len(task_queues))),
+            execution_timeout=timedelta(seconds=max(90, 65 * len(qualified))),
             versioning_override=PinnedVersioningOverride(
                 WorkerDeploymentVersion(
                     deployment_name=deployment,
