@@ -17,8 +17,8 @@ Last Updated: 2026-10-01
 >
 > A Provider Profile is broader than authentication alone. It defines:
 >
-> - which runtime MoonMind launches,
-> - which upstream provider that runtime should target,
+> - which Harness and upstream Provider the connection supports,
+> - which compatible execution configuration applies through the shared selection boundary,
 > - which credential source class is used,
 > - which secret references or OAuth volume back the launch,
 > - how provider-specific configuration is materialized into the runtime environment,
@@ -31,9 +31,13 @@ Last Updated: 2026-10-01
 
 ---
 
-## Unified Profile selection
+## Unified Provider Profile selection
 
-The user-facing Profile is this existing credential and capacity identity. It also
+[Harness, Provider Profile, and Backend Selection](../UI/HarnessProfileBackendSelection.md)
+owns the accepted product vocabulary and ordinary selection behavior. Provider
+Profile is this existing credential and capacity identity. Its stored `runtime_id`
+identifies Harness ownership, such as `codex_cli`, `claude_code`, or `opencode`;
+it does not choose the Backend or become `omnigent`. It also
 owns model tiers and an optional `execution_configuration` reference containing
 an immutable configuration id, version and digest. New workflow and schedule
 submissions supply the Profile id; API admission resolves compatible execution
@@ -43,13 +47,24 @@ because model discovery expires or a host image changes. Disabled and disconnect
 Profiles remain visible with an actionable setup state. Credentials, trust,
 capability compatibility and actual-host model verification remain launch gates.
 
-When the advanced runtime control is untouched or omitted, the selected Profile
-owns runtime selection before deployment defaults apply. A supported direct
-runtime Profile without a compatible Omnigent configuration uses its owning
-runtime. A pinned or compatible Omnigent configuration keeps Omnigent authority,
-including when validation is incomplete; it cannot silently fall back to direct
-execution. Explicit runtime overrides remain subject to compatibility checks.
-The selected model and effort are preserved through this admission decision.
+Ordinary authoring selects Harness and one Provider Profile. The shared target
+and profile-selection owners reconcile them with the defaulted or explicit
+Backend and compatible execution configuration before credential acquisition
+or host effects. Omitted Backend and its documented default equivalent resolve
+consistently to the deployment's supported default, normally Omnigent. A profile
+without a compatible Omnigent configuration reports the setup or compatibility
+gap; omission is not permission to select a direct launcher. A meaningful,
+supported alternative Backend can be selected explicitly under Advanced. An
+explicit nondefault choice or alternative deployment default remains disclosed.
+
+A selected profile from a saved draft, preset, deep link, or other supported
+entrypoint establishes its compatible Harness. A new unconfigured draft may use
+an authorized default or sole compatible profile. After a deliberate Harness
+change, retain the selected profile only when compatible; otherwise require a
+compatible Provider Profile without silently choosing another account. Preserve
+explicit configuration pins, model/effort intent, and source execution identity.
+An unavailable or incompletely validated pinned configuration cannot silently
+fall back to direct execution.
 
 ## 1. Summary
 
@@ -98,7 +113,7 @@ Provider Profiles depend on, but do not replace, other MoonMind systems.
 
 Provider Profiles are the semantic owner of:
 
-- runtime selection
+- Harness ownership and compatibility
 - provider selection
 - profile-level routing metadata
 - default model intent for the runtime/provider combination
@@ -151,11 +166,12 @@ Those cards may be backed by disabled setup-stub Provider Profiles or by a separ
 3. Successful user-initiated setup makes the profile connected and enabled by default.
 4. Failed setup leaves the profile disabled with clear readiness diagnostics.
 
-Settings is also the one administrative exception to runtime-scoped selection.
-It owns an explicit **All runtimes** view of every Provider Profile plus a
-per-runtime filter over that table, while global configuration health stays
-computed from the complete unfiltered collection. See
-[10.5 Runtime-owned selection scope](#105-runtime-owned-selection-scope).
+Settings is the one configuration exception to Harness-scoped selection.
+It owns an explicit **All harnesses** view of every Provider Profile plus a
+Harness filter over that table, while global configuration health stays computed
+from the complete unfiltered collection. The filter and creation control retain
+canonical `runtime_id` values in their API payloads. See
+[10.5 Harness-owned selection scope](#105-harness-owned-selection-scope).
 
 ---
 
@@ -224,16 +240,19 @@ Provider Profiles define **selection, activation, and materialization**, not a u
 
 ## 5. Key Concepts
 
-### 5.1 Runtime vs Provider
+### 5.1 Harness vs Provider
 
-A **runtime** is the executable MoonMind launches.
+A **Harness** is the agent software performing the work. Provider Profile schemas
+retain `runtime_id` for this ownership; the serialized field is not a Backend
+selector. **Backend** identifies the system managing the Harness, normally
+Omnigent.
 
 Examples:
 
 - `claude_code`
 - `codex_cli`
 
-A **provider** is the upstream service the runtime talks to.
+A **Provider** is the upstream service the Harness talks to.
 
 Examples:
 
@@ -242,7 +261,7 @@ Examples:
 - `minimax`
 - `zai`
 
-A runtime is not the same thing as a provider.
+Harness and Provider are separate identities.
 
 Examples:
 
@@ -1086,8 +1105,8 @@ AgentExecutionRequest:
 
 Provider Profile resolution must follow this order:
 
-1. If `execution_profile_ref` is present, resolve that exact profile.
-2. Otherwise, filter by `runtime_id == agent_id`.
+1. If `execution_profile_ref` is present, resolve that exact profile. An unavailable slot or cooldown waits through existing capacity handling; it does not permit another account or provider.
+2. Otherwise, resolve only within the authorized selector's Harness scope (`runtime_id == agent_id` for direct requests, or the selected Omnigent configuration's compatibility projection).
 3. If `profile_selector.provider_id` is present, filter by provider.
 4. Apply tag filters.
 5. Exclude disabled profiles.
@@ -1097,38 +1116,33 @@ Provider Profile resolution must follow this order:
 9. Select the highest-priority compatible profile.
 10. Break ties using the profile with the most free slots.
 
-This behavior is required for correctness.
+The priority and free-slot ordering applies only within an explicitly authorized
+selector pool. Ordinary authoring resolves its Provider Profile through the shared
+selection boundary before this capacity handoff. Selection never rewrites an
+authored account, Harness, Backend, or credential route.
 
-### 10.4 Default provider fallback
+### 10.4 Default Provider Profile and authorized selectors
 
-When neither `execution_profile_ref` nor `profile_selector.provider_id` is specified, resolution happens across all launch-ready providers for the runtime.
+A new unconfigured authoring draft may use its authorized default or sole
+compatible Provider Profile. A submitted explicit or preserved profile remains
+that identity even when capacity is busy, advisory discovery fails, or setup
+is unavailable. Missing or revoked authority reports the affected action; it
+never triggers a cross-provider, account, or Backend fallback.
 
-This can route a generic request to an alternative provider if:
+Lower-level selector requests may use provider/tag constraints and deterministic
+priority ordering only within the pool the operator authorized. Absence of both
+an exact profile and a provider constraint does not itself authorize routing to
+every launch-ready provider. Disabled setup stubs never become launch defaults.
+The selected identity and authored/defaulted provenance are recorded through the
+existing admission owner before acquisition.
 
-- the alternative profile is compatible,
-- the alternative profile is launch ready,
-- the alternative has higher priority, or
-- the primary profile is unavailable due to cooldown or slot exhaustion.
+### 10.5 Harness-owned selection scope
 
-To prevent unintentional cross-provider routing, one or more of the following should be true:
-
-1. **Explicit provider in request**
-   - Recommended default for MoonMind dashboard flows.
-
-2. **Default tag convention**
-   - Only the primary provider’s launch-ready profiles carry `default`, and the request includes `tags_all: ["default"]`.
-
-3. **Priority ordering**
-   - The intended primary provider has higher priority than alternatives.
-
-Disabled setup stubs must never participate in default provider fallback.
-
-### 10.5 Runtime-owned selection scope
-
-> Provider Profiles are runtime-owned launch contracts. A runtime-coupled
-> execution surface must display and accept only profiles compatible with the
-> selected effective runtime. Settings may expose an explicit All-runtimes
-> administrative view.
+> Provider Profiles are Harness-owned connection and launch contracts. Ordinary
+> authoring displays and accepts profiles compatible with the selected Harness
+> and Backend through the shared selection owners. Settings may expose an
+> explicit **All harnesses** configuration view. Existing `runtime_id` query
+> parameters and persisted identifiers retain their meanings.
 
 `runtime_id` is required and stable because the profile owns runtime-specific
 behavior: provider and credential selection, credential materialization,
@@ -1153,24 +1167,24 @@ claude_minimax_team
 
 #### Execution and workflow-authoring surfaces
 
-For an ordinary managed runtime, a visible profile satisfies:
+For a direct supported Backend, profile `runtime_id` agrees with the selected
+Harness's canonical ownership ID. Omnigent additionally applies the compatibility
+projection below; neither path infers Harness compatibility from Provider alone.
 
-```text
-visible profile.runtime_id == selected effective runtime
-```
-
-- Execution surfaces do not offer an **All runtimes** option.
-- Surfaces scope the result set server-side with
-  `GET /api/v1/provider-profiles?runtime_id=<canonical runtime>` rather than
-  fetching every profile and filtering only on the client.
-- The query cache key includes the effective runtime, and previous-runtime
-  placeholder data is never selectable, resolvable, or submittable during a
-  runtime-scoped refetch.
-- Changing runtime drops an incompatible selection, then selects the new
-  runtime's launch-ready default profile, or the first eligible profile under
-  the existing deterministic ordering.
-- A runtime with no eligible profile shows a runtime-specific empty state that
-  names the runtime instead of hiding the control.
+- Execution surfaces do not offer an **All harnesses** option.
+- Surfaces scope the result set server-side using the existing
+  `GET /api/v1/provider-profiles?runtime_id=<canonical harness ownership ID>`
+  and selected Backend compatibility projection rather than fetching every
+  profile and filtering only on the client.
+- Query cache keys include the selected identity, and previous-selection
+  placeholder data is never selectable, resolvable, or submittable during refetch.
+- A deliberately changed Harness retains a compatible selected profile;
+  otherwise the form requires a compatible Provider Profile and preserves
+  recoverable draft values. It does not select a different account to repair
+  the mismatch. Authorized default selection is limited to a new unconfigured
+  draft, as specified under Unified Provider Profile selection.
+- A Harness with no eligible profile shows a named setup/compatibility state
+  instead of hiding the control or selecting another Backend.
 
 #### Omnigent compatibility exception
 
@@ -1206,8 +1220,8 @@ Rejection returns `409 Conflict` with code `provider_profile_runtime_mismatch`,
 identifying both sides of the incompatible pair:
 
 ```text
-Provider Profile 'claude_anthropic_oauth' belongs to runtime 'claude_code' and
-cannot be used with runtime 'codex_cli'.
+Provider Profile 'claude_anthropic_oauth' belongs to Harness 'Claude Code' and
+cannot be used with Harness 'Codex'.
 ```
 
 The rule is expressed once as a typed contract at the shared authoring

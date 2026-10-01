@@ -1,18 +1,18 @@
-# Runtime-Provider Rollout Policy
+# Agent Backend Selection and Transition
 
 **Status:** Desired-state simplification with an implemented legacy contract still in use  
 **Document Class:** Module Contract Specification  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-21  
-**Authority:** Runtime selection and bounded transition under the primary-runtime strategy; not a permanent promotion platform
+**Last updated:** 2026-09-30  
+**Authority:** Agent backend selection and bounded transition under the primary-backend strategy; not a permanent promotion platform
 
 ## Related documents
 
-[Primary runtime strategy](PrimaryRuntimeProviderStrategy.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Canonical Turn Command Boundary](CanonicalTurnCommandBoundary.md), [Provider Profiles](../Security/ProviderProfiles.md), [Single-User Application Design](../SingleUserApplicationDesign.md), and [Docker Compose updates](../Steps/DockerComposeUpdateSystem.md).
+[Primary backend strategy](PrimaryRuntimeProviderStrategy.md), [Harness, Provider Profile, and Backend Selection](../UI/HarnessProfileBackendSelection.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Canonical Turn Command Boundary](CanonicalTurnCommandBoundary.md), [Provider Profiles](../Security/ProviderProfiles.md), [Single-User Application Design](../SingleUserApplicationDesign.md), and [Docker Compose updates](../Steps/DockerComposeUpdateSystem.md).
 
 ## Advance organizer
 
-Use one existing selection/admission boundary and the deployment's installed managed runtime. Preserve the operator's meaningful harness, Profile, model/cost/privacy, source, and publication choices. Do not maintain parallel Codex phases, qualification toggles, per-combination canaries, rollback controls, and independent schedule pins as permanent authorities for the same choice.
+Use one existing selection/admission boundary and the deployment's installed agent backend. Preserve the operator's meaningful harness, Provider Profile, model/cost/privacy, source, and publication choices. Do not maintain parallel Codex phases, qualification toggles, per-combination canaries, rollback controls, and independent schedule pins as permanent authorities for the same choice.
 
 `moonmind/omnigent/runtime_provider_rollout.py` still implements the earlier policy at reviewed main `6fdaab848e8f9fd9c5279ea36186482cab05733d`. Its fields, states, and existing consumers must be migrated coherently rather than ignored. This document revises the target and retains enough compatibility context to interpret that implementation. It does not change executable behavior or authorize deployment. The [earlier complete contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/RuntimeProviderRollout.md) remains available for precise historical questions.
 
@@ -26,7 +26,11 @@ Keep artifact integrity and source-control concurrency checks. Historical observ
 
 ### Authoring and diagnostic presentation
 
-Preserve the existing Runtime and one Profile authoring boundary. The Profile's account and meaningful execution choices determine its compatible resolved configuration. Internal target, harness descriptor, Host Class, and realizer are not additional mandatory controls. Displayed/submitted expectations must agree with actual admission, without forcing manual reconfiguration for every compatible installed-image update.
+Ordinary authoring uses **Harness and one Provider Profile**. **Backend** names Omnigent, normally resolved without an ordinary selector. Only a meaningful supported alternative appears under Advanced, with an exceptional choice visible when collapsed. With one supported backend, remove the selector and retain recorded Backend in execution details. Container and Host describe actual resources, not replacement names for Omnigent.
+
+The Profile's account, harness compatibility, and meaningful execution choices determine its compatible resolved configuration. Internal target, harness descriptor, Host Class, and realizer are not additional mandatory controls. Displayed/submitted expectations must agree with actual admission, without forcing manual reconfiguration for every compatible installed-image update. Profile `runtime_id` remains a stored harness-ownership field during this presentation change. Do not globally reinterpret existing runtime fields as Backend.
+
+The workflows list shows Provider Profile rather than Runtime. [The product selection design](../UI/HarnessProfileBackendSelection.md) owns the recorded identity projection, profile-filter semantics, historical handling, and the consistent vocabulary across Settings and authoring.
 
 ## 2. Rollout states
 
@@ -100,7 +104,9 @@ Already-started attempts retain the identity, meaning, and evidence of what they
 
 ## 9. Shared selection and admission boundary
 
-`resolve_runtime_target_selection` in `runtime_target_selection.py` remains the integration point for Create, presets, schedules, edits/reruns, fresh retries, Checkpoint Branches, remediation, continuation, API/MCP, worker normalization, and dashboard projections. Remove redundant providers/defaults there rather than build another selector.
+`resolve_runtime_target_selection` in `runtime_target_selection.py` remains the integration point for Create, presets, schedules, edits/reruns, fresh retries, Checkpoint Branches, remediation, continuation, API/MCP, worker normalization, and dashboard projections. Compose it with the existing Provider Profile/configuration selection at admission. Remove redundant providers/defaults there rather than build another selector.
+
+New Harness/Provider Profile authoring resolves the normal omitted or default-equivalent Backend intent to the supported Omnigent path through this boundary. Hiding a Runtime dropdown must not accidentally reactivate an old direct-path default. Preserve whether input was defaulted, explicitly chosen, or inherited, separately from the resolved backend and configuration. Contradictory harness/profile/backend combinations fail before credential or host effects. The actual ingress/schema owner handles any necessary legacy compatibility, not page-local heuristics.
 
 ### Recorded authority
 

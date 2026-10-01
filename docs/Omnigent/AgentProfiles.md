@@ -4,7 +4,7 @@ Status: **Desired-State Design**
 Document Class: System / Feature Design View
 Owners: MoonMind Engineering  
 Issue: MoonLadderStudios/MoonMind#3517  
-Last updated: 2026-09-23
+Last updated: 2026-09-30
 
 ## Implementation status
 
@@ -12,7 +12,9 @@ This document defines the target contract. The repository currently implements t
 
 Dashboard profile management, readiness-aware workflow and schedule selectors, transactional immutable snapshots, bounded bundle import, smoke validation, and durable bootstrap authority are implemented. Checkpoint-branch and remediation authoring preserve the originating immutable agent-profile and Provider Profile selection so continuation cannot silently substitute runtime authority.
 
-Configuration support and source implementation do not establish exact-host, native-chat, recovery, or protected-live qualification. The [primary-runtime product outcomes](PrimaryRuntimeProviderStrategy.md#11-seven-required-product-outcomes) govern the complete journey. Qualification and default promotion use their existing evidence owners, not the existence of a saved configuration or a closed implementation issue.
+The adopted [Harness, Provider Profile, and Backend design](../UI/HarnessProfileBackendSelection.md) replaces the former visible Runtime authoring requirement below. This is a desired product contract, not a claim that the terminology, controls, or list projection have already shipped. Existing serialized fields and historical snapshots keep their meaning.
+
+Configuration support and source implementation do not establish exact-host, native-chat, recovery, or protected-live qualification. The [primary-backend product outcomes](PrimaryRuntimeProviderStrategy.md#11-seven-required-product-outcomes) govern the complete journey. Qualification and default promotion use their existing evidence owners, not the existence of a saved configuration or a closed implementation issue.
 
 ## Purpose and identities
 
@@ -22,7 +24,7 @@ Every execution resolves these references into a secret-free immutable snapshot 
 
 ### One account Profile, subordinate execution configuration
 
-The ordinary Profile control selects the existing Provider Profile. The internal Agent Profile supplies reusable execution configuration, not a second account, credential enrollment, or required workflow-authoring choice. Distinct persisted identities are not instructions to create distinct editable controls.
+Ordinary authoring pairs **Harness** with one **Provider Profile** control selecting the existing Provider Profile. **Backend** identifies Omnigent, not the profile's owning harness. The internal Agent Profile supplies reusable execution configuration, not a second account, credential enrollment, or required workflow-authoring choice. Distinct persisted identities are not instructions to create distinct editable controls.
 
 | Selected account Profile | Corresponding Omnigent harness | Credential materializer |
 | --- | --- | --- |
@@ -31,13 +33,13 @@ The ordinary Profile control selects the existing Provider Profile. The internal
 | Keyed OpenCode Go | `opencode-native` | `opencode-auth-json@1` |
 | Credentialless OpenCode Zen | `opencode-native` | `none@1` |
 
-These are compatibility relationships, not a blanket support claim. The selected configuration, materializer, Host Class, launch policy, model and exact support evidence still have to admit the execution. A shared upstream provider name alone cannot establish runtime compatibility.
+These are compatibility relationships, not a blanket support claim. The selected configuration, materializer, Host Class, launch policy, model and exact support evidence still have to admit the execution. A shared upstream provider name alone cannot establish harness or backend compatibility.
 
-Codex and Claude OAuth Profiles retain their underlying runtime IDs, account identities, enrollment-owned credential homes, generations and capacity authority when execution uses Omnigent. Do not rewrite those Profiles to `runtime_id=omnigent`, create duplicate Omnigent-only accounts, copy OAuth homes, or start a second interactive login. Direct compatibility and Omnigent consumers must honor the same credential-resource lease owner. Supporting both paths does not authorize concurrent writers to a mutable OAuth home. Credentialless OpenCode creates no dummy secret and cannot inherit the keyed route's account or billing authority.
+Codex and Claude OAuth Profiles retain their underlying runtime IDs, account identities, enrollment-owned credential homes, generations and capacity authority when execution uses Omnigent. The stored profile `runtime_id` expresses harness ownership in the adopted vocabulary. Do not rewrite those Profiles to `runtime_id=omnigent`, create duplicate Omnigent-only accounts, copy OAuth homes, or start a second interactive login. Direct compatibility and Omnigent consumers must honor the same credential-resource lease owner. Supporting both paths does not authorize concurrent writers to a mutable OAuth home. Credentialless OpenCode creates no dummy secret and cannot inherit the keyed route's account or billing authority.
 
 Compatible configuration resolves automatically from an explicit Profile pin, an authorized compatible default, or the sole compatible option through the existing resolver. A genuine ambiguity has an actionable Profile Settings remedy. Normal account setup must not require understanding Host Classes, materializers, realizer versions, or multiple Profile types. Optional advanced pins and policy overrides must not turn into mandatory setup for every ordinary account.
 
-The execution description is read-only and comes from the resolved configuration, for example `Uses Claude Code through Omnigent`. Adding a supported harness must not add another ordinary selector or another frontend selection authority. The final admission boundary independently verifies the same selection.
+The execution description is read-only and comes from the resolved configuration, for example `Uses Claude Code through Omnigent`. Adding a supported harness extends the existing Harness choice and compatible-profile projection, not another ordinary selector or frontend selection authority. The final admission boundary independently verifies the same selection.
 
 ## Persistence and lifecycle
 
@@ -70,24 +72,39 @@ and never stands in for `codex-native`. Each wrapper record is present only
 while its stock agent is observed.
 
 Workflow, schedule, checkpoint-branch, and remediation authoring expose
-Runtime and one Profile selection. Runtime stays visible and names a stable
-family; Omnigent is never relabeled after a preferred rollout row. The existing
-Provider Profile identity owns account, model tiers and
-capacity, and optionally pins an immutable execution configuration. Configuration
-versions remain an advanced implementation contract, not a second required
-profile selector. Automatic resolution selects the compatible deployment default
-or the sole compatible configuration; ambiguity requires an explicit choice in
-Profile settings. Execution configuration and rollout target are subordinate
-resolved values, never independent authoring selectors. The selected configuration's
-harness supplies the execution description. Advanced mode contains supported
-model and host-policy overrides. A pinned version remains selected after the active version
-changes. Create submits the displayed configuration's profile id/version/digest
-as `task.runtime.executionConfiguration`. The visible Runtime is submitted as
-explicit intent whether accepted as a default or selected manually. Admission
-rejects a changed resolved reference with `profile_execution_configuration_changed`
-before execution.
-Clients that omit this expectation still use the same Profile resolver. Historical
-snapshots remain authoritative for existing runs.
+**Harness** and one **Provider Profile** selection. The selected/default profile
+establishes the compatible initial harness. **Backend** is normally Omnigent and
+is not an ordinary required selector. A genuine supported alternative appears
+under Advanced, remains disclosed when selected, and is not reset by collapsing
+Advanced. With only one supported backend, omit the selector and show recorded
+Backend in execution details. Container and Host remain diagnostic resource terms.
+
+The existing Provider Profile identity owns account, model tiers and capacity,
+and optionally pins an immutable execution configuration. Configuration versions
+remain an advanced implementation contract, not a second required profile
+selector. Automatic resolution selects a compatible deployment default or the
+sole compatible configuration under the authored harness/backend constraints.
+Ambiguity has an actionable Provider Profile Settings remedy. Neither control
+silently changes the selected account to repair an incompatible pair. Execution
+configuration and technical target remain subordinate resolved values.
+
+A pinned version remains selected after its active version changes. Existing
+`task.runtime.executionConfiguration` id/version/digest expectations keep their
+meaning at their schema owner. The final admission boundary composes the same
+selection and independently rejects meaningful harness/profile/backend conflicts
+and changed pinned references before effects. Preserve authored, defaulted, and
+inherited Backend intent separately from the resolved configuration. A hidden
+normal default is not an explicit override, and omission must not accidentally
+select the legacy direct path. Clients that omit an expectation still use the
+same resolver. Do not extend expectation checks into image-equality or
+advisory-preview freshness gates. Historical snapshots remain authoritative for
+existing runs.
+
+Model and effort authoring follows the shared Tier/Custom contract, not a second
+set of hard-override or Tier fallback controls under Advanced. Supported
+host-policy specialization stays with its existing owner rather than becoming a
+required setup chain. The Workflows list presents recorded Provider Profile with
+optional secondary Harness instead of exposing the Backend as its primary identity.
 
 Discovery freshness never filters Profile inventory. Submission persists the
 profile id/version/digest, upstream snapshot, Provider Profile id, execution and
@@ -141,13 +158,13 @@ Native Workflow Chat validation also proves that the binding-scoped facade can p
 
 ## Bootstrap
 
-The synchronized stock `codex-native-ui` identity is materialized as an explicit active bootstrap profile version after structural readiness passes. `OMNIGENT_DEFAULT_AGENT_NAME` may override that first-start selector only when durable profile state is absent in bootstrap/local development; its use is recorded. Durable state wins, and conflicts fail closed.
+The synchronized stock `codex-native-ui` identity is materialized as an explicit active bootstrap profile version after structural readiness passes. `OMNIGENT_DEFAULT_AGENT_NAME` may override that first-start selector only when durable state is absent in bootstrap/local development; its use is recorded. Durable state wins, and conflicts fail closed.
 
 Unless `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` explicitly stops it (the default is true), policy reconciliation uses the deployment-resolved shared host image digest to activate `claude-on-demand`. Inventory reconciliation then binds an observed, structurally ready `claude-native-ui` identity to `omnigent-claude-default` with `claude_code` / `anthropic` OAuth requirements. This managed configuration is a fallback for a compatible Provider Profile; an explicit pin or compatible operator-authored configuration keeps selection authority. Image, policy, inventory, provider readiness, and rollout gates still apply independently. A connected Anthropic OAuth Profile needs no manual rollout toggle, but it does not bypass those checks or exact-host attestation.
 
 ## Deployment-managed default authority
 
-Exactly one profile holds `default_for_runtime`, and one boundary decides which MoonMind-managed profile that is. The default workflow runtime is Omnigent (OpenCode), so the built-in OpenCode profile `omnigent-opencode-default` holds the deployment default whenever its active version is launch ready and its observed upstream identity satisfies the document contract. The Codex bootstrap profile `omnigent-bootstrap-default` is the fallback and holds the default only while the OpenCode built-in cannot launch — for example when `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false`.
+Exactly one profile holds `default_for_runtime`, and one boundary decides which MoonMind-managed profile that is. The default workflow Backend is Omnigent with OpenCode as the default Harness, so the built-in OpenCode profile `omnigent-opencode-default` holds the deployment default whenever its active version is launch ready and its observed upstream identity satisfies the document contract. The Codex bootstrap profile `omnigent-bootstrap-default` is the fallback and holds the default only while the OpenCode built-in cannot launch — for example when `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false`.
 
 This describes deployment-managed configuration default selection, not recovery permission. It applies only where no authored account/configuration constrains the choice and the existing admission policy authorizes the resulting combination. It cannot replace an explicitly selected Provider Profile, pinned configuration, model or billing route, rescue a failed admitted execution, or change an active plan. An unavailable selected route receives the appropriate setup, support or waiting result. Default repair is not permission for runtime or credential fallback.
 

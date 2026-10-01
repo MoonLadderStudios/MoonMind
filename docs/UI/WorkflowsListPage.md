@@ -1,9 +1,9 @@
 # Workflows List Page
 
-Status: Living product and implementation contract  
+Status: Living product contract; Provider Profile presentation is adopted desired state, not an implementation claim  
 Owners: MoonMind Engineering  
-Last updated: 2026-06-28  
-Canonical for: dashboard Workflows list route, execution-list controls, table sorting, column filters, filter URL state, Google Sheets-like list filtering behavior, and Progress column sort/filter semantics
+Last updated: 2026-10-01
+Canonical for: dashboard Workflows list route, execution-list controls, table sorting, column filters, filter URL state, Google Sheets-like list filtering behavior, Provider Profile presentation, and Progress column sort/filter semantics
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
 
@@ -17,6 +17,8 @@ The page helps operators inspect Temporal-backed MoonMind Workflow Executions in
 
 The column filtering model is intentionally similar to Google Sheets filters: each filterable column owns a filter control where users can stage changes, search or enter values, include or exclude values when appropriate, include or exclude blanks when meaningful, clear a column filter, cancel staged edits, and apply the filter.
 
+The adopted agent-selection design replaces the ordinary Runtime column and mobile field with **Provider Profile**, optionally showing **Harness** as secondary text in the same cell. **Backend** identifies Omnigent and belongs in execution details, not another ordinary list column. This requires a recorded-profile data projection and corresponding query controls, not a heading-only rename.
+
 ---
 
 ## 2. Related docs and implementation surfaces
@@ -25,6 +27,7 @@ Use this document for Workflows List page behavior.
 
 Use related docs for system-level contracts:
 
+- [Harness, Provider Profile, and Backend Selection](HarnessProfileBackendSelection.md) — product vocabulary, recorded identity, profile scope, and legacy runtime handling.
 - `docs/Api/ExecutionsApiContract.md` — `/api/executions` list contract, execution lifecycle fields, filters, count, and pagination semantics.
 - `docs/Temporal/VisibilityAndUiQueryModel.md` — Temporal Visibility and UI query model.
 - `docs/Temporal/StepLedgerAndProgressModel.md` — workflow-owned step ledger and bounded execution progress summary.
@@ -84,7 +87,7 @@ Core rules:
 
 ## 5. Current implementation snapshot
 
-This section describes the Workflows List implementation as of this document update.
+This section preserves the implementation snapshot from the June 28, 2026 version of this document. Its uses of Current describe that historical snapshot, not a fresh September 30 verification or an instruction to retain obsolete controls. In particular, Runtime is the old presentation. The adopted Provider Profile target is defined in sections 6 onward. Recheck current code and tests rather than rebuilding already delivered Progress work.
 
 ### 5.1 Page shell
 
@@ -243,7 +246,7 @@ Rules:
 
 ## 6. Target page layout
 
-The target page layout keeps the current column-filter direction and extends it to Progress.
+The target page layout keeps the column-filter direction, supports Progress, and replaces ordinary Runtime presentation with Provider Profile.
 
 | Surface | Target contents |
 | --- | --- |
@@ -252,15 +255,15 @@ The target page layout keeps the current column-filter direction and extends it 
 | Results toolbar / footer | Page summary, page size, pagination, current sort-scope notice when applicable. |
 | Desktop table | Sortable and filterable column headers where a column supports those behaviors. |
 | Advanced filters | Full filter set, including hidden/optional fields and all mobile filters. |
-| Mobile cards | Existing card presentation, with filter affordances available through the mobile filter sheet. |
+| Mobile cards | Existing card presentation with Provider Profile replacing Runtime and filters available through the mobile filter sheet. |
 | View options | Density, column visibility, and live-update preference. |
 
 Rules:
 
 1. Repository filtering stays in the Repository column/drawer filter.
 2. Status filtering stays in the Status column/drawer filter.
-3. Runtime filtering stays in the Runtime column/drawer filter.
-4. Progress sorting and filtering must be added to the Progress column and advanced/mobile filters.
+3. Provider Profile filtering belongs to its column/drawer filter, not the old runtime identifier filter.
+4. Progress sorting and filtering must be added to the Progress column and advanced/mobile filters where not already implemented.
 5. Scope, workflow type, and entry controls stay out of the normal Workflows List page instead of being represented by a `Kind` column.
 6. The normal page always queries the user-visible Workflow-run scope; system workflows are not available from the ordinary Workflow table.
 7. Active filters are still summarized in a row of chips so users do not have to inspect every header.
@@ -281,7 +284,7 @@ The target desktop table uses this default column model:
 | Visible | Status | `rawState || state || status` plus compact supplements | Yes | Canonical status checklist |
 | Visible | Progress | `progress` bounded counters and current step title | Yes | Completion range, buckets, signals, current-step text, blanks |
 | Visible | Repository | `repository` | Yes | Value checklist, text/prefix search, blanks |
-| Visible | Runtime | `targetRuntime` | Yes | Value checklist, blanks |
+| Visible | Provider Profile | Recorded profile summary with optional secondary Harness | Yes, with honest scope | Stable profile-ID membership, explicit blank/state semantics |
 | Visible | Updated | `updatedAt` | Yes | Date range, relative dates |
 | Optional | Target skill | `targetSkill` plus `taskSkills` | Yes | Value checklist, blanks |
 | Optional | Integration | `integration` | Yes | Value checklist, blanks |
@@ -294,12 +297,9 @@ Rules:
 4. System workflow rows must not appear in the normal Workflow table, even through column filters or old URL parameters.
 5. Retired Manifest-ingest rows stay out of the normal Workflow table; the Manifests page is removed (MoonLadderStudios/MoonMind#4192), so retired links show a recoverable retired-product message unless a separate user-workflow diagnostics view is explicitly designed.
 6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.
-7. The mobile filter sheet must expose the same filterable Workflow columns as desktop, including Progress after Progress filtering is implemented.
+7. The mobile filter sheet must expose the same filterable Workflow columns as desktop, including Progress and Provider Profile.
 8. The table must not expose raw Temporal Visibility query syntax to ordinary users.
-9. Runtime and Target skill filters are backed by `mm_target_runtime` and the
-   singular primary `mm_target_skill` only when those Search Attributes are
-   registered. During migration, missing attributes produce degraded facets or
-   empty filtered results rather than a page-level 503.
+9. Legacy Runtime and Target skill filters use `mm_target_runtime` and singular `mm_target_skill` where those Search Attributes are registered. Provider Profile is not a new label for `mm_target_runtime`; it requires its own compact recorded-identity projection through the existing list/query owner. Missing query capability or projection coverage is reported truthfully rather than guessed from today's profiles.
 
 ### 7.1 Admin diagnostics escape hatch
 
@@ -312,6 +312,32 @@ Rules:
 3. Diagnostics access must be permission-gated. Ordinary users cannot widen `/workflows` into system workflow visibility by editing URL parameters.
 4. If compatibility routes or query parameters such as `scope=system` are still accepted, the normal Workflows List page must either ignore them safely, redirect authorized admins to diagnostics, or show a recoverable message explaining that system workflows moved to diagnostics.
 5. The product contract for `/workflows` remains Workflow-oriented even if the underlying `/api/executions` endpoint can list broader workflow scopes.
+
+### 7.2 Provider Profile identity and history
+
+Use the workflow's recorded selection and supported explicit step-profile variations. This column is not a transient current-agent field. Backend and actual attempt use remain inspectable in details.
+
+| Available record | `selectionState` | Display |
+| --- | --- | --- |
+| One known profile | `recorded` | Recorded friendly name, or stable ID if no name was recorded; optional secondary Harness. |
+| Selection not yet resolved and no profile ID recorded | `pending` | Pending selection. |
+| Historical association unavailable and no profile ID recoverable | `not_recorded` | Not recorded. |
+| Confirmed no agent profile applies | `not_applicable` | Not applicable. |
+| Multiple applicable profiles | `recorded` | Multiple profiles, with a bounded summary and individual step/attempt associations in details. |
+
+The compact Provider Profile summary exposes this typed `selectionState` alongside
+its recorded profile IDs. States are mutually exclusive for the workflow summary:
+any recorded applicable ID yields `recorded`, while the three absence states
+apply only when no ID is recorded. Existing step/attempt detail can still explain
+unresolved selections beside known members. Projection failure or unavailable
+coverage is reported as unavailable information, never classified as one of these
+absence states. The same projection supplies rows, filtering, counts, and facets.
+
+An authored profile can be displayed before launch without claiming successful acquisition. A renamed, disabled, disconnected, or removed live profile does not erase the historical association. Capture an inexpensive display-name snapshot with existing admitted-selection metadata where needed. Where old records contain only an ID, display that ID instead of inventing the old name. Do not infer an account from the runtime, model, provider, or current default.
+
+Extend the existing list projection and typed response for this compact summary. Reuse existing persistence/batching rather than adding a profile-history service. The browser must not request per-row profiles, execution details, step ledgers, or Temporal histories. No credentials, OAuth paths, raw provider payloads, or infrastructure handles enter the ordinary list payload.
+
+Keep one replacement column. Do not add ordinary Harness, Provider, Backend, Container, and Host columns alongside Provider Profile. Long names wrap or truncate accessibly within the current layout rather than overflowing mobile cards. Equal names are disambiguated by a compact stable ID where needed.
 
 ---
 
@@ -338,7 +364,7 @@ Rules:
 6. A filtered column shows an active filter icon, visually distinct from an unfiltered icon.
 7. A column with both sort and filter active shows both indicators.
 8. Header controls must preserve `aria-sort` behavior for the sort target.
-9. The filter target must expose accessible state such as `Filter Runtime. No filter applied.`, `Filter Status. Filter active: excluding canceled.`, or `Filter Progress. Filter active: 25 to 75 percent complete.`
+9. The filter target must expose accessible state such as `Filter Provider Profile. No filter applied.`, `Filter Status. Filter active: excluding canceled.`, or `Filter Progress. Filter active: 25 to 75 percent complete.`
 10. Progress gets the same split sort/filter affordance as other sortable and filterable columns.
 
 ### 8.1 Sort behavior
@@ -355,6 +381,7 @@ Rules:
 6. Multi-column sorting is out of scope for the first Progress version.
 7. While a column uses client-side current-page sorting, the UI must not present the order as a global result ordering guarantee.
 8. Once a column is server-sortable, `sort` and `sortDir` should be included in shareable URL state and API requests for that column.
+9. Provider Profile sorting uses its display projection and deterministic identity tie-breakers. Retain the current-page-only notice until actual server support exists; never fetch all rows to simulate global ordering.
 
 ### 8.2 Progress sort semantics
 
@@ -411,10 +438,10 @@ Each value-list filter popover contains:
 9. `Cancel` action;
 10. `Apply` action.
 
-Representative layout:
+Representative layout with illustrative profile names:
 
 ```text
-Runtime
+Provider Profile
 All values selected
 
 Sort A to Z
@@ -422,10 +449,10 @@ Sort Z to A
 
 Search values...
 [✓] Select all
-[✓] Codex CLI (18)
-[✓] Claude Code (11)
-[✓] Jules (3)
-[✓] Blanks (2)
+[✓] OpenAI · Primary (18)
+[✓] Anthropic · Work (11)
+[✓] OpenRouter · Work (3)
+[✓] No recorded profile ID (2)
 
 Clear     Cancel     Apply
 ```
@@ -438,7 +465,7 @@ Rules:
 4. Search filters the available checklist values inside the popover; it does not filter table rows until the user applies a value selection or text filter.
 5. Value rows show display labels and counts when count data is available.
 6. The popover may support an `Only` quick action on value hover/focus for power users, but the row checkbox remains the primary interaction.
-7. The menu should show status pills for Status values and human-readable runtime labels for Runtime values.
+7. The menu should show status pills for Status values and recorded profile labels with stable-ID disambiguation for Provider Profile values.
 8. Long value lists must be virtualized or paginated.
 9. Value labels must never render untrusted HTML.
 
@@ -471,16 +498,19 @@ Rules:
 4. The filter must tolerate historical rows where `rawState`, `state`, and `status` differ by using the same display precedence as the table: `rawState || state || status`.
 5. If backend lifecycle enums and frontend display options diverge, the UI may show compatibility values but the API must validate and report unsupported values clearly.
 
-### 9.3 Runtime filter
+### 9.3 Provider Profile filter
 
-The Runtime filter is a value-list popover backed by runtime identifiers.
+The Provider Profile filter is a value-list popover backed by stable recorded profile IDs, not runtime identifiers or display names.
 
 Rules:
 
-1. The checklist stores raw runtime identifiers such as `codex_cli`.
-2. The checklist displays human-readable labels such as `Codex CLI`.
-3. Blanks are represented as `—` and can be included or excluded.
-4. Runtime filtering is part of the normal Workflows List filter set.
+1. Store stable profile IDs and display recorded friendly labels or ID fallback. Equal names do not collapse distinct accounts.
+2. Include mode matches a workflow when any recorded applicable member is selected. Exclude mode rejects workflows containing any excluded member. Count each workflow once per facet value, even when several steps use that profile.
+3. Pending selection (`pending`), Not recorded (`not_recorded`), and Not applicable (`not_applicable`) are separate selectable state values. `providerProfileStateIn` / `providerProfileStateNotIn` filter them through the same query owner. A blank shortcut includes or excludes their aggregate no-recorded-ID bucket; unknown projection coverage is not known absence.
+4. Facets describe authorized workflow records, including profiles that are disabled, disconnected, renamed, or removed from current launch inventory.
+5. Provider Profile replaces Runtime in the ordinary column, drawer/mobile filter, and chip presentation. A retained runtime URL constraint remains explicitly labeled as legacy and is never translated into current profile inventory.
+6. Filtering uses the existing server query projection, not per-row detail hydration or browser filtering after pagination. Facet errors preserve selected IDs and state values and table access with truthful coverage.
+7. Positive ID and state selections in this column use OR semantics: select `profile-a` and `pending` to show either recorded membership of that ID or pending rows. Excluded IDs and states reject any matching row. Other columns still combine with this result using AND. Section 12.1 defines the blank shortcut and validation rules.
 
 ### 9.4 Repository filter
 
@@ -604,7 +634,7 @@ Rules:
 3. Progress blanks are rows with missing progress, null progress, or `total <= 0`.
 4. Bucket selections use OR semantics within Progress.
 5. Signal selections use OR semantics within the signal group.
-6. The Progress filter as a whole ANDs together its enabled subfilters. Example: `Progress 25–75%` plus `Has failed steps` means rows must satisfy both.
+6. The Progress filter as a whole ANDs together its enabled subfilters. Example: `Progress 25–75%` plus `Has failed_steps` means rows must satisfy both.
 7. `Current step title` filtering is for the single bounded `currentStepTitle` string only. It must not search full step detail, logs, artifacts, stdout/stderr, or diagnostic payloads.
 8. Progress filtering must remain useful for live rows whose `currentStepTitle` changes; active filters should re-evaluate on refresh without losing staged filter edits.
 9. Progress filter labels must use product copy such as `Waiting on external progress`, not raw counter names such as `awaitingExternal`.
@@ -620,7 +650,9 @@ Examples:
 | User selection | Meaning |
 | --- | --- |
 | Status = `executing` and `planning` | Show rows whose state is executing OR planning. |
-| Runtime = `codex_cli`; Status = `failed` | Show rows whose runtime is Codex CLI AND state is failed. |
+| Provider Profile = `profile-a`; Status = `failed` | Show failed workflows with recorded membership of the illustrative stable ID `profile-a`. |
+| Provider Profile = `profile-a` or Pending selection | Show workflows with that recorded ID OR `selectionState=pending`. |
+| Provider Profile excludes Not applicable | Reject confirmed no-agent workflows; retain pending and historical-not-recorded rows subject to other filters. |
 | Repository excludes `owner/archived` | Show all repositories except `owner/archived`, subject to other filters. |
 | Progress = 25–75%; Signal = `has_failed_steps` | Show rows that are 25–75% complete AND have at least one failed step. |
 | Progress bucket = `in_progress` or `not_started`; Status = `executing` | Show executing rows whose progress is either in progress OR not started. |
@@ -653,7 +685,7 @@ Representative chips:
 
 ```text
 Status: not canceled
-Runtime: Codex CLI +1
+Provider Profile: OpenAI · Primary +1
 Repository: MoonLadderStudios/MoonMind
 Finished: blank
 Progress: 25–75%
@@ -693,12 +725,14 @@ Target server-authoritative rule:
 
 ### 12.1 Canonical filter encoding
 
-The API and URL should support multi-value include and exclude filters where meaningful.
+The API and URL should support multi-value include and exclude filters where meaningful. Provider Profile parameters below are the target extension of the existing query owner, not a claim that the current API accepts them. Implement and document the server and generated/client contract together.
 
-Representative URL shapes:
+Representative URL shapes with illustrative stable profile IDs:
 
 ```text
-/workflows?stateNotIn=canceled&targetRuntimeIn=codex_cli,claude_code&limit=50
+/workflows?stateNotIn=canceled&providerProfileIn=profile-a,profile-b&limit=50
+/workflows?providerProfileStateIn=pending,not_recorded&providerProfileStateNotIn=not_applicable&limit=50
+/workflows?providerProfileIn=profile-a&providerProfileStateIn=pending&limit=50
 /workflows?progressPctFrom=25&progressPctTo=75&progressSignalIn=has_failed_steps&sort=progressPct&sortDir=desc
 ```
 
@@ -707,7 +741,10 @@ Recommended parameters:
 | Parameter | Meaning |
 | --- | --- |
 | `stateIn` / `stateNotIn` | Canonical lifecycle state values. |
-| `targetRuntimeIn` / `targetRuntimeNotIn` | Runtime identifiers. |
+| `providerProfileIn` / `providerProfileNotIn` | Recorded stable profile-ID membership, using section 9.3 semantics. |
+| `providerProfileStateIn` / `providerProfileStateNotIn` | Include/exclude absence states: `pending`, `not_recorded`, `not_applicable`. Positive ID/state choices use OR within the Provider Profile column; exclusions reject any matching ID or state. |
+| `providerProfileBlank` | Boolean aggregate shortcut: `true` includes all three absence states; `false` includes `recorded` rows. Omitted applies no blank constraint. Do not combine this shortcut with other Provider Profile parameters; use explicit state lists for mixed selections. |
+| `targetRuntimeIn` / `targetRuntimeNotIn` | Legacy runtime identifiers only while their actual consumers remain supported; never a Provider Profile alias. |
 | `targetSkillIn` / `targetSkillNotIn` | Skill identifiers. |
 | `repoIn` / `repoNotIn` | Exact repository values. |
 | `repoContains` | Repository text filter; current Temporal-backed behavior is prefix-like. |
@@ -730,11 +767,12 @@ Rules:
 
 1. Values in comma-separated lists must be URL-encoded.
 2. If a value can contain commas in the future, the client and API must support repeated parameters as an equivalent representation.
-3. The API must reject contradictory include and exclude filters on the same field with a clear validation error.
+3. The API must reject contradictory include and exclude filters on the same field with a clear validation error. For Provider Profile, an ID or state cannot be both included and excluded. Reject unknown state tokens and combinations of `providerProfileBlank` with any other Provider Profile filter; do not silently ignore or broaden them.
 4. The browser must normalize empty lists away rather than sending no-op filters.
 5. Filter changes reset `nextPageToken` and the previous-page cursor stack.
 6. Sort changes reset `nextPageToken` and the previous-page cursor stack when sort is server-authoritative.
 7. When sort is current-page-only, sort changes do not modify URL state.
+8. Provider Profile IDs and absence states round-trip as distinct typed values in URLs, saved views, active chips, and desktop/mobile staged selections. An empty state list imposes no state constraint. State filters run before pagination with the same count semantics as ID filters.
 
 ### 12.2 Backward compatibility
 
@@ -754,6 +792,7 @@ Existing URLs must continue to fail safe:
 | `entry=run` | Historical alias for the default Workflow-run view. |
 | `entry=manifest` | Show a recoverable retired-product message (MoonLadderStudios/MoonMind#4192); the Manifests page is removed, so never redirect to it. |
 | `repo=<value>` | Repository text filter. |
+| legacy Runtime query/filter | Preserve its runtime semantics with a clearly labeled legacy constraint while supported, or explain unsupported filtering before changing the query. Never relabel as Provider Profile or silently broaden results. |
 | legacy `sort` / `sortDir` while frontend sort is current-page-only | Dropped or ignored so old links do not imply global order. |
 | legacy `sort=progress` | Normalize to `sort=progressPct` only after server-authoritative Progress sort exists; otherwise drop or ignore with current-page-only behavior. |
 
@@ -761,15 +800,16 @@ Rules:
 
 1. Existing query parameters remain accepted on load so old shared links do not break.
 2. Compatibility handling must never reveal system workflows in the ordinary Workflows List page.
-3. After the user changes filters in the new UI, the URL should rewrite to the new canonical Workflow-column filter encoding.
+3. After the user changes filters in the new UI, the URL should rewrite to the new canonical Workflow-column filter encoding while preserving any retained legacy constraint's distinct meaning.
 4. Shared old links should either preserve meaning inside the Workflow-focused page, redirect to the more appropriate page, or explain why the old workflow scope moved.
 5. Progress compatibility params must not force a per-row step-ledger fetch.
+6. Provider Profile column visibility may inherit the old Runtime column preference. A saved runtime filter cannot become a profile filter by the same preference migration. List/detail return links, mobile context, and saved views preserve the actual query.
 
 ---
 
 ## 13. API and data requirements
 
-The `/api/executions` list endpoint is the server authority for the normal Workflows List page. Current frontend filtering already relies on list query parameters and facet data for non-Progress columns. Progress sorting/filtering requires additional derived query support.
+The `/api/executions` list endpoint is the server authority for the normal Workflows List page. Existing filtering relies on list query parameters and facet data. Provider Profile presentation adds a compact recorded selection/membership projection through that owner. Reuse already implemented Progress support instead of repeating its migration.
 
 ### 13.1 List query requirements
 
@@ -795,27 +835,33 @@ Rules:
 5. The API remains the authority for access control; users cannot widen their visibility through filter params.
 6. The normal Workflows List query is always bounded to user-visible Workflow Executions. Backend list support for broader workflow scopes must not leak into this page.
 7. Progress query semantics must be evaluated from bounded execution progress summary data, not full step-ledger hydration.
+8. Provider Profile membership, typed `selectionState`, display summaries, filtering, count, and pagination use the same recorded selection scope. Apply the section 9.3 ID/state union and exclusions before count and pagination. Do not filter an already paginated page or guess a historical profile from current inventory. Extend the existing schema/projection and batch loading rather than a new list service or per-row lookup.
 
 ### 13.2 Facet query requirements
 
 The UI needs facet data so a filter popover can show values and counts beyond the current page.
 
-Recommended endpoint pattern:
+Target Provider Profile extension to the existing endpoint, not an already-shipped API claim:
 
 ```text
-GET /api/executions/facets?source=temporal&facet=targetRuntime&<current filters except targetRuntime>
+GET /api/executions/facets?source=temporal&facet=providerProfile&<current filters except Provider Profile IDs, states, and blank shortcut>
 ```
 
-Representative response:
+Representative response with illustrative stable IDs:
 
 ```json
 {
-  "facet": "targetRuntime",
+  "facet": "providerProfile",
   "items": [
-    { "value": "codex_cli", "label": "Codex CLI", "count": 18 },
-    { "value": "claude_code", "label": "Claude Code", "count": 11 }
+    { "value": "profile-a", "label": "OpenAI · Primary", "count": 18 },
+    { "value": "profile-b", "label": "Anthropic · Work", "count": 11 }
   ],
-  "blankCount": 2,
+  "stateItems": [
+    { "value": "pending", "label": "Pending selection", "count": 2 },
+    { "value": "not_recorded", "label": "Not recorded", "count": 1 },
+    { "value": "not_applicable", "label": "Not applicable", "count": 3 }
+  ],
+  "blankCount": 6,
   "countMode": "exact",
   "truncated": false,
   "nextPageToken": null
@@ -827,14 +873,16 @@ Rules:
 1. Facets are scoped by the current user and authorization model.
 2. Facet requests include all active filters except the filter for the facet being opened, unless the user asks to search within the currently selected subset.
 3. Static facets such as Status may come from the frontend enum plus server counts.
-4. Dynamic facets such as Runtime, Skill, Repository, and Integration should come from server data.
+4. Dynamic facets such as Provider Profile, Skill, Repository, and Integration should come from server data. Profile values come from recorded workflow associations, including no-longer-launchable profiles, not only current Settings inventory.
 5. Progress buckets and signals are static lists; counts are useful but optional for the first Progress implementation.
 6. Progress current-step title should not be exposed as a full value facet because it is high-cardinality and transient.
-7. Facet counts must reflect the current query context.
+7. Facet counts must reflect the current query context. A workflow appears at most once in each profile count. Multi-profile workflows may contribute to more than one profile value, so the sum of those counts is not necessarily the total workflow count.
 8. If exact counts are expensive, the response may set `countMode` to an estimated or unknown mode; the UI must label those counts accordingly or omit counts.
 9. Large facets may be paginated and searched server-side.
-10. Facet failure must not break the table; the UI can fall back to values in the currently loaded page with a visible `current page values only` notice.
+10. Facet failure must not break the table; the UI can fall back to values in the currently loaded page with a visible `current page values only` notice. Preserve selected IDs even when a failed or partial facet response omits them.
 11. Facet results must not include system-only workflow values or counts on the normal Workflows List page.
+12. `stateItems` exposes all three absence tokens from section 7.2, including zero-count entries. Their counts use the same authorization, other-column filters, and count mode as `items`. Each absent workflow contributes to exactly one state count; `blankCount` is their sum when counts are exact. Unavailable projection coverage cannot contribute to an absence count and must be reported truthfully.
+13. Provider Profile facet requests omit all of `providerProfileIn`, `providerProfileNotIn`, `providerProfileStateIn`, `providerProfileStateNotIn`, and `providerProfileBlank` unless deliberately querying the selected subset. State entries remain available when profile-ID items are paginated or searched; state values are typed separately from profile IDs. Partial or failed responses preserve selected state tokens as well as IDs.
 
 ### 13.3 Progress data materialization
 
@@ -902,7 +950,7 @@ Rules:
 6. `Escape` cancels staged changes and closes the popover.
 7. `Enter` on `Apply` applies staged changes and closes the popover.
 8. Checkbox labels include value label and count when shown.
-9. Active filter chips expose remove buttons with names such as `Remove Status filter` or `Remove Progress filter`.
+9. Active filter chips expose remove buttons with names such as `Remove Provider Profile filter`, `Remove Status filter`, or `Remove Progress filter`.
 10. Mobile filter sheet controls must be equivalent to desktop controls for screen-reader and keyboard users.
 11. Color must not be the only indicator of active sort, active filter, selected status, or selected Progress signal.
 12. Progress range controls must expose percent units in their accessible names.
@@ -917,11 +965,12 @@ The mobile card layout remains the primary narrow-screen presentation. Column he
 Rules:
 
 1. The mobile results toolbar includes a `Filters` button when the table header is not visible.
-2. The mobile filter sheet lists the same filterable columns as desktop, including Progress after Progress filtering is implemented.
+2. The mobile filter sheet lists the same filterable columns as desktop, including Provider Profile and Progress.
 3. Each column row opens the same filter editor used by desktop, adapted to full-screen or bottom-sheet layout.
-4. Active chips remain visible on mobile through a horizontally scrollable chip row or compact filter summary.
+4. Active chips remain visible on mobile through a horizontally scrollable row or compact filter summary.
 5. Mobile cards continue to show Progress in the field grid using the same compact display string as desktop.
 6. Mobile Progress filtering must not require a table header to be visible.
+7. Provider Profile replaces the Runtime card field, with optional secondary Harness. Long or equal-name profiles and unavailable metadata retain readable labels, stable identity, and usable controls without page overflow.
 
 ---
 
@@ -939,3 +988,16 @@ The Progress sort/filter implementation should preserve these testable behaviors
 8. Current-page-only Progress sorting, if used before server-authoritative rollout, keeps sort out of URL/API state and keeps the current-page-only notice visible.
 9. Server-authoritative Progress sorting, once enabled, resets pagination and includes `sort=progressPct` plus `sortDir` in URL/API state.
 10. Backend validation rejects contradictory Progress include/exclude filters with a clear validation error.
+
+## 18. Provider Profile test contract
+
+Implement through the existing projection, API, query/facet helpers, production list components, and browser tests. These are executable behavior requirements, not documentation-wording tests.
+
+1. Single, multiple, pending, not-recorded, and no-agent rows display their recorded selection without current-default guesses. Renamed/disabled/removed profiles and duplicate labels preserve stable identity.
+2. Real list/facet integration filters profile membership and each absence state before pagination, proves mixed ID/state OR and exclusion semantics with other-column AND filters, counts state buckets and their exact blank aggregate consistently, and retains authorization and system-workflow exclusions. Unknown projection coverage never becomes a known absence; invalid state tokens, overlapping include/exclude values, and conflicting blank shortcuts fail clearly.
+3. Profile display and querying perform no per-row detail/profile/history fetches and expose no credential or infrastructure material.
+4. Desktop/mobile filter controls, chips, staged selections, loading/empty/error states, long labels, keyboard focus, and immediate submission work on production components and styles.
+5. URL reload, saved views and column preferences, typed ID/state filter chips, legacy runtime constraints, and list/detail return context preserve query meaning. A runtime filter is never silently relabeled or translated through today's profiles.
+6. Current-page sorting remains honestly scoped until server implementation exists, and partial or failed facets do not clear selected IDs or state tokens or masquerade as a complete empty collection. State facets retain zero-count entries and remain available alongside paginated/searched profile items.
+
+Use targeted red/green checks and broader existing GitHub Actions. A paid-provider run, mandatory manual visual review, new query service, or exhaustive runtime matrix is not required for this list change. Record candidate evidence and unexecuted checks honestly.
