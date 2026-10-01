@@ -197,18 +197,18 @@ with workflow.unsafe.imports_passed_through():
     )
 
 from moonmind.workflows.skills.approval_policy import (
+    ReviewRequest,
+    StepGateResult,
     gate_transition_allows_review_retry,
     inject_review_feedback_into_inputs,
+    is_review_gate_active,
     merge_accepted_output_evidence,
+    parse_step_gate_result,
+    recommended_next_actions,
     review_gate_budget_metadata,
     review_gate_retry_allowed,
     review_gate_verdict_made_progress,
     terminal_disposition_for_gate_stop,
-    is_review_gate_active,
-    ReviewRequest,
-    StepGateResult,
-    parse_step_gate_result,
-    recommended_next_actions,
 )
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_plan_contracts import REVIEW_VERDICTS
@@ -238,18 +238,18 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     RemediationProgressVector,
     TypedGateResult,
     advance_remediation_loop_state,
+    bounded_story_loop_scope_guard,
     build_remediation_progress_vector,
     compile_bounded_story_loop,
-    bounded_story_loop_scope_guard,
     evaluate_attempt_continuation,
     evaluate_publication_decision,
 )
 from moonmind.workflows.temporal.completion_summary import is_generic_completion_summary
-from moonmind.workflows.temporal.publication_recovery import PublicationObservation
 from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
     build_incident_trace_ref,
 )
+from moonmind.workflows.temporal.publication_recovery import PublicationObservation
 from moonmind.workflows.temporal.publish_auto_evidence import (
     AutoPublishEvidenceError,
     parse_auto_publish_evidence,
@@ -503,6 +503,9 @@ MERGE_AUTOMATION_TERMINAL_STATUSES = (
 )
 RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
     "run-merge-automation-omnigent-resolver-plan-v1"
+)
+RUN_MERGE_AUTOMATION_RESOLVER_SELECTION_PATCH = (
+    "run-merge-automation-resolver-selection-v1"
 )
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
@@ -19776,10 +19779,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 post_merge_github.setdefault("required", True)
                 post_merge_github.setdefault("repository", github_issue["repository"])
                 post_merge_github.setdefault("issueNumber", github_issue["issueNumber"])
-                if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
-                    task = self._mapping_value(parameters, "workflow") or self._mapping_value(parameters, "task") or {}
+                if self._patched_or_false_outside_workflow(
+                    RUN_ACCEPTANCE_EVIDENCE_PATCH
+                ):
+                    task = (
+                        self._mapping_value(parameters, "workflow")
+                        or self._mapping_value(parameters, "task")
+                        or {}
+                    )
                     inputs = self._mapping_value(task, "inputs") or {}
-                    target_ref = self._coerce_text(inputs.get("completion_target_ref"), max_chars=500)
+                    target_ref = self._coerce_text(
+                        inputs.get("completion_target_ref"), max_chars=500
+                    )
                     if target_ref:
                         post_merge_github["completionTargetRef"] = target_ref
             return {
@@ -19802,6 +19813,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     max_chars=20,
                 )
                 or "squash",
+                "maxIterations": candidate.get("maxIterations"),
                 "finishMode": self._normalize_finish_mode(
                     candidate.get("finishMode") or candidate.get("finish_mode")
                 ),
@@ -20057,7 +20069,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         timeouts: dict[str, Any] = {"fallbackPollSeconds": fallback_poll_seconds or 120}
         if expire_after_seconds is not None:
             timeouts["expireAfterSeconds"] = expire_after_seconds
-        task_payload = self._mapping_value(parameters, "task") or {}
+        inherit_resolver_selection = self._workflow_patch_enabled(
+            RUN_MERGE_AUTOMATION_RESOLVER_SELECTION_PATCH
+        )
+        task_payload = (
+            (
+                self._mapping_value(parameters, "workflow")
+                if inherit_resolver_selection
+                else {}
+            )
+            or self._mapping_value(parameters, "task")
+            or {}
+        )
         task_runtime_payload = (
             self._mapping_value(task_payload, "runtime")
             if isinstance(task_payload, Mapping)
@@ -20077,11 +20100,25 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "targetRuntime": target_runtime,
             "requiredCapabilities": ["git", "gh"],
         }
-        if (
-            target_runtime == "omnigent"
-            and self._workflow_patch_enabled(
-                RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH
+        if inherit_resolver_selection:
+            resolver_template["inputs"] = {"returnToGate": True}
+        if inherit_resolver_selection and request.get("maxIterations") is not None:
+            iterations = request["maxIterations"]
+            if (
+                isinstance(iterations, bool)
+                or not str(iterations).isdigit()
+                or not 1 <= int(iterations) <= 50
+            ):
+                raise ValueError(
+                    "resolver maxIterations must be an integer between 1 and 50"
+                )
+            # Absent in retained inputs: do not alter their recorded child
+            # template/command shape. New adoption carries the Skill budget.
+            resolver_template.setdefault("inputs", {})["maxIterations"] = int(
+                iterations
             )
+        if target_runtime == "omnigent" and self._workflow_patch_enabled(
+            RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH
         ):
             parent_execution_plan = parameters.get("omnigentExecutionPlan")
             if not isinstance(parent_execution_plan, WorkflowMapping):
@@ -20092,17 +20129,31 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             resolver_template["parentOmnigentExecutionPlan"] = dict(
                 parent_execution_plan
             )
-        profile_id = self._inherited_execution_profile_ref(parameters)
+        profile_id = self._inherited_execution_profile_ref(
+            {**parameters, "task": task_payload}
+            if inherit_resolver_selection
+            else parameters
+        )
         if profile_id:
             resolver_template["executionProfileRef"] = profile_id
         runtime_model = self._coerce_text(
-            parameters.get("model"),
+            parameters.get("model")
+            or (
+                task_runtime_payload.get("model")
+                if inherit_resolver_selection
+                else None
+            ),
             max_chars=160,
         )
         if runtime_model:
             resolver_template["model"] = runtime_model
         runtime_effort = self._coerce_text(
-            parameters.get("effort"),
+            parameters.get("effort")
+            or (
+                task_runtime_payload.get("effort")
+                if inherit_resolver_selection
+                else None
+            ),
             max_chars=80,
         )
         if runtime_effort:

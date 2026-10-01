@@ -341,7 +341,12 @@ def build_resolver_run_request(
         # The legacy branch exists only to replay previously recorded children.
         required_capabilities = list(
             dict.fromkeys(
-                [*(value.lower() for value in required_capabilities), "git", "gh", "docker"]
+                [
+                    *(value.lower() for value in required_capabilities),
+                    "git",
+                    "gh",
+                    "docker",
+                ]
             )
         )
     normalized_finish_mode = (
@@ -355,6 +360,27 @@ def build_resolver_run_request(
         "mergeMethod": merge_method,
         "finishMode": normalized_finish_mode,
     }
+    template_inputs = template.get("inputs")
+    return_to_gate = (
+        isinstance(template_inputs, Mapping)
+        and template_inputs.get("returnToGate") is True
+    )
+    if return_to_gate:
+        args["returnToGate"] = True
+    if (
+        isinstance(template_inputs, Mapping)
+        and template_inputs.get("maxIterations") is not None
+    ):
+        iterations = template_inputs["maxIterations"]
+        if (
+            isinstance(iterations, bool)
+            or not str(iterations).isdigit()
+            or not 1 <= int(iterations) <= 50
+        ):
+            raise ValueError(
+                "resolver maxIterations must be an integer between 1 and 50"
+            )
+        args["maxIterations"] = int(iterations)
     if pr.head_branch:
         args["branch"] = pr.head_branch
     if jira_issue_key:
@@ -410,6 +436,13 @@ def build_resolver_run_request(
                     "--require-fresh-review to every pr_resolve_finalize.py "
                     "invocation, and never post the review request yourself."
                     if review_loop_enabled
+                    else ""
+                )
+                + (
+                    " Return external CI/provider waits to this durable parent: "
+                    "pass --return-to-gate to pr_resolve_orchestrate.py, retain "
+                    "its gatedContinuation, and stop the agent turn on reenter_gate."
+                    if return_to_gate
                     else ""
                 )
                 + (

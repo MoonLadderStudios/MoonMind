@@ -96,7 +96,23 @@ def _activities() -> list[Any]:
     return handlers
 
 
-async def test_container_job_executes_on_test_server_and_replays() -> None:
+@pytest.mark.parametrize("legacy_pull_budget", [False, True])
+async def test_container_job_executes_on_test_server_and_replays(
+    monkeypatch, legacy_pull_budget
+) -> None:
+    from moonmind.workflows.temporal.workflows import container_job
+
+    original_patch = container_job._workflow_patch_enabled
+    if legacy_pull_budget:
+        monkeypatch.setattr(
+            container_job,
+            "_workflow_patch_enabled",
+            lambda patch: (
+                False
+                if patch == container_job.CONTAINER_JOB_IMAGE_PULL_BUDGET_PATCH
+                else original_patch(patch)
+            ),
+        )
     workflow_queue = f"container-job-workflow-{uuid4()}"
     activity_queue = settings.temporal.activity_agent_runtime_task_queue
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -128,6 +144,18 @@ async def test_container_job_executes_on_test_server_and_replays() -> None:
     assert result["state"] == "succeeded"
     assert result["logsRef"] == "art:logs"
     assert result["projectionSequence"] > 0
+    acquisition = next(
+        event.activity_task_scheduled_event_attributes
+        for event in history.events
+        if event.HasField("activity_task_scheduled_event_attributes")
+        and event.activity_task_scheduled_event_attributes.activity_type.name
+        == "container_job.acquire_image"
+    )
+    assert acquisition.start_to_close_timeout.seconds == (
+        300 if legacy_pull_budget else 1800
+    )
+    # Replay the retained pre-patch command with the current implementation.
+    monkeypatch.setattr(container_job, "_workflow_patch_enabled", original_patch)
     await Replayer(
         workflows=[MoonMindContainerJobWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),

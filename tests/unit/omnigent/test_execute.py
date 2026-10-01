@@ -25,20 +25,20 @@ from moonmind.omnigent.bridge_store import (
 )
 from moonmind.omnigent.execute import (
     _ACTIVITY_HEARTBEAT_STATE,
-    _safe_heartbeat,
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
+    PromptContextResolution,
     _agent_items,
     _await_marked_turn_terminal,
-    _build_omnigent_first_message,
     _build_capture_bundle,
+    _build_omnigent_first_message,
     _durable_terminal_status_with_evidence,
     _enqueue_stream_events,
     _first_message_text,
-    _marked_turn_item_state,
-    _marked_turn_failure_snapshot,
     _journaled_marked_turn_failure_snapshot,
+    _marked_turn_failure_snapshot,
+    _marked_turn_item_state,
     _marked_turn_timeout_diagnostics,
     _marked_turn_timeout_message,
     _MarkedTurnStartWatchdog,
@@ -46,13 +46,13 @@ from moonmind.omnigent.execute import (
     _resolve_agent_id,
     _resolve_initial_context_message,
     _restore_active_journals,
+    _safe_heartbeat,
     _session_authority_observation,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
-from moonmind.omnigent.execute import PromptContextResolution
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
@@ -70,6 +70,196 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "interruption_allowed,interrupt_confirmed",
+    [(True, True), (True, False), (False, True)],
+)
+async def test_active_heartbeat_only_turn_recovers_after_semantic_stall(
+    monkeypatch,
+    tmp_path,
+    interruption_allowed,
+    interrupt_confirmed,
+) -> None:
+    from moonmind.omnigent.execute import OmnigentSameSessionContinuationRequired
+
+    marker = "MoonMind-Omnigent-Run:\n  correlationId: corr-1\n  idempotencyKey: idem-1"
+    streamed = {"value": 0}
+    base = _never_started_client(marker, stream_shape="heartbeats", streamed=streamed)
+    interruptions = []
+    provider_state = {"posted": False, "interrupted": False}
+
+    class Client(base):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.http_client = kwargs["client"]
+
+        async def post_event(self, session_id, payload):
+            provider_state["posted"] = True
+            return await super().post_event(session_id, payload)
+
+        async def get_session(self, session_id):
+            assert not self.http_client.is_closed
+            snapshot = _never_started_snapshot(marker)
+            if provider_state["posted"]:
+                snapshot["active_response_id"] = (
+                    None if provider_state["interrupted"] else "stuck-response"
+                )
+                snapshot["status"] = (
+                    "idle" if provider_state["interrupted"] else "running"
+                )
+                snapshot["items"].append(
+                    {
+                        "id": "preamble",
+                        "type": "message",
+                        "status": "completed",
+                        "data": {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "Starting the requested work.",
+                                }
+                            ],
+                        },
+                    }
+                )
+            return snapshot
+
+        async def interrupt(self, session_id):
+            assert not self.http_client.is_closed
+            interruptions.append(session_id)
+            provider_state["interrupted"] = interrupt_confirmed
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", Client)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._resolved_marked_turn_timeout_seconds",
+        lambda _: 0.05,
+    )
+    request = _request().model_copy(
+        update={
+            "parameters": {
+                "omnigent": {
+                    "agent": {"agentName": "opencode-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "do the work"},
+                }
+            }
+        }
+    )
+    store = _RecordingBridgeStore()
+    expected = (
+        OmnigentSameSessionContinuationRequired
+        if interruption_allowed and interrupt_confirmed
+        else OmnigentSessionStillRunningError
+    )
+    with pytest.raises(expected) as failure:
+        await asyncio.wait_for(
+            run_omnigent_execution(
+                request,
+                artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+                run_store=store,
+                allow_same_session_continuation=True,
+                allow_stall_interruption=interruption_allowed,
+            ),
+            timeout=3,
+        )
+    assert interruptions == (["session-1"] if interruption_allowed else [])
+    assert "progress" in str(failure.value)
+    assert not store.terminal_calls
+    assert store.row.raw_events_ref and store.row.normalized_events_ref
+    _, events = await _restore_active_journals(
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        durable_row=store.row,
+    )
+    assert events[-1]["metadata"]["reconciliation"]["turnProgressSignature"]
+    assert events[-1]["metadata"]["reconciliation"]["turnLastProgressAt"] > 0
+
+
+@pytest.mark.asyncio
+async def test_semantic_stall_budget_does_not_interrupt_an_unfinished_tool():
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop, timeout_seconds=60, stall_timeout_seconds=120
+    )
+    snapshot = _never_started_snapshot("marker")
+    snapshot["active_response_id"] = "build-response"
+    snapshot["items"].append(
+        {
+            "id": "build",
+            "type": "function_call",
+            "data": {"call_id": "build", "name": "bash"},
+        }
+    )
+    state = _marked_turn_item_state(snapshot, marker="marker")
+    assert state["unfinishedToolCall"]
+    observed = loop.time()
+    watchdog.observe(snapshot, state, observation_started_at=observed)
+    # Quiet tool execution is not proof that its provider stalled.
+    watchdog.observe(snapshot, state, observation_started_at=observed + 60)
+    with pytest.raises(
+        OmnigentSessionStillRunningError, match="no observable progress"
+    ):
+        watchdog.observe(snapshot, state, observation_started_at=observed + 121)
+
+
+@pytest.mark.asyncio
+async def test_semantic_stall_clock_survives_journal_restore(tmp_path):
+    import time
+
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    loop = asyncio.get_running_loop()
+    snapshot = _never_started_snapshot("marker")
+    snapshot["active_response_id"] = "stuck-response"
+    state = _marked_turn_item_state(snapshot, marker="marker")
+    signature = hashlib.sha256(
+        json.dumps(state["signature"], sort_keys=True).encode()
+    ).hexdigest()
+    progress = {
+        "turnProgressSignature": signature,
+        "turnLastProgressAt": time.time() - 60,
+    }
+    ref = await gateway.write_text(
+        request=_request(),
+        name="normalized.jsonl",
+        payload=json.dumps({"metadata": {"reconciliation": progress}}) + "\n",
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+    _, events = await _restore_active_journals(
+        artifact_gateway=gateway,
+        durable_row=SimpleNamespace(normalized_events_ref=ref),
+    )
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop, timeout_seconds=60, stall_timeout_seconds=1
+    )
+    watchdog.restore_progress_events(events)
+    with pytest.raises(
+        OmnigentSessionStillRunningError, match="no observable progress"
+    ):
+        watchdog.observe(snapshot, state, observation_started_at=loop.time())
+
+
+def test_progress_signature_changes_when_existing_tool_output_advances():
+    snapshot = _never_started_snapshot("marker")
+    snapshot["items"].append(
+        {
+            "id": "out-1",
+            "type": "function_call_output",
+            "data": {"call_id": "call-1", "output": "first"},
+        }
+    )
+    before = _marked_turn_item_state(snapshot, marker="marker")["signature"]
+    snapshot["items"][-1]["data"]["output"] = "first\nsecond"
+    after = _marked_turn_item_state(snapshot, marker="marker")["signature"]
+    assert before != after
 
 
 def test_marked_turn_timeout_diagnostics_explain_active_tool_and_quota_evidence() -> (
@@ -1055,6 +1245,17 @@ class _RecordingBridgeStore:
 
     async def list_events(self, *_args: object, **_kwargs: object) -> list[dict]:
         return []
+
+    async def attach_active_journal_refs(
+        self,
+        _bridge_session_id: str,
+        *,
+        raw_ref: str,
+        normalized_ref: str,
+    ) -> SimpleNamespace:
+        self.row.raw_events_ref = raw_ref
+        self.row.normalized_events_ref = normalized_ref
+        return self.row
 
     async def mark_terminal(
         self,

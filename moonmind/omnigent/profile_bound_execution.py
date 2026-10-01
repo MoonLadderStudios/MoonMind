@@ -1549,6 +1549,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         run_store=self._run_store,
                         defer_bridge_terminal=True,
                         allow_same_session_continuation=True,
+                        allow_stall_interruption=(
+                            effective_launch["capabilities"]["interruptTurn"] is True
+                        ),
                     ),
                     host_lease_ref=host_lease.lease_id,
                     ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
@@ -1568,6 +1571,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                 # owns the durable checkpoint and later publication; they need
                 # the same recovery without publishing this intermediate stage.
                 running_turn_recovery = exc
+                await emit(
+                    "same_session_recovery",
+                    "started",
+                    code=exc.code,
+                    summary=str(exc)[:1000],
+                    ignore_errors=True,
+                )
                 attempt_cleanup_deferred_code = (
                     "same_session_continuation_pending"
                 )
@@ -1928,7 +1938,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                                     "bridgeSessionId": (
                                         continuation_bridge.bridge_session_id
                                     ),
-                                    "effectiveLaunchRef": effective_launch["snapshotRef"],
+                                    "effectiveLaunchRef": effective_launch[
+                                        "snapshotRef"
+                                    ],
                                 },
                                 harness=str(effective_launch["harness"]),
                                 agent_name=str(effective_launch["agentName"]),
@@ -1941,11 +1953,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                             ),
                             defer_bridge_terminal=True,
                             allow_same_session_continuation=True,
+                            allow_stall_interruption=(
+                                effective_launch["capabilities"]["interruptTurn"]
+                                is True
+                            ),
                         ),
                         host_lease_ref=host_lease.lease_id,
-                        ttl_seconds=int(
-                            effective_launch["limits"]["timeoutSeconds"]
-                        ),
+                        ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
                     )
                     deferred_count = len(deferred_bridge_terminals)
                     result = collect_deferred_bridge_terminal(continuation_result)

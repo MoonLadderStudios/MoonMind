@@ -611,6 +611,8 @@ never
 not in the caller container. Digests are preferred for reproducibility. When a
 tag is permitted, the job records the resolved digest.
 
+Image acquisition has a bounded 1800s execution window and 2100s total scheduling/retry window, independently of the later workload timeout. This applies to direct registry images and approved image sources. A short test request must not truncate a cold Unreal image pull. Retained Temporal histories keep their recorded acquisition timeout through the `container-job-image-pull-budget-v1` patch.
+
 ### 11.2 Local-build freshness
 
 Before invoking a local build, the trusted worker:
@@ -952,6 +954,8 @@ cleanup_status
 
 `image_provision_action` is one of `reuse`, `pull`, `build`, or `none`. Secrets,
 registry-auth payloads, build secrets, and unbounded logs are excluded.
+
+Registry pull output is redacted before publication and retained in bounded stream tails. The default worker publishes the first progress immediately, refreshes at most every 15s, and preserves the final available prefix on cancellation. The existing job projection links this evidence while acquisition is running; a later timeout with no new log ref cannot erase it. Diagnostic publication failures do not replace the pull result.
 
 Metrics distinguish workspace resolution, image cache hits, freshness misses,
 lock waits, pull time, build time, validation time, container startup, workload
