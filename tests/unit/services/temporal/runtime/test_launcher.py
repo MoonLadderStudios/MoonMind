@@ -5789,3 +5789,33 @@ async def test_unconfigured_default_suspends_only_authenticated_repository_work(
 
     assert "GITHUB_TOKEN" in str(excinfo.value)
     assert launcher._request_uses_github(_make_request()) is False
+
+
+@pytest.mark.asyncio
+async def test_deleted_default_connection_blocks_instead_of_deriving_it(
+    tmp_path, monkeypatch
+):
+    from moonmind.workflows.executions.repository_contract import (
+        REPOSITORY_DENIED,
+        RepositoryRouteError,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+
+    async def _deleted(connection_ref: str):
+        raise RepositoryRouteError(REPOSITORY_DENIED, f"{connection_ref} was deleted")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.load_repository_connection_for_launch",
+        _deleted,
+    )
+    launcher = _ready_launcher(tmp_path)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
+    ) as excinfo:
+        await launcher._ensure_repository_ready_for_launch(
+            _git_target_request("repository-connection:git-default"), None
+        )
+
+    assert "was deleted" in str(excinfo.value)

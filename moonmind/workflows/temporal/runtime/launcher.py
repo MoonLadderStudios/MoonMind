@@ -43,6 +43,7 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryClientPolicy,
     RepositoryConnection,
     RepositoryContractError,
+    RepositoryRouteError,
     ResolvedRepositoryTarget,
     compile_repository_target,
     ensure_repository_ready,
@@ -613,6 +614,11 @@ class ManagedRuntimeLauncher:
             )
         except asyncio.CancelledError:
             raise
+        except RepositoryRouteError as exc:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                f"{exc}; no other connection is substituted",
+            ) from exc
         except Exception as exc:
             raise RepositoryContractError(
                 "REPOSITORY_CONNECTION_UNAVAILABLE",

@@ -79,20 +79,42 @@ async def load_repository_connection_for_launch(connection_ref: str) -> Any:
     """Return the recorded repository connection, or ``None`` when none exists.
 
     A database failure propagates so callers can tell an unreadable record
-    from an absent one; absence alone may select the deployment declaration.
+    from an absent one, and a deleted or disabled connection raises
+    ``RepositoryRouteError``: only true absence may select the deployment
+    declaration.
     """
 
     from api_service.db.base import async_session_maker
+    from api_service.db.models import RepositoryConnectionRecord
     from api_service.services.repository_connections import (
         RepositoryConnectionService,
     )
+    from moonmind.workflows.executions.repository_contract import (
+        REPOSITORY_DENIED,
+        RepositoryRouteError,
+    )
 
     async with async_session_maker() as session:
-        return await RepositoryConnectionService(session).get_connection(
+        connection = await RepositoryConnectionService(session).get_connection(
             connection_ref,
             principal_ref=_LAUNCH_CONNECTION_PRINCIPAL,
             principal_scope=("system", None),
         )
+        if connection is not None:
+            return connection
+        deleted = (
+            await session.execute(
+                select(RepositoryConnectionRecord.connection_id).where(
+                    RepositoryConnectionRecord.connection_id == connection_ref,
+                    RepositoryConnectionRecord.tombstone.is_(True),
+                )
+            )
+        ).first()
+        if deleted is not None:
+            raise RepositoryRouteError(
+                REPOSITORY_DENIED, f"repository connection {connection_ref} was deleted"
+            )
+        return None
 
 
 async def resolve_default_github_connection_credential(
@@ -115,6 +137,7 @@ async def resolve_default_github_connection_credential(
     )
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
+        RepositoryRouteError,
     )
 
     try:
@@ -123,6 +146,17 @@ async def resolve_default_github_connection_credential(
         )
     except asyncio.CancelledError:
         raise
+    except RepositoryRouteError as exc:
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=DEFAULT_GIT_CONNECTION_REF,
+            repo=repo,
+            diagnostic=(
+                f"{exc}; MoonMind does not try another GitHub credential. Record "
+                f"or re-enable {DEFAULT_GIT_CONNECTION_REF} under Settings, "
+                "Source Control."
+            ),
+        )
     except Exception as exc:
         logger.warning(
             "Default repository connection could not be read: %s",

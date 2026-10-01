@@ -7,6 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from moonmind.workflows.temporal.runtime import (
+    managed_api_key_resolve as managed_api_key_resolve_module,
+)
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     BrokenSecretRef,
     SecretRefLaunchBlockedError,
@@ -18,6 +21,8 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+_real_loader = managed_api_key_resolve_module.load_repository_connection_for_launch
 
 
 @pytest.fixture(autouse=True)
@@ -749,3 +754,96 @@ async def test_default_connection_loader_cancellation_propagates(
 
     with pytest.raises(asyncio.CancelledError):
         await resolve_github_token_for_launch({})
+
+
+async def test_launch_connection_loader_distinguishes_deleted_from_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A deleted recorded connection is not absence (#4023)."""
+
+    import sqlalchemy as sa
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db.models import Base, RepositoryConnectionRecord
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryRouteError,
+    )
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/connections.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            Base.metadata.create_all,
+            tables=[RepositoryConnectionRecord.__table__],
+        )
+        for connection_id, tombstone in (
+            ("repository-connection:active", False),
+            ("repository-connection:deleted", True),
+        ):
+            await connection.execute(
+                sa.insert(RepositoryConnectionRecord.__table__).values(
+                    connection_id=connection_id,
+                    display_name="Recorded",
+                    provider="git",
+                    hosting_service="github",
+                    endpoint_normalized="https://github.com",
+                    endpoint_ref="https://github.com",
+                    allowed_operations=["read"],
+                    client_policy={
+                        "pinnedVersion": "2.46.0",
+                        "toolBundleRef": "repository-client:git-system",
+                        "executableSha256": "sha256:git",
+                    },
+                    credential_config={
+                        "source": "secret_ref",
+                        "credentialRef": {"provider": "env", "key": "PAT", "extra": {}},
+                    },
+                    lifecycle="deleted" if tombstone else "active",
+                    owner_ref="system:deployment",
+                    scope_type="system",
+                    allowed_principal_refs=[],
+                    tombstone=tombstone,
+                )
+            )
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", async_sessionmaker(engine)
+    )
+    monkeypatch.setattr(
+        managed_api_key_resolve,
+        "load_repository_connection_for_launch",
+        _real_loader,
+    )
+
+    try:
+        active = await _real_loader("repository-connection:active")
+        absent = await _real_loader("repository-connection:absent")
+        with pytest.raises(RepositoryRouteError, match="deleted"):
+            await _real_loader("repository-connection:deleted")
+    finally:
+        await engine.dispose()
+
+    assert active is not None and active.credential.source == "secret_ref"
+    assert absent is None
+
+
+async def test_deleted_default_connection_does_not_fall_back_to_declaration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.executions.repository_contract import (
+        REPOSITORY_DENIED,
+        RepositoryRouteError,
+    )
+
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "declared-token")
+
+    async def _deleted(connection_ref: str):
+        raise RepositoryRouteError(REPOSITORY_DENIED, f"{connection_ref} was deleted")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _deleted,
+    )
+
+    assert await resolve_github_token_for_launch({}) is None
