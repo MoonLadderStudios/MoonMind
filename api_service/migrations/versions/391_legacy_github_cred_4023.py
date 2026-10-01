@@ -56,8 +56,9 @@ MIGRATION_REQUEST_ID = "migration:391:legacy-github-credential"
 MIGRATION_ACTOR_REF = "system:migration-391"
 _CREATE_ACTION = "connection.create"
 _CORRECTION = (
-    "Correct it, or record the GitHub credential under Settings, Source "
-    "Control, as repository-connection:git-default."
+    "Set it to a secret reference such as env://GITHUB_TOKEN or "
+    "db://<managed secret slug>; while repository-connection:git-default is "
+    "not recorded, launches read the corrected deployment value."
 )
 
 # Frozen legacy precedence (moonmind.auth.github_credentials and the launch
