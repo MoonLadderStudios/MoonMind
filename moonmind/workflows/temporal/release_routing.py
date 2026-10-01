@@ -166,7 +166,7 @@ async def await_registered_queues(
                 for item in response.worker_deployment_version_info.task_queue_infos
             }
             if required <= registered:
-                return registered
+                return
         except RPCError as exc:
             if exc.status != RPCStatusCode.NOT_FOUND:
                 raise
@@ -253,6 +253,57 @@ async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=1
     }
 
 
+async def _registered_activity_queues(client, version: str) -> set[str]:
+    from temporalio.api.enums.v1 import TaskQueueType
+
+    response = await client.workflow_service.describe_worker_deployment_version(
+        DescribeWorkerDeploymentVersionRequest(
+            namespace=client.namespace, version=version
+        )
+    )
+    return {
+        item.name
+        for item in response.worker_deployment_version_info.task_queue_infos
+        if item.type == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+    }
+
+
+async def _run_pinned_canary(
+    client, *, execution_id, deployment, build_id, task_queue, queues
+):
+    from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    try:
+        handle = await client.start_workflow(
+            "MoonMind.ReleaseCanary",
+            {"digest": build_id, "taskQueues": list(queues)},
+            id=execution_id,
+            task_queue=task_queue,
+            # A failed canary must not pin this ID forever. REJECT_DUPLICATE
+            # made every later retry reattach to the closed failed run and
+            # re-raise its error, so a transient canary failure left the old
+            # route current with no pollers even after the outage cleared.
+            # FAILED_ONLY still refuses to re-run a successful canary, and
+            # USE_EXISTING still dedupes concurrent stewards.
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            execution_timeout=timedelta(seconds=max(90, 65 * len(queues))),
+            versioning_override=PinnedVersioningOverride(
+                WorkerDeploymentVersion(
+                    deployment_name=deployment,
+                    build_id=build_id,
+                )
+            ),
+        )
+    except WorkflowAlreadyStartedError:
+        handle = client.get_workflow_handle(execution_id)
+    if await handle.result() != {"digest": build_id, "status": "verified"}:
+        raise ValueError(
+            "Candidate release canary did not verify its immutable identity"
+        )
+
+
 async def promote_version(
     client,
     *,
@@ -276,59 +327,46 @@ async def promote_version(
         raise ValueError(
             "Release routing changed after qualification; re-evaluate the candidate"
         )
-    registered = await await_registered_queues(
+    await await_registered_queues(
         client,
         version=f"{deployment}.{build_id}",
         workflow_queue=task_queue,
         activity_queues=task_queues or (task_queue,),
         workflow_queues=workflow_queues,
     )
-    from temporalio.api.enums.v1 import TaskQueueType
-    from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
-    from temporalio.exceptions import WorkflowAlreadyStartedError
+    import hashlib
 
-    # Check every Activity queue the target registered, not only the ones
-    # the caller named. Before routing moves, no ordinary work can reach the
-    # target, so a busy fleet cannot be mistaken for an unrouted one.
-    # Ordinary verification after promotion checks only workflow queues.
-    qualified = sorted(
-        set(task_queues)
-        | {
-            name
-            for name, kind in registered
-            if kind == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
-        }
-    )
     execution_id = canary_id or f"mm-release-canary-{uuid4()}"
-    try:
-        handle = await client.start_workflow(
-            "MoonMind.ReleaseCanary",
-            {"digest": build_id, "taskQueues": qualified},
-            id=execution_id,
+    # The named canary keeps the caller's queue set, so concurrent stewards and
+    # lost-acknowledgement retries that reuse its run agree on what it checked.
+    qualified = list(task_queues or (task_queue,))
+    await _run_pinned_canary(
+        client,
+        execution_id=execution_id,
+        deployment=deployment,
+        build_id=build_id,
+        task_queue=task_queue,
+        queues=qualified,
+    )
+    # Then check every other Activity queue the target registered, re-reading
+    # after each canary: a fleet starting alongside this one can register
+    # meanwhile. Before routing moves, no ordinary work can reach the target,
+    # so a busy fleet cannot be mistaken for an unrouted one. Ordinary
+    # verification after promotion checks only workflow queues.
+    while added := sorted(
+        await _registered_activity_queues(client, target) - set(qualified)
+    ):
+        await _run_pinned_canary(
+            client,
+            execution_id=execution_id
+            + "-added-"
+            + hashlib.sha256(" ".join(added).encode()).hexdigest()[:12],
+            deployment=deployment,
+            build_id=build_id,
             task_queue=task_queue,
-            # A failed canary must not pin this ID forever. REJECT_DUPLICATE
-            # made every later retry reattach to the closed failed run and
-            # re-raise its error, so a transient canary failure left the old
-            # route current with no pollers even after the outage cleared.
-            # FAILED_ONLY still refuses to re-run a successful canary, and
-            # USE_EXISTING still dedupes concurrent stewards.
-            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-            execution_timeout=timedelta(seconds=max(90, 65 * len(qualified))),
-            versioning_override=PinnedVersioningOverride(
-                WorkerDeploymentVersion(
-                    deployment_name=deployment,
-                    build_id=build_id,
-                )
-            ),
+            queues=added,
         )
-    except WorkflowAlreadyStartedError:
-        handle = client.get_workflow_handle(execution_id)
-    canary = await handle.result()
-    if canary != {"digest": build_id, "status": "verified"}:
-        raise ValueError(
-            "Candidate release canary did not verify its immutable identity"
-        )
+        qualified.extend(added)
     if observed_current != target:
         await client.workflow_service.set_worker_deployment_current_version(
             SetWorkerDeploymentCurrentVersionRequest(
