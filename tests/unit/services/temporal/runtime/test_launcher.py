@@ -44,11 +44,11 @@ def _no_recorded_repository_connections(monkeypatch):
     async def _absent(_connection_ref: str):
         return None
 
-    for module in (
-        "moonmind.workflows.temporal.runtime.launcher",
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve",
-    ):
-        monkeypatch.setattr(f"{module}.load_repository_connection_for_launch", _absent)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _absent,
+    )
 
 
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
@@ -5436,11 +5436,11 @@ def _record_connections(monkeypatch, connections: dict[str, RepositoryConnection
         loaded.append(connection_ref)
         return connections.get(connection_ref)
 
-    for module in (
-        "moonmind.workflows.temporal.runtime.launcher",
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve",
-    ):
-        monkeypatch.setattr(f"{module}.load_repository_connection_for_launch", _load)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _load,
+    )
     return loaded
 
 
@@ -5657,10 +5657,15 @@ async def test_unrecorded_explicit_connection_is_unavailable_not_default(
 
     with pytest.raises(
         RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
-    ):
+    ) as excinfo:
         await launcher._ensure_repository_ready_for_launch(
             _git_target_request("repository-connection:team-missing"), None
         )
+
+    # The correction is one the operator can apply today: there is no
+    # Source Control settings surface to add the connection under.
+    assert "select a recorded connection" in str(excinfo.value)
+    assert "Source Control" not in str(excinfo.value)
 
 
 @pytest.mark.asyncio
@@ -5673,7 +5678,8 @@ async def test_unreadable_connection_record_blocks_instead_of_using_default(
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.load_repository_connection_for_launch",
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
         _unreadable,
     )
     launcher = _ready_launcher(tmp_path)
@@ -5806,7 +5812,8 @@ async def test_deleted_default_connection_blocks_instead_of_deriving_it(
         raise RepositoryRouteError(REPOSITORY_DENIED, f"{connection_ref} was deleted")
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.load_repository_connection_for_launch",
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
         _deleted,
     )
     launcher = _ready_launcher(tmp_path)

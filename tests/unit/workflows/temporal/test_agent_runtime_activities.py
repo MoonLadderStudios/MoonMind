@@ -7708,3 +7708,208 @@ async def test_launch_scratch_session_has_no_github_descriptor(
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.github_credential is None
     assert "GITHUB_TOKEN" not in launched_request.environment
+
+
+# --- MoonLadderStudios/MoonMind#4023: a managed session authenticates as the
+# connection its repositoryTarget selects, read from the recorded connections
+# through the real Activity and session controller. ---
+
+
+def _selected_connection_session_payload(
+    workspace_root: Path, connection_ref: str | None
+) -> dict[str, Any]:
+    """A repository session; ``None`` omits the target, selecting the default."""
+
+    workspace_spec: dict[str, Any] = {"repository": "MoonLadderStudios/private-repo"}
+    if connection_ref is not None:
+        workspace_spec["repositoryTarget"] = {
+            "provider": "git",
+            "connectionRef": connection_ref,
+            "repository": {"name": "MoonLadderStudios/private-repo"},
+            "branch": {"name": "main"},
+        }
+    return {
+        "agentRunId": "mm:task-4023",
+        "sessionId": "sess-4023",
+        "threadId": "thread-4023",
+        "workspacePath": str(workspace_root / "mm:task-4023" / "repo"),
+        "sessionWorkspacePath": str(workspace_root / "mm:task-4023" / "session"),
+        "artifactSpoolPath": str(workspace_root / "mm:task-4023" / "artifacts"),
+        "codexHomePath": str(workspace_root / "mm:task-4023" / "codex-home"),
+        "imageRef": "moonmind:latest",
+        "workspaceSpec": workspace_spec,
+    }
+
+
+class _RecordingSessionHost:
+    """Git/Docker host and auth broker for a real session controller."""
+
+    def __init__(self) -> None:
+        self.git_envs: list[dict[str, str]] = []
+        self.docker_run_envs: list[dict[str, str]] = []
+        self.broker_tokens: list[str] = []
+
+    async def run(
+        self,
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
+    ) -> tuple[int, str, str]:
+        if command[0] == "git":
+            self.git_envs.append(dict(env or {}))
+            return 0, "", ""
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            self.docker_run_envs.append(dict(env or {}))
+            return 0, "ctr-4023\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            return 0, json.dumps(
+                {
+                    "sessionState": {
+                        "sessionId": "sess-4023",
+                        "sessionEpoch": 1,
+                        "containerId": "ctr-4023",
+                        "threadId": "thread-4023",
+                    },
+                    "status": "ready",
+                    "imageRef": "moonmind:latest",
+                    "controlUrl": "docker-exec://mm-codex-session-sess-4023",
+                }
+            ), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    async def start(self, *, run_id: str, token: str, socket_path: str) -> None:
+        self.broker_tokens.append(token)
+
+    async def stop(self, run_id: str) -> None:
+        return None
+
+
+def _session_activities(
+    workspace_root: Path, host: _RecordingSessionHost
+) -> TemporalAgentRuntimeActivities:
+    from moonmind.workflows.temporal.runtime.managed_session_controller import (
+        DockerCodexManagedSessionController,
+    )
+
+    return TemporalAgentRuntimeActivities(
+        session_controller=DockerCodexManagedSessionController(
+            workspace_volume_name="agent_workspaces",
+            codex_volume_name="codex_auth_volume",
+            workspace_root=str(workspace_root),
+            command_runner=host.run,
+            ready_poll_interval_seconds=0,
+            github_auth_brokers=host,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("selected_ref", "selected_token", "other_token"),
+    [
+        ("repository-connection:team-b", "token-for-selected-B", "token-for-default-A"),
+        # A bare repository selects the default, as an omitted connectionRef does.
+        (None, "token-for-default-A", "token-for-selected-B"),
+    ],
+)
+async def test_launch_session_authenticates_as_the_selected_connection_among_several(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    selected_ref: str | None,
+    selected_token: str,
+    other_token: str,
+) -> None:
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        record_repository_connections,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+    monkeypatch.setenv("GH_TOKEN", "ambient-token")
+    monkeypatch.setenv("DEFAULT_ACCOUNT_PAT", "token-for-default-A")
+    monkeypatch.setenv("TEAM_B_PAT", "token-for-selected-B")
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"),
+        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    host = _RecordingSessionHost()
+    try:
+        await _session_activities(workspace_root, host).agent_runtime_launch_session(
+            _selected_connection_session_payload(workspace_root, selected_ref)
+        )
+    finally:
+        await engine.dispose()
+
+    # The clone, the session's git/gh broker, and the container all carry the
+    # selected account's token; the other account and ambient token never.
+    assert host.git_envs
+    assert {env.get("GITHUB_TOKEN") for env in host.git_envs} == {selected_token}
+    assert host.broker_tokens == [selected_token]
+    assert [env.get("GITHUB_TOKEN") for env in host.docker_run_envs] == [
+        selected_token
+    ]
+    delivered = json.dumps([host.git_envs, host.docker_run_envs, host.broker_tokens])
+    assert other_token not in delivered
+    assert "ambient-token" not in delivered
+
+
+@pytest.mark.parametrize(
+    ("selected_ref", "unset_key"),
+    [
+        ("repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"),
+        ("repository-connection:team-b", "TEAM_B_PAT"),
+        (None, "DEFAULT_ACCOUNT_PAT"),
+    ],
+)
+async def test_launch_session_stops_with_the_correction_when_the_selected_source_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    selected_ref: str | None,
+    unset_key: str,
+) -> None:
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        record_repository_connections,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+    monkeypatch.setenv("DEFAULT_ACCOUNT_PAT", "token-for-default-A")
+    monkeypatch.setenv("TEAM_B_PAT", "token-for-selected-B")
+    monkeypatch.delenv(unset_key)
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"),
+        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    host = _RecordingSessionHost()
+    try:
+        with pytest.raises(TemporalActivityRuntimeError) as excinfo:
+            await _session_activities(
+                workspace_root, host
+            ).agent_runtime_launch_session(
+                _selected_connection_session_payload(workspace_root, selected_ref)
+            )
+    finally:
+        await engine.dispose()
+
+    # The authenticated session stops before cloning, naming the selected
+    # source and its correction, instead of cloning without a token or as
+    # another account.
+    message = str(excinfo.value)
+    assert "REPOSITORY_CREDENTIAL_UNAVAILABLE" in message
+    assert f"env://{unset_key} is not set" in message
+    assert "select a different repository connection" in message
+    assert host.git_envs == []
+    assert host.docker_run_envs == []
+    assert host.broker_tokens == []

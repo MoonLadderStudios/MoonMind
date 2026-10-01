@@ -45,6 +45,37 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
     ManagedSessionSupervisor,
 )
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
+from moonmind.workflows.temporal.runtime import (
+    managed_api_key_resolve as managed_api_key_resolve_module,
+)
+
+_production_connection_loader = (
+    managed_api_key_resolve_module.load_repository_connection_for_launch
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_recorded_repository_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests have no database: no repository connection is recorded."""
+
+    async def _absent(_connection_ref: str):
+        return None
+
+    monkeypatch.setattr(
+        managed_api_key_resolve_module,
+        "load_repository_connection_for_launch",
+        _absent,
+    )
+
+
+def _read_recorded_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read connections through the production loader and connection service."""
+
+    monkeypatch.setattr(
+        managed_api_key_resolve_module,
+        "load_repository_connection_for_launch",
+        _production_connection_loader,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -7636,3 +7667,110 @@ async def test_scratch_session_receives_no_github_credential(
     assert "GITHUB_TOKEN" not in git_env
     assert secret_env == {}
     assert "GIT_CONFIG_GLOBAL" not in session_environment
+
+
+def _git_target_session_request(
+    workspace_root: Path, connection_ref: str
+) -> LaunchCodexManagedSessionRequest:
+    return LaunchCodexManagedSessionRequest(
+        agentRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "mm:task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        githubCredential=ManagedGitHubCredentialDescriptor(source="managed_secret"),
+        workspaceSpec={
+            "repository": "MoonLadderStudios/private-repo",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": connection_ref,
+                "repository": {"name": "MoonLadderStudios/private-repo"},
+                "branch": {"name": "main"},
+            },
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_with_an_unrecorded_selection_does_not_use_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """MoonLadderStudios/MoonMind#4023: no other connection is substituted."""
+
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        record_repository_connections,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+    monkeypatch.setenv("DEFAULT_ACCOUNT_PAT", "token-for-default-A")
+    _read_recorded_connections(monkeypatch)
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"),
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    try:
+        with pytest.raises(RuntimeError) as excinfo:
+            await DockerCodexManagedSessionController._git_host_environment(
+                _git_target_session_request(
+                    workspace_root, "repository-connection:team-missing"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+    message = str(excinfo.value)
+    assert "REPOSITORY_CONNECTION_UNAVAILABLE" in message
+    assert "repository-connection:team-missing" in message
+    assert "token-for-default-A" not in message
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_deployment_session_still_clones_anonymously(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """With no recorded connection and no GitHub declaration, public work runs."""
+
+    from moonmind.config.settings import settings as app_settings
+    from tests.helpers.repository_connections import record_repository_connections
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    for name in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN",
+        "GITHUB_TOKEN_SECRET_REF",
+        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        "MOONMIND_GITHUB_TOKEN_REF",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    _read_recorded_connections(monkeypatch)
+    engine = await record_repository_connections(monkeypatch, tmp_path)
+    workspace_root = tmp_path / "agent_jobs"
+    request = _git_target_session_request(
+        workspace_root, "repository-connection:git-default"
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        ready_poll_interval_seconds=0,
+    )
+    session_environment: dict[str, str] = {}
+    try:
+        git_env = await controller._git_host_environment(request)
+        secret_env = await controller._configure_session_github_auth(
+            request, session_environment
+        )
+    finally:
+        await engine.dispose()
+
+    assert "GITHUB_TOKEN" not in git_env
+    assert secret_env == {}

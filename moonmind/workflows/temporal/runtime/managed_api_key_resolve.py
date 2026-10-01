@@ -117,6 +117,112 @@ async def load_repository_connection_for_launch(connection_ref: str) -> Any:
         return None
 
 
+def _repository_connections_dir() -> Path:
+    runtime_root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+    return Path(
+        os.environ.get(
+            "MOONMIND_REPOSITORY_CONNECTIONS_DIR",
+            os.path.join(runtime_root, "repository_connections"),
+        )
+    )
+
+
+async def select_git_connection_for_launch(
+    connection_ref: str,
+    *,
+    connections_dir: Path | None = None,
+    client_policy: Any | None = None,
+) -> Any:
+    """Return exactly the Git connection a launch selected (#4023).
+
+    A recorded connection is authoritative; given ``client_policy`` it takes
+    the deployment's Git client, because the deployment owns its client and
+    the record owns authority. Without a record, an explicit reference may
+    name a deployment-owned connection file, and the default reference
+    returns ``None``: it derives from the deployment's declared GitHub
+    configuration. An unreadable, deleted, disabled, or non-Git record and an
+    unrecorded explicit reference raise ``RepositoryContractError``; no other
+    connection is substituted.
+    """
+
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        REPOSITORY_CONNECTION_MISMATCH,
+        RepositoryContractError,
+        RepositoryRouteError,
+        load_repository_connection,
+    )
+
+    try:
+        recorded = await load_repository_connection_for_launch(connection_ref)
+    except asyncio.CancelledError:
+        raise
+    except RepositoryRouteError as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"{exc}; no other connection is substituted, so select a recorded "
+            "connection for this work",
+        ) from exc
+    except Exception as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"repository connection {connection_ref!r} could not be read; no "
+            "other connection is substituted",
+        ) from exc
+    if recorded is not None:
+        if recorded.provider != "git":
+            raise RepositoryContractError(
+                REPOSITORY_CONNECTION_MISMATCH,
+                "repository target and connection identity/provider do not match",
+            )
+        if client_policy is None:
+            return recorded
+        return recorded.model_copy(update={"client_policy": client_policy})
+    if connection_ref == DEFAULT_GIT_CONNECTION_REF:
+        return None
+    directory = connections_dir or _repository_connections_dir()
+    for path in sorted(directory.glob("*.json")):
+        try:
+            connection = load_repository_connection(path, connection_ref)
+        except RepositoryContractError:
+            continue
+        if connection.provider == "git":
+            return connection
+    raise RepositoryContractError(
+        "REPOSITORY_CONNECTION_UNAVAILABLE",
+        f"repository connection {connection_ref!r} is not recorded; select a "
+        f"recorded connection, or {DEFAULT_GIT_CONNECTION_REF}, which uses the "
+        "deployment GitHub credential (GITHUB_TOKEN in .env) while it is not "
+        "recorded",
+    )
+
+
+async def resolve_selected_github_credential_for_launch(
+    connection_ref: str,
+    *,
+    repo: str | None = None,
+    connections_dir: Path | None = None,
+) -> Any:
+    """Resolve only the credential of the Git connection a launch selected.
+
+    Selection raises as :func:`select_git_connection_for_launch` does. A
+    selected source that fails yields an unresolved result carrying its
+    correction, never another credential.
+    """
+
+    from moonmind.auth.github_credentials import (
+        resolve_connection_github_credential,
+        resolve_github_credential,
+    )
+
+    connection = await select_git_connection_for_launch(
+        connection_ref, connections_dir=connections_dir
+    )
+    if connection is None:
+        return await resolve_github_credential(repo=repo)
+    return await resolve_connection_github_credential(connection, repo=repo)
+
+
 async def resolve_default_github_connection_credential(
     *, repo: str | None = None
 ) -> Any:
@@ -152,9 +258,10 @@ async def resolve_default_github_connection_credential(
             sourceName=DEFAULT_GIT_CONNECTION_REF,
             repo=repo,
             diagnostic=(
-                f"{exc}; MoonMind does not try another GitHub credential. Record "
-                f"or re-enable {DEFAULT_GIT_CONNECTION_REF} under Settings, "
-                "Source Control."
+                f"{exc}; MoonMind does not try another GitHub credential or "
+                "derive the default from the deployment's GitHub declaration "
+                "while that record is deleted or disabled, so select a recorded "
+                "connection for this work."
             ),
         )
     except Exception as exc:
@@ -544,8 +651,10 @@ async def resolve_github_token_for_launch(
                 )
                 return None
         if source == "managed_secret":
-            # Historical descriptor name: it selects the deployment's default
-            # repository connection, not a search of well-known secret slugs.
+            # Historical descriptor name for a repository session's own
+            # selection, not a search of well-known secret slugs. A session
+            # with a repositoryTarget resolves that target's connection before
+            # reaching here; without one, this is the default connection.
             resolved = await resolve_default_github_connection_credential()
             if resolved.token:
                 return resolved.token
@@ -569,8 +678,9 @@ def build_github_credential_descriptor_for_launch(
     """Return a non-sensitive GitHub launch credential descriptor.
 
     An explicit launch ``GITHUB_TOKEN`` stays the launch's own input. A
-    repository session otherwise selects the deployment's default repository
-    connection; scratch sessions get no GitHub credential.
+    repository session otherwise uses the connection its repository
+    selection names (the deployment default when it has no
+    ``repositoryTarget``); scratch sessions get no GitHub credential.
     """
 
     from moonmind.schemas.managed_session_models import (
@@ -808,4 +918,6 @@ __all__ = [
     "resolve_ghcr_pull_credentials_for_launch",
     "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
+    "resolve_selected_github_credential_for_launch",
+    "select_git_connection_for_launch",
 ]

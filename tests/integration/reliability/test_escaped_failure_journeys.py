@@ -329,7 +329,7 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
         return None
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher."
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
         "load_repository_connection_for_launch",
         no_recorded_connection,
     )
