@@ -2,7 +2,7 @@
 
 Status: Living product contract; Provider Profile presentation is adopted desired state, not an implementation claim  
 Owners: MoonMind Engineering  
-Last updated: 2026-09-30  
+Last updated: 2026-10-01
 Canonical for: dashboard Workflows list route, execution-list controls, table sorting, column filters, filter URL state, Google Sheets-like list filtering behavior, Provider Profile presentation, and Progress column sort/filter semantics
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
@@ -317,13 +317,21 @@ Rules:
 
 Use the workflow's recorded selection and supported explicit step-profile variations. This column is not a transient current-agent field. Backend and actual attempt use remain inspectable in details.
 
-| Available record | Display |
-| --- | --- |
-| One known profile | Recorded friendly name, or stable ID if no name was recorded; optional secondary Harness. |
-| Selection not yet resolved | Pending selection. |
-| Historical association unavailable | Not recorded. |
-| No agent profile applies | Not applicable. |
-| Multiple applicable profiles | Multiple profiles, with a bounded summary and individual step/attempt associations in details. |
+| Available record | `selectionState` | Display |
+| --- | --- | --- |
+| One known profile | `recorded` | Recorded friendly name, or stable ID if no name was recorded; optional secondary Harness. |
+| Selection not yet resolved and no profile ID recorded | `pending` | Pending selection. |
+| Historical association unavailable and no profile ID recoverable | `not_recorded` | Not recorded. |
+| Confirmed no agent profile applies | `not_applicable` | Not applicable. |
+| Multiple applicable profiles | `recorded` | Multiple profiles, with a bounded summary and individual step/attempt associations in details. |
+
+The compact Provider Profile summary exposes this typed `selectionState` alongside
+its recorded profile IDs. States are mutually exclusive for the workflow summary:
+any recorded applicable ID yields `recorded`, while the three absence states
+apply only when no ID is recorded. Existing step/attempt detail can still explain
+unresolved selections beside known members. Projection failure or unavailable
+coverage is reported as unavailable information, never classified as one of these
+absence states. The same projection supplies rows, filtering, counts, and facets.
 
 An authored profile can be displayed before launch without claiming successful acquisition. A renamed, disabled, disconnected, or removed live profile does not erase the historical association. Capture an inexpensive display-name snapshot with existing admitted-selection metadata where needed. Where old records contain only an ID, display that ID instead of inventing the old name. Do not infer an account from the runtime, model, provider, or current default.
 
@@ -498,10 +506,11 @@ Rules:
 
 1. Store stable profile IDs and display recorded friendly labels or ID fallback. Equal names do not collapse distinct accounts.
 2. Include mode matches a workflow when any recorded applicable member is selected. Exclude mode rejects workflows containing any excluded member. Count each workflow once per facet value, even when several steps use that profile.
-3. A blank filter means no recorded profile ID, not proof that a profile never existed. Pending selection, Not recorded, and Not applicable remain distinct in display and can use explicit state filtering where provided by the same query owner. Unknown projection coverage is not known absence.
+3. Pending selection (`pending`), Not recorded (`not_recorded`), and Not applicable (`not_applicable`) are separate selectable state values. `providerProfileStateIn` / `providerProfileStateNotIn` filter them through the same query owner. A blank shortcut includes or excludes their aggregate no-recorded-ID bucket; unknown projection coverage is not known absence.
 4. Facets describe authorized workflow records, including profiles that are disabled, disconnected, renamed, or removed from current launch inventory.
 5. Provider Profile replaces Runtime in the ordinary column, drawer/mobile filter, and chip presentation. A retained runtime URL constraint remains explicitly labeled as legacy and is never translated into current profile inventory.
-6. Filtering uses the existing server query projection, not per-row detail hydration or browser filtering after pagination. Facet errors preserve selected IDs and table access with truthful coverage.
+6. Filtering uses the existing server query projection, not per-row detail hydration or browser filtering after pagination. Facet errors preserve selected IDs and state values and table access with truthful coverage.
+7. Positive ID and state selections in this column use OR semantics: select `profile-a` and `pending` to show either recorded membership of that ID or pending rows. Excluded IDs and states reject any matching row. Other columns still combine with this result using AND. Section 12.1 defines the blank shortcut and validation rules.
 
 ### 9.4 Repository filter
 
@@ -642,6 +651,8 @@ Examples:
 | --- | --- |
 | Status = `executing` and `planning` | Show rows whose state is executing OR planning. |
 | Provider Profile = `profile-a`; Status = `failed` | Show failed workflows with recorded membership of the illustrative stable ID `profile-a`. |
+| Provider Profile = `profile-a` or Pending selection | Show workflows with that recorded ID OR `selectionState=pending`. |
+| Provider Profile excludes Not applicable | Reject confirmed no-agent workflows; retain pending and historical-not-recorded rows subject to other filters. |
 | Repository excludes `owner/archived` | Show all repositories except `owner/archived`, subject to other filters. |
 | Progress = 25–75%; Signal = `has_failed_steps` | Show rows that are 25–75% complete AND have at least one failed step. |
 | Progress bucket = `in_progress` or `not_started`; Status = `executing` | Show executing rows whose progress is either in progress OR not started. |
@@ -720,6 +731,8 @@ Representative URL shapes with illustrative stable profile IDs:
 
 ```text
 /workflows?stateNotIn=canceled&providerProfileIn=profile-a,profile-b&limit=50
+/workflows?providerProfileStateIn=pending,not_recorded&providerProfileStateNotIn=not_applicable&limit=50
+/workflows?providerProfileIn=profile-a&providerProfileStateIn=pending&limit=50
 /workflows?progressPctFrom=25&progressPctTo=75&progressSignalIn=has_failed_steps&sort=progressPct&sortDir=desc
 ```
 
@@ -729,7 +742,8 @@ Recommended parameters:
 | --- | --- |
 | `stateIn` / `stateNotIn` | Canonical lifecycle state values. |
 | `providerProfileIn` / `providerProfileNotIn` | Recorded stable profile-ID membership, using section 9.3 semantics. |
-| `providerProfileBlank` | Include or exclude rows without a recorded profile ID; display retains pending, historical-unknown, and not-applicable distinctions. |
+| `providerProfileStateIn` / `providerProfileStateNotIn` | Include/exclude absence states: `pending`, `not_recorded`, `not_applicable`. Positive ID/state choices use OR within the Provider Profile column; exclusions reject any matching ID or state. |
+| `providerProfileBlank` | Boolean aggregate shortcut: `true` includes all three absence states; `false` includes `recorded` rows. Omitted applies no blank constraint. Do not combine this shortcut with other Provider Profile parameters; use explicit state lists for mixed selections. |
 | `targetRuntimeIn` / `targetRuntimeNotIn` | Legacy runtime identifiers only while their actual consumers remain supported; never a Provider Profile alias. |
 | `targetSkillIn` / `targetSkillNotIn` | Skill identifiers. |
 | `repoIn` / `repoNotIn` | Exact repository values. |
@@ -753,11 +767,12 @@ Rules:
 
 1. Values in comma-separated lists must be URL-encoded.
 2. If a value can contain commas in the future, the client and API must support repeated parameters as an equivalent representation.
-3. The API must reject contradictory include and exclude filters on the same field with a clear validation error.
+3. The API must reject contradictory include and exclude filters on the same field with a clear validation error. For Provider Profile, an ID or state cannot be both included and excluded. Reject unknown state tokens and combinations of `providerProfileBlank` with any other Provider Profile filter; do not silently ignore or broaden them.
 4. The browser must normalize empty lists away rather than sending no-op filters.
 5. Filter changes reset `nextPageToken` and the previous-page cursor stack.
 6. Sort changes reset `nextPageToken` and the previous-page cursor stack when sort is server-authoritative.
 7. When sort is current-page-only, sort changes do not modify URL state.
+8. Provider Profile IDs and absence states round-trip as distinct typed values in URLs, saved views, active chips, and desktop/mobile staged selections. An empty state list imposes no state constraint. State filters run before pagination with the same count semantics as ID filters.
 
 ### 12.2 Backward compatibility
 
@@ -820,7 +835,7 @@ Rules:
 5. The API remains the authority for access control; users cannot widen their visibility through filter params.
 6. The normal Workflows List query is always bounded to user-visible Workflow Executions. Backend list support for broader workflow scopes must not leak into this page.
 7. Progress query semantics must be evaluated from bounded execution progress summary data, not full step-ledger hydration.
-8. Provider Profile membership, display summaries, filtering, count, and pagination use the same recorded selection scope. Do not filter an already paginated page or guess a historical profile from current inventory. Extend the existing schema/projection and batch loading rather than a new list service or per-row lookup.
+8. Provider Profile membership, typed `selectionState`, display summaries, filtering, count, and pagination use the same recorded selection scope. Apply the section 9.3 ID/state union and exclusions before count and pagination. Do not filter an already paginated page or guess a historical profile from current inventory. Extend the existing schema/projection and batch loading rather than a new list service or per-row lookup.
 
 ### 13.2 Facet query requirements
 
@@ -829,7 +844,7 @@ The UI needs facet data so a filter popover can show values and counts beyond th
 Target Provider Profile extension to the existing endpoint, not an already-shipped API claim:
 
 ```text
-GET /api/executions/facets?source=temporal&facet=providerProfile&<current filters except Provider Profile>
+GET /api/executions/facets?source=temporal&facet=providerProfile&<current filters except Provider Profile IDs, states, and blank shortcut>
 ```
 
 Representative response with illustrative stable IDs:
@@ -841,7 +856,12 @@ Representative response with illustrative stable IDs:
     { "value": "profile-a", "label": "OpenAI · Primary", "count": 18 },
     { "value": "profile-b", "label": "Anthropic · Work", "count": 11 }
   ],
-  "blankCount": 2,
+  "stateItems": [
+    { "value": "pending", "label": "Pending selection", "count": 2 },
+    { "value": "not_recorded", "label": "Not recorded", "count": 1 },
+    { "value": "not_applicable", "label": "Not applicable", "count": 3 }
+  ],
+  "blankCount": 6,
   "countMode": "exact",
   "truncated": false,
   "nextPageToken": null
@@ -861,7 +881,8 @@ Rules:
 9. Large facets may be paginated and searched server-side.
 10. Facet failure must not break the table; the UI can fall back to values in the currently loaded page with a visible `current page values only` notice. Preserve selected IDs even when a failed or partial facet response omits them.
 11. Facet results must not include system-only workflow values or counts on the normal Workflows List page.
-12. `blankCount` for Provider Profile is the no-recorded-ID bucket from section 9.3, not a claim that those workflows never use a profile. Preserve pending, historical-unknown, and no-agent states in the row projection.
+12. `stateItems` exposes all three absence tokens from section 7.2, including zero-count entries. Their counts use the same authorization, other-column filters, and count mode as `items`. Each absent workflow contributes to exactly one state count; `blankCount` is their sum when counts are exact. Unavailable projection coverage cannot contribute to an absence count and must be reported truthfully.
+13. Provider Profile facet requests omit all of `providerProfileIn`, `providerProfileNotIn`, `providerProfileStateIn`, `providerProfileStateNotIn`, and `providerProfileBlank` unless deliberately querying the selected subset. State entries remain available when profile-ID items are paginated or searched; state values are typed separately from profile IDs. Partial or failed responses preserve selected state tokens as well as IDs.
 
 ### 13.3 Progress data materialization
 
@@ -973,10 +994,10 @@ The Progress sort/filter implementation should preserve these testable behaviors
 Implement through the existing projection, API, query/facet helpers, production list components, and browser tests. These are executable behavior requirements, not documentation-wording tests.
 
 1. Single, multiple, pending, not-recorded, and no-agent rows display their recorded selection without current-default guesses. Renamed/disabled/removed profiles and duplicate labels preserve stable identity.
-2. Real list/facet integration filters profile membership before pagination, combines it with existing filters, counts consistently, and retains authorization and system-workflow exclusions.
+2. Real list/facet integration filters profile membership and each absence state before pagination, proves mixed ID/state OR and exclusion semantics with other-column AND filters, counts state buckets and their exact blank aggregate consistently, and retains authorization and system-workflow exclusions. Unknown projection coverage never becomes a known absence; invalid state tokens, overlapping include/exclude values, and conflicting blank shortcuts fail clearly.
 3. Profile display and querying perform no per-row detail/profile/history fetches and expose no credential or infrastructure material.
 4. Desktop/mobile filter controls, chips, staged selections, loading/empty/error states, long labels, keyboard focus, and immediate submission work on production components and styles.
-5. URL reload, saved column preferences, legacy runtime constraints, and list/detail return context preserve query meaning. A runtime filter is never silently relabeled or translated through today's profiles.
-6. Current-page sorting remains honestly scoped until server implementation exists, and partial or failed facets do not clear selected IDs or masquerade as a complete empty collection.
+5. URL reload, saved views and column preferences, typed ID/state filter chips, legacy runtime constraints, and list/detail return context preserve query meaning. A runtime filter is never silently relabeled or translated through today's profiles.
+6. Current-page sorting remains honestly scoped until server implementation exists, and partial or failed facets do not clear selected IDs or state tokens or masquerade as a complete empty collection. State facets retain zero-count entries and remain available alongside paginated/searched profile items.
 
 Use targeted red/green checks and broader existing GitHub Actions. A paid-provider run, mandatory manual visual review, new query service, or exhaustive runtime matrix is not required for this list change. Record candidate evidence and unexecuted checks honestly.

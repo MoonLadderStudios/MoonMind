@@ -4,7 +4,7 @@ Status: **Desired-state UI and implementation contract**
 
 Owners: MoonMind Engineering
 
-Last updated: 2026-08-27
+Last updated: 2026-10-01
 
 Canonical for: the Settings experience used to inspect and edit `model_tiers` and `default_model_tier` on a Provider Profile
 
@@ -201,10 +201,10 @@ Within the Provider Profile form, the desired section order is:
 
 ```text
 Identity
-Provider and runtime
+Harness and Provider
 Model and effort tiers
 Credentials and volumes
-Runtime limits
+Capacity
 Advanced profile options
 Save actions
 ```
@@ -253,7 +253,7 @@ On narrow screens, the Provider Profile table may become cards. Each card shows:
 
 ```text
 Profile name
-Runtime / Provider
+Harness / Provider
 3 model tiers · Default Tier 2
 [Show tier mapping]
 ```
@@ -962,9 +962,13 @@ It must not label a stored effort as applied when the runtime reports otherwise.
 
 ---
 
-## 17. Runtime or Provider Changes
+## 17. Harness or Provider Changes
 
-Runtime and provider selection determine tier capabilities.
+Harness and Provider selection determine tier capabilities through their existing
+canonical `runtime_id` and `provider_id` values. The
+[selection design](./HarnessProfileBackendSelection.md) owns identity labels and
+Backend disclosure; tier inheritance and serialized runtime defaults retain the
+model-policy meanings defined here.
 
 When either field changes in a create form:
 
@@ -976,7 +980,7 @@ When either field changes in a create form:
 6. offer `Reset incompatible values to runtime defaults`, and
 7. block save only for values the new backend policy cannot accept.
 
-When editing an existing profile, immutable runtime rules remain authoritative. If runtime is not editable, capability changes come only from provider edits or backend catalog changes.
+When editing an existing profile, immutable `runtime_id` ownership remains authoritative. If Harness is not editable, capability changes come only from Provider edits or backend catalog changes.
 
 A reset action must list the affected tiers before applying:
 

@@ -1,9 +1,10 @@
 # Harness, Provider Profile, and Backend Selection
 
-**Status:** Adopted desired state. Implementation and deployment status are separate.
+**Status:** Accepted
+**Implementation and deployment:** Tracked separately; acceptance of this design does not certify shipped behavior.
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Product and Platform
-**Updated:** 2026-09-30
+**Updated:** 2026-10-01
 **Authority:** Product terminology, ordinary agent selection, advanced Backend disclosure, and identity presentation across authoring and workflow views. Existing admission, credential, persistence, and lifecycle owners remain authoritative for their mechanisms.
 **Related:** [Create Page](CreatePage.md), [Workflows List](WorkflowsListPage.md), [Provider Profiles](../Security/ProviderProfiles.md), [Execution Configurations](../Omnigent/AgentProfiles.md), [Primary Backend Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md), [Selection and Transition](../Omnigent/RuntimeProviderRollout.md), [Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md).
 
@@ -111,7 +112,7 @@ Project this compact summary through the existing execution list/read model. No 
 
 Provider Profile filters use stable profile IDs, not display labels or `targetRuntime`. Extend the existing list/facet query owner with the required profile summary and membership data. Desktop headers, mobile filters, active chips, URL/query serialization, saved column preferences, and list-to-detail return context all use the same semantics.
 
-For a multiple-profile workflow, an include filter matches any recorded applicable member and an exclude filter rejects any listed member. Unresolved, historical-unknown, and not-applicable states remain distinguishable in display and use explicit documented blank/state semantics in queries. Do not imply a missing projection proves a known absence.
+For a multiple-profile workflow, an include filter matches any recorded applicable member and an exclude filter rejects any listed member. Unresolved, historical-unknown, and not-applicable states remain distinguishable in display and queries through `providerProfileStateIn` / `providerProfileStateNotIn` values `pending`, `not_recorded`, and `not_applicable`. [Workflows List sections 7.2, 9.3, 12.1, and 13.2](WorkflowsListPage.md#93-provider-profile-filter) own the row state, ID/state union, aggregate blank shortcut, and state facet/count contract. Do not imply a missing projection proves a known absence.
 
 Facets describe authorized workflow records, not just currently enabled profiles or the currently loaded page. Retain recorded profiles that are no longer launchable. Deduplicate by stable ID and show a short ID when equal labels require disambiguation. Count and pagination semantics must agree with the list. Facet failure preserves the table and selected filter, with truthful partial/unavailable coverage.
 

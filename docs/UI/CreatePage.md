@@ -2,9 +2,10 @@
 
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
-**Status:** Desired state; Harness/Provider Profile/Backend selection adopted, implementation tracked separately  
+**Status:** Accepted
+**Implementation and deployment:** Harness/Provider Profile/Backend selection is accepted design intent; implementation is tracked separately.
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-30  
+**Updated:** 2026-10-01
 **Audience:** Dashboard, workflow authoring, schema-form, and API contributors  
 **Authority:** Create-page information architecture, single-context presentation, schema-driven task inputs, preview/error behavior, and submission/reconstruction UX. Backend providing contracts remain authoritative for execution and policy.  
 **Owning Surface:** Shared /workflows/new authoring form and its catalog/compiler consumers  
