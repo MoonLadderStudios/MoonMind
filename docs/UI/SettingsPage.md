@@ -1,10 +1,10 @@
 # Settings Configuration Pages
 
-**Related design documents:** [SettingsSystem.md](../Security/SettingsSystem.md), [SecretsSystem.md](../Security/SecretsSystem.md), [ProviderProfiles.md](../Security/ProviderProfiles.md), [ProviderProfileCreation.md](./ProviderProfileCreation.md), [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [DashboardDesignSystem.md](./DashboardDesignSystem.md), [DashboardSPAArchitecture.md](./DashboardSPAArchitecture.md)
+**Related design documents:** [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md), [SettingsSystem.md](../Security/SettingsSystem.md), [SecretsSystem.md](../Security/SecretsSystem.md), [ProviderProfiles.md](../Security/ProviderProfiles.md), [ProviderProfileCreation.md](./ProviderProfileCreation.md), [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [DashboardDesignSystem.md](./DashboardDesignSystem.md), [DashboardSPAArchitecture.md](./DashboardSPAArchitecture.md)
 
 Status: **Desired-State UI Contract**  
 Owners: MoonMind Engineering  
-Last Updated: 2026-09-05
+Last Updated: 2026-10-01
 
 > [!NOTE]
 > This document supersedes the single `/settings` page with a three-way tab, radio, or segmented section switcher. The existing Settings dropdown remains the only cross-page navigation surface. Its **Configuration** group exposes the three former Settings sections as separate pages.
@@ -61,7 +61,7 @@ This is a desired-state contract. The current implementation may still use one S
 
 ### 3.1 One navigation owner
 
-The Settings dropdown owns navigation among configuration pages. A page-local control is valid only when it changes state inside the current page, such as a runtime filter, a category filter, or an operation subview.
+The Settings dropdown owns navigation among configuration pages. A page-local control is valid only when it changes state inside the current page, such as a Harness filter, a category filter, or an operation subview.
 
 ### 3.2 Pathname owns page identity
 
@@ -71,7 +71,7 @@ The pathname selects the configuration page. Query parameters may select approve
 
 The backend owns which settings exist, which are exposed, their types and scopes, validation, sensitivity, effective values, sources, and application semantics. The frontend renders descriptors and submits intent.
 
-Provider Profile creation follows the same rule. Runtime, provider, authentication, and creation capabilities determine backend-owned presets. The browser must not assume one materialization strategy for every provider.
+Provider Profile creation follows the same rule. Harness, Provider, authentication, and creation capabilities determine backend-owned presets. Harness choices retain canonical `runtime_id` values in API payloads. The browser must not assume one materialization strategy for every provider.
 
 ### 3.4 Data-driven rows
 
@@ -319,17 +319,17 @@ npm run ui:test:browser -- frontend/src/browser/mobileOverflow4559.browser.test.
 
 This page contains:
 
-- Provider Profiles as the durable runtime and provider launch contract;
+- Provider Profiles as the durable Harness/Provider connection and launch contract;
 - model and effort tier policy editing inside the normal Provider Profile editor;
 - Managed Secrets and secret-health surfaces;
 - SecretRef role bindings and validation;
 - OAuth-backed profile lifecycle entry points;
 - provider credential health and readiness; and
-- runtime and provider binding diagnostics.
+- Harness and Provider binding diagnostics, with Backend provenance in execution details.
 
 The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
 
-A page-local runtime filter may narrow the visible Provider Profile collection. It must not narrow global readiness counts unless the summary is explicitly labeled as filtered.
+A page-local Harness filter offers **All harnesses** and backend-supported Harness choices. It narrows the visible Provider Profile collection while global readiness counts use the complete collection unless explicitly labeled as filtered. Existing `runtime` URL parameters and `runtime_id` API values remain compatibility inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) owns this vocabulary and authoring defaults.
 
 On narrow viewports the saved-profile records stack each label above its value and give actions their own full-width wrapping area below the values (MoonLadderStudios/MoonMind#4559). The create/edit form stays single-column with shrinkable fieldsets, and tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. The shared contract lives in [DashboardDesignSystem.md](./DashboardDesignSystem.md).
 
@@ -340,15 +340,15 @@ Provider Profile creation uses one standard form with progressive disclosure as 
 The standard form keeps these user-facing decisions visible:
 
 - Profile ID, with an auto-generated suggestion and review before creation;
-- runtime selected from backend-owned choices;
-- provider selected from backend-owned choices scoped to that runtime;
+- Harness selected from backend-owned choices;
+- Provider selected from backend-owned choices scoped to that Harness;
 - optional account label;
 - high-level authentication method and connection action;
 - model and effort tier policy;
 - max parallel runs; and
-- optional `Use as runtime default` intent when readiness permits.
+- optional `Use as Harness default` intent when readiness permits.
 
-Runtime/provider selectors display friendly labels but submit canonical IDs. Choice discovery reuses creation-capability authority and works before any profile or launch-ready host exists. The Settings runtime filter can seed a permitted creation runtime but does not redefine profile ownership. In particular, an Omnigent execution target is not the underlying Provider Profile runtime.
+Harness/Provider selectors display friendly labels but submit existing canonical IDs. Choice discovery reuses creation-capability authority and works before any profile or launch-ready host exists. The Settings Harness filter can seed a permitted creation Harness but does not redefine saved profile ownership. The Harness control submits `runtime_id`, such as `codex_cli`, `claude_code`, or `opencode`; Omnigent is a Backend and must not become `runtime_id=omnigent`. Choosing a profile default does not change the deployment Backend default.
 
 Profile ID suggestions follow the existing backend constraints, remain visible, and stop updating automatically after the user edits them. Refreshes and account-label changes do not overwrite a user-authored ID. Format or uniqueness conflicts preserve the draft and require a reviewed resubmission, never an automatically suffixed retry. Section 4 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) owns selection changes, unknown saved values, and explicit manual-path behavior.
 
@@ -421,7 +421,7 @@ The page title `Operations` is distinct from any broader dropdown group also lab
 
 | Page | Primary data |
 |---|---|
-| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, permitted runtime/provider choices, profile creation capabilities and presets |
+| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, permitted Harness/Provider choices, profile creation capabilities and presets |
 | Instance | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 
@@ -641,7 +641,7 @@ Forbidden patterns include:
 - eager loading of every configuration dataset on every route;
 - one hard-coded React row per setting key;
 - frontend copies of backend defaults or authoritative validation;
-- a second provider-creation wizard or a duplicate runtime/provider catalog for the same form;
+- a second provider-creation wizard or a duplicate Harness/Provider catalog for the same form;
 - recommended-policy summaries inferred solely from authentication-method availability;
 - unconditional client-side `enabled: true` for a credential-required Provider Profile;
 - a global fallback credential source or materialization mode for every provider;
@@ -672,7 +672,7 @@ Sharing one bundle is allowed; sharing page identity is not. A page must not
 mount managers, panels, or data loaders belonging to a sibling destination, and
 no parent component may select between the three by internal state.
 
-**State ownership.** Page-scoped state lives on the page that owns it: runtime
+**State ownership.** Page-scoped state lives on the page that owns it: Harness
 filtering on Providers & Secrets and worker command state on Operations. No
 cross-page selection state exists, and browser navigation — not local state —
 moves between destinations.
@@ -718,7 +718,7 @@ The design is satisfied when:
 27. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
 28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
 29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.
-30. Runtime/provider creation choices work for the first profile, submit canonical IDs, and cannot be restored from stale metadata after a selection change.
+30. Harness/Provider creation choices work for the first profile, submit canonical IDs, and cannot be restored from stale metadata after a selection change.
 31. Profile ID suggestions preserve user edits and require review after format or uniqueness conflicts.
 32. Creation actions match supported save/setup behavior, and collapsed summaries distinguish recommendations, overrides, and uncertainty without implying credential readiness.
 
@@ -764,7 +764,7 @@ substitute for the per-page unit tests, which remain in
 - Query parameters represent page-local state, not page identity.
 - Every page owns its title, status, authorization, loading, queries, and failures.
 - Provider Profile creation uses one collapsed advanced-options region and no separate wizard.
-- Runtime/provider selectors use existing backend authority and do not require memorized IDs or an existing profile.
+- Harness/Provider selectors use existing backend authority and do not require memorized IDs or an existing profile.
 - Suggested Profile IDs stay reviewable and respect user edits.
 - Creation actions describe the real setup continuation. Policy summaries do not imply credential readiness.
 - Max parallel runs remains visible.
