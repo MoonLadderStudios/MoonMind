@@ -19,13 +19,15 @@ CommandRunner = Callable[..., Awaitable[tuple[int, str, str]]]
 MAX_EVIDENCE_CHARS = 512
 REMOTE_PROBE_MAX_ATTEMPTS = 4
 REMOTE_PROBE_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
-# GitHub's primary rate-limit window is one hour and its reset time is free to
-# read, so a rate-limited probe waits for the reported reset instead of failing
-# a launch that waited for capacity. A secondary limit reports no exhausted
+# GitHub's reset time is free to read, so a rate-limited probe waits once for
+# the reported reset instead of failing a launch that waited for capacity. The
+# wait is capped well inside the launch activity's budget and the host it
+# holds; a longer outage is reported as transient so the parent's bounded Step
+# Execution retry waits out the rest. A secondary limit reports no exhausted
 # primary resource; GitHub asks clients to wait at least a minute.
-RATE_LIMIT_MAX_WAITS = 2
+RATE_LIMIT_MAX_WAITS = 1
 RATE_LIMIT_DEFAULT_WAIT_SECONDS = 60.0
-RATE_LIMIT_MAX_WAIT_SECONDS = 3600.0
+RATE_LIMIT_MAX_WAIT_SECONDS = 900.0
 RATE_LIMIT_LOOKUP_COMMAND = "gh api rate_limit"
 
 
