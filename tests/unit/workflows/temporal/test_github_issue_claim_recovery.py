@@ -488,6 +488,58 @@ async def test_serialized_native_checkpoint_and_cleanup_control_release(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["none", "commit"])
+async def test_repeat_sweeps_reuse_the_saved_work_comparison(
+    journey, monkeypatch, tmp_path, fault
+):
+    """A stuck claim must not spend a counted GitHub read on every sweep.
+
+    2026-10-01: 22 claims stuck on ``saved_work_requires_recovery`` re-read
+    the same comparison every five minutes. Every re-check is a conditional
+    request, which GitHub answers with an uncounted 304 until the comparison
+    changes, and the stored verdict is reused.
+    """
+    import json
+
+    from tests.unit.omnigent.test_claim_recovery_workspace import (
+        capture_saved_workspace,
+        comparison_from_git,
+    )
+
+    state, service, sessions = journey
+    saved, _, workspace, _ = await capture_saved_workspace(
+        tmp_path, monkeypatch, fault
+    )
+    state["comparison_provider"] = comparison_from_git(workspace)
+    saved = json.loads(json.dumps(saved))
+    await persist_saved_binding(
+        sessions, agent_id="agent", run_id="run", saved=saved, state="cleaned"
+    )
+    verdicts: dict = {}
+
+    def sweep():
+        return recovery._runtime_no_work(
+            IssueClaimStore(sessions),
+            {("agent", "run")},
+            SimpleNamespace(owner="default/parent", repository="example/repo"),
+            service,
+            compare_verdicts=verdicts,
+        )
+
+    for _ in range(3):
+        if fault == "none":
+            assert await sweep() == [saved["checkpointRef"]]
+        else:
+            with pytest.raises(ValueError, match="saved_work_requires_recovery"):
+                await sweep()
+
+    compares = [path for path in state["reads"] if "/compare/" in path]
+    assert len(compares) == 3
+    # Only the first read is counted; the repeats are 304s.
+    assert state.get("compare_not_modified") == 2
+
+
+@pytest.mark.asyncio
 async def test_continue_as_new_chain_visits_prior_run_children():
     from temporalio.api.common.v1 import WorkflowExecution
     from temporalio.api.history.v1 import (

@@ -87,6 +87,75 @@ def _label_names(issue_payload: Mapping[str, Any] | None) -> tuple[str, list[str
     return str(payload.get("state") or "open"), names
 
 
+# Last no-op outcome per listed issue, keyed by the listing's ``updated_at``.
+# Any label or comment change bumps ``updated_at``, so an unchanged issue whose
+# last outcome depended only on that issue state is not re-read every run.
+_ISSUE_OBSERVATIONS = "issueObservations"
+_MAX_ISSUE_OBSERVATIONS = 1000
+
+
+def _issue_observations(state: dict[str, Any], repository: str) -> dict[str, Any]:
+    observations = state.setdefault(_ISSUE_OBSERVATIONS, {})
+    return observations.setdefault(_string(repository).casefold(), {})
+
+
+def _listing_outcome(
+    *, state: dict[str, Any], repository: str, issue_number: int, entry: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Decide from the scan listing alone, or ``None`` when a full read is due.
+
+    Nothing decided here acts on GitHub: an out-of-scope issue and an
+    unchanged no-op issue are left untouched, so Req 2's re-read-before-acting
+    still holds for every issue the reconciler might change.
+    """
+
+    if recon.pending_effects_for_issue(state, repository=repository, issue_number=issue_number):
+        return None
+    outcome: dict[str, Any] = {
+        "repository": repository,
+        "issueNumber": issue_number,
+        "action": recon.ACTION_NO_ACTION,
+        "apiRequests": 0,
+    }
+    observed = _issue_observations(state, repository).get(str(issue_number))
+    updated_at = _string(entry.get("updated_at"))
+    if isinstance(observed, Mapping) and updated_at and observed.get("updatedAt") == updated_at:
+        return {
+            **outcome,
+            "reasonCode": _string(observed.get("reasonCode")),
+            "summary": f"Unchanged since its last no-op reconciliation ({updated_at}); not re-read.",
+            "cacheable": True,
+        }
+    read_state, names = _label_names(entry)
+    scope = recon.classify_issue_for_scan({"state": read_state, "labels": names})
+    if scope["inScope"]:
+        return None
+    return {**outcome, "reasonCode": str(scope["reasonCode"]), "summary": str(scope["summary"])}
+
+
+def _remember_observation(
+    *,
+    state: dict[str, Any],
+    repository: str,
+    issue_number: int,
+    entry: Mapping[str, Any],
+    item: dict[str, Any],
+) -> None:
+    observations = _issue_observations(state, repository)
+    updated_at = _string(entry.get("updated_at"))
+    if item.pop("cacheable", False) and updated_at:
+        observations[str(issue_number)] = {
+            "updatedAt": updated_at,
+            "reasonCode": _string(item.get("reasonCode")),
+        }
+    else:
+        observations.pop(str(issue_number), None)
+    excess = len(observations) - _MAX_ISSUE_OBSERVATIONS
+    if excess > 0:
+        for stale in sorted(observations, key=int)[:excess]:
+            observations.pop(stale, None)
+
+
 def _is_rate_limit(result: Mapping[str, Any]) -> bool:
     code = _string(result.get("reasonCode") or result.get("reason_code")).lower()
     summary = _string(result.get("summary")).lower()
@@ -524,7 +593,10 @@ async def _reconcile_one_issue(
         else:
             outcome.update(action=recon.ACTION_NO_ACTION,
                 reasonCode=expired_result.get("reasonCode", "claim_changed"),
-                summary="Current GitHub ownership or lifecycle state prevents lease reclamation.")
+                summary="Current GitHub ownership or lifecycle state prevents lease reclamation.",
+                # Expired claims stay expired and the settled label is issue
+                # state, so only an issue change can alter this outcome.
+                cacheable=expired_result.get("reasonCode") == "settled_status_retained")
             return outcome
     handoffs, malformed = _validated_handoffs(
         comments,
@@ -620,6 +692,14 @@ async def _reconcile_one_issue(
         local_workflow_available=False,
     )
     outcome.update(action=decision.action, reasonCode=decision.reason_code, summary=decision.summary)
+    if (
+        decision.action == recon.ACTION_NO_ACTION
+        and decision.reason_code == "no_interrupted_transition"
+        and not (active_claims or expired_claims or pr_url or known)
+    ):
+        # Decided from issue labels and comments alone: no claim lease can
+        # expire, no PR state can move, and no local effect is pending.
+        outcome["cacheable"] = True
 
     if decision.action == recon.ACTION_COMPLETE and decision.to_target:
         planned = recon.plan_repair_mutation(
@@ -817,11 +897,15 @@ async def reconcile_local_github_issue_claims(*, state_dir=None):
     # made from GitHub alone. No foreign Temporal/database access is needed.
     import asyncio
     from moonmind.config.settings import settings
-    repositories = sorted(set(state.get("repositories") or []) | set(result.get("repositories") or []))
+    # GitHub repository names are case-insensitive and receipts store them
+    # casefolded: sweep each repository once, under its configured spelling.
     configured = str(settings.workflow.github_repository or "")
-    if configured and configured not in repositories:
-        repositories.append(configured)
-    repositories.sort()
+    spellings: dict[str, str] = {}
+    known = set(state.get("repositories") or []) | set(result.get("repositories") or [])
+    for name in [configured, *sorted(known)]:
+        if _string(name):
+            spellings.setdefault(_string(name).casefold(), _string(name))
+    repositories = sorted(spellings.values(), key=str.casefold)
     state["repositories"] = repositories
     offset = int(state.get("repositoryCursor") or 0)
     github_results = []
@@ -938,6 +1022,7 @@ async def reconcile_github_issue_handoffs(
     requests_exhausted = False
 
     targets: list[int] = []
+    listed_entries: dict[int, Mapping[str, Any]] = {}
     if issue_numbers is not None:
         seen: set[int] = set()
         for raw in issue_numbers:
@@ -995,6 +1080,7 @@ async def reconcile_github_issue_handoffs(
                     if number > cursor and number not in targets:
                         targets.append(number)
                         target_pages[number] = page
+                        listed_entries[number] = entry
                     if len(targets) >= max(0, int(max_issues)):
                         break
                 if len(targets) >= max(0, int(max_issues)):
@@ -1011,15 +1097,26 @@ async def reconcile_github_issue_handoffs(
             requests_exhausted = True
             failures.append({"reasonCode": "request_budget_exhausted", "summary": f"Deferred {repository}#{number}: request budget exhausted."})
             continue
-        try:
-            import asyncio
-            async with asyncio.timeout(10):
-                item = await _reconcile_one_issue(
-                    service=service, repository=_string(repository), issue_number=number, budget=budget, state=state, now_iso=now_iso,
-                    authenticated_login=authenticated_login,
-                )
-        except Exception as exc:  # noqa: BLE001 - one issue never fails the run
-            item = {"repository": _string(repository), "issueNumber": number, "action": recon.ACTION_DEFERRED_UNKNOWN, "reasonCode": "issue_error", "summary": f"Reconciliation error deferred: {exc.__class__.__name__}.", "apiRequests": 0}
+        entry = listed_entries.get(number)
+        item = (
+            _listing_outcome(state=state, repository=_string(repository), issue_number=number, entry=entry)
+            if entry is not None
+            else None
+        )
+        if item is None:
+            try:
+                import asyncio
+                async with asyncio.timeout(10):
+                    item = await _reconcile_one_issue(
+                        service=service, repository=_string(repository), issue_number=number, budget=budget, state=state, now_iso=now_iso,
+                        authenticated_login=authenticated_login,
+                    )
+            except Exception as exc:  # noqa: BLE001 - one issue never fails the run
+                item = {"repository": _string(repository), "issueNumber": number, "action": recon.ACTION_DEFERRED_UNKNOWN, "reasonCode": "issue_error", "summary": f"Reconciliation error deferred: {exc.__class__.__name__}.", "apiRequests": 0}
+        if entry is not None:
+            _remember_observation(state=state, repository=_string(repository), issue_number=number, entry=entry, item=item)
+        else:
+            item.pop("cacheable", None)
         results.append(item)
         if issue_numbers is None:
             # Persist progress between issues so the repository's outer time
