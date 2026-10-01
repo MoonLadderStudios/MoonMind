@@ -5663,7 +5663,12 @@ class TemporalExecutionService:
         attrs["mm_owner_id"] = self._default_owner_id(record)
         integration_state = self._integration_state(record)
         if integration_state is None:
-            attrs.pop("mm_integration", None)
+            # `mm_stage` is owned by integration monitoring alone, so it
+            # disappears with it. `mm_integration` is not: every execution
+            # declares one at creation (a deployment update, a GitHub event),
+            # and readers filter lists on it. Dropping it here erased that
+            # declaration on the first state transition of any execution that
+            # never entered integration monitoring.
             attrs.pop("mm_stage", None)
         else:
             attrs["mm_integration"] = integration_state["integration_name"]
