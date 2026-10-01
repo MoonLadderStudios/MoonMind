@@ -185,8 +185,9 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
         priority=0,
         max_attempts=3,
     )
-    template = request["payload"]["task"]["taskTemplate"]
-    expanded = await _expand(tmp_path, template["inputs"])
+    task = request["payload"]["task"]
+    assert task["taskTemplate"] == {"slug": "pr-review-resolve"}
+    expanded = await _expand(tmp_path, task["inputs"])
     policy = expanded["publish"]["mergeAutomation"]
     assert policy["automatedReview"] == "disabled"
     assert policy["reviewLoop"]["enabled"] is False
