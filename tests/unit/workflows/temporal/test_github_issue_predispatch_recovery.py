@@ -384,3 +384,56 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
         next_run.status == "COMPLETED" and next_run.completion_disposition != "idle"
     ), next_run.outputs
     assert (await store.get("default/after-capacity-recovery")).issue_number == 3970
+
+
+@pytest.mark.asyncio
+async def test_fast_capacity_backoff_records_an_unspent_allowance(journey):
+    """The live backoff releases before its lease lapses; the record says so.
+
+    ``ISSUE_CLAIM_CAPACITY_BLOCKED`` fires on the first renewal cadence, so
+    the sweep finalizes an attempt whose own handoff is still ``in_progress``
+    under a valid lease. That attempt never ran and is never charged, so the
+    released handoff must not report it as a spent retry.
+    """
+    from moonmind.workflows.temporal.github_issue_lease_workflow import (
+        CAPACITY_BLOCKED_CODE,
+    )
+
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    async with sessions.kw["bind"].begin() as connection:
+        for table in (
+            OmnigentRuntimeBindingRecord.__table__,
+            ProviderProfileSlotLease.__table__,
+        ):
+            await connection.run_sync(lambda conn, table=table: table.create(conn))
+    owner = "default/capacity-wait"
+    await _announce(service, owner)
+    await renew_owned_claim(store=store, service=service, owner=owner)
+    announced = parse_attempt_comment(state["comments"][0]["body"]).handoff
+    assert parse_time(announced.lease_expires_at) > datetime.now(UTC)
+    assert announced.retry_remaining == announced.retry_allowance == 3
+    message = (
+        f"{CAPACITY_BLOCKED_CODE}: queued behind unavailable local capacity; "
+        "releasing the issue reservation and backing off"
+    )
+    client = _closed_capacity_wait(
+        failure_type="CapacityBlocked", failure_message=message
+    )
+    client.get_workflow_handle("capacity-wait").result = AsyncMock(
+        side_effect=RuntimeError(f"Child Workflow execution failed: {message}")
+    )
+
+    result = await recovery.reconcile_local_claims(
+        state={},
+        store=store,
+        service=service,
+        client_factory=AsyncMock(return_value=client),
+    )
+
+    assert result["released"] == 1, result
+    recovered = parse_attempt_comment(state["comments"][0]["body"]).handoff
+    assert recovered.outcome == "runtime_unavailable"
+    assert recovered.next_action == "fresh_retry"
+    assert recovered.retry_remaining == announced.retry_allowance
+    assert "Retry: 3/3 remaining." in state["comments"][0]["body"]
