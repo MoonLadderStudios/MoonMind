@@ -32,11 +32,12 @@ async def test_readiness_permission_403_reports_unavailable_evidence(monkeypatch
             return False
 
         async def get(self, url, **_kwargs):
-            if url.endswith("/pulls/12"):
+            path = httpx.URL(url).path
+            if path.endswith("/pulls/12"):
                 return _response(200, {"state": "open", "head": {"sha": "abc"}})
-            if url.endswith("/status"):
+            if path.endswith("/status"):
                 return _response(200, {"state": "success", "statuses": []})
-            if url.endswith("/check-runs"):
+            if path.endswith("/check-runs"):
                 return _response(
                     403,
                     {"message": "Resource not accessible by personal access token"},

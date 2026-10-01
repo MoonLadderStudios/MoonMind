@@ -512,16 +512,14 @@ def _build_queue_request(
             # Reuse existing-PR adoption: the trusted tool qualifies the target,
             # Temporal owns external waits, and ordinary Skill children own
             # repairs and merge effects. A batch does not add a review policy.
-            "taskTemplate": {
-                "slug": "pr-review-resolve",
-                "inputs": {
-                    "repository": repo,
-                    "pull_request": str(pr_number),
-                    "review_provider": "none",
-                    "finish_with_pr_resolver": True,
-                    "merge_method": merge_method,
-                    "max_iterations": max_iterations,
-                },
+            "taskTemplate": {"slug": "pr-review-resolve"},
+            "inputs": {
+                "repository": repo,
+                "pull_request": str(pr_number),
+                "review_provider": "none",
+                "finish_with_pr_resolver": True,
+                "merge_method": merge_method,
+                "max_iterations": max_iterations,
             },
         },
     }

@@ -4,7 +4,7 @@
 **Viewpoint:** Module Contract Specification  
 **Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-19  
+**Updated:** 2026-10-01\
 **Audience:** Workflow, runtime, API, and dashboard contributors and operators  
 **Authority:** Authored workflow/batch publication intent, context and branch roles, compiled effect ownership, and publication outcome semantics. The provider-neutral evidence schema is owned by Lore VCS Integration Design section 3.13.  
 **Owning Surface:** Workflow admission/compiler, publication orchestration, and repository publisher consumers  
@@ -225,11 +225,11 @@ This matrix is the declarative target for catalog metadata, authoring preview, c
 | `github-issue-breakdown-orchestrate` | Parent creates issues/dependent workflows; children create PRs | Support the same PR-and-merge extension as its Implement sibling when the child's handoff contract is satisfied; do not merely extend the enum without the payload/lifecycle. |
 | `jira-breakdown-implement` and `jira-breakdown-orchestrate` | Parent creates issues/dependent workflows; children use PR with merge automation | Preserve the declared merge default and display it. Alternative choices must preserve required predecessor-code handoffs. |
 | `document-update-orchestrate` | Parent discovers documents; children use PR with merge automation | Discovery source and child workspace context agree; preserve ordering and dependency semantics. |
-| `batch-pr-resolver` | Parent discovers and queues; children use Skill-owned Auto on existing PRs | No coordinator PR; each child has its own PR head/base. Preserve eligibility and fork protections. |
+| `batch-pr-resolver` | Parent discovers and queues existing-PR coordinators; their resolver children use Skill-owned Auto | Parent and intermediate coordinator publication is `none`. The trusted target tool qualifies each PR head/base, and enabled merge automation owns the publishing resolver. Preserve eligibility and fork protections. |
 | `batch-dependabot-resolver` | Same existing-PR behavior for matching Dependabot PRs | Preserve conservative filters, caps, dry run, and per-PR/head deduplication. |
 | `pr-resolver` | Skill-owned Auto repairs the selected PR and merges when its declared finish mode is `merge` | `fix_only` still pushes, never merges, and succeeds only at the clean gate. None is incompatible with this publishing objective. |
 | `fix-comments`, `fix-ci`, `fix-merge-conflicts` | Skill-owned Auto for their declared existing-PR/branch effects | Preserve exact remote-head evidence and portable Skill semantics. |
-| `pr-review-resolve` | Review/fix the existing PR; optional final merge is off by default | Coordinator publication is `none`; the existing review/merge owner invokes resolver work under the scope's admitted effects. Parent `none` is not a tree-wide user selection. |
+| `pr-review-resolve` | Review/fix the existing PR; optional final merge is off by default | Coordinator publication is `none`; enabled merge automation declares the resolution owner before the trusted tool qualifies the target. The owner invokes resolver work under the scope's admitted effects. Parent `none` is not a tree-wide user selection. |
 | Standalone implementation presets, including Jira/GitHub Implement, Jira/GitHub Orchestrate, document author/update, and MoonSpec Orchestrate | Managed PR publication under their declared default | Read-only assessment, verification, or tracker steps remain non-publishing inside the same composition. |
 | Standalone assessment, verification, or tracker-only work | No repository publication | Tracker effects and artifact saving have independent contracts. |
 

@@ -234,7 +234,7 @@ def test_batch_children_adopt_existing_prs_with_durable_merge_ownership():
     payload = request["payload"]
     task = payload["task"]
     assert task["taskTemplate"]["slug"] == "pr-review-resolve"
-    assert task["taskTemplate"]["inputs"] == {
+    assert task["inputs"] == {
         "repository": "owner/repo",
         "pull_request": "42",
         "review_provider": "none",
@@ -404,8 +404,8 @@ def test_build_queue_request_preserves_runtime_and_existing_pr_locator():
     assert task["runtime"]["executionProfileRef"] == "test-profile"
     assert "providerProfile" not in task["runtime"]
     assert task["title"] == "feature/example"
-    assert task["taskTemplate"]["inputs"]["pull_request"] == "42"
-    assert task["taskTemplate"]["inputs"]["finish_with_pr_resolver"] is True
+    assert task["inputs"]["pull_request"] == "42"
+    assert task["inputs"]["finish_with_pr_resolver"] is True
 
 
 def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
@@ -489,10 +489,7 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     )
 
     # The preset resolves the existing PR before configuring its coordinator.
-    assert (
-        request["payload"]["task"]["taskTemplate"]["inputs"]["finish_with_pr_resolver"]
-        is True
-    )
+    assert request["payload"]["task"]["inputs"]["finish_with_pr_resolver"] is True
 
 
 def test_resolve_artifacts_dir_prefers_managed_session_spool(
@@ -1121,7 +1118,7 @@ def test_build_queue_request_adoption_contract() -> None:
     assert "skill" not in task
     assert "git" not in task
     assert "publish" not in task
-    inputs = task["taskTemplate"]["inputs"]
+    inputs = task["inputs"]
     assert inputs["repository"] == "MoonLadderStudios/MoonMind"
     assert inputs["pull_request"] == "42"
     assert inputs["merge_method"] == "squash"
