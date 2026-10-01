@@ -397,6 +397,14 @@ def run_orchestration(
             )
             if normalized_reason in {"ci_running", "codex_review_grace_wait"}:
                 sleep_seconds = max(sleep_seconds, 60)
+            if normalized_reason == "ci_infra_transient" and isinstance(
+                gated_continuation, dict
+            ):
+                # Finalize owns the infrastructure rerun schedule (for example
+                # the artifact quota backoff); never poll it faster.
+                requested = gated_continuation.get("retryAfterSeconds")
+                if isinstance(requested, int) and not isinstance(requested, bool):
+                    sleep_seconds = max(sleep_seconds, requested)
             finalize_only_retry_index += 1
             history.append(
                 {
