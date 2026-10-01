@@ -1816,9 +1816,11 @@ async def test_launch_session_heartbeats_while_waiting_for_remote_session_contro
         for heartbeat in heartbeats
     )
 
-async def test_launch_session_uses_github_descriptor_from_activity_environment(
+async def test_launch_session_selects_default_connection_not_ambient_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """MoonLadderStudios/MoonMind#4023: ambient tokens do not pick the identity."""
+
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-ambient-token")
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
@@ -1855,8 +1857,7 @@ async def test_launch_session_uses_github_descriptor_from_activity_environment(
     assert "GITHUB_TOKEN" not in launched_request.environment
     assert "GIT_TERMINAL_PROMPT" not in launched_request.environment
     assert launched_request.github_credential is not None
-    assert launched_request.github_credential.source == "environment"
-    assert launched_request.github_credential.env_var == "GITHUB_TOKEN"
+    assert launched_request.github_credential.source == "managed_secret"
 
 async def test_launch_session_preserves_request_scoped_github_token_for_controller() -> None:
     token = "ghp_request_scoped_token_12345678901234567890"
@@ -2066,9 +2067,11 @@ async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
     assert launched_request.github_credential.source == "managed_secret"
     assert launched_request.github_credential.required is False
 
-async def test_launch_session_preserves_explicit_github_secret_ref_descriptor(
+async def test_launch_session_settings_ref_is_read_through_default_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The settings ref is deployment configuration, not a session descriptor."""
+
     from moonmind.config.settings import settings as app_settings
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -2108,11 +2111,8 @@ async def test_launch_session_preserves_explicit_github_secret_ref_descriptor(
 
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.github_credential is not None
-    assert launched_request.github_credential.source == "secret_ref"
-    assert (
-        launched_request.github_credential.secret_ref
-        == "env://MM320_GITHUB_PAT"
-    )
+    assert launched_request.github_credential.source == "managed_secret"
+    assert launched_request.github_credential.secret_ref is None
     assert "GITHUB_TOKEN" not in launched_request.environment
 
 async def test_launch_session_redacts_github_token_in_failure_details() -> None:
@@ -4098,8 +4098,7 @@ async def test_agent_runtime_launch_session_temporal_boundary(
             assert "GITHUB_TOKEN" not in launch_request.environment
             assert "GIT_TERMINAL_PROMPT" not in launch_request.environment
             assert launch_request.github_credential is not None
-            assert launch_request.github_credential.source == "environment"
-            assert launch_request.github_credential.env_var == "GITHUB_TOKEN"
+            assert launch_request.github_credential.source == "managed_secret"
 
 @pytest.mark.asyncio
 async def test_agent_runtime_send_turn_temporal_boundary() -> None:
@@ -7669,3 +7668,43 @@ async def test_terminal_evidence_still_fails_other_manual_review_reasons(
     )
 
     assert result.failure_class == "execution_error"
+
+
+async def test_launch_scratch_session_has_no_github_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4023: scratch sessions need no GitHub login."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-ambient-token")
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "agentRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+            "workspaceSpec": {},
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.github_credential is None
+    assert "GITHUB_TOKEN" not in launched_request.environment

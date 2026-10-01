@@ -23,12 +23,9 @@ from moonmind.auth.resolvers import (
     RootSecretResolver,
 )
 
-# Slugs tried when no profile secret_refs / env token / WORKFLOW_GITHUB_TOKEN_SECRET_REF
-# produced a token (matches api_service startup seeding and dashboard hints).
-_MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
-    "GITHUB_TOKEN",
-    "GITHUB_PAT",
-)
+#: Principal under which launches read the deployment's recorded repository
+#: connections. A single-user instance admits its own runtime at system scope.
+_LAUNCH_CONNECTION_PRINCIPAL = "system:managed-runtime-launch"
 # Registry endpoint this module's GHCR pull credentials are bound to. Returned
 # credentials must only be presented to this endpoint (or its exact image /
 # repository scope); never to arbitrary endpoints derived from image strings,
@@ -78,30 +75,74 @@ def _normalize_secret_ref_input(
         raise ValueError(f"{field_name} is empty")
     return stripped
 
-async def resolve_managed_github_token_from_store() -> str | None:
-    """Return an active GitHub PAT from managed secrets (Settings), if any.
+async def load_repository_connection_for_launch(connection_ref: str) -> Any:
+    """Return the recorded repository connection, or ``None`` when none exists.
 
-    This is separate from provider profile ``secret_refs``: operators store one
-    org-wide token under a well-known slug without binding it to each profile.
+    A database failure propagates so callers can tell an unreadable record
+    from an absent one; absence alone may select the deployment declaration.
     """
+
     from api_service.db.base import async_session_maker
-    from api_service.db.models import ManagedSecret, SecretStatus
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
 
     async with async_session_maker() as session:
-        for slug in _MANAGED_GITHUB_TOKEN_SLUGS:
-            # Probe well-known slugs quietly so an expected "not configured"
-            # path does not emit one warning per candidate.
-            result = await session.execute(
-                select(ManagedSecret).where(
-                    ManagedSecret.slug == slug,
-                    ManagedSecret.status == SecretStatus.ACTIVE,
-                )
-            )
-            secret = result.scalar_one_or_none()
-            candidate = str(secret.ciphertext if secret else "").strip()
-            if candidate:
-                return candidate
-    return None
+        return await RepositoryConnectionService(session).get_connection(
+            connection_ref,
+            principal_ref=_LAUNCH_CONNECTION_PRINCIPAL,
+            principal_scope=("system", None),
+        )
+
+
+async def resolve_default_github_connection_credential(
+    *, repo: str | None = None
+) -> Any:
+    """Resolve the deployment's default GitHub connection and nothing else.
+
+    A recorded ``repository-connection:git-default`` (normally produced by the
+    #4023 migration) is authoritative: only its credential is read. Without a
+    recorded connection, the deployment's declared GitHub configuration
+    applies. An unreadable record or a failed selected source yields an
+    unresolved result instead of another credential.
+    """
+
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+        resolve_connection_github_credential,
+        resolve_github_credential,
+    )
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+
+    try:
+        connection = await load_repository_connection_for_launch(
+            DEFAULT_GIT_CONNECTION_REF
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Default repository connection could not be read: %s",
+            type(exc).__name__,
+        )
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=DEFAULT_GIT_CONNECTION_REF,
+            repo=repo,
+            diagnostic=(
+                f"{DEFAULT_GIT_CONNECTION_REF} could not be read; MoonMind does "
+                "not try another GitHub credential while the recorded "
+                "connection is unknown."
+            ),
+            retryable=True,
+        )
+    if connection is None:
+        return await resolve_github_credential(repo=repo)
+    return await resolve_connection_github_credential(connection, repo=repo)
+
 
 def _github_user_api_url() -> str:
     api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").strip()
@@ -420,6 +461,8 @@ async def resolve_github_token_for_launch(
     When a non-sensitive descriptor is provided, the descriptor controls
     resolution. Legacy environment ``GITHUB_TOKEN`` remains a launch-boundary
     input only so older callers can still be scrubbed before container launch.
+    Otherwise only the deployment's default repository connection is used; a
+    failed selected source returns ``None`` rather than another credential.
     """
 
     launch_environment = environment or {}
@@ -467,69 +510,35 @@ async def resolve_github_token_for_launch(
                 )
                 return None
         if source == "managed_secret":
-            try:
-                resolved = await resolve_managed_github_token_from_store()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if required:
-                    raise ValueError(
-                        "GitHub credential managed secret could not be resolved"
-                    ) from exc
-                logger.warning(
-                    "Failed to resolve GitHub token from managed secrets store",
-                    exc_info=True,
-                )
-                return None
-            if resolved:
-                return resolved
+            # Historical descriptor name: it selects the deployment's default
+            # repository connection, not a search of well-known secret slugs.
+            resolved = await resolve_default_github_connection_credential()
+            if resolved.token:
+                return resolved.token
             if required:
-                raise ValueError("GitHub credential managed secret is not configured")
+                raise ValueError(resolved.safe_summary)
             return None
         raise ValueError(f"Unsupported GitHub credential source: {source or '<blank>'}")
 
-    from moonmind.auth.github_credentials import resolve_github_credential
-
-    resolved = await resolve_github_credential()
+    resolved = await resolve_default_github_connection_credential()
     if resolved.token:
         return resolved.token
-
-    from moonmind.config.settings import settings as _mm_settings
-
-    secret_ref = str(
-        getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
-    ).strip()
-    if secret_ref:
-        try:
-            return await resolve_managed_api_key_reference(secret_ref)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning(
-                "Failed to resolve GitHub token secret ref for managed runtime launch",
-                exc_info=True,
-            )
-
-    try:
-        return await resolve_managed_github_token_from_store()
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.warning(
-            "Failed to resolve GitHub token from managed secrets store",
-            exc_info=True,
-        )
-        return None
+    if resolved.diagnostic and resolved.source.value != "missing":
+        logger.warning("GitHub launch credential unavailable: %s", resolved.safe_summary)
+    return None
 
 def build_github_credential_descriptor_for_launch(
     environment: Mapping[str, str] | None = None,
     *,
-    ambient_github_token: str | None = None,
-    enable_managed_secret_fallback: bool = False,
+    repository_session: bool = False,
 ) -> "ManagedGitHubCredentialDescriptor | None":
-    """Return a non-sensitive GitHub launch credential descriptor."""
+    """Return a non-sensitive GitHub launch credential descriptor.
 
-    from moonmind.config.settings import settings as _mm_settings
+    An explicit launch ``GITHUB_TOKEN`` stays the launch's own input. A
+    repository session otherwise selects the deployment's default repository
+    connection; scratch sessions get no GitHub credential.
+    """
+
     from moonmind.schemas.managed_session_models import (
         ManagedGitHubCredentialDescriptor,
     )
@@ -541,50 +550,9 @@ def build_github_credential_descriptor_for_launch(
             envVar="GITHUB_TOKEN",
             required=False,
         )
-
-    ambient_token = str(ambient_github_token or "").strip()
-    if enable_managed_secret_fallback and ambient_token:
-        return ManagedGitHubCredentialDescriptor(
-            source="environment",
-            envVar="GITHUB_TOKEN",
-            required=False,
-        )
-
-    secret_ref = str(
-        getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
-    ).strip()
-    if enable_managed_secret_fallback and secret_ref:
-        return ManagedGitHubCredentialDescriptor(
-            source="secret_ref",
-            secretRef=secret_ref,
-            required=False,
-        )
-
-    if enable_managed_secret_fallback:
+    if repository_session:
         return ManagedGitHubCredentialDescriptor(source="managed_secret", required=False)
     return None
-
-async def shape_launch_github_auth_environment(
-    environment: Mapping[str, str] | None = None,
-    *,
-    ambient_github_token: str | None = None,
-) -> dict[str, str]:
-    """Return launch env with GitHub auth seeded using explicit precedence."""
-
-    shaped_environment = {
-        str(key): str(value) for key, value in (environment or {}).items()
-    }
-    ambient_token = str(ambient_github_token or "").strip()
-
-    if ambient_token and not str(shaped_environment.get("GITHUB_TOKEN", "")).strip():
-        shaped_environment["GITHUB_TOKEN"] = ambient_token
-
-    github_token = await resolve_github_token_for_launch(shaped_environment)
-    if github_token:
-        shaped_environment["GITHUB_TOKEN"] = github_token
-        shaped_environment.setdefault("GIT_TERMINAL_PROMPT", "0")
-
-    return shaped_environment
 
 async def resolve_managed_api_key_reference(
     ref: str | Mapping[str, Any],
@@ -801,9 +769,9 @@ __all__ = [
     "assert_managed_secret_refs_active_for_launch",
     "build_github_credential_descriptor_for_launch",
     "inspect_managed_secret_refs_for_launch",
+    "load_repository_connection_for_launch",
+    "resolve_default_github_connection_credential",
     "resolve_ghcr_pull_credentials_for_launch",
     "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
-    "resolve_managed_github_token_from_store",
-    "shape_launch_github_auth_environment",
 ]

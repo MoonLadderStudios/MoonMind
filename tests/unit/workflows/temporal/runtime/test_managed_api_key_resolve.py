@@ -15,11 +15,23 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     resolve_ghcr_pull_credentials_for_launch,
     resolve_github_token_for_launch,
     resolve_managed_api_key_reference,
-    resolve_managed_github_token_from_store,
-    shape_launch_github_auth_environment,
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _no_recorded_default_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests have no database: record no default repository connection."""
+
+    async def _absent(_connection_ref: str):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _absent,
+    )
 
 async def test_resolve_from_worker_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MY_TEST_SECRET_KEY", "abc123")
@@ -88,42 +100,6 @@ class _FakeSessionMaker:
         self.calls += 1
         return _FakeAsyncSessionCtx(self._session)
 
-async def test_resolve_managed_github_token_from_store_first_slug(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session = _FakeLookupSession(values={"GITHUB_TOKEN": "ghp-from-managed-store"})
-    session_maker = _FakeSessionMaker(session)
-    monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
-
-    out = await resolve_managed_github_token_from_store()
-    assert out == "ghp-from-managed-store"
-    assert session_maker.calls == 1
-    assert session.seen_slugs == ["GITHUB_TOKEN"]
-
-async def test_resolve_managed_github_token_from_store_empty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session = _FakeLookupSession()
-    session_maker = _FakeSessionMaker(session)
-    monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
-
-    assert await resolve_managed_github_token_from_store() is None
-    assert session_maker.calls == 1
-    assert session.seen_slugs == ["GITHUB_TOKEN", "GITHUB_PAT"]
-
-async def test_resolve_managed_github_token_from_store_stops_after_lookup_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session = _FakeLookupSession(errors={"GITHUB_TOKEN": RuntimeError("db down")})
-    session_maker = _FakeSessionMaker(session)
-    monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
-
-    with pytest.raises(RuntimeError, match="db down"):
-        await resolve_managed_github_token_from_store()
-
-    assert session_maker.calls == 1
-    assert session.seen_slugs == ["GITHUB_TOKEN"]
-
 async def test_resolve_github_token_for_launch_prefers_existing_environment_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -186,16 +162,17 @@ def _forbid_source_token_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _unexpected_github_token(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("source GitHub token resolution must not run")
 
-    async def _unexpected_managed_token(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("managed source token lookup must not run")
+    async def _unexpected_connection(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("repository connection lookup must not run")
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_github_token_for_launch",
         _unexpected_github_token,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _unexpected_managed_token,
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _unexpected_connection,
     )
 
 
@@ -378,30 +355,6 @@ async def test_ghcr_pull_credentials_bound_to_ghcr_registry() -> None:
 
     assert GHCR_REGISTRY == "ghcr.io"
 
-async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from moonmind.config.settings import settings as app_settings
-
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
-
-    async def _unexpected_store() -> str:
-        raise AssertionError("managed store lookup should not run")
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _unexpected_store,
-    )
-
-    shaped = await shape_launch_github_auth_environment(
-        {"PATH": "/usr/bin"},
-        ambient_github_token="ghp-ambient-token",
-    )
-
-    assert shaped["PATH"] == "/usr/bin"
-    assert shaped["GITHUB_TOKEN"] == "ghp-ambient-token"
-    assert shaped["GIT_TERMINAL_PROMPT"] == "0"
-
 async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -419,25 +372,6 @@ async def test_resolve_github_token_for_launch_propagates_cancellation_from_secr
 
     with pytest.raises(asyncio.CancelledError):
         await resolve_github_token_for_launch({})
-
-async def test_resolve_github_token_for_launch_propagates_cancellation_from_store(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from moonmind.config.settings import settings as app_settings
-
-    async def _fake_store_token() -> str:
-        raise asyncio.CancelledError()
-
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _fake_store_token,
-    )
-
-    with pytest.raises(asyncio.CancelledError):
-        await resolve_github_token_for_launch({})
-
 
 class _FakeStatusResult:
     def __init__(self, rows: list[tuple[str, str]]) -> None:
@@ -587,3 +521,231 @@ async def test_assert_managed_secret_refs_noop_for_all_active(
     await assert_managed_secret_refs_active_for_launch(
         ["db://ok-key", "env://ALSO_OK"]
     )
+
+
+# --- MoonLadderStudios/MoonMind#4023: the launch boundary uses the recorded
+# default repository connection and never searches other credentials. ---
+
+
+def _default_connection(credential: dict[str, object]):
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        RepositoryConnection,
+    )
+
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": DEFAULT_GIT_CONNECTION_REF,
+            "provider": "git",
+            "displayName": "Default GitHub connection",
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "clientPolicy": {
+                "pinnedVersion": "2.46.0",
+                "toolBundleRef": "repository-client:git-system",
+                "executableSha256": "sha256:git",
+            },
+            "credential": credential,
+            "ownership": {"ownerRef": "system:deployment", "scopeType": "system"},
+            "hostingService": "github",
+        }
+    )
+
+
+def _record_default_connection(monkeypatch: pytest.MonkeyPatch, connection) -> list[str]:
+    loaded: list[str] = []
+
+    async def _load(connection_ref: str):
+        loaded.append(connection_ref)
+        return connection
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _load,
+    )
+    return loaded
+
+
+def _clear_deployment_github_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    for name in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN",
+        "GITHUB_TOKEN_SECRET_REF",
+        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        "MOONMIND_GITHUB_TOKEN_REF",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+async def test_recorded_default_connection_wins_over_ambient_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("SELECTED_GITHUB_PAT", "selected-token-B")
+    loaded = _record_default_connection(
+        monkeypatch,
+        _default_connection(
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "SELECTED_GITHUB_PAT"},
+            }
+        ),
+    )
+
+    assert await resolve_github_token_for_launch({}) == "selected-token-B"
+    assert loaded == ["repository-connection:git-default"]
+
+
+async def test_failed_recorded_connection_does_not_fall_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.delenv("SELECTED_GITHUB_PAT", raising=False)
+    _record_default_connection(
+        monkeypatch,
+        _default_connection(
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "SELECTED_GITHUB_PAT"},
+            }
+        ),
+    )
+
+    assert await resolve_github_token_for_launch({}) is None
+
+
+async def test_unreadable_default_connection_is_not_treated_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+
+    async def _unreadable(_connection_ref: str):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _unreadable,
+    )
+
+    assert await resolve_github_token_for_launch({}) is None
+
+
+async def test_failed_configured_reference_does_not_search_other_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    _clear_deployment_github_env(monkeypatch)
+    _record_default_connection(monkeypatch, None)
+    monkeypatch.setenv("GITHUB_TOKEN_SECRET_REF", "db://github-pat-broken")
+    monkeypatch.setattr(
+        app_settings.github, "github_token_secret_ref", "db://github-pat-settings"
+    )
+    attempted: list[str] = []
+
+    async def _resolve(ref: str, **_kwargs: object) -> str:
+        attempted.append(ref)
+        raise ValueError("secret store unavailable")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_managed_api_key_reference",
+        _resolve,
+    )
+
+    assert await resolve_github_token_for_launch({}) is None
+    assert attempted == ["db://github-pat-broken"]
+
+
+async def test_without_recorded_connection_the_declared_deployment_token_applies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_deployment_github_env(monkeypatch)
+    _record_default_connection(monkeypatch, None)
+    monkeypatch.setenv("GITHUB_TOKEN", "declared-token")
+
+    assert await resolve_github_token_for_launch({}) == "declared-token"
+
+
+async def test_no_recorded_connection_and_no_declaration_yields_no_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_deployment_github_env(monkeypatch)
+    _record_default_connection(monkeypatch, None)
+
+    assert await resolve_github_token_for_launch({}) is None
+
+
+async def test_default_connection_descriptor_uses_recorded_connection_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.schemas.managed_session_models import (
+        ManagedGitHubCredentialDescriptor,
+    )
+
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    _record_default_connection(
+        monkeypatch,
+        _default_connection(
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "MISSING_SELECTED_PAT"},
+            }
+        ),
+    )
+    monkeypatch.delenv("MISSING_SELECTED_PAT", raising=False)
+    descriptor = ManagedGitHubCredentialDescriptor(
+        source="managed_secret", required=True
+    )
+
+    with pytest.raises(ValueError, match="repository-connection:git-default"):
+        await resolve_github_token_for_launch({}, github_credential=descriptor)
+
+
+async def test_repository_session_descriptor_selects_the_default_connection() -> None:
+    from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+        build_github_credential_descriptor_for_launch,
+    )
+
+    repository = build_github_credential_descriptor_for_launch(
+        {}, repository_session=True
+    )
+    scratch = build_github_credential_descriptor_for_launch(
+        {}, repository_session=False
+    )
+    explicit = build_github_credential_descriptor_for_launch(
+        {"GITHUB_TOKEN": "explicit-launch-token"}, repository_session=True
+    )
+
+    assert repository is not None and repository.source == "managed_secret"
+    assert scratch is None
+    assert explicit is not None and explicit.source == "environment"
+
+
+async def test_default_connection_loader_cancellation_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_deployment_github_env(monkeypatch)
+
+    async def _cancelled(_connection_ref: str):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _cancelled,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_github_token_for_launch({})

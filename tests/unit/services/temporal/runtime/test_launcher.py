@@ -37,6 +37,20 @@ from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
     LoreCliReadinessAdapter,
 )
 
+@pytest.fixture(autouse=True)
+def _no_recorded_repository_connections(monkeypatch):
+    """Unit tests have no database: no repository connection is recorded."""
+
+    async def _absent(_connection_ref: str):
+        return None
+
+    for module in (
+        "moonmind.workflows.temporal.runtime.launcher",
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve",
+    ):
+        monkeypatch.setattr(f"{module}.load_repository_connection_for_launch", _absent)
+
+
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
     defaults = dict(
         runtime_id="codex-cli",
@@ -1448,6 +1462,8 @@ async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
 
 @pytest.mark.asyncio
 async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
+    """A profile-declared GITHUB_TOKEN passthrough is an explicit choice (#4023)."""
+
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-runtime")
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
@@ -3482,10 +3498,10 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
 @pytest.mark.asyncio
-async def test_launch_resolves_github_token_from_managed_secrets_store_without_profile_ref(
+async def test_launch_resolves_migrated_settings_secret_through_default_connection(
     tmp_path, monkeypatch
 ):
-    """Managed secret slug GITHUB_TOKEN (Settings) supplies gh without profile secret_refs."""
+    """A migrated Settings secret supplies gh through the recorded connection (#4023)."""
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
 
     store = ManagedRunStore(tmp_path)
@@ -3523,13 +3539,26 @@ async def test_launch_resolves_github_token_from_managed_secrets_store_without_p
             captured_env.update(env)
         return _FakeProcess()
 
-    async def _fake_store_token() -> str:
+    async def _fake_secret(ref: str, **_kwargs) -> str:
+        assert ref == "db://GITHUB_TOKEN"
         return "resolved-from-managed-secrets-table"
 
     from moonmind.config.settings import settings as app_settings
 
     monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "db", "key": "GITHUB_TOKEN"},
+                },
+            )
+        },
+    )
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
         _fake_create_subprocess_exec,
@@ -3539,8 +3568,8 @@ async def test_launch_resolves_github_token_from_managed_secrets_store_without_p
         lambda command: "/usr/bin/gh" if command == "gh" else None,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _fake_store_token,
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_secret,
     )
 
     _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
@@ -3597,13 +3626,26 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
             captured_env.update(env)
         return _FakeProcess()
 
-    async def _fake_store_token() -> str:
+    async def _fake_secret(ref: str, **_kwargs) -> str:
+        assert ref == "db://GITHUB_TOKEN"
         return "resolved-from-managed-secrets-table"
 
     from moonmind.config.settings import settings as app_settings
 
     monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "db", "key": "GITHUB_TOKEN"},
+                },
+            )
+        },
+    )
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
         _fake_create_subprocess_exec,
@@ -3613,8 +3655,8 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
         lambda command: "/usr/bin/gh" if command == "gh" else None,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _fake_store_token,
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_secret,
     )
 
     _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
@@ -3969,7 +4011,9 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
 
     _record, process, _cleanup, deferred_cleanup = await launcher.launch(
         run_id="claude-gh-run",
-        request=_make_request(),
+        request=_make_request(
+            workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+        ),
         profile=profile,
         workspace_path=str(workspace_root),
     )
@@ -5356,3 +5400,304 @@ async def test_launch_skips_redundant_artifacts_chown_for_internal_workspace(
     # Only the single ownership-root chown; the artifacts dir is already covered.
     assert len(chown_calls) == 1
     assert str(workspace.resolve().parent) in {str(call[-1]) for call in chown_calls}
+
+
+# --- MoonLadderStudios/MoonMind#4023: launches use the selected repository
+# connection, never a search of ambient credentials; scratch needs no GitHub. ---
+
+
+def _recorded_connection(
+    connection_id: str, credential: dict[str, object]
+) -> RepositoryConnection:
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": connection_id,
+            "provider": "git",
+            "displayName": "Recorded GitHub connection",
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "clientPolicy": {
+                "pinnedVersion": "0.0.0-recorded-elsewhere",
+                "toolBundleRef": "repository-client:git-system",
+                "executableSha256": "sha256:recorded-elsewhere",
+            },
+            "credential": credential,
+            "ownership": {"ownerRef": "system:deployment", "scopeType": "system"},
+            "hostingService": "github",
+        }
+    )
+
+
+def _record_connections(monkeypatch, connections: dict[str, RepositoryConnection]):
+    loaded: list[str] = []
+
+    async def _load(connection_ref: str):
+        loaded.append(connection_ref)
+        return connections.get(connection_ref)
+
+    for module in (
+        "moonmind.workflows.temporal.runtime.launcher",
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve",
+    ):
+        monkeypatch.setattr(f"{module}.load_repository_connection_for_launch", _load)
+    return loaded
+
+
+def _capture_launch_env(monkeypatch) -> dict[str, str]:
+    captured_env: dict[str, str] = {}
+
+    class _FakeProcess:
+        pid = 4023
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+    return captured_env
+
+
+@pytest.mark.asyncio
+async def test_scratch_launch_receives_no_github_credential(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("GH_TOKEN", "ambient-token-A")
+    captured_env = _capture_launch_env(monkeypatch)
+
+    async def _unexpected_resolve(*_args, **_kwargs):
+        raise AssertionError("scratch launches must not resolve a GitHub token")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _unexpected_resolve,
+    )
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-scratch-4023", request=_make_request(), profile=profile
+    )
+    await process.wait()
+
+    assert captured_env
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        assert name not in captured_env
+
+
+@pytest.mark.asyncio
+async def test_recorded_default_connection_wins_over_ambient_launch_token(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("GH_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("SELECTED_GITHUB_PAT", "selected-token-B")
+    _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": "SELECTED_GITHUB_PAT"},
+                },
+            )
+        },
+    )
+    captured_env = _capture_launch_env(monkeypatch)
+    source_repo = tmp_path / "source-repo"
+    subprocess.run(["git", "init", str(source_repo)], check=True, capture_output=True)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-selected-4023",
+        request=_make_request(workspace_spec={"repository": str(source_repo)}),
+        profile=profile,
+    )
+    await process.wait()
+
+    assert captured_env["GITHUB_TOKEN"] == "selected-token-B"
+    assert "GH_TOKEN" not in captured_env
+
+
+def _git_target_request(connection_ref: str, *, publish_mode: str = "none"):
+    return _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": connection_ref,
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={"publishMode": publish_mode},
+    )
+
+
+def _ready_launcher(tmp_path) -> ManagedRuntimeLauncher:
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+    return launcher
+
+
+@pytest.mark.asyncio
+async def test_selected_connection_failure_blocks_readiness_without_fallback(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.delenv("SELECTED_GITHUB_PAT", raising=False)
+    _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": "SELECTED_GITHUB_PAT"},
+                },
+            )
+        },
+    )
+    launcher = _ready_launcher(tmp_path)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ) as excinfo:
+        await launcher._ensure_repository_ready_for_launch(
+            _git_target_request("repository-connection:git-default"), None
+        )
+
+    assert "env://SELECTED_GITHUB_PAT" in str(excinfo.value)
+    assert "ambient-token-A" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_explicit_recorded_connection_is_selected_among_several(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("TEAM_A_PAT", "team-a-token")
+    monkeypatch.setenv("TEAM_B_PAT", "team-b-token")
+    loaded = _record_connections(
+        monkeypatch,
+        {
+            ref: _recorded_connection(
+                ref,
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": key},
+                },
+            )
+            for ref, key in (
+                ("repository-connection:team-a", "TEAM_A_PAT"),
+                ("repository-connection:team-b", "TEAM_B_PAT"),
+            )
+        },
+    )
+    launcher = _ready_launcher(tmp_path)
+    request = _git_target_request("repository-connection:team-b")
+
+    resolved = await launcher._ensure_repository_ready_for_launch(request, None)
+    token = await launcher._resolve_request_github_token(request)
+
+    assert resolved is not None
+    assert resolved.connection_ref == "repository-connection:team-b"
+    assert token == "team-b-token"
+    assert set(loaded) == {"repository-connection:team-b"}
+
+
+@pytest.mark.asyncio
+async def test_unrecorded_explicit_connection_is_unavailable_not_default(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    launcher = _ready_launcher(tmp_path)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
+    ):
+        await launcher._ensure_repository_ready_for_launch(
+            _git_target_request("repository-connection:team-missing"), None
+        )
+
+
+@pytest.mark.asyncio
+async def test_unreadable_connection_record_blocks_instead_of_using_default(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+
+    async def _unreadable(_connection_ref: str):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.load_repository_connection_for_launch",
+        _unreadable,
+    )
+    launcher = _ready_launcher(tmp_path)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
+    ):
+        await launcher._ensure_repository_ready_for_launch(
+            _git_target_request("repository-connection:git-default"), None
+        )
+
+
+@pytest.mark.asyncio
+async def test_worker_startup_does_not_persist_an_always_on_default_alias(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    ManagedRuntimeLauncher(
+        store,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion="2.46.0",
+            toolBundleRef="repository-client:git-system",
+            executableSha256="sha256:git",
+        ),
+    )
+
+    assert not (
+        store.store_root.parent / "repository_connections" / "git-default.json"
+    ).exists()
