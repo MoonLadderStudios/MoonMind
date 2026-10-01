@@ -4,7 +4,7 @@ Status: **Desired-state UI and implementation contract. Not implemented by the d
 
 Owners: MoonMind Engineering
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
 Canonical for: model selection while creating or editing workflows and their steps, including preset, rerun, and schedule round trips.
 
@@ -38,7 +38,7 @@ Recheck current code and existing implementation work before changing these owne
 
 | Event | Tier state | Model and Effort behavior | Authored intent |
 | --- | --- | --- | --- |
-| Open a new otherwise unconfigured workflow after its profile loads | Profile's actual default tier | Populate both from that tier | Tier reference, not concrete preview overrides |
+| Open a new otherwise unconfigured workflow after its profile loads | Profile's actual default tier as a preview | Populate both from that tier | Keep model-selection fields omitted until an explicit user change |
 | Load a preset, saved draft, rerun, or schedule | Restore its authored selection | Display corresponding values | Preserve saved selection and existing inheritance |
 | Select a configured numbered tier | Selected number | Replace both fields from that tier | Remove prior Custom overrides |
 | User edits Model | Custom | Keep edited Model and unchanged Effort | Author the complete pair |
@@ -71,7 +71,7 @@ runtime:
   modelTier: 2
 ```
 
-The populated Model and Effort fields are previews. Do not add their concrete values to the request as overrides. Future launches continue to follow Tier 2's policy.
+This example represents an explicitly authored tier choice. The populated Model and Effort fields are previews. Do not add their concrete values to the request as overrides. Future launches continue to follow Tier 2's policy. A default-derived numbered display has no authored `modelTier` and remains omitted until the user changes the selection.
 
 ### Custom
 
@@ -105,6 +105,12 @@ runtime:
 
 It is not the same as omitting model selection. Do not strip these fields, refill them from workflow/profile tiers, or let a legacy scalar default supply them. A missing runtime default remains unknown/absent and is subject to existing runtime requirements, not an invented model.
 
+### Saved legacy partial or mixed selections
+
+Restore the original saved model-selection fields, including omission versus null, on load and unrelated saves. For example, `modelTier: 2` plus only `effort: high` keeps following the Tier 2 model while retaining the effort override; saving a title must not freeze the displayed model into a full Custom pair.
+
+Show the effective pair with concise source text such as `Tier 2 with saved effort override`. If the saved shape has no canonical numbered-tier or Custom value, use a nonselectable `Saved selection` placeholder; configured numbers and Custom remain the only selectable choices. Display and preview refresh do not convert the payload. An explicit tier selection, Custom selection, or field edit replaces it under the new authoring rules. Preserve the companion field only when its authored/runtime-default meaning is known; do not guess a missing value from historical launch diagnostics.
+
 ### Inheritance
 
 An unconfigured step keeps existing workflow inheritance. Show its effective values with concise `Inherited from workflow` supporting text. Merely opening or saving the form must not persist that preview as a step override.
@@ -117,7 +123,7 @@ Inherited values must not remain as hidden competing fields. A child tier supers
 
 ### Default initialization
 
-Use the selected profile's `default_model_tier`, not a hard-coded 1. Automatic initialization applies only to an otherwise unconfigured workflow. Saved/preset values and user input take precedence over an asynchronous default response.
+Use the selected profile's `default_model_tier`, not a hard-coded 1. Automatic initialization supplies display previews only for an otherwise unconfigured workflow. It does not author `modelTier`, `model`, or `effort`. An untouched save or recurring submission keeps those fields omitted, so future launches follow a changed profile default. Saved/preset values and user input take precedence over an asynchronous default response.
 
 Existing omitted/default intent must not be pinned merely by hydration. Distinguish initialization, inherited/saved state, and explicit user changes with minimal local provenance in the existing form owner. Do not create a second persistent preferences or model-policy system.
 
@@ -129,13 +135,13 @@ In Custom, preserve both inputs. Validate them against the new provider/runtime,
 
 ### A saved request exceeds the current tier count
 
-Do not add an unavailable number to the selectable options. For ordinary clamp behavior, display the effective configured tier and a concise message identifying the original request:
+Do not add an unavailable number to the selectable options. Use a nonselectable `Requested Tier 3 (unavailable)` placeholder for the saved selection, and display the backend's effective configured tier in supporting text and the Model/Effort previews:
 
 ```text
 Tier 3 is not configured for this profile. Using Tier 2.
 ```
 
-Retain requested Tier 3 in saved intent until the user explicitly replaces the model selection. A later profile with three tiers can then honor it. Unrelated edits must not silently convert requested Tier 3 into permanently authored Tier 2.
+Retain requested Tier 3 in saved intent until the user explicitly replaces the model selection. Choosing configured Tier 2 from the placeholder must produce a selection change and persist `modelTier: 2`; do not make the effective Tier 2 the controlled select's selected value while secretly retaining Tier 3. A later profile with three tiers can honor an unchanged request. Unrelated edits must not silently convert requested Tier 3 into permanently authored Tier 2.
 
 ### Legacy strict requests
 
@@ -149,7 +155,7 @@ Unrelated edits preserve strict intent. Explicit selection of a numbered tier or
 This saved request requires Tier 3. Choosing a tier or Custom replaces that requirement.
 ```
 
-Do not silently discard strict metadata on load/save. Backend strict retirement is a separate compatibility cleanup after identified consumers no longer require it, not a prerequisite for removing the UI selector.
+Do not silently discard strict metadata on load/save. The backend design's §9.4 cutoff rejects newly authored strict intent across APIs and producers while allowing unchanged saves and launches from trusted saved sources. Backend strict retirement follows drainage or an authorized intent-preserving migration of those consumers; removing the UI selector does not retire saved requirements.
 
 ## 6. Loading and Failure Behavior
 
@@ -197,12 +203,12 @@ The implementation issue must supply executable proof, not manual visual signoff
 
 | Boundary | Required scenarios |
 | --- | --- |
-| Initialization | Default Tier 2 in a three-tier profile; one-tier and more-than-three-tier profiles; saved preset/draft intent not overwritten |
+| Initialization | Default Tier 2 previews without authoring selection; untouched recurring save follows a later default-tier change; one-tier and more-than-three-tier profiles; saved preset/draft intent not overwritten |
 | User transitions | Every row in §3, both edit directions, direct Custom, clearing values, matching a tier while staying Custom, Custom back to numbered tier |
 | Serialization | Tier sends no concrete overrides; Custom sends the full nullable pair without an active tier; omitted step selection remains inherited |
 | Resolution | Custom one-null/both-null cases do not use profile tiers, legacy scalars, or inherited values; provider/effort constraints stay authoritative |
 | Async/profile changes | Delayed preview/default response after user input; rapid profile switching; unavailable profile data; Custom preserved on provider change |
-| Compatibility | Out-of-range saved tier remains authored with honest clamp notice; legacy strict survives unrelated edits and does not silently clamp |
+| Compatibility | Saved partial/mixed fields survive unrelated saves and continue following their original policy; unavailable-tier placeholder allows explicitly choosing the effective tier; legacy strict survives trusted unrelated edits and does not silently clamp; newly authored strict intent is rejected |
 | Round trips | Save/reload, preset expansion, edit/rerun, recurring workflow submission, remediation draft import where applicable, preview and actual launch parameter construction |
 | Scheduling/history | A future tier launch uses updated profile mapping; Custom strings remain explicit; Custom nulls use runtime defaults; prior attempt records remain unchanged |
 | Presentation | Shared workflow/step controls, no fallback selector in normal or Advanced mode, keyboard/focus continuity, mobile layout with long model IDs |
