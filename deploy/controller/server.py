@@ -10,6 +10,7 @@ state and converges only unfinished work toward the same target: a lost
 result never repeats a completed apply, and an already-running Compose child
 is reconciled (left alone) rather than competed with.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -19,6 +20,7 @@ import os
 import re
 import socketserver
 import threading
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 from wsgiref.simple_server import WSGIServer, make_server
@@ -30,6 +32,8 @@ from redact import redact_mapping, redact_text
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
+OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
+OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # The deployment checkout bootstrap mounts read-only at its host path.
 TARGET_REPO_ENV = "MOONMIND_CONTROLLER_TARGET_REPO"
 # The MoonMind Compose project bootstrap recorded in the controller identity
@@ -66,21 +70,31 @@ class LegacyWriterUnknown(RuntimeError):
     """Docker state could not be read, so legacy ownership is unverified."""
 
 
-def parse_legacy_mutation_ps(output: str) -> bool:
+def parse_legacy_mutation_ps(
+    output: str, *, controller_operations: dict[str, str] | None = None
+) -> bool:
     """Return True when `docker ps` output shows an active legacy mutation.
 
     The steady-state ``temporal-worker-deployment-control`` service runs
     continuously with ``restart: unless-stopped``, so mere container
     existence is not evidence of an active writer. Only a running one-off
     updater container (``com.docker.compose.oneoff=true``) for the legacy
-    control service counts as an owned mutation in progress.
+    control service counts as an owned mutation in progress. A controller
+    helper is excluded only with its recorded operation and target project.
     """
     for line in (output or "").splitlines():
-        name, _, oneoff = line.strip().partition("\t")
-        if not name:
+        fields = line.strip().split("\t")
+        name, oneoff = (fields + ["", ""])[:2]
+        if not name or oneoff.strip().lower() not in ("true", "1", "yes"):
             continue
-        if oneoff.strip().lower() in ("true", "1", "yes"):
-            return True
+        if len(fields) >= 4:
+            project, operation_id = fields[2:4]
+            if (
+                operation_id
+                and (controller_operations or {}).get(operation_id) == project
+            ):
+                continue
+        return True
     return False
 
 
@@ -105,7 +119,9 @@ def default_legacy_writer_probe() -> bool:
                 "--filter",
                 f"label=com.docker.compose.service={LEGACY_CONTROL_SERVICE}",
                 "--format",
-                '{{.Names}}\t{{.Label "com.docker.compose.oneoff"}}',
+                '{{.Names}}\t{{.Label "com.docker.compose.oneoff"}}'
+                '\t{{.Label "com.docker.compose.project"}}'
+                f'\t{{{{.Label "{OMNIGENT_OPERATION_LABEL}"}}}}',
             ],
             capture_output=True,
             text=True,
@@ -114,10 +130,23 @@ def default_legacy_writer_probe() -> bool:
     except (OSError, subprocess.SubprocessError) as exc:
         raise LegacyWriterUnknown(f"cannot inspect Docker state: {exc}") from exc
     if completed.returncode != 0:
-        raise LegacyWriterUnknown(
-            f"docker ps failed (exit {completed.returncode})"
+        raise LegacyWriterUnknown(f"docker ps failed (exit {completed.returncode})")
+    store = record_mod.OperationStore(
+        os.environ.get("MOONMIND_CONTROLLER_STATE_DIR", "/var/lib/moonmind-controller")
+    )
+    # A label from an old operation is not authority. Only a current
+    # release step protected by the controller's kernel lock is excluded;
+    # orphaned, failed and superseded one-offs remain competing writers.
+    operations = {
+        operation["operationId"]: str(
+            (operation.get("target") or {}).get("project") or ""
         )
-    return parse_legacy_mutation_ps(completed.stdout)
+        for operation in (*store.list_open(), *store.list_terminal())
+        if operation.get("omnigentStep") in ("select", "migrate")
+        and operation.get("status") in (*record_mod.OPEN_STATUSES, "succeeded")
+        and lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
+    }
+    return parse_legacy_mutation_ps(completed.stdout, controller_operations=operations)
 
 
 def _read_secret(secret: str | None, secret_file: str | None) -> str:
@@ -771,8 +800,8 @@ def _env_files_for_apply(target: dict, overlay: str) -> list:
     The deployment-owned `.env` (explicit ``target.envFile`` or
     ``<projectDir>/.env`` when present) stays first so Compose keeps
     operator authentication, bindings, and infrastructure versions; the
-    generated image overlay comes last and overrides only the release
-    selection.
+    release-owned ``.env.deploy`` follows it, and the generated image
+    overlay comes last and overrides only the MoonMind release selection.
     """
     files: list[str] = []
     explicit = (target or {}).get("envFile")
@@ -783,8 +812,11 @@ def _env_files_for_apply(target: dict, overlay: str) -> list:
         candidate = os.path.join(str(project_dir), ".env") if project_dir else ""
         if candidate and os.path.isfile(candidate):
             files.append(candidate)
+    release_env = _release_env_for_target(target)
+    if release_env and os.path.isfile(release_env):
+        files.append(release_env)
     files.append(overlay)
-    return files
+    return list(dict.fromkeys(files))
 
 
 def write_image_overlay(state_dir: str, operation_id: str, image: str) -> str:
@@ -859,6 +891,29 @@ def read_env_file(path: str) -> dict:
     return values
 
 
+def _release_env_for_target(target: dict) -> str:
+    """Map the deployment service's desired-state mount to the checkout."""
+    project_dir = str((target or {}).get("projectDir") or "")
+    if not project_dir:
+        return ""
+    operator_env = str(target.get("envFile") or os.path.join(project_dir, ".env"))
+    configured = (
+        read_env_file(operator_env).get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE")
+        or "/workspace/deployment_state/.env.deploy"
+    )
+    for mounted, local in (
+        ("/workspace/deployment_state/", os.path.join(project_dir, "deploy", "state")),
+        ("/workspace/host_project/", project_dir),
+    ):
+        if configured.startswith(mounted):
+            return os.path.join(local, configured[len(mounted) :])
+    return (
+        configured
+        if os.path.isabs(configured)
+        else os.path.join(project_dir, configured)
+    )
+
+
 def omnigent_channels_for_target(target: dict) -> list:
     """Return the configured Omnigent channel keys for a deployment target."""
     explicit = (target or {}).get("envFile")
@@ -870,9 +925,126 @@ def omnigent_channels_for_target(target: dict) -> list:
     for candidate in candidates:
         for key, value in read_env_file(candidate).items():
             seen.setdefault(key, value)
-    return [
+    channels = [
         key for key in OMNIGENT_CHANNEL_KEYS if str(seen.get(key) or "").strip()
     ]
+    # Compose supplies the documented defaults even with no .env. A rendered
+    # Omnigent service therefore requires the same release convergence.
+    if not channels and "omnigent" in (target.get("services") or ()):
+        return list(OMNIGENT_CHANNEL_KEYS)
+    return channels
+
+
+def run_omnigent_step(
+    store: record_mod.OperationStore,
+    operation: dict,
+    *,
+    runner,
+    overlay: str,
+    phase: str,
+    selected_revision: int | None = None,
+) -> dict:
+    """Delegate one release step to the selected image, never a full updater.
+
+    The controller retains stack ownership while the existing app-side
+    release helpers resolve images or converge catalog/policy state. A
+    one-off runs without dependencies and cannot enter the legacy updater.
+    """
+    target = operation.get("target") or {}
+    operation_id = record_mod.check_operation_id(operation["operationId"])
+    project = target.get("project", operation.get("stack"))
+    # A timed-out compose client can leave its one-off alive. Observe that
+    # exact operation/project before any retry launches another process.
+    active = engine.run_command(
+        runner,
+        (
+            "docker",
+            "ps",
+            "--filter",
+            f"label={OMNIGENT_OPERATION_LABEL}={operation_id}",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--format",
+            "{{.ID}}",
+        ),
+        timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS,
+    )
+    if int(active.get("exit", 0)) != 0 or str(active.get("output") or "").strip():
+        raise LegacyWriterUnknown(
+            "Omnigent release step is still running or its ownership is unverified"
+        )
+    helper_config = os.path.join(
+        str(store.state_dir), "image-overlays", f"{operation_id}-omnigent.json"
+    )
+    record_mod._atomic_write_json(
+        Path(helper_config),
+        {
+            "services": {
+                LEGACY_CONTROL_SERVICE: {
+                    "image": operation["desired"]["image"],
+                    "user": "0:0",
+                    "environment": {
+                        "DOCKER_HOST": "unix:///var/run/docker.sock",
+                        "SYSTEM_DOCKER_HOST": "unix:///var/run/docker.sock",
+                    },
+                    "volumes": ["/var/run/docker.sock:/var/run/docker.sock:ro"],
+                }
+            }
+        },
+    )
+    base = engine.compose_base(
+        project=target.get("project", operation.get("stack")),
+        project_dir=target.get("projectDir", ""),
+        compose_files=(
+            *target.get("composeFiles", ("docker-compose.yaml",)),
+            helper_config,
+        ),
+        env_files=_env_files_for_apply(target, overlay),
+    )
+    request = {
+        "operationId": operation_id,
+        "moonmindImage": operation["desired"]["image"],
+        "target": target,
+    }
+    if selected_revision is not None:
+        request["selectedRevision"] = selected_revision
+    store.record_omnigent_step(operation_id, phase)
+    try:
+        result = engine.run_command(
+            runner,
+            (
+                *base,
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "--pull",
+                "always" if phase == "select" else "never",
+                "--label",
+                f"{OMNIGENT_OPERATION_LABEL}={operation_id}",
+                "--entrypoint",
+                "python",
+                LEGACY_CONTROL_SERVICE,
+                "-m",
+                "moonmind.workflows.skills.deployment_release",
+                f"--omnigent-{phase}",
+                json.dumps(request, sort_keys=True),
+            ),
+            timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
+        )
+    finally:
+        store.record_omnigent_step(operation_id, None)
+    output = str(result.get("output") or "")
+    if int(result.get("exit", 0)) != 0:
+        raise engine.CommandError(
+            f"omnigent-{phase}", int(result.get("exit", 1)), redact_text(output)[-2000:]
+        )
+    for line in reversed(output.splitlines()):
+        if line.startswith(OMNIGENT_RESULT_PREFIX):
+            receipt = json.loads(line[len(OMNIGENT_RESULT_PREFIX) :])
+            if isinstance(receipt, dict):
+                return receipt
+    raise ValueError(f"Omnigent {phase} returned no release receipt")
 
 
 def production_apply(
@@ -881,6 +1053,7 @@ def production_apply(
     *,
     dispatch_probe: Callable[[], bool | None] | None = None,
     omnigent_migrator: Callable[[dict], Any] | None = None,
+    omnigent_selector: Callable[[dict], Any] | None = None,
 ) -> dict:
     """Default applier: stage images, apply, verify, and record the result."""
     target = operation.get("target") or {}
@@ -892,13 +1065,51 @@ def production_apply(
         old_service_health={},
     )
     if not checks["admitted"]:
-        store.record_attempt_error(operation["operationId"], error="; ".join(checks["problems"]))
+        store.record_attempt_error(
+            operation["operationId"], error="; ".join(checks["problems"])
+        )
         return {"status": "refused", "problems": checks["problems"]}
     store.mark_stage(operation["operationId"], stage="staged")
     runner = engine.subprocess_runner()
     overlay = write_image_overlay(
         str(store.state_dir), operation["operationId"], operation["desired"]["image"]
     )
+    channels = omnigent_channels_for_target(target)
+    selection = store.load(operation["operationId"]).get("omnigentSelection") or {}
+    if channels and not selection:
+        try:
+            selection = (
+                omnigent_selector(operation)
+                if omnigent_selector is not None
+                else run_omnigent_step(
+                    store, operation, runner=runner, overlay=overlay, phase="select"
+                )
+            )
+            if not isinstance(selection, dict) or selection.get("status") == "failed":
+                raise ValueError(f"invalid Omnigent selection receipt: {selection!r}")
+            if selection.get("status") != "skipped" and not isinstance(
+                selection.get("revision"), int
+            ):
+                raise ValueError("Omnigent selection did not record a revision")
+            store.record_omnigent_selection(operation["operationId"], selection)
+        except Exception as exc:
+            detail = f"Omnigent selection failed: {exc} {getattr(exc, 'output', '')}"
+            store.record_attempt_error(
+                operation["operationId"], error=redact_text(detail)
+            )
+            raise engine.StageError("omnigent-select", 1, redact_text(detail)) from exc
+    if channels and omnigent_migrator is None:
+
+        def omnigent_migrator(summary):
+            return run_omnigent_step(
+                store,
+                operation,
+                runner=runner,
+                overlay=overlay,
+                phase="migrate",
+                selected_revision=selection.get("revision"),
+            )
+
     env_files = _env_files_for_apply(target, overlay)
     try:
         outcome = engine.apply(
@@ -911,12 +1122,18 @@ def production_apply(
             env_files=env_files,
         )
     except engine.StageError as exc:
-        store.record_attempt_error(operation["operationId"], error=f"staging failed: {exc} {exc.output}")
+        store.record_attempt_error(
+            operation["operationId"], error=f"staging failed: {exc} {exc.output}"
+        )
         raise
     except engine.ApplyError as exc:
-        store.record_attempt_error(operation["operationId"], error=f"apply failed: {exc} {exc.output}")
+        store.record_attempt_error(
+            operation["operationId"], error=f"apply failed: {exc} {exc.output}"
+        )
         raise
-    store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+    store.confirm_installed(
+        operation["operationId"], image=operation["desired"]["image"]
+    )
     verification = _verify_applied_release(
         store,
         operation,
@@ -1058,8 +1275,8 @@ def _verify_omnigent_release(
             "status": "unavailable",
             "detail": (
                 f"Omnigent channels configured ({', '.join(channels)}) but no "
-                "migrator is delegated; re-run ./tools/update-moonmind.sh to "
-                "converge the installed Omnigent release"
+                "migrator is delegated; the controller release-step capability "
+                "must be restored before this update can verify"
             ),
         }
         store.record_verification(operation_id, **check)
@@ -1077,11 +1294,17 @@ def _verify_omnigent_release(
         check = {
             "name": "omnigent-migration",
             "status": "failed",
-            "detail": f"Omnigent migration did not converge: {exc}",
+            "detail": redact_text(
+                f"Omnigent migration did not converge: {exc} {getattr(exc, 'output', '')}"
+            ),
         }
         store.record_verification(operation_id, **check)
         return check
-    if not receipt or (isinstance(receipt, dict) and receipt.get("status") not in ("migrated", "aligned", "skipped", "ok", "succeeded")):
+    if not receipt or (
+        isinstance(receipt, dict)
+        and receipt.get("status")
+        not in ("migrated", "converged", "aligned", "skipped", "ok", "succeeded")
+    ):
         check = {
             "name": "omnigent-migration",
             "status": "failed",
