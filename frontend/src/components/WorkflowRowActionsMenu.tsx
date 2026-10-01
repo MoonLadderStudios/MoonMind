@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ban, RotateCcw, Wrench, type LucideIcon } from 'lucide-react';
 import { z } from 'zod';
 
 import { DashboardActionDialog } from './DashboardActionDialog';
@@ -78,20 +77,6 @@ const KEBAB_ICON = (
     <circle cx="8" cy="13" r="1.5" />
   </svg>
 );
-
-/**
- * Actions promoted out of the overflow menu onto the row itself, each with the
- * icon it renders as. The row is a narrow table cell, so the promoted controls
- * are icon-only; the action name stays reachable as the accessible name and the
- * hover tooltip. Everything not listed here stays behind the kebab.
- */
-const INLINE_ACTION_ICONS = {
-  cancel: Ban,
-  rerun: RotateCcw,
-  'create-remediation-task': Wrench,
-} as const satisfies Record<string, LucideIcon>;
-
-const INLINE_ACTION_IDS = new Set(Object.keys(INLINE_ACTION_ICONS));
 
 const ACTION_AVAILABILITY_PENDING_REASON = 'Checking availability…';
 const DEFAULT_WORKFLOW_ACTION_ERROR = 'The workflow action could not be completed.';
@@ -545,8 +530,6 @@ export function WorkflowRowActionsMenu({
     : detailQuery.isError
       ? 'Unable to load workflow actions.'
       : 'No workflow actions are currently available.';
-  const inlineItems = items.filter((item) => INLINE_ACTION_IDS.has(item.id));
-  const menuItems = items.filter((item) => !INLINE_ACTION_IDS.has(item.id));
   const subject = workflowSubject;
   const closeDialog = () => {
     setActiveDialog(null);
@@ -575,37 +558,17 @@ export function WorkflowRowActionsMenu({
       onMouseEnter={armActions}
       onFocus={armActions}
     >
-      <div className="workflow-row-actions-controls">
-        {inlineItems.map((item) => {
-          const Icon = INLINE_ACTION_ICONS[item.id as keyof typeof INLINE_ACTION_ICONS];
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={`secondary workflow-row-actions-inline-button${
-                item.danger ? ' workflow-row-actions-inline-button--danger' : ''
-              }`}
-              disabled={Boolean(item.disabledReason)}
-              aria-label={item.label}
-              title={item.disabledReason ? `${item.label} — ${item.disabledReason}` : item.label}
-              onClick={item.onSelect}
-            >
-              <Icon className="workflow-row-actions-inline-icon" aria-hidden="true" />
-            </button>
-          );
-        })}
-        <WorkflowActionsMenu
-          items={menuItems}
-          triggerContent={KEBAB_ICON}
-          triggerAriaLabel="More actions"
-          triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
-          menuAriaLabel="More actions"
-          emptyMessage={emptyMessage}
-          onOpenChange={(open) => {
-            if (open) armActions();
-          }}
-        />
-      </div>
+      <WorkflowActionsMenu
+        items={items}
+        triggerContent={KEBAB_ICON}
+        triggerAriaLabel="More actions"
+        triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+        menuAriaLabel="More actions"
+        emptyMessage={emptyMessage}
+        onOpenChange={(open) => {
+          if (open) armActions();
+        }}
+      />
       <DashboardActionDialog
         open={activeDialog === 'rename'}
         title="Rename workflow"

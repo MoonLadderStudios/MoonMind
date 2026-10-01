@@ -3,7 +3,7 @@ import { page } from 'vitest/browser';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { WorkflowListPage } from '../entrypoints/workflow-list';
-import { renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import '../styles/dashboard.css';
 
 // Real-browser guardrail for the responsive workflow-list toolbar. The jsdom
@@ -20,7 +20,7 @@ const payload: BootPayload = {
   apiBase: '/api',
   initialData: {
     dashboardConfig: {
-      features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+      features: { temporalDashboard: { listEnabled: true, actionsEnabled: true, temporalWorkflowEditing: true } },
     },
   },
 };
@@ -31,23 +31,36 @@ let cleanupRender: (() => void) | null = null;
 beforeEach(() => {
   window.localStorage.clear();
   window.history.replaceState({}, '', '/workflows');
-  fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
-    ok: true,
-    json: async () => ({
-      items: [
-        {
-          taskId: 'task-123',
-          source: 'temporal',
-          title: 'Example task',
-          status: 'running',
+  fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+    if (String(input) === '/api/executions/task-123?source=temporal') {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          workflowId: 'task-123',
+          runId: 'run-1',
           state: 'executing',
-          rawState: 'executing',
-          startedAt: '2026-03-28T00:00:01Z',
-          createdAt: '2026-03-28T00:00:00Z',
-        },
-      ],
-    }),
-  } as Response);
+          actions: { canCancel: true, canRerun: true },
+        }),
+      } as Response);
+    }
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            startedAt: '2026-03-28T00:00:01Z',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+  });
 });
 
 afterEach(async () => {
@@ -86,5 +99,54 @@ describe('workflow list responsive toolbar', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
     });
+  });
+});
+
+describe('workflow list row actions', () => {
+  it.each([
+    ['desktop table', DESKTOP, '.queue-table-cell-actions'],
+    ['mobile card', MOBILE, '.queue-card-actions'],
+  ] as const)('keeps actions in the three-dot menu on the %s', async (_surface, viewport, selector) => {
+    await page.viewport(viewport.width, viewport.height);
+    const { container, unmount } = renderWithClient(<WorkflowListPage payload={payload} />);
+    cleanupRender = unmount;
+    await screen.findAllByText('Example task');
+
+    const row = container.querySelector(`${selector} .workflow-row-actions`) as HTMLElement;
+    const trigger = within(row).getByRole('button', { name: 'More actions' });
+    expect(within(row).getAllByRole('button')).toEqual([trigger]);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-123?'))).toBe(false);
+
+    await page.getByRole('button', { name: 'More actions' }).click();
+    const menu = await within(row).findByRole('menu', { name: 'More actions' });
+    await waitFor(() => {
+      expect(within(menu).getByRole('menuitem', { name: 'Cancel' }).getAttribute('aria-disabled')).toBeNull();
+      expect(within(menu).getByRole('menuitem', { name: 'Rerun' }).getAttribute('aria-disabled')).toBeNull();
+    });
+    expect(within(menu).getByRole('menuitem', { name: 'Remediate' }).getAttribute('aria-disabled')).toBe('true');
+
+    const bounds = menu.getBoundingClientRect();
+    expect(bounds.width).toBeGreaterThan(0);
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    if (viewport === MOBILE) {
+      const card = row.closest('.queue-card') as HTMLElement;
+      const cardBounds = card.getBoundingClientRect();
+      expect(bounds.left).toBeGreaterThanOrEqual(cardBounds.left);
+      expect(bounds.right).toBeLessThanOrEqual(cardBounds.right);
+      expect(bounds.bottom).toBeLessThanOrEqual(cardBounds.bottom);
+    }
+
+    await page.getByRole('menuitem', { name: 'Cancel', exact: true }).click();
+    await waitFor(() => {
+      const cancelCall = fetchSpy.mock.calls.find(([url]) => String(url) === '/api/executions/task-123/cancel');
+      expect(cancelCall).toBeTruthy();
+      expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
+        action: 'cancel',
+        graceful: true,
+      });
+    });
+    expect(within(row).queryByRole('menu')).toBeNull();
+    expect(within(row).getAllByRole('button')).toEqual([trigger]);
   });
 });
