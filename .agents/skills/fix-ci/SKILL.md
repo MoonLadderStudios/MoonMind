@@ -76,10 +76,41 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - If every failure is a GitHub Actions platform failure with no code defect
   (for example `Artifact storage quota has been hit`, a lost runner, or an
   Actions service error) and any downstream gate failed only because that
-  job's artifact is missing, there is nothing to fix. Do not edit code,
-  rerun CI, or recommend manual review: write the no-op publish evidence
-  from step 6 and return to the caller. `pr-resolver` finalize classifies
-  this as `ci_infra_transient` and reruns the failed jobs after its backoff.
+  job's artifact is missing, there is no code to fix. Do not edit code or
+  recommend manual review. Recover by rerunning the failed jobs on the same
+  head; no other owner reruns CI when this Skill reaches this case:
+  - Read the run with
+    `gh run view <run-id> --json attempt,status,updatedAt,headSha` and the
+    current head with `gh pr view --json headRefOid` (or the branch head when
+    there is no PR). Rerun only a run whose `headSha` is the current head; a
+    run for an older SHA says nothing about the current code, so select the
+    current head's failed run instead. A run gets at most 3 attempts in
+    total, the same cap `pr-resolver` uses. If a rerun is already in
+    progress, wait for it instead of starting another.
+  - GitHub recalculates the artifact storage quota every 6-12 hours, though
+    it often clears sooner. For a quota failure, the first rerun is due 30
+    minutes after the failed attempt finished. If the quota failure recurs,
+    the final attempt is due 6 hours after the first quota failure finished,
+    so the budget is not spent before a recalculation is plausible. Lost
+    runners and Actions service errors rerun immediately.
+  - Wait for a rerun that is not yet due inside this invocation, sleeping
+    until it is due and re-reading the run before acting. Do not stop and
+    rely on a caller to retry: no caller is guaranteed to run this Skill
+    again. Only if this invocation cannot stay alive until the rerun is due,
+    write blocked evidence with `--reason ci_infra_transient` and report the
+    run, its attempt, and when the next rerun is due.
+  - Rerun with `gh run rerun <run-id> --failed --repo <owner/repo>`. If
+    GitHub reports the run is already running, in progress, or not yet
+    completed, or the command times out, the rerun may already be under way:
+    re-read the run's attempt and status and wait for that attempt instead
+    of failing or rerunning again. Only a definitive refusal (permissions,
+    authentication, a run that cannot be rerun) writes blocked evidence with
+    `--reason ci_infra_rerun_failed` and GitHub's error.
+  - Then continue at step 6 without a commit. Write no-op publish evidence
+    and wait for the rerun on the same SHA. A rerun that passes finishes
+    successfully. A rerun that exposes a code failure returns to step 2. If
+    the platform failure persists after the third attempt, write blocked
+    evidence with `--reason ci_infra_rerun_exhausted`.
 - Analyze the error output.
 - Apply surgical code changes to fix the build error or test failure.
 - Ensure the fix doesn't break other existing functionality.
