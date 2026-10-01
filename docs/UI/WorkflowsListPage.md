@@ -274,6 +274,7 @@ Rules:
 12. When workflow actions are enabled, each desktop Actions cell and mobile card exposes a single three-dot `More actions` menu trigger. Cancel, Rerun, and Remediate belong in that menu alongside the other workflow actions.
 13. Row action capabilities load on operator interaction, not list rendering. Loading and unavailable actions show their disabled reasons inside the menu; the trigger remains usable. The same action handlers and availability rules serve desktop and mobile.
 14. On mobile cards, the open actions menu stays in the card's normal flow and fits its width.
+15. On desktop, the open actions menu can extend past the table's edges and stays clickable above the results footer.
 
 ---
 

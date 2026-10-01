@@ -2675,6 +2675,13 @@ tbody tr:hover {
   overflow: visible;
 }
 
+/* The table also inherits overflow: hidden, which clips the menu in Firefox. */
+.workflow-list-data-slab .queue-table-wrapper table:has(
+  .td-workflow-actions-popover
+) {
+  overflow: visible;
+}
+
 .workflow-list-data-slab .queue-table-wrapper:has(
   .workflow-list-column-filter-popover
 ) {
