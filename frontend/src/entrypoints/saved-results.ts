@@ -4,10 +4,17 @@
  * Uses only the server's actual selected run/attempt/result and committed
  * artifact references. No second result store, no frontend-invented status,
  * no compute restart. Download reuses the existing authorized artifact
- * download endpoint; Continue reuses the existing publication-free
- * `POST /executions/{workflowId}/continue` fresh-admission path; Publish
- * Saved Work reuses the existing publication-only
- * `POST /executions/{workflowId}/retry-publication` path (no model rerun).
+ * download endpoint; Continue reuses the single continuation owner
+ * (`continueInNewWorkflow`, fresh admission through
+ * `POST /executions/{workflowId}/continue`); Publish Saved Work reuses the
+ * publication-only `POST /executions/{workflowId}/retry-publication` path with
+ * the saved-work body (`savedWorkRef` + destination), so no model is rerun.
+ *
+ * A committed saved-work manifest is presented as one saved unit with the
+ * snapshot, delta, history, and file-manifest parts it names. Its format
+ * claims, exclusions, limitations, and retention come from the server's
+ * compact `saved_work_summary` listing metadata, never from parsing raw
+ * manifest bytes in the browser.
  *
  * Preview access never authorizes raw restore/publication: an ArtifactRef is
  * an identifier, not a URL or credential. Raw bytes require
@@ -16,50 +23,50 @@
  */
 
 export interface SavedResultLinkLike {
-  linkType?: string;
-  link_type?: string;
-  label?: string | null;
+  linkType?: string | undefined;
+  link_type?: string | undefined;
+  label?: string | null | undefined;
   [key: string]: unknown;
 }
 
 export interface SavedResultArtifactLike {
   artifactId: string;
-  contentType?: string | null;
-  content_type?: string | null;
-  sizeBytes?: number | null;
-  size_bytes?: number | null;
-  status?: string | null;
-  sha256?: string | null;
-  digest?: string | null;
-  contentDigest?: string | null;
-  content_digest?: string | null;
-  downloadUrl?: string | null;
-  download_url?: string | null;
-  defaultReadRef?: { artifactId?: string } | null;
-  default_read_ref?: { artifactId?: string; artifact_id?: string } | null;
-  rawAccessAllowed?: boolean | null;
-  raw_access_allowed?: boolean | null;
-  metadata?: Record<string, unknown> | null;
-  links?: SavedResultLinkLike[] | null;
+  contentType?: string | null | undefined;
+  content_type?: string | null | undefined;
+  sizeBytes?: number | null | undefined;
+  size_bytes?: number | null | undefined;
+  status?: string | null | undefined;
+  sha256?: string | null | undefined;
+  digest?: string | null | undefined;
+  contentDigest?: string | null | undefined;
+  content_digest?: string | null | undefined;
+  downloadUrl?: string | null | undefined;
+  download_url?: string | null | undefined;
+  defaultReadRef?: { artifactId?: string } | null | undefined;
+  default_read_ref?: { artifactId?: string; artifact_id?: string } | null | undefined;
+  rawAccessAllowed?: boolean | null | undefined;
+  raw_access_allowed?: boolean | null | undefined;
+  metadata?: Record<string, unknown> | null | undefined;
+  links?: SavedResultLinkLike[] | null | undefined;
   [key: string]: unknown;
 }
 
 export interface SavedResultExecutionLike {
-  workflowId?: string | null;
-  workflow_id?: string | null;
-  runId?: string | null;
-  run_id?: string | null;
-  temporalRunId?: string | null;
-  temporal_run_id?: string | null;
-  state?: string | null;
-  rawState?: string | null;
-  status?: string | null;
-  closeStatus?: string | null;
-  close_status?: string | null;
-  finishSummary?: Record<string, unknown> | null;
-  finish_summary?: Record<string, unknown> | null;
-  outputBranch?: Record<string, unknown> | null;
-  output_branch?: Record<string, unknown> | null;
+  workflowId?: string | null | undefined;
+  workflow_id?: string | null | undefined;
+  runId?: string | null | undefined;
+  run_id?: string | null | undefined;
+  temporalRunId?: string | null | undefined;
+  temporal_run_id?: string | null | undefined;
+  state?: string | null | undefined;
+  rawState?: string | null | undefined;
+  status?: string | null | undefined;
+  closeStatus?: string | null | undefined;
+  close_status?: string | null | undefined;
+  finishSummary?: unknown;
+  finish_summary?: unknown;
+  outputBranch?: unknown;
+  output_branch?: unknown;
   [key: string]: unknown;
 }
 
@@ -149,6 +156,19 @@ function contentType(artifact: SavedResultArtifactLike): string {
   return text(artifact.contentType ?? artifact.content_type).toLowerCase();
 }
 
+const SAVED_WORK_MANIFEST_CONTENT_TYPE =
+  'application/vnd.moonmind.saved-work-manifest+json';
+
+function artifactKind(artifact: SavedResultArtifactLike): string {
+  return text(((artifact.metadata ?? {}) as Record<string, unknown>).artifact_kind);
+}
+
+// The content type is set by the server's capture path; it, not a link
+// label or title, identifies the committed saved-work unit.
+function isSavedWorkManifest(artifact: SavedResultArtifactLike): boolean {
+  return contentType(artifact).startsWith(SAVED_WORK_MANIFEST_CONTENT_TYPE);
+}
+
 export function classifySavedResultArtifact(artifact: SavedResultArtifactLike): {
   kind: SavedResultKind;
   complete: boolean;
@@ -163,6 +183,7 @@ export function classifySavedResultArtifact(artifact: SavedResultArtifactLike): 
     types.some((type) =>
       REPOSITORY_LINK_PREFIXES.some((prefix) => type.startsWith(prefix)),
     ) ||
+    artifactKind(artifact).startsWith('checkpoint_') ||
     content.includes('x-diff') ||
     content.includes('x-patch')
   ) {
@@ -264,69 +285,139 @@ export function buildSavedResultPreviewHref(
   );
 }
 
-export function savedResultSelectionKey(
+function savedResultSelectionKey(
   workflowId: string,
   runId: string,
 ): string {
   return `${workflowId}|${runId}`;
 }
 
-export function shouldApplySavedResultResponse(
-  requestKey: string,
-  currentKey: string,
-): boolean {
-  // Late responses must never retarget a historical selection or overwrite a
-  // newer operation: only the exact current selection applies.
-  return requestKey === currentKey;
+// FNV-1a over two independent lanes: a stable, synchronous identity for an
+// authored intent. Browsers on plain-HTTP LAN origins have no SubtleCrypto.
+function stableDigest(value: string): string {
+  let first = 0x811c9dc5;
+  let second = 0x01000193 ^ value.length;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ code, 0x5bd1e995);
+  }
+  return [first, second]
+    .map((lane) => (lane >>> 0).toString(16).padStart(8, '0'))
+    .join('');
 }
 
-export function savedResultIdempotencyKey(
+export function savedResultContinuationKey(
   workflowId: string,
   runId: string,
-  action: 'continue' | 'publish' | 'download',
-  artifactId?: string,
+  intent: {
+    instructions: string;
+    title?: string | null;
+    selectedSourceArtifactRefs: string[];
+  },
 ): string {
+  // The key is derived from the exact selected source run and the authored
+  // intent, so a double click, a retry after a lost acknowledgment, or a
+  // resubmission after reload maps to the same server reservation, while a
+  // changed intent or ref set is a new request rather than a digest conflict.
   // Single-user instance/resource key: no human-user partitions.
-  const subject = artifactId ? `:${artifactId}` : ':selection';
-  return `saved-result:${action}:${workflowId}:${runId}${subject}`;
+  const digest = stableDigest(
+    JSON.stringify({
+      instructions: intent.instructions,
+      title: intent.title || null,
+      refs: [...intent.selectedSourceArtifactRefs].sort(),
+    }),
+  );
+  return `saved-result:continue:${workflowId}:${runId}:${digest}`;
 }
 
-export function resolveUncertainSavedResultSubmission(input: {
-  pendingOperationId: string;
-  response: {
-    status: number;
-    code?: string | null;
-    operationId?: string | null;
-  } | null;
-}): { reused: boolean; operationId: string } {
-  const { pendingOperationId, response } = input;
-  if (!response) {
-    return { reused: false, operationId: pendingOperationId };
-  }
-  const conflictCodes = new Set([
-    'idempotency_key_conflict',
-    'continuation_idempotency_conflict',
-    'publication_idempotency_key_conflict',
-    'publication_recovery_already_started',
-  ]);
-  // A conflict is a reusable success only when it carries the confirmed
-  // operation; a conflict code alone (for example a changed request digest
-  // under the same key) means the request failed.
-  if (
-    response.status === 409 &&
-    response.code &&
-    conflictCodes.has(response.code) &&
-    text(response.operationId)
-  ) {
-    return { reused: true, operationId: text(response.operationId) };
-  }
-  if (text(response.operationId) === pendingOperationId) {
-    return { reused: true, operationId: pendingOperationId };
-  }
-  return {
-    reused: false,
-    operationId: text(response.operationId) || pendingOperationId,
+export type SavedWorkObjective = 'pr' | 'draft_pr' | 'branch';
+export type SavedWorkStrategy =
+  | 'baseline_delta'
+  | 'additive_import'
+  | 'empty_initialization';
+
+export interface SavedWorkDestinationDraft {
+  repository: string;
+  objective: SavedWorkObjective;
+  baseBranch: string;
+  headBranch: string;
+  strategy: SavedWorkStrategy;
+  pullRequestTitle: string;
+}
+
+export interface SavedWorkPublicationRequest {
+  savedWorkRef: string;
+  destination: {
+    repository: string;
+    objective: SavedWorkObjective;
+    baseBranch?: string;
+    headBranch: string;
+    strategy: SavedWorkStrategy;
   };
+  pullRequestTitle?: string;
+}
+
+export interface SavedWorkPublicationResult {
+  sourceWorkflowId: string;
+  sourceRunId: string;
+  workflowId: string;
+  runId: string;
+  publicationIdempotencyKey: string;
+  rolloutGeneration?: string;
+}
+
+function branchSlug(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+export function defaultSavedWorkDestination(
+  execution: SavedResultExecutionLike,
+  workflowId: string,
+): SavedWorkDestinationDraft {
+  // Derive the destination the execution already determines; the operator
+  // edits it through the form rather than declaring it from scratch.
+  const fields = execution as Record<string, unknown>;
+  const publishMode = text(fields.publishMode ?? fields.publish_mode).toLowerCase();
+  return {
+    repository: text(fields.repository),
+    objective: publishMode === 'branch' ? 'branch' : 'pr',
+    baseBranch: text(fields.startingBranch ?? fields.starting_branch),
+    headBranch: `saved-work/${branchSlug(workflowId) || 'result'}`,
+    strategy: 'baseline_delta',
+    pullRequestTitle: '',
+  };
+}
+
+export function buildSavedWorkPublicationRequest(
+  savedWorkRef: string,
+  draft: SavedWorkDestinationDraft,
+): SavedWorkPublicationRequest {
+  // Only the saved result and its destination are authored here. The server
+  // freezes the manifest digest, destination policy, and commit identity, and
+  // derives the operation identity from them.
+  const destination: SavedWorkPublicationRequest['destination'] = {
+    repository: draft.repository.trim(),
+    objective: draft.objective,
+    headBranch: draft.headBranch.trim(),
+    strategy: draft.strategy,
+  };
+  const baseBranch = draft.baseBranch.trim();
+  if (baseBranch) {
+    destination.baseBranch = baseBranch;
+  }
+  const request: SavedWorkPublicationRequest = { savedWorkRef, destination };
+  const title = draft.pullRequestTitle.trim();
+  if (title && draft.objective !== 'branch') {
+    request.pullRequestTitle = title;
+  }
+  return request;
+}
+
+export function savedWorkPublicationIdentity(
+  request: SavedWorkPublicationRequest,
+): string {
+  return JSON.stringify(request);
 }
 
 export function savedResultErrorMessage(payload: unknown): string {
@@ -352,34 +443,73 @@ export function savedResultErrorMessage(payload: unknown): string {
   return text(record.message);
 }
 
-export function buildContinueInNewWorkflowBody(input: {
-  idempotencyKey: string;
-  selectedSourceArtifactRefs: string[];
-  instructions?: string;
-  title?: string | null;
-  initialParameters?: Record<string, unknown>;
-  boundedPurpose?: string | null;
-}): Record<string, unknown> {
-  // The browser authors only new intent plus already-authorized source refs.
-  // Source run, session, host, profile, credential, and workspace ownership
-  // stay server-pinned; they are never authored here.
-  const body: Record<string, unknown> = {
-    idempotencyKey: input.idempotencyKey,
-    selectedSourceArtifactRefs: [...input.selectedSourceArtifactRefs],
-  };
-  if (input.title !== undefined && input.title !== null) {
-    body.title = input.title;
+/** A response the server returned: the request was not accepted. */
+export class SavedWorkPublicationError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(message: string, status: number, code: string | null) {
+    super(message);
+    this.name = 'SavedWorkPublicationError';
+    this.status = status;
+    this.code = code;
   }
-  if (input.instructions !== undefined) {
-    body.instructions = input.instructions;
+}
+
+export async function publishSavedWork(
+  apiBase: string,
+  workflowId: string,
+  request: SavedWorkPublicationRequest,
+): Promise<SavedWorkPublicationResult> {
+  // A transport failure propagates as-is: the request may have been accepted,
+  // and resubmitting the same request reuses the same server operation.
+  const response = await fetch(
+    joinApiBasePath(
+      apiBase,
+      `/executions/${encodeURIComponent(workflowId)}/retry-publication`,
+    ),
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(request),
+    },
+  );
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    const detail = record(record(payload).detail);
+    throw new SavedWorkPublicationError(
+      savedResultErrorMessage(payload) ||
+        `Publish saved work failed (${response.status})`,
+      response.status,
+      text(detail.code) || null,
+    );
   }
-  if (input.initialParameters !== undefined) {
-    body.initialParameters = { ...input.initialParameters };
+  if (!text(record(payload).workflowId)) {
+    // Accepted but unreadable: report it as possibly started, not as failed.
+    throw new Error('The publication response could not be read.');
   }
-  if (input.boundedPurpose !== undefined && input.boundedPurpose !== null) {
-    body.boundedPurpose = input.boundedPurpose;
-  }
-  return body;
+  return payload as SavedWorkPublicationResult;
+}
+
+export interface SavedWorkPartEntry {
+  artifactId: string;
+  role: string;
+  /** Present only when the part is in the run's artifact listing. */
+  present: boolean;
+  complete: boolean;
+  completenessReason: string;
+  restricted: boolean;
+  expired: boolean;
+}
+
+export interface SavedWorkUnit {
+  /** False for manifests listed without the server's compact summary. */
+  summaryAvailable: boolean;
+  formats: Array<{ format: string; status: string; required: boolean }>;
+  exclusionReasons: Array<{ reason: string; count: number }>;
+  limitations: string[];
+  parts: SavedWorkPartEntry[];
 }
 
 export interface SavedResultEntry {
@@ -392,6 +522,8 @@ export interface SavedResultEntry {
   expired: boolean;
   retention: string | null;
   exclusions: number | null;
+  /** Set when the entry is a committed saved-work manifest. */
+  savedWork: SavedWorkUnit | null;
 }
 
 function entryTitle(artifact: SavedResultArtifactLike): string {
@@ -465,7 +597,197 @@ function toEntry(
     expired: isExpiredArtifact(artifact, now),
     retention: entryRetention(artifact),
     exclusions: entryExclusions(artifact),
+    savedWork: null,
   };
+}
+
+const FORMAT_PART_ROLES: Record<string, string> = {
+  full_snapshot: 'snapshot',
+  exact_baseline_delta: 'delta',
+  selected_history: 'history',
+};
+
+// Output claims that keep a required format usable; anything else
+// (incomplete, failed, inapplicable, unknown) cannot satisfy it.
+const USABLE_FORMAT_STATUSES = new Set(['self_contained', 'requires_dependencies']);
+
+function savedWorkSummary(
+  artifact: SavedResultArtifactLike,
+): Record<string, unknown> | null {
+  const summary = record(record(artifact.metadata).saved_work_summary);
+  return Array.isArray(summary.outputs) ? summary : null;
+}
+
+function toPart(
+  artifactId: string,
+  role: string,
+  byId: Map<string, SavedResultArtifactLike>,
+  now: number,
+): SavedWorkPartEntry {
+  const artifact = byId.get(artifactId);
+  if (!artifact) {
+    return {
+      artifactId,
+      role,
+      present: false,
+      complete: false,
+      completenessReason: 'not-listed',
+      restricted: true,
+      expired: false,
+    };
+  }
+  const classified = classifySavedResultArtifact(artifact);
+  return {
+    artifactId,
+    role,
+    present: true,
+    complete: classified.complete,
+    completenessReason: classified.reason,
+    restricted: !canDownloadSavedResultRaw(artifact),
+    expired: isExpiredArtifact(artifact, now),
+  };
+}
+
+function toSavedWorkEntry(
+  manifest: SavedResultArtifactLike,
+  byId: Map<string, SavedResultArtifactLike>,
+  checkpointManifests: SavedResultArtifactLike[],
+  now: number,
+): SavedResultEntry {
+  const base = toEntry(manifest, now);
+  const summary = savedWorkSummary(manifest);
+  if (!summary) {
+    // A listed manifest without the compact summary still has its own
+    // server status and content identity; its format claims are unknown.
+    return {
+      ...base,
+      kind: 'repository',
+      title: 'Saved work',
+      savedWork: {
+        summaryAvailable: false,
+        formats: [],
+        exclusionReasons: [],
+        limitations: [],
+        parts: [],
+      },
+    };
+  }
+  const required = new Set(
+    (Array.isArray(summary.required_formats) ? summary.required_formats : []).map(
+      (value) => text(value),
+    ),
+  );
+  const claims = (summary.outputs as unknown[]).map((item) => record(item));
+  const formats = claims.map((claim) => ({
+    format: text(claim.format),
+    status: text(claim.status),
+    required: required.has(text(claim.format)),
+  }));
+  const parts: SavedWorkPartEntry[] = [];
+  const partByFormat = new Map<string, SavedWorkPartEntry>();
+  for (const claim of claims) {
+    const artifactId = text(claim.artifact_id);
+    if (!artifactId) {
+      continue;
+    }
+    const format = text(claim.format);
+    const part = toPart(artifactId, FORMAT_PART_ROLES[format] ?? format, byId, now);
+    parts.push(part);
+    partByFormat.set(format, part);
+  }
+  const snapshot = partByFormat.get('full_snapshot');
+  for (const checkpoint of checkpointManifests) {
+    const indexed = record(record(checkpoint.metadata).checkpoint_parts);
+    if (!snapshot || text(indexed.archive_artifact_id) !== snapshot.artifactId) {
+      continue;
+    }
+    parts.push(toPart(checkpoint.artifactId, 'file-manifest', byId, now));
+    const indexPatch = text(indexed.index_patch_artifact_id);
+    if (indexPatch) {
+      parts.push(toPart(indexPatch, 'index-patch', byId, now));
+    }
+  }
+
+  // The manifest's own server status and identity come first; its claims and
+  // the listed parts of each required format can only downgrade that.
+  let complete = base.complete;
+  let completenessReason = base.completenessReason;
+  if (complete) {
+    for (const format of required) {
+      const claim = formats.find((item) => item.format === format);
+      if (!claim || !USABLE_FORMAT_STATUSES.has(claim.status)) {
+        complete = false;
+        completenessReason = `format-${format}-${claim?.status || 'missing'}`;
+        break;
+      }
+      const part = partByFormat.get(format);
+      if (part && (!part.complete || part.expired)) {
+        complete = false;
+        completenessReason = `part-${part.role}-${part.expired ? 'expired' : part.completenessReason}`;
+        break;
+      }
+    }
+  }
+  const exclusionCount = summary.exclusion_count;
+  return {
+    ...base,
+    kind: claims.some((claim) => text(claim.format) !== 'report_only' && text(claim.artifact_id))
+      ? 'repository'
+      : 'non-git',
+    title: 'Saved work',
+    complete,
+    completenessReason,
+    exclusions:
+      typeof exclusionCount === 'number' && Number.isFinite(exclusionCount)
+        ? exclusionCount
+        : null,
+    savedWork: {
+      summaryAvailable: true,
+      formats,
+      exclusionReasons: (Array.isArray(summary.exclusion_reasons)
+        ? summary.exclusion_reasons
+        : []
+      ).map((item) => ({
+        reason: text(record(item).reason),
+        count: Number(record(item).count) || 0,
+      })),
+      limitations: (Array.isArray(summary.limitations) ? summary.limitations : [])
+        .map((item) => text(item))
+        .filter(Boolean),
+      parts,
+    },
+  };
+}
+
+function projectEntries(
+  artifacts: SavedResultArtifactLike[],
+  now: number,
+): SavedResultEntry[] {
+  const outputs = artifacts.filter(isSavedOutputArtifact);
+  const byId = new Map(artifacts.map((artifact) => [artifact.artifactId, artifact]));
+  const checkpointManifests = outputs.filter(
+    (artifact) => artifactKind(artifact) === 'checkpoint_manifest',
+  );
+  const units = outputs
+    .filter(isSavedWorkManifest)
+    .map((manifest) => toSavedWorkEntry(manifest, byId, checkpointManifests, now));
+  // Parts belong to their saved unit; they are not separate saved results.
+  const grouped = new Set(
+    units.flatMap((unit) => unit.savedWork?.parts.map((part) => part.artifactId) ?? []),
+  );
+  const unitIds = new Set(units.map((unit) => unit.artifactId));
+  const singles = outputs
+    .filter((artifact) => !unitIds.has(artifact.artifactId) && !grouped.has(artifact.artifactId))
+    .map((artifact) => toEntry(artifact, now));
+  return [...units, ...singles];
+}
+
+export function canPublishSavedWork(entry: SavedResultEntry): boolean {
+  // Publication reads the committed manifest's raw bytes, so preview access
+  // or an incomplete/expired save never enables it.
+  return Boolean(
+    entry.savedWork && entry.complete && !entry.expired && !entry.restricted,
+  );
 }
 
 function computeOutcome(execution: SavedResultExecutionLike): string {
@@ -622,9 +944,7 @@ export function projectSavedResults(input: {
     };
   }
   const now = input.now ?? Date.now();
-  const entries = (input.artifacts ?? [])
-    .filter(isSavedOutputArtifact)
-    .map((artifact) => toEntry(artifact, now));
+  const entries = projectEntries(input.artifacts ?? [], now);
   if (entries.length === 0) {
     const state = terminalSource ? 'unavailable' : 'pending';
     return { ...base, state, entries: [], saveOutcome: state };

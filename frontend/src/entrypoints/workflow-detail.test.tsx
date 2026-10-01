@@ -8486,7 +8486,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('heading', { name: 'Saved Results' })).toBeTruthy();
   });
 
-  it('gates saved-result actions by server capability and authorized evidence', async () => {
+  it('presents API-shaped saved work and dispatches saved-result actions through their contracts', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
@@ -8499,6 +8499,8 @@ describe('Workflow Detail Entrypoint', () => {
       summary: 'Done',
       status: 'completed',
       state: 'no_commit',
+      repository: 'Owner/Repo',
+      startingBranch: 'main',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -8506,16 +8508,24 @@ describe('Workflow Detail Entrypoint', () => {
         disabledReasons: { canRetryPublication: 'publication_not_failed' },
       },
     };
-    const savedArtifact = (artifactId: string, linkType: string) => ({
+    // Listing rows exactly as GET /api/executions/{ns}/{wf}/{run}/artifacts
+    // serializes them (snake_case ArtifactMetadataModel).
+    const listed = (artifactId: string, linkType: string, extra: Record<string, unknown> = {}) => ({
       artifact_id: artifactId,
       content_type: 'text/markdown',
       size_bytes: 128,
-      sha256: `sha256:${artifactId}`,
-      status: 'COMPLETE',
+      sha256: `sha256-${artifactId}`,
+      status: 'complete',
+      retention_class: 'standard',
+      expires_at: null,
+      raw_access_allowed: true,
+      default_read_ref: { artifact_id: artifactId },
       metadata: { title: artifactId },
-      links: [{ link_type: linkType }],
+      links: [{ link_type: linkType, label: null }],
+      ...extra,
     });
     let continueBody = null as Record<string, unknown> | null;
+    let publishBody = null as Record<string, unknown> | null;
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -8530,6 +8540,21 @@ describe('Workflow Detail Entrypoint', () => {
               code: 'continuation_evidence_unauthorized',
               message: 'Selected evidence is not authorized.',
             },
+          }),
+        } as Response);
+      }
+      if (url.endsWith('/executions/test-123/retry-publication')) {
+        publishBody = JSON.parse(String(init?.body));
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: async () => ({
+            sourceWorkflowId: 'test-123',
+            sourceRunId: '01-run',
+            workflowId: 'mm:saved-publication',
+            runId: 'pub-run',
+            publicationIdempotencyKey: 'saved-publication:123',
+            rolloutGeneration: 'g1',
           }),
         } as Response);
       }
@@ -8551,9 +8576,39 @@ describe('Workflow Detail Entrypoint', () => {
           ok: true,
           json: async () => ({
             artifacts: [
-              savedArtifact('art-authorized', 'output.primary'),
-              savedArtifact('art-unauthorized', 'report.summary'),
-              savedArtifact('art-runtime-log', 'runtime.stdout'),
+              listed('art-saved-work', 'output.checkpoint', {
+                content_type: 'application/vnd.moonmind.saved-work-manifest+json;version=1',
+                metadata: {
+                  artifact_kind: 'saved_work_manifest',
+                  saved_work_summary: {
+                    capture_id: 'implement:capture',
+                    required_formats: ['full_snapshot'],
+                    outputs: [
+                      { format: 'full_snapshot', status: 'self_contained', artifact_id: 'art-archive' },
+                      {
+                        format: 'exact_baseline_delta',
+                        status: 'requires_dependencies',
+                        artifact_id: 'art-delta',
+                      },
+                    ],
+                    exclusion_count: 1,
+                    exclusion_reasons: [{ reason: 'sensitive-filename-policy', count: 1 }],
+                    limitations: [],
+                    retention_ref: 'artifact-ownership',
+                  },
+                },
+              }),
+              listed('art-archive', 'output.checkpoint', {
+                content_type: 'application/vnd.moonmind.worktree-archive',
+                metadata: { artifact_kind: 'checkpoint_archive' },
+              }),
+              listed('art-delta', 'output.checkpoint', {
+                raw_access_allowed: false,
+                metadata: { artifact_kind: 'checkpoint_delta' },
+              }),
+              listed('art-authorized', 'output.primary'),
+              listed('art-unauthorized', 'report.summary'),
+              listed('art-runtime-log', 'runtime.stdout'),
             ],
           }),
         } as Response);
@@ -8575,21 +8630,48 @@ describe('Workflow Detail Entrypoint', () => {
     expect(cleanupCard?.textContent).toMatch(/Cleanup:\s*unknown/i);
     expect(cleanupCard?.textContent).not.toMatch(/Preserved/);
 
+    // The manifest is the saved unit; a restricted part never offers raw bytes.
+    const parts = inSaved.getByRole('list', { name: 'Saved work parts' });
+    const delta = within(parts).getByText('art-delta').closest('li') as HTMLElement;
+    expect(within(delta).getByText('Raw unavailable')).toBeTruthy();
+    expect(within(parts).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+      '/api/artifacts/art-archive/download',
+    );
+
+    // Publish Saved Work does not depend on the failed-publication recovery
+    // capability; it sends the saved-work body to the publication-only path.
     const publish = inSaved.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
-    expect(publish.disabled).toBe(true);
-    expect(publish.title).toMatch(/publication not failed/i);
+    expect(publish.disabled).toBe(false);
+    fireEvent.click(publish);
+    fireEvent.submit(inSaved.getByRole('form', { name: 'Publish saved work' }));
+    await waitFor(() => {
+      expect(inSaved.getByText(/Publication started for Owner\/Repo/)).toBeTruthy();
+    });
+    expect(publishBody).toEqual({
+      savedWorkRef: 'art-saved-work',
+      destination: {
+        repository: 'Owner/Repo',
+        objective: 'pr',
+        baseBranch: 'main',
+        headBranch: 'saved-work/test-123',
+        strategy: 'baseline_delta',
+      },
+    });
 
     const continueButton = inSaved.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement;
     await waitFor(() => expect(continueButton.disabled).toBe(false));
-    await waitFor(() =>
-      expect(fetchSpy.mock.calls.some(([input]) => String(input).endsWith('/captured-evidence'))).toBe(true),
-    );
     fireEvent.click(continueButton);
+    const continueForm = inSaved.getByRole('form', { name: 'Continue working' });
+    fireEvent.change(within(continueForm).getByLabelText('New instructions'), {
+      target: { value: 'Keep going.' },
+    });
+    fireEvent.submit(continueForm);
 
     await waitFor(() => {
       expect(inSaved.getByText('Selected evidence is not authorized.')).toBeTruthy();
     });
     expect(continueBody?.selectedSourceArtifactRefs).toEqual(['art-authorized']);
+    expect(continueBody?.instructions).toBe('Keep going.');
     expect(inSaved.queryByText(/Continuation admitted/)).toBeNull();
   });
 
