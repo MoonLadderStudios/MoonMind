@@ -503,6 +503,11 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
     async def live_server(_image_ref: str) -> str:
         return resolved["server"]
 
+    # The deployment image leg's resolved shared host is Codex/Claude authority.
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=resolved["host"]),
+    )
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'policy.db'}")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:
@@ -3696,6 +3701,7 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     )
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -5115,6 +5121,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
     expected = load_replay(replay_id, "expected-outcome.json")
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,

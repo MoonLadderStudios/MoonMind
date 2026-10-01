@@ -84,11 +84,12 @@ OMNIGENT_HOST_IMAGE_REF=ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
 
 These `*_IMAGE_REF` values pin the images used by Compose services and take
 precedence over the bootstrap-compatible image/tag pairs. Workflow-requested
-on-demand hosts do not read `OMNIGENT_HOST_IMAGE_REF`; pin those launches by
-setting `OMNIGENT_HOST_IMAGE` itself to the complete digest reference:
+Codex and Claude on-demand hosts do not read `OMNIGENT_HOST_IMAGE_REF`; they
+launch the shared host image that owns the MoonMind tools. Pin those launches
+with the shared host digest:
 
 ```dotenv
-OMNIGENT_HOST_IMAGE=ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
+OMNIGENT_SHARED_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 ```
 
 When on-demand hosts are enabled, production and credentialed conformance must
