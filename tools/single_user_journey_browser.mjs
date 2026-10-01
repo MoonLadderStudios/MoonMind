@@ -148,11 +148,9 @@ async function controllerJourney(page, visit, submit) {
   const showsFailedOperation = async (operationId) => {
     const label = `Operation ${operationId}`;
     await card.getByText(label, { exact: true }).waitFor({ state: "visible" });
-    // `has` is evaluated inside each candidate, so it starts from the page.
-    const details = card
-      .locator("div")
-      .filter({ has: page.getByText(label, { exact: true }) })
-      .last();
+    // The operation label shares its parent with the requested image,
+    // installed image, original error, and controller logs.
+    const details = card.getByText(label, { exact: true }).locator("..");
     await details.getByText(target, { exact: true }).waitFor({ state: "visible" });
     await details.getByText("not confirmed", { exact: true }).waitFor({ state: "visible" });
     await details.getByText(/^Error: attempt 1: /).waitFor({ state: "visible" });
