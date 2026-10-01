@@ -127,6 +127,12 @@ interface ProviderProfileTierCapabilities {
 
 type ProviderProfileTierEffortOption = ProviderProfileTierCapabilities['effort']['options'][number];
 
+function isTierEffortOptionAvailable(option: ProviderProfileTierEffortOption, model: string | null): boolean {
+  return option.status !== 'unavailable' && (
+    !option.compatible_models || option.compatible_models.includes(model ?? '')
+  );
+}
+
 // Offered only while backend capabilities are unavailable, ordered by
 // increasing effort; the backend catalog owns the list once it loads.
 const FALLBACK_TIER_EFFORT_OPTIONS: ProviderProfileTierEffortOption[] = ['low', 'medium', 'high', 'xhigh', 'max'].map(
@@ -3301,6 +3307,23 @@ export function ProviderProfilesManager({
   const submittedOperationRef = useRef<SubmittedProfileOperation | null>(null);
   const handleSaveSubmit = () => {
     if (saveMutation.isPending) return;
+    const effortErrors: Record<string, string> = {};
+    for (const tier of tierDrafts) {
+      const baseline = tierBaseline?.find((saved) => saved.clientId === tier.clientId);
+      if (baseline && baseline.model === tier.model && baseline.effort === tier.effort) continue;
+      const option = tierEffortOptions.find((candidate) => candidate.value === tier.effort);
+      if (option && !isTierEffortOptionAvailable(option, tier.model ?? tierCapabilities?.model?.runtime_default ?? null)) {
+        effortErrors[`${tier.clientId}.effort`] = `Effort "${tier.effort}" is unavailable for this model. Choose a supported effort.`;
+      }
+    }
+    setTierFieldErrors((current) => ({
+      ...Object.fromEntries(Object.entries(current).filter(([key]) => !key.endsWith('.effort'))),
+      ...effortErrors,
+    }));
+    if (Object.keys(effortErrors).length > 0) {
+      onNotice({ level: 'error', text: Object.values(effortErrors)[0]! });
+      return;
+    }
     const selectedMethod =
       creationCapabilities?.authentication_methods.find(
         (method) => method.id === form.authenticationMethod,
@@ -5107,7 +5130,7 @@ export function ProviderProfilesManager({
             <p className="text-sm text-slate-600 dark:text-slate-400">Map workflow tier requests to a model and effort for this profile. Future launches use the saved policy. Historical runs keep their record.</p>
             <div className="flex flex-wrap items-center gap-3 text-sm">
               <span className="font-medium text-slate-700 dark:text-slate-300">{tierDrafts.length} tiers{defaultTierClientId ? ` · Default: Tier ${tierDrafts.findIndex((t) => t.clientId === defaultTierClientId) + 1}` : ''}</span>
-              {canWriteProviderProfiles && invalidSavedDefaultIndex !== null ? <span className="rounded bg-amber-100 dark:bg-amber-900/30 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">Invalid saved default: Tier {invalidSavedDefaultIndex}</span> : null}
+              {invalidSavedDefaultIndex !== null ? <span className="rounded bg-amber-100 dark:bg-amber-900/30 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">Invalid saved default: Tier {invalidSavedDefaultIndex}</span> : null}
             </div>
             {isTierRepair ? (
               <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-800 dark:text-amber-300">
@@ -5247,7 +5270,7 @@ export function ProviderProfilesManager({
                               <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.effort ?? '__runtime_default__'} onChange={(e) => handleTierEffortChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} effort`}>
                                 <option value="__runtime_default__">Runtime default{tierCapabilities?.effort?.runtime_default ? ` — ${tierCapabilities.effort.runtime_default}` : ''}</option>
                                 {tierEffortOptions.map((opt) => (
-                                  <option key={opt.value} value={opt.value}>
+                                  <option key={opt.value} value={opt.value} disabled={!isTierEffortOptionAvailable(opt, tier.model ?? tierCapabilities?.model?.runtime_default ?? null)}>
                                     {opt.label}
                                     {opt.status !== 'available' ? ` (${opt.status})` : ''}
                                   </option>
@@ -5290,7 +5313,7 @@ export function ProviderProfilesManager({
                 );
               })}
             </ol>
-            {canWriteProviderProfiles && !isTierRepair ? (
+            {!isTierRepair ? (
               <button type="button" className="w-full rounded-xl border border-dashed border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800" onClick={handleAddTier}>
                 <span aria-hidden="true">+ </span>Add tier
               </button>
