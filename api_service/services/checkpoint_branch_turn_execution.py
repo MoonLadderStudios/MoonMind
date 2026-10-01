@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -1013,18 +1012,7 @@ class CheckpointBranchTurnExecutionOwner:
             ) from exc
         if follow_up_retrieval is not None:
             try:
-                compiled_retrieval = compile_follow_up_retrieval_policy(
-                    policy_snapshot,
-                    {"followUpRetrieval": follow_up_retrieval},
-                    repository=binding.repository,
-                    tenant_id=str(
-                        follow_up_retrieval.get("tenantId")
-                        or os.getenv(
-                            "MOONMIND_FOLLOWUP_RETRIEVAL_DEFAULT_TENANT",
-                            "default",
-                        )
-                    ).strip(),
-                )
+                compiled_retrieval = compile_follow_up_retrieval_policy()
                 enforce_required_follow_up_retrieval(
                     follow_up_retrieval,
                     compiled_retrieval,

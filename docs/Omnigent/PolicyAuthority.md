@@ -12,7 +12,14 @@ never alter historical authority.
 
 One version declares `endpoint`, `execution`, `host`, `resources`, `network`,
 `workspace`, `providerProfile`, `session`, `capture`, `checkpoint`,
-`remediation`, `rag`, `approvals`, `retention`, and `rollout`.
+`remediation`, `approvals`, `retention`, and `rollout`.
+
+MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103).
+A version recorded earlier may also carry a `rag` section; it stays readable
+and executable with its recorded digest, but the policy API rejects `rag` on
+new versions. Authoring uses a separate document schema that allows only an
+absent or null `rag`; historical decoding retains the recorded section.
+Bootstrap and release successors omit it.
 
 These sections govern bridge-mode eligibility; execution profile, harness, and
 agent identities; host/backend/architecture admission and immutable images;
@@ -21,9 +28,8 @@ and enforced egress; locator/mutation/mount/UID/GID/cache/artifact/Skill/tool/
 OAuth/state boundaries; Provider Profile compatibility and capacity; the full
 session lifecycle; capture classes, bounded logs, redaction and completeness;
 checkpoint/resume/branch/publication/promotion; remediation allowlists, risks,
-locks, limits and autonomy; retrieval scope, budgets, fallback and
-credential refs; reviewer requirements; retention, rollout, diagnostics and
-deprecation.
+locks, limits and autonomy; reviewer requirements; retention, rollout,
+diagnostics and deprecation.
 
 Documents contain references only. Secret bodies, OAuth-volume content, Docker
 socket access, arbitrary Docker options, and raw machine paths are invalid.
@@ -61,8 +67,8 @@ remain mandatory before lease acquisition or host mutation.
 
 Stable diagnostics cover invalid images, unavailable host/backend, missing
 egress, unsafe mounts, unsupported workspace, incompatible profile,
-resource/capacity excess, missing capture, denied remediation/RAG/checkpoint,
-and stale versions.
+resource/capacity excess, missing capture, denied remediation/checkpoint, and
+stale versions.
 
 ## Approvals
 
@@ -107,7 +113,7 @@ release.
 Related: [settings](../Security/SettingsSystem.md), [Provider Profiles](../Security/ProviderProfiles.md),
 [adapter](OmnigentAdapter.md), [workspaces](../Workflows/WorkspaceLocators.md),
 [checkpoints](../Workflows/CheckpointBranchSystem.md), [remediation](../Workflows/WorkflowRemediation.md),
-and [RAG](../Rag/WorkflowRag.md).
+and [context assembly](../Rag/WorkflowRag.md).
 
 ## Single-user operation (#4351)
 

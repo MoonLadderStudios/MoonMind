@@ -8,10 +8,13 @@ from moonmind.omnigent.policies import (
     bind_approval_request,
     compile_policy_snapshot,
     document_digest,
+    normalize_document,
     policy_authority_evidence,
+    reject_retired_policy_sections,
     resolve_action,
     validate_approval_binding,
     validate_policy_authority_evidence,
+    without_retired_policy_sections,
 )
 from api_service.services.omnigent_policies import bootstrap_document, validate_policy
 
@@ -38,8 +41,6 @@ def policy_document() -> dict:
         "capture": {"required": True, "artifactClasses": ["events", "snapshot"], "maxLogBytes": 1000000, "redaction": "required"},
         "checkpoint": {"capture": True, "resume": True, "branch": True, "publication": "approval", "promotion": "verified"},
         "remediation": {"actions": ["retry"], "riskTiers": {"retry": "low"}, "locks": True, "maxActions": 3, "autonomous": False},
-        "rag": {"initialScope": "workflow", "followupScope": "session", "collectionRefs": ["default"],
-                "tokenBudget": 4000, "fallback": "deny", "credentialRef": "retrieval-default"},
         "approvals": {"actions": {
             "read": {"decision": "allow", "reason": "read-only"},
             "publish": {"decision": "approval_required", "approvalClass": "release", "reviewerRule": "owner", "reason": "publication"},
@@ -58,9 +59,66 @@ def test_digest_and_compilation_are_reproducible_and_cover_every_boundary():
     assert set(first["boundaries"]) == {
         "schemaVersion", "endpoint", "execution", "host", "resources", "network",
         "workspace", "providerProfile", "session", "capture", "checkpoint",
-        "remediation", "rag", "approvals", "retention", "rollout",
+        "remediation", "approvals", "retention", "rollout",
     }
 
+
+def historical_retrieval_policy_document() -> dict:
+    """A version persisted before native retrieval was retired (#4103)."""
+
+    document = policy_document()
+    document["rag"] = {
+        "initialScope": "workflow", "followupScope": "session",
+        "collectionRefs": ["default"], "tokenBudget": 4000, "fallback": "deny",
+        "credentialRef": "retrieval-default",
+    }
+    return document
+
+
+# Digest of historical_retrieval_policy_document() as computed by the
+# implementation that still required ``rag`` (main c9f2b7c8d). Historical
+# versions and launch evidence pin this value, so it must never move.
+HISTORICAL_RETRIEVAL_POLICY_DIGEST = (
+    "sha256:84ebae1cf5456950d678b63a04449363c273b3cb544178a33a5c8621c9e9e79a"
+)
+
+
+def test_new_policy_documents_need_no_native_retrieval_section():
+    parsed = PolicyDocument.model_validate(policy_document())
+
+    assert parsed.rag is None
+    assert "rag" not in normalize_document(parsed)
+    assert reject_retired_policy_sections(parsed) is parsed
+
+
+def test_historical_retrieval_policy_reads_with_its_recorded_digest():
+    document = historical_retrieval_policy_document()
+
+    snapshot = compile_policy_snapshot(
+        policy_id="p", version=1, document=document, validation={"valid": True}
+    )
+
+    assert document_digest(document) == HISTORICAL_RETRIEVAL_POLICY_DIGEST
+    assert snapshot["policyDigest"] == HISTORICAL_RETRIEVAL_POLICY_DIGEST
+    assert snapshot["boundaries"]["rag"]["collectionRefs"] == ["default"]
+
+
+def test_new_policy_versions_reject_the_retired_retrieval_section():
+    with pytest.raises(ValueError, match="rag.*retired"):
+        reject_retired_policy_sections(
+            PolicyDocument.model_validate(historical_retrieval_policy_document())
+        )
+
+
+def test_successors_derived_from_history_drop_only_the_retired_section():
+    historical = historical_retrieval_policy_document()
+
+    successor = without_retired_policy_sections(historical)
+
+    assert "rag" not in successor
+    assert successor == policy_document()
+    assert historical["rag"]["collectionRefs"] == ["default"]
+    reject_retired_policy_sections(PolicyDocument.model_validate(successor))
 
 def test_policy_rejects_secret_bodies_raw_paths_and_docker_socket():
     for key, value in (
@@ -308,3 +366,21 @@ def test_approval_binding_rejects_stale_policy_or_target_state(field, replacemen
     binding[field] = replacement
     with pytest.raises(ValueError, match="stale approval binding"):
         validate_approval_binding(binding, snapshot, target_current_state="ready")
+
+
+@pytest.mark.parametrize("request_model_name", ["CreatePolicy", "NewVersion"])
+def test_policy_write_schema_cannot_request_retired_retrieval(request_model_name):
+    from api_service.api.routers import omnigent_policies
+
+    model = getattr(omnigent_policies, request_model_name)
+    schema = model.model_json_schema()
+    reference = schema["properties"]["document"]["$ref"].rsplit("/", 1)[-1]
+    assert schema["$defs"][reference]["properties"]["rag"].get("type") == "null"
+
+
+def test_policy_authoring_accepts_a_parsed_vector_free_document():
+    from api_service.api.routers.omnigent_policies import NewVersion
+
+    parsed = PolicyDocument.model_validate(policy_document())
+    request = NewVersion(expectedParentRef="p@1", document=parsed)
+    assert normalize_document(request.document) == normalize_document(parsed)

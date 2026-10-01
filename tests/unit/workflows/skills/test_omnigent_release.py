@@ -189,6 +189,19 @@ def test_build_migrated_policy_document_carries_operator_fields():
     assert document["host"]["serverImageRef"] == OLD_SERVER
 
 
+
+def test_build_migrated_policy_document_drops_retired_retrieval_section():
+    document = {
+        "host": {"serverImageRef": OLD_SERVER, "hostImageRef": OLD_HOST},
+        "rag": {"collectionRefs": ["workflow-default"], "credentialRef": "retrieval-profile"},
+    }
+    migrated = build_migrated_policy_document(
+        document, server_ref=NEW_SERVER, host_ref=NEW_HOST
+    )
+    assert "rag" not in migrated
+    # The recorded version keeps its section; only the successor sheds it.
+    assert document["rag"]["collectionRefs"] == ["workflow-default"]
+
 def test_build_migrated_policy_document_rejects_bad_shapes():
     with pytest.raises(OmnigentReleaseError):
         build_migrated_policy_document({}, server_ref=NEW_SERVER, host_ref=NEW_HOST)

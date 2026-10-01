@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import logging
 import os
 import platform
@@ -42,6 +41,7 @@ from moonmind.omnigent.policies import (
     document_digest,
     normalize_document,
     require_explicit_policy_resources,
+    without_retired_policy_sections,
 )
 from moonmind.omnigent.settings import (
     generic_claude_qualified,
@@ -1273,14 +1273,6 @@ def bootstrap_document(
                 "maxActions": 3,
                 "autonomous": False,
             },
-            "rag": {
-                "initialScope": "workflow",
-                "followupScope": "session",
-                "collectionRefs": ["workflow-default"],
-                "tokenBudget": 8000,
-                "fallback": "deny",
-                "credentialRef": "retrieval-profile",
-            },
             "approvals": {"actions": _bootstrap_approval_actions()},
             "retention": {"days": 30, "deletion": "after-expiry"},
             "rollout": {
@@ -1485,7 +1477,9 @@ async def _reconcile_bootstrap_authority(
                 reconciled.append(policy_id)
             continue
 
-        desired_payload = copy.deepcopy(current.document_json)
+        # A successor never carries the retired retrieval section (#4103);
+        # the recorded version keeps it unchanged.
+        desired_payload = without_retired_policy_sections(current.document_json)
         desired_payload["host"]["serverImageRef"] = desired_server_image
         desired_payload["host"]["hostImageRef"] = desired_host_image
         desired_payload["resources"] = desired_resources
@@ -1796,7 +1790,9 @@ async def seed_bootstrap_policies(
                 candidate = versions[0]
                 legacy_ref = f"{policy_id}@{row.version}"
                 if candidate.version == row.version:
-                    migrated_payload = copy.deepcopy(row.document_json)
+                    migrated_payload = without_retired_policy_sections(
+                        row.document_json
+                    )
                     migrated_payload["execution"]["agentIdentities"] = [
                         CODEX_STOCK_AGENT_NAME
                     ]

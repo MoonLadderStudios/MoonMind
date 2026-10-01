@@ -201,4 +201,54 @@ describe('OmnigentInventoryPage', () => {
     expect((screen.getByRole('button', { name: 'Disable codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Deprecate codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('keeps a historical retrieval section readable but out of new policy versions', async () => {
+    window.history.replaceState({}, '', '/omnigent/policies');
+    const historical = {
+      host: { mode: 'static_compose' },
+      rag: { collectionRefs: ['workflow-default'], credentialRef: 'retrieval-profile' },
+    };
+    const posted: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'POST') {
+        posted.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+        return { ok: true, json: async () => ({}) } as Response;
+      }
+      if (url.endsWith('/usage')) return { ok: false, status: 404, json: async () => ({}) } as Response;
+      if (url.endsWith('/audit')) return { ok: true, json: async () => ({ items: [] }) } as Response;
+      if (url.endsWith('/versions')) return {
+        ok: true, json: async () => ({ items: [
+          { policyId: 'codex-static', version: 1, ref: 'codex-static@1', state: 'active', digest: 'sha256:1',
+            validation: { valid: true }, document: historical },
+        ] }),
+      } as Response;
+      return {
+        ok: true,
+        json: async () => ({ items: [{
+          id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 1,
+          summary: 'Immutable policy authority', version: { validation: { valid: true }, document: historical },
+        }] }),
+      } as Response;
+    });
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: true },
+      initialData: { uiEndpoints: { omnigentPolicies: '/api/omnigent/policies' } },
+    });
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Inspect' }))[0]!);
+    const detail = screen.getByRole('region', { name: 'Immutable policy version' });
+    // The recorded version still shows exactly what it carried.
+    expect(detail.textContent).toContain('retrieval-profile');
+    expect(screen.queryByText(/context retrieval/i)).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit as new version' }));
+    const editor = screen.getByLabelText('Complete policy document (JSON)') as HTMLTextAreaElement;
+    expect(JSON.parse(editor.value)).toEqual({ host: { mode: 'static_compose' } });
+    expect(screen.queryByText(/context retrieval/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save draft' }));
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0]!.url).toBe('/api/omnigent/policies/codex-static/versions');
+    expect(posted[0]!.body.document).toEqual({ host: { mode: 'static_compose' } });
+  });
 });

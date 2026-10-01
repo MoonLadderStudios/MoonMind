@@ -511,9 +511,11 @@ Rules:
 
 ### 8.1 Retrieval context
 
-Retrieval and RAG inputs must be attempt inputs, not hidden ambient state.
+Retrieval inputs must be attempt inputs, not hidden ambient state.
 
-Representative retrieval context:
+MoonMind no longer ships a native retrieval index (MoonLadderStudios/MoonMind#4103). Current attempts assemble context from explicit attachments, artifact refs, and scoped workspace access. The retrieval context shape below stays readable so attempts recorded before retirement keep their evidence.
+
+Representative recorded retrieval context:
 
 ```json
 {
@@ -855,7 +857,7 @@ Suggested side-effect classes:
 | `publication` | Branch/PR/publish/merge handoff. | Requires gate-approved state. |
 | `provider_account` | Provider profile slot, OAuth, account-level state. | Requires provider-profile policy and cleanup/release semantics. |
 | `memory_update` | Run-local or repo-level memory change. | Requires promotion state and policy. |
-| `retrieval_index_update` | RAG index mutation or cache update. | Requires index/version policy. |
+| `retrieval_index_update` | Retired native RAG index mutation or cache update. | No MoonMind producer remains; the class is retained so recorded attempts keep their classification. |
 
 Representative side effect:
 

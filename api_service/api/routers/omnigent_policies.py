@@ -7,7 +7,7 @@ from difflib import unified_diff
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -20,9 +20,25 @@ from api_service.services.omnigent_policies import (
     validate_policy,
 )
 from api_service.services.settings_catalog import has_settings_permission
-from moonmind.omnigent.policies import PolicyDocument, PolicyState
+from moonmind.omnigent.policies import (
+    PolicyDocument,
+    PolicyState,
+    reject_retired_policy_sections,
+)
 
 router = APIRouter(prefix="/api/omnigent/policies", tags=["Omnigent Policies"])
+
+
+class PolicyAuthoringDocument(PolicyDocument):
+    """Write contract; recorded policies retain their historical read model."""
+
+    rag: None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_sections(cls, value: Any) -> dict[str, Any]:
+        document = reject_retired_policy_sections(PolicyDocument.model_validate(value))
+        return document.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 class CreatePolicy(BaseModel):
@@ -30,14 +46,14 @@ class CreatePolicy(BaseModel):
     policy_id: str = Field(alias="policyId", pattern=r"^[a-z0-9][a-z0-9-]{1,127}$")
     name: str = Field(min_length=2, max_length=255)
     visibility: Literal["private", "deployment"] = "private"
-    document: PolicyDocument
+    document: PolicyAuthoringDocument
     clone_source_ref: str | None = Field(None, alias="cloneSourceRef")
 
 
 class NewVersion(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     expected_parent_ref: str = Field(alias="expectedParentRef")
-    document: PolicyDocument
+    document: PolicyAuthoringDocument
 
 
 class Transition(BaseModel):

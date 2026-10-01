@@ -162,7 +162,8 @@ describe('remediationCreateDraft', () => {
     expect(draft.executionProfileRef).toBe('execution-profile:codex-default');
     expect(draft.launchPolicyRef).toBe('launch-policy:remediation-v3');
     // Retired (#4105): remediation drafts carry no retrieval authoring.
-    expect(draft.contextRetrieval).toBeUndefined();
+    expect('contextRetrieval' in draft).toBe(false);
+    expect(JSON.stringify(draft)).not.toContain('"rag"');
     expect(draft.remediation.checkpointBranchPolicy).toMatchObject({
       gitWorkBranch: 'repair/mm-3623',
     });

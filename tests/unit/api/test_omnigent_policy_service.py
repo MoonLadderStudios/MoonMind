@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.api.routers import omnigent_policies as policy_router
 from api_service.db.models import (
     Base,
     OmnigentBridgeSession,
@@ -36,7 +37,10 @@ from moonmind.omnigent.execution_profiles import (
 )
 from moonmind.omnigent.policies import PolicyDocument, PolicyState, document_digest
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
-from tests.unit.omnigent.test_policy_authority import policy_document
+from tests.unit.omnigent.test_policy_authority import (
+    historical_retrieval_policy_document,
+    policy_document,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -1228,6 +1232,164 @@ async def test_bootstrap_advances_stale_interrupted_draft_lineage(
         assert latest.document_json["host"]["serverImageRef"] == next_server
         assert latest.document_json["host"]["hostImageRef"] == next_host
 
+
+
+# The retrieval section bootstrap seeded before native retrieval was retired
+# (MoonLadderStudios/MoonMind#4103).
+_PRE_RETIREMENT_BOOTSTRAP_RAG = {
+    "initialScope": "workflow",
+    "followupScope": "session",
+    "collectionRefs": ["workflow-default"],
+    "tokenBudget": 8000,
+    "latencyBudgetMs": 3000,
+    "fallback": "deny",
+    "credentialRef": "retrieval-profile",
+}
+
+
+def test_policy_api_rejects_new_documents_carrying_retired_retrieval():
+    with pytest.raises(ValueError, match="rag.*retired"):
+        policy_router.CreatePolicy.model_validate(
+            {
+                "policyId": "operator-policy",
+                "name": "Operator policy",
+                "document": historical_retrieval_policy_document(),
+            }
+        )
+    with pytest.raises(ValueError, match="rag.*retired"):
+        policy_router.NewVersion.model_validate(
+            {
+                "expectedParentRef": "operator-policy@1",
+                "document": historical_retrieval_policy_document(),
+            }
+        )
+
+    accepted = policy_router.NewVersion.model_validate(
+        {"expectedParentRef": "operator-policy@1", "document": policy_document()}
+    )
+    assert accepted.document.rag is None
+
+
+@pytest.mark.asyncio
+async def test_historical_retrieval_version_stays_readable_and_executable(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        row = await service.create(
+            policy_id="historical",
+            name="historical name",
+            owner_user_id=None,
+            visibility="deployment",
+            document=PolicyDocument.model_validate(
+                historical_retrieval_policy_document()
+            ),
+            actor="operator",
+        )
+        await service.transition(
+            policy_id="historical",
+            version=1,
+            state=PolicyState.ACTIVE,
+            actor="operator",
+            make_default=True,
+        )
+
+        snapshot = await service.resolve_runtime_snapshot("historical@1")
+
+        assert row.digest == document_digest(historical_retrieval_policy_document())
+        assert snapshot["policyDigest"] == row.digest
+        assert snapshot["boundaries"]["rag"]["collectionRefs"] == ["default"]
+
+
+@pytest.mark.asyncio
+async def test_fresh_bootstrap_policies_carry_no_retrieval_authority(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+
+    server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+
+    async def resolver(image_ref: str) -> str:
+        return host if "host" in image_ref else server
+
+    async def live_server(_image_ref: str) -> str:
+        return server
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        seeded = await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        rows = list((await session.execute(select(OmnigentPolicyVersion))).scalars())
+
+        assert seeded
+        assert rows
+        assert all(row.validation_json["valid"] for row in rows)
+        assert all("rag" not in row.document_json for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_successor_retires_historical_retrieval_without_rewriting_history(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
+    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+    resolved = {"server": first_server, "host": first_host}
+
+    async def resolver(image_ref: str) -> str:
+        return resolved["host" if "host" in image_ref else "server"]
+
+    async def live_server(_image_ref: str) -> str:
+        return resolved["server"]
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        # Reproduce a deployment whose bootstrap versions were persisted
+        # while bootstrap still seeded native retrieval configuration.
+        historical: dict[str, tuple[dict, str]] = {}
+        for row in (await session.execute(select(OmnigentPolicyVersion))).scalars():
+            document = deepcopy(row.document_json)
+            document["rag"] = deepcopy(_PRE_RETIREMENT_BOOTSTRAP_RAG)
+            row.document_json = document
+            row.digest = document_digest(document)
+            historical[row.policy_id] = (document, row.digest)
+        await session.commit()
+
+        # Unchanged inputs never force a new version merely to retire the
+        # inert section: the recorded active authority stays the default.
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        policies = list((await session.execute(select(OmnigentPolicy))).scalars())
+        assert all(policy.default_version == 1 for policy in policies)
+
+        resolved.update(server=next_server, host=next_host)
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        service = OmnigentPolicyService(session)
+        for policy_id, (document, digest) in historical.items():
+            policy = await session.get(OmnigentPolicy, policy_id)
+            successor = await service.get_version(policy_id, policy.default_version)
+            recorded = await service.get_version(policy_id, 1)
+            assert policy.default_version == 2, policy_id
+            assert successor.validation_json["valid"] is True, policy_id
+            assert "rag" not in successor.document_json, policy_id
+            assert successor.document_json["host"]["hostImageRef"] == next_host
+            assert recorded.document_json == document, policy_id
+            assert recorded.digest == digest, policy_id
 
 @pytest.mark.asyncio
 async def test_live_server_image_resolver_reads_running_compose_image(monkeypatch):
