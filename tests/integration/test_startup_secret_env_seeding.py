@@ -28,11 +28,19 @@ def _isolate_secret_env_sources(monkeypatch, tmp_path) -> None:
     for key in ("GITHUB_TOKEN", "GITHUB_PAT", "ATLASSIAN_API_KEY"):
         monkeypatch.delenv(key, raising=False)
 
+async def _secret(slug: str):
+    async with db_base.async_session_maker() as session:
+        return (
+            await session.execute(select(ManagedSecret).where(ManagedSecret.slug == slug))
+        ).scalar_one_or_none()
+
 @pytest.mark.asyncio
 async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_keys, tmp_path):
     await _seed_db(tmp_path)
+    _isolate_secret_env_sources(monkeypatch, tmp_path)
 
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-test-token")
+    monkeypatch.setenv("GITHUB_PAT", "ghp-test-pat")
     monkeypatch.setenv("ATLASSIAN_API_KEY", "atl-token")
 
     with (
@@ -40,53 +48,58 @@ async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_
     ):
         await startup_event()
 
-    async with db_base.async_session_maker() as session:
-        github_secret = (
-            await session.execute(select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_TOKEN"))
-        ).scalar_one_or_none()
-        atlassian_secret = (
-            await session.execute(
-                select(ManagedSecret).where(ManagedSecret.slug == "ATLASSIAN_API_KEY")
-            )
-        ).scalar_one_or_none()
-
-    assert github_secret is not None
-    assert github_secret.status == SecretStatus.ACTIVE
-    assert github_secret.ciphertext == "ghp-test-token"
-    assert github_secret.details.get("imported_from") == ".env"
+    atlassian_secret = await _secret("ATLASSIAN_API_KEY")
     assert atlassian_secret is not None
     assert atlassian_secret.status == SecretStatus.ACTIVE
     assert atlassian_secret.ciphertext == "atl-token"
     assert atlassian_secret.details.get("imported_from") == ".env"
+    # MoonLadderStudios/MoonMind#4023: the GitHub credential is a reference on
+    # the default repository connection, not a token copied on every boot.
+    assert await _secret("GITHUB_TOKEN") is None
+    assert await _secret("GITHUB_PAT") is None
 
 @pytest.mark.asyncio
 async def test_startup_updates_existing_env_managed_secret(monkeypatch, disabled_env_keys, tmp_path):
     await _seed_db(tmp_path)
+    _isolate_secret_env_sources(monkeypatch, tmp_path)
 
     async with db_base.async_session_maker() as session:
-        existing_secret = ManagedSecret(
-            slug="GITHUB_TOKEN",
-            ciphertext="old-token",
-            status=SecretStatus.ACTIVE,
-            details={"imported_from": ".env", "migrated_at": "older"},
+        session.add_all(
+            [
+                ManagedSecret(
+                    slug="ATLASSIAN_API_KEY",
+                    ciphertext="old-atlassian-key",
+                    status=SecretStatus.ACTIVE,
+                    details={"imported_from": ".env", "migrated_at": "older"},
+                ),
+                ManagedSecret(
+                    slug="GITHUB_TOKEN",
+                    ciphertext="recorded-github-token",
+                    status=SecretStatus.ACTIVE,
+                    details={"imported_from": ".env", "migrated_at": "older"},
+                ),
+            ]
         )
-        session.add(existing_secret)
         await session.commit()
 
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "new-atlassian-key")
     monkeypatch.setenv("GITHUB_TOKEN", "new-github-token")
+    monkeypatch.setenv("GITHUB_PAT", "new-github-pat")
 
     with (
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()
 
-    async with db_base.async_session_maker() as session:
-        refreshed = (
-            await session.execute(select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_TOKEN"))
-        ).scalar_one()
-
-    assert refreshed.ciphertext == "new-github-token"
-    assert refreshed.details.get("migrated_at") is not None
+    refreshed = await _secret("ATLASSIAN_API_KEY")
+    assert refreshed.ciphertext == "new-atlassian-key"
+    assert refreshed.details.get("migrated_at") != "older"
+    # A migrated connection may name db://GITHUB_TOKEN; startup leaves the
+    # operator's managed secret as recorded instead of overwriting it.
+    recorded = await _secret("GITHUB_TOKEN")
+    assert recorded.ciphertext == "recorded-github-token"
+    assert recorded.details.get("migrated_at") == "older"
+    assert await _secret("GITHUB_PAT") is None
 
 @pytest.mark.asyncio
 async def test_startup_syncs_managed_secrets_from_dotenv_file(
@@ -106,67 +119,10 @@ async def test_startup_syncs_managed_secrets_from_dotenv_file(
     ):
         await startup_event()
 
-    async with db_base.async_session_maker() as session:
-        github_secret = (
-            await session.execute(
-                select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_TOKEN")
-            )
-        ).scalar_one_or_none()
-        atlassian_secret = (
-            await session.execute(
-                select(ManagedSecret).where(
-                    ManagedSecret.slug == "ATLASSIAN_API_KEY"
-                )
-            )
-        ).scalar_one_or_none()
-
-    assert github_secret is not None
-    assert github_secret.ciphertext == "ghp-dotenv-token"
+    atlassian_secret = await _secret("ATLASSIAN_API_KEY")
     assert atlassian_secret is not None
     assert atlassian_secret.ciphertext == "atl-dotenv-token"
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("slug", ["GITHUB_PAT"])
-async def test_startup_syncs_github_alias_and_refreshes_canonical_slug(
-    monkeypatch, disabled_env_keys, tmp_path, slug
-):
-    await _seed_db(tmp_path)
-    _isolate_secret_env_sources(monkeypatch, tmp_path)
-
-    async with db_base.async_session_maker() as session:
-        session.add(
-            ManagedSecret(
-                slug="GITHUB_TOKEN",
-                ciphertext="stale-token",
-                status=SecretStatus.ACTIVE,
-                details={"imported_from": ".env", "migrated_at": "older"},
-            )
-        )
-        await session.commit()
-
-    monkeypatch.setenv(slug, "ghp-alias-token")
-
-    with (
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
-        await startup_event()
-
-    async with db_base.async_session_maker() as session:
-        canonical_secret = (
-            await session.execute(
-                select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_TOKEN")
-            )
-        ).scalar_one()
-        alias_secret = (
-            await session.execute(select(ManagedSecret).where(ManagedSecret.slug == slug))
-        ).scalar_one()
-
-    assert canonical_secret.status == SecretStatus.ACTIVE
-    assert canonical_secret.ciphertext == "ghp-alias-token"
-    assert canonical_secret.details.get("imported_from") == ".env"
-    assert alias_secret.status == SecretStatus.ACTIVE
-    assert alias_secret.ciphertext == "ghp-alias-token"
-    assert alias_secret.details.get("imported_from") == ".env"
+    assert await _secret("GITHUB_TOKEN") is None
 
 @pytest.mark.asyncio
 async def test_startup_ignores_whitespace_only_env_tokens(
@@ -175,7 +131,6 @@ async def test_startup_ignores_whitespace_only_env_tokens(
     await _seed_db(tmp_path)
     _isolate_secret_env_sources(monkeypatch, tmp_path)
 
-    monkeypatch.setenv("GITHUB_PAT", "   ")
     monkeypatch.setenv("ATLASSIAN_API_KEY", "\t")
 
     with (
@@ -183,19 +138,4 @@ async def test_startup_ignores_whitespace_only_env_tokens(
     ):
         await startup_event()
 
-    async with db_base.async_session_maker() as session:
-        github_secret = (
-            await session.execute(
-                select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_TOKEN")
-            )
-        ).scalar_one_or_none()
-        atlassian_secret = (
-            await session.execute(
-                select(ManagedSecret).where(
-                    ManagedSecret.slug == "ATLASSIAN_API_KEY"
-                )
-            )
-        ).scalar_one_or_none()
-
-    assert github_secret is None
-    assert atlassian_secret is None
+    assert await _secret("ATLASSIAN_API_KEY") is None

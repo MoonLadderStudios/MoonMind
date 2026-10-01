@@ -1,16 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildContinueInNewWorkflowBody,
+  SavedWorkPublicationError,
   buildSavedResultDownloadHref,
   buildSavedResultPreviewHref,
+  buildSavedWorkPublicationRequest,
   canDownloadSavedResultRaw,
+  canPublishSavedWork,
   classifySavedResultArtifact,
+  defaultSavedWorkDestination,
   projectSavedResults,
-  resolveUncertainSavedResultSubmission,
+  publishSavedWork,
+  savedResultContinuationKey,
   savedResultErrorMessage,
-  savedResultIdempotencyKey,
-  savedResultSelectionKey,
-  shouldApplySavedResultResponse,
 } from './saved-results';
 
 function artifact(overrides: Record<string, unknown> = {}) {
@@ -143,51 +144,37 @@ describe('separate compute/save/publication outcomes', () => {
   });
 });
 
-describe('stale-response guard binds to the exact selected result', () => {
-  it('ignores late responses for a historical selection', () => {
-    const current = savedResultSelectionKey('wf-4020', 'run-new-2');
-    expect(shouldApplySavedResultResponse('wf-4020|run-old-1', current)).toBe(
-      false,
-    );
-    expect(shouldApplySavedResultResponse(current, current)).toBe(true);
-  });
-});
+describe('uncertain submissions reuse idempotency through the authored intent', () => {
+  const intent = {
+    instructions: 'Continue from the saved report.',
+    title: 'Follow-up',
+    selectedSourceArtifactRefs: ['art-b', 'art-a'],
+  };
 
-describe('uncertain submissions reuse idempotency and returned operation IDs', () => {
-  it('produces a stable key per selected result and action', () => {
-    const first = savedResultIdempotencyKey('wf-4020', 'run-1', 'continue');
-    const second = savedResultIdempotencyKey('wf-4020', 'run-1', 'continue');
-    expect(first).toBe(second);
-    expect(savedResultIdempotencyKey('wf-4020', 'run-2', 'continue')).not.toBe(
-      first,
-    );
-  });
-
-  it('reuses the returned operation after a lost acknowledgment or double click', () => {
-    const resolved = resolveUncertainSavedResultSubmission({
-      pendingOperationId: 'op-continue-1',
-      response: {
-        status: 409,
-        code: 'continuation_idempotency_conflict',
-        operationId: 'op-continue-1',
-      },
-    });
-    expect(resolved.reused).toBe(true);
-    expect(resolved.operationId).toBe('op-continue-1');
+  it('maps a double click, lost acknowledgment, or reload to one key', () => {
+    const first = savedResultContinuationKey('wf-4020', 'run-1', intent);
+    expect(savedResultContinuationKey('wf-4020', 'run-1', { ...intent })).toBe(first);
+    expect(
+      savedResultContinuationKey('wf-4020', 'run-1', {
+        ...intent,
+        selectedSourceArtifactRefs: ['art-a', 'art-b'],
+      }),
+    ).toBe(first);
+    expect(first.length).toBeLessThanOrEqual(512);
   });
 
-  it('binds continue requests to the exact selected source artifacts', () => {
-    const body = buildContinueInNewWorkflowBody({
-      idempotencyKey: savedResultIdempotencyKey('wf-4020', 'run-1', 'continue'),
-      selectedSourceArtifactRefs: ['art_01TESTSAVEDRESULT01'],
-      instructions: 'Continue working from the saved result.',
-    });
-    expect(body.selectedSourceArtifactRefs).toEqual([
-      'art_01TESTSAVEDRESULT01',
-    ]);
-    expect(body).not.toHaveProperty('host');
-    expect(body).not.toHaveProperty('sessionId');
-    expect(body).not.toHaveProperty('credential');
+  it('treats a changed intent, ref set, or source run as a new request', () => {
+    const first = savedResultContinuationKey('wf-4020', 'run-1', intent);
+    expect(
+      savedResultContinuationKey('wf-4020', 'run-1', { ...intent, instructions: 'Other work.' }),
+    ).not.toBe(first);
+    expect(
+      savedResultContinuationKey('wf-4020', 'run-1', {
+        ...intent,
+        selectedSourceArtifactRefs: ['art-a'],
+      }),
+    ).not.toBe(first);
+    expect(savedResultContinuationKey('wf-4020', 'run-2', intent)).not.toBe(first);
   });
 });
 
@@ -336,15 +323,7 @@ describe('expired saved outputs', () => {
   });
 });
 
-describe('continuation responses', () => {
-  it('treats an idempotency conflict without a destination as a failure', () => {
-    const resolved = resolveUncertainSavedResultSubmission({
-      pendingOperationId: 'op-continue-1',
-      response: { status: 409, code: 'continuation_idempotency_conflict', operationId: null },
-    });
-    expect(resolved.reused).toBe(false);
-  });
-
+describe('server error messages', () => {
   it('preserves structured FastAPI error messages', () => {
     expect(
       savedResultErrorMessage({
@@ -354,5 +333,339 @@ describe('continuation responses', () => {
     expect(savedResultErrorMessage({ detail: 'plain detail' })).toBe('plain detail');
     expect(savedResultErrorMessage({ message: 'top-level' })).toBe('top-level');
     expect(savedResultErrorMessage(null)).toBe('');
+  });
+});
+
+const SAVED_WORK = 'application/vnd.moonmind.saved-work-manifest+json;version=1';
+
+function capture(overrides: { summary?: Record<string, unknown> | null } = {}) {
+  const summary =
+    overrides.summary === undefined
+      ? {
+          capture_id: 'step-1:capture',
+          required_formats: ['full_snapshot'],
+          outputs: [
+            { format: 'full_snapshot', status: 'self_contained', artifact_id: 'art-archive' },
+            { format: 'exact_baseline_delta', status: 'requires_dependencies', artifact_id: 'art-delta' },
+            { format: 'selected_history', status: 'inapplicable' },
+          ],
+          exclusion_count: 3,
+          exclusion_reasons: [
+            { reason: 'sensitive-path-policy', count: 2 },
+            { reason: 'sensitive-filename-policy', count: 1 },
+          ],
+          limitations: ['target-platform path/case collisions present'],
+          retention_ref: 'artifact-ownership',
+        }
+      : overrides.summary;
+  const part = (artifactId: string, kind: string, extra: Record<string, unknown> = {}) =>
+    artifact({
+      artifactId,
+      contentType: 'application/octet-stream',
+      metadata: { artifact_kind: kind },
+      links: [{ linkType: 'output.checkpoint' }],
+      ...extra,
+    });
+  return {
+    manifest: artifact({
+      artifactId: 'art-manifest',
+      contentType: SAVED_WORK,
+      metadata: {
+        artifact_kind: 'saved_work_manifest',
+        ...(summary ? { saved_work_summary: summary } : {}),
+      },
+      links: [{ linkType: 'output.checkpoint' }],
+    }),
+    archive: part('art-archive', 'checkpoint_archive'),
+    delta: part('art-delta', 'checkpoint_delta'),
+    fileManifest: part('art-file-manifest', 'checkpoint_manifest', {
+      metadata: {
+        artifact_kind: 'checkpoint_manifest',
+        checkpoint_parts: {
+          archive_artifact_id: 'art-archive',
+          index_patch_artifact_id: 'art-index',
+        },
+      },
+    }),
+    index: part('art-index', 'checkpoint_index'),
+    part,
+  };
+}
+
+describe('the committed saved-work manifest is one saved unit', () => {
+  it('groups the parts it names and surfaces the server summary', () => {
+    const saved = capture();
+    const projection = project({
+      artifacts: [
+        saved.manifest,
+        saved.archive,
+        saved.delta,
+        saved.fileManifest,
+        saved.index,
+        artifact({ artifactId: 'art-report' }),
+      ],
+    });
+    expect(projection.entries.map((entry) => entry.artifactId)).toEqual([
+      'art-manifest',
+      'art-report',
+    ]);
+    const [unit] = projection.entries;
+    expect(unit?.kind).toBe('repository');
+    expect(unit?.complete).toBe(true);
+    expect(unit?.exclusions).toBe(3);
+    expect(unit?.savedWork?.summaryAvailable).toBe(true);
+    expect(unit?.savedWork?.limitations).toEqual([
+      'target-platform path/case collisions present',
+    ]);
+    expect(unit?.savedWork?.parts.map((part) => [part.role, part.artifactId])).toEqual([
+      ['snapshot', 'art-archive'],
+      ['delta', 'art-delta'],
+      ['file-manifest', 'art-file-manifest'],
+      ['index-patch', 'art-index'],
+    ]);
+    expect(unit?.savedWork?.formats).toContainEqual({
+      format: 'full_snapshot',
+      status: 'self_contained',
+      required: true,
+    });
+    expect(canPublishSavedWork(unit!)).toBe(true);
+  });
+
+  it('downgrades completeness when a required format or its part is not usable', () => {
+    const saved = capture();
+    const missingArchive = project({ artifacts: [saved.manifest, saved.delta] }).entries[0];
+    expect(missingArchive?.complete).toBe(false);
+    expect(missingArchive?.completenessReason).toBe('part-snapshot-not-listed');
+    expect(canPublishSavedWork(missingArchive!)).toBe(false);
+
+    const expiredArchive = project({
+      now: Date.parse('2026-09-30T00:00:00Z'),
+      artifacts: [
+        saved.manifest,
+        saved.part('art-archive', 'checkpoint_archive', { expiresAt: '2026-09-29T00:00:00Z' }),
+      ],
+    }).entries[0];
+    expect(expiredArchive?.completenessReason).toBe('part-snapshot-expired');
+
+    const failedFormat = project({
+      artifacts: [
+        capture({
+          summary: {
+            required_formats: ['full_snapshot'],
+            outputs: [{ format: 'full_snapshot', status: 'incomplete' }],
+          },
+        }).manifest,
+      ],
+    }).entries[0];
+    expect(failedFormat?.complete).toBe(false);
+    expect(failedFormat?.completenessReason).toBe('format-full_snapshot-incomplete');
+  });
+
+  it.each([
+    ['full_snapshot', 'self_contained', 'snapshot'],
+    ['exact_baseline_delta', 'requires_dependencies', 'delta'],
+  ])('marks a required %s claim without an artifact incomplete', (format, status, role) => {
+    const missing = project({
+      artifacts: [
+        capture({
+          summary: {
+            required_formats: [format],
+            outputs: [{ format, status }],
+          },
+        }).manifest,
+      ],
+      authorizedContinuationRefs: ['art-manifest'],
+    });
+    const [unit] = missing.entries;
+    expect(unit?.complete).toBe(false);
+    expect(unit?.completenessReason).toBe(`part-${role}-missing-artifact`);
+    expect(canPublishSavedWork(unit!)).toBe(false);
+    expect(missing.continuationRefs).toEqual([]);
+  });
+
+  it('never upgrades a manifest the server has not completed', () => {
+    const saved = capture();
+    const pending = project({
+      artifacts: [{ ...saved.manifest, status: 'PENDING_UPLOAD', sha256: null }, saved.archive],
+    }).entries[0];
+    expect(pending?.complete).toBe(false);
+    expect(pending?.completenessReason).toBe('status-PENDING_UPLOAD');
+    expect(canPublishSavedWork(pending!)).toBe(false);
+  });
+
+  it('keeps a manifest listed without a summary useful but honest', () => {
+    const legacy = project({ artifacts: [capture({ summary: null }).manifest] }).entries[0];
+    expect(legacy?.savedWork?.summaryAvailable).toBe(false);
+    expect(legacy?.exclusions).toBeNull();
+    expect(legacy?.kind).toBe('repository');
+  });
+
+  it('requires raw access to the snapshot before publication is offered', () => {
+    const saved = capture();
+    const restricted = project({
+      artifacts: [
+        saved.manifest,
+        { ...saved.archive, rawAccessAllowed: false },
+        saved.delta,
+      ],
+    }).entries[0];
+    expect(restricted?.complete).toBe(true);
+    expect(restricted?.restricted).toBe(false);
+    expect(canPublishSavedWork(restricted!)).toBe(false);
+  });
+
+  it.each([
+    { state: 'missing', delta: null },
+    { state: 'pending', delta: { status: 'PENDING_UPLOAD' } },
+    { state: 'expired', delta: { expiresAt: '2026-09-29T00:00:00Z' } },
+    { state: 'restricted', delta: { rawAccessAllowed: false } },
+  ])('refuses publication with a $state recorded delta even when that format is optional', ({ delta }) => {
+    const saved = capture();
+    const unit = project({
+      now: Date.parse('2026-09-30T00:00:00Z'),
+      artifacts: [
+        saved.manifest,
+        saved.archive,
+        ...(delta ? [saved.part('art-delta', 'checkpoint_delta', delta)] : []),
+      ],
+    }).entries[0];
+    expect(unit?.complete).toBe(true);
+    expect(unit?.savedWork?.formats).toContainEqual({
+      format: 'exact_baseline_delta',
+      status: 'requires_dependencies',
+      required: false,
+    });
+    expect(canPublishSavedWork(unit!)).toBe(false);
+  });
+
+  it('requires a self-contained snapshot for publication while keeping a complete report useful', () => {
+    const saved = capture({
+      summary: {
+        required_formats: ['report_only'],
+        outputs: [{ format: 'report_only', status: 'self_contained', artifact_id: 'art-report' }],
+      },
+    });
+    const unit = project({ artifacts: [saved.manifest, artifact({ artifactId: 'art-report' })] }).entries[0];
+    expect(unit?.complete).toBe(true);
+    expect(canPublishSavedWork(unit!)).toBe(false);
+  });
+
+  it('does not require raw access to parts publication never reads', () => {
+    const saved = capture({
+      summary: {
+        required_formats: ['full_snapshot'],
+        outputs: [
+          { format: 'full_snapshot', status: 'self_contained', artifact_id: 'art-archive' },
+          { format: 'exact_baseline_delta', status: 'requires_dependencies', artifact_id: 'art-delta' },
+          { format: 'selected_history', status: 'self_contained', artifact_id: 'art-history' },
+        ],
+      },
+    });
+    const unit = project({
+      artifacts: [
+        saved.manifest,
+        saved.archive,
+        saved.delta,
+        { ...saved.fileManifest, rawAccessAllowed: false },
+        { ...saved.index, rawAccessAllowed: false },
+        saved.part('art-history', 'selected_history', { rawAccessAllowed: false }),
+      ],
+    }).entries[0];
+    expect(canPublishSavedWork(unit!)).toBe(true);
+  });
+
+  it('requires raw access to the manifest before publication is offered', () => {
+    const restricted = project({
+      artifacts: [{ ...capture().manifest, rawAccessAllowed: false }, capture().archive],
+    }).entries[0];
+    expect(restricted?.complete).toBe(true);
+    expect(restricted?.restricted).toBe(true);
+    expect(canPublishSavedWork(restricted!)).toBe(false);
+  });
+});
+
+describe('Publish Saved Work uses the saved-work publication contract', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('derives the destination the execution already determines', () => {
+    expect(
+      defaultSavedWorkDestination(
+        execution({ repository: 'Owner/Repo', startingBranch: 'main', publishMode: 'branch' }),
+        'mm:wf 4020',
+      ),
+    ).toEqual({
+      repository: 'Owner/Repo',
+      objective: 'branch',
+      baseBranch: 'main',
+      headBranch: 'saved-work/mm-wf-4020',
+      strategy: 'baseline_delta',
+      pullRequestTitle: '',
+    });
+  });
+
+  it('authors only the saved result and its destination', () => {
+    const draft = {
+      repository: ' Owner/Repo ',
+      objective: 'pr' as const,
+      baseBranch: '',
+      headBranch: ' saved-work/x ',
+      strategy: 'additive_import' as const,
+      pullRequestTitle: ' Publish it ',
+    };
+    expect(buildSavedWorkPublicationRequest('art-manifest', draft)).toEqual({
+      savedWorkRef: 'art-manifest',
+      destination: {
+        repository: 'Owner/Repo',
+        objective: 'pr',
+        headBranch: 'saved-work/x',
+        strategy: 'additive_import',
+      },
+      pullRequestTitle: 'Publish it',
+    });
+    expect(
+      buildSavedWorkPublicationRequest('art-manifest', { ...draft, objective: 'branch' }),
+    ).not.toHaveProperty('pullRequestTitle');
+  });
+
+  it('posts the body and distinguishes a server rejection from a lost acknowledgment', async () => {
+    const request = buildSavedWorkPublicationRequest('art-manifest', {
+      repository: 'Owner/Repo',
+      objective: 'pr',
+      baseBranch: 'main',
+      headBranch: 'saved-work/x',
+      strategy: 'baseline_delta',
+      pullRequestTitle: '',
+    });
+    const fetchSpy = vi.spyOn(window, 'fetch');
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: 'publication_retry_not_admitted',
+            message: 'Publication is not admitted by current rollout policy.',
+          },
+        }),
+        { status: 409 },
+      ),
+    );
+    const rejected = await publishSavedWork('/api', 'mm:wf', request).catch((err) => err);
+    expect(rejected).toBeInstanceOf(SavedWorkPublicationError);
+    expect(rejected.code).toBe('publication_retry_not_admitted');
+    expect(rejected.message).toBe('Publication is not admitted by current rollout policy.');
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe('/api/executions/mm%3Awf/retry-publication');
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+
+    fetchSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const lost = await publishSavedWork('/api', 'mm:wf', request).catch((err) => err);
+    expect(lost).toBeInstanceOf(Error);
+    expect(lost).not.toBeInstanceOf(SavedWorkPublicationError);
+
+    fetchSpy.mockResolvedValueOnce(new Response('<html>proxy</html>', { status: 201 }));
+    const unreadable = await publishSavedWork('/api', 'mm:wf', request).catch((err) => err);
+    expect(unreadable).toBeInstanceOf(Error);
+    expect(unreadable).not.toBeInstanceOf(SavedWorkPublicationError);
   });
 });

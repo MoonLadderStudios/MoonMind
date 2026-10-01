@@ -956,21 +956,38 @@ Debug artifacts should be hidden by default in normal user views and shown in op
 
 ### 11.6 Saved-result presentation (Workflow Detail, #4020)
 
-Workflow Detail shows one compact Saved Results section bound to the
-server's actual selected run/attempt/result and committed artifact
-references. Report-only and non-Git output remain useful. The section
-reuses the existing result/artifact projection, the existing Create flow
-for continuation, and the existing publication-only publisher path. It
-introduces no second result store and no recovery wizard.
+Workflow Detail shows one compact Saved Results section on the Artifacts tab,
+bound to the server's actual selected run/result and its committed artifact
+references from the existing run artifact listing. Report-only and non-Git
+output remain useful. The section reuses the existing result/artifact
+projection, the single continuation owner, and the existing publication-only
+publisher path. It introduces no second result store and no recovery wizard.
 
 Rules:
 
-- The section binds requests and displayed state to the exact selected
-  `(workflow_id, run_id)` result/action. Late responses never retarget a
-  historical selection or overwrite a newer operation. Uncertain
-  submissions (lost acknowledgment, reload, double click) reuse the
-  stable per-selection idempotency key and the returned operation ID.
-  Leaving a dialog is not cancellation of accepted remote work.
+- Saved outputs are only artifacts linked as results (`output.*` other
+  than `output.logs`, `report.*`, repository/patch/checkpoint links, or
+  `result`); inputs, runtime logs, and debug evidence are not saved work.
+- A committed saved-work manifest (content type
+  `application/vnd.moonmind.saved-work-manifest+json`) is one saved unit.
+  The snapshot archive, delta, history, file manifest, and index patch it
+  names are listed as its parts, each with its own completeness and raw
+  download, not as separate saved results. Its format claims, exclusion
+  counts by reason, and limitations come from the `saved_work_summary`
+  listing metadata the capture path projects from the committed manifest;
+  its displayed retention is the listing's retention class and expiry. The
+  browser never parses raw manifest bytes. A
+  manifest listed without that summary is shown with its own status and
+  identity and "format details unavailable".
+- Completeness never comes from a provider exit code, a local directory
+  path, an absent digest, or a permissive generic metadata default. Only
+  a server `COMPLETE` status bound to real content identity (digest plus
+  size) counts as a complete save. For a saved unit, a required format whose
+  claim is not `self_contained`/`requires_dependencies`, or whose listed part
+  is missing, incomplete, or expired, downgrades it to incomplete; summary
+  metadata can never upgrade an incomplete manifest. Available downloads,
+  completeness/exclusions, and retention are shown without requiring every
+  format.
 - Compute, saving, requested publication, and cleanup outcomes stay
   distinct. A failed/canceled run may still show committed saved work; a
   failed requested publication may still show a successful save; pending
@@ -981,41 +998,89 @@ Rules:
   `auxiliaryOutcomes.gitPublication` status first; cleanup reports the
   recorded `hostCleanup`/`providerProfileRelease`/`janitorRequired`
   outcome, or unknown when no evidence exists.
-- Saved outputs are only artifacts linked as results (`output.*` other
-  than `output.logs`, `report.*`, repository/patch/checkpoint links, or
-  `result`); inputs, runtime logs, and debug evidence are not saved work.
-  Continuation submits only complete saved outputs that the source's
-  captured evidence authorizes. Expiry comes from the artifact's
-  `expires_at` (or a `DELETED` status), and expired entries show no
-  Preview/Download affordance.
-- Completeness never comes from a provider exit code, a local directory
-  path, an absent digest, or a permissive generic metadata default. Only
-  a server `COMPLETE` status bound to real content identity (digest plus
-  size) counts as a complete save. Available downloads,
-  completeness/exclusions, and retention are shown without requiring
-  every format.
 - Previews reuse the existing safe-preview path: metadata-first,
   `default_read_ref`-honoring, bounded inert renderers with redaction.
   Preview access never authorizes raw restore/publication; an ArtifactRef
   is an identifier, not a URL or credential. Raw download affordances
-  appear only when `raw_access_allowed === true`. Expired links and
-  hostile generated content never trigger credentialed fetches or
-  workflow controls.
-- Actions reuse existing endpoints with current server authorization and
-  the existing required confirmation: Download via the authorized
-  artifact download endpoint; Continue working via
-  `POST /executions/{workflow_id}/continue` (fresh admitted execution,
-  never a revived session/lease, available for every terminal state
-  including `no_commit`); Publish Saved Work via the publication-only
-  `POST /executions/{workflow_id}/retry-publication` path (no model
-  rerun), enabled only by the server's `canRetryPublication` capability.
-  An idempotency conflict counts as a reused operation only when it
-  returns the confirmed destination. Changing the actual destination/base/content
-  invalidates its old preview approval through the existing destination
-  checks, without a second approval system or routine manual review.
+  appear only when `raw_access_allowed === true`. Expiry comes from the
+  artifact's `expires_at` (or a `DELETED` status), and expired entries show
+  no Preview/Download affordance. Expired links and hostile generated
+  content never trigger credentialed fetches or workflow controls.
+- **Download** uses the authorized artifact download endpoint.
+- **Continue working** submits operator-authored instructions (and an
+  optional title) through `continueInNewWorkflow`, the same owner the
+  terminal Chat actions use: `POST /executions/{workflow_id}/continue`
+  creates a fresh admitted execution and never revives a session or lease.
+  It is available for every terminal state, including `no_commit`, and
+  carries only complete saved outputs the source's captured evidence
+  authorizes.
+- **Publish Saved Work** is offered for a complete, unexpired saved unit
+  whose manifest and required snapshot/delta closure have raw access, when
+  the execution's action projection reports `canPublishSavedWork`. That capability applies the same
+  submission gate and publication-recovery rollout admission as the
+  publication route; when it is off, `disabledReasons.canPublishSavedWork`
+  carries the route's reason (`publication_recovery_disabled` under the
+  shipped default-off rollout gate, `publication_recovery_shadow_only`,
+  `publication_mode_not_allowed`, `publication_recovery_not_in_canary` when
+  a canary admits no repository for the operator,
+  `publication_recovery_policy_invalid` when the rollout setting cannot be
+  read, or `temporal_submit_disabled`); a malformed rollout setting never
+  breaks the execution read. The section then explains the reason once,
+  separately from the save's completeness and the compute outcome, and
+  keeps Preview, Download, and Continue available. An unreported
+  capability is unavailable, never assumed. When available,
+  `actionEvidence.publishSavedWork` lists the `allowedModes` and, under a
+  repository canary, the `canaryRepositories`; the form offers only those
+  modes and names those repositories. The UI never changes the rollout
+  setting, and the server remains the final authority: a
+  `publication_retry_not_admitted` refusal is shown as returned and
+  refreshes the projection.
+- Publishing posts the saved-work body (`savedWorkRef` and the selected
+  `sourceRunId`, plus the destination repository, objective, base/head
+  branch, application strategy, and optional PR title) to the publication-only
+  `POST /executions/{workflow_id}/retry-publication` path described in
+  [Publish Saved Work](../Workflows/WorkflowPublishing.md#publish-saved-work),
+  so no model is rerun. The destination form is prefilled from the
+  execution's repository, starting branch, and publish mode. Repository,
+  publish mode, head branch, and PR title come first; the base branch and
+  application strategy appear when requested, when an existing destination
+  still needs a base, or when a non-default strategy is chosen. Initializing
+  an empty destination selects branch-only publication and sends no base;
+  it is offered only when branch publication is admitted. This is the
+  single saved-work publication form; Workflow Create/edit (#2619) does not add another. It
+  does not depend on `canRetryPublication`: that capability gates only the
+  body-less recovery of a failed requested publication, which stays in the
+  workflow action menu. The server's ownership, destination, Lore, and
+  rollout checks decide admission, and their rejection is shown as
+  returned. The returned publication workflow and
+  `publicationIdempotencyKey` are displayed with the destination they were
+  admitted for. Changing the destination makes the next submission a new
+  decision; the earlier operation stays visible, and no second approval
+  system is added.
+- An accepted publication is followed through the existing execution
+  detail read of the returned workflow (`GET /executions/{workflow_id}`)
+  until it closes, and its terminal status is shown: completed means the
+  saved work was published or the destination already had it, and failed
+  or canceled means the run's persisted saved-work publication result
+  records the reason and any confirmed change. Following never starts,
+  retries, or cancels work, and closing the form does not stop it.
+- Requests and displayed state are bound to the exact selected
+  `(workflow_id, run_id)` result and to the latest request for each action.
+  Late responses never retarget a historical selection or overwrite a newer
+  operation; a selection change discards unfinished local state without
+  cancelling accepted remote work. A double click dispatches once. A
+  transport failure after submission is reported as possibly accepted,
+  and publication timeout/server-error responses carry the same uncertainty.
+  Resubmitting the same continuation intent maps to the same idempotency key (derived from the source run and the authored intent and
+  refs), and resubmitting the same publication request maps to the same
+  server operation, including after a reload. Leaving a form is not
+  cancellation.
 - Instance/resource cache keys stay under the single-user model: no
-  human-user partitions. Protected content is invalidated when admission
-  changes, while machine/resource access restrictions remain effective.
+  human-user partitions. A `401`/`403` from a saved-result action refreshes
+  the protected listing so raw-access affordances follow current
+  authorization. A continuation denial also refetches captured evidence
+  before retrying with current refs. Machine/resource access restrictions
+  remain effective.
 
 ---
 

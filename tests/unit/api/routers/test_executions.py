@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -18248,7 +18249,23 @@ def test_retry_publication_stops_before_temporal_when_rollout_disables_admission
     adapter.start_workflow.assert_not_awaited()
 
 
-_SAVED_WORK_MANIFEST = b'{"schemaVersion":"saved-work-manifest/v1"}'
+_SAVED_WORK_SNAPSHOT = b"saved snapshot"
+_SAVED_WORK_SNAPSHOT_DIGEST = hashlib.sha256(_SAVED_WORK_SNAPSHOT).hexdigest()
+_SAVED_WORK_MANIFEST = json.dumps(
+    {
+        "schemaVersion": "saved-work-manifest/v1",
+        "contentDigest": "sha256:" + _SAVED_WORK_SNAPSHOT_DIGEST,
+        "outputs": [
+            {
+                "format": "full_snapshot",
+                "status": "self_contained",
+                "ref": "art_snapshot",
+                "digest": "sha256:" + _SAVED_WORK_SNAPSHOT_DIGEST,
+                "sizeBytes": len(_SAVED_WORK_SNAPSHOT),
+            }
+        ],
+    }
+).encode()
 
 
 class _SavedWorkArtifacts:
@@ -18258,18 +18275,51 @@ class _SavedWorkArtifacts:
         self,
         *,
         linked_workflow_id: str = "mm:wf-1",
+        linked_run_id: str | None = "run-2",
         content_type: str = "application/vnd.moonmind.saved-work-manifest+json;version=1",
     ) -> None:
-        self.artifact = SimpleNamespace(artifact_id="art_saved", content_type=content_type)
-        self.links = [SimpleNamespace(workflow_id=linked_workflow_id)]
+        self.artifact = SimpleNamespace(
+            artifact_id="art_saved",
+            content_type=content_type,
+            status=TemporalArtifactStatus.COMPLETE,
+            sha256=hashlib.sha256(_SAVED_WORK_MANIFEST).hexdigest(),
+            size_bytes=len(_SAVED_WORK_MANIFEST),
+            metadata_json={},
+            expires_at=None,
+            deleted_at=None,
+            hard_deleted_at=None,
+            redaction_level=TemporalArtifactRedactionLevel.NONE,
+        )
+        self.snapshot = SimpleNamespace(
+            artifact_id="art_snapshot",
+            content_type="application/vnd.moonmind.worktree-archive",
+            status=TemporalArtifactStatus.COMPLETE,
+            sha256=_SAVED_WORK_SNAPSHOT_DIGEST,
+            size_bytes=len(_SAVED_WORK_SNAPSHOT),
+            metadata_json={},
+            expires_at=None,
+            deleted_at=None,
+            hard_deleted_at=None,
+            redaction_level=TemporalArtifactRedactionLevel.NONE,
+        )
+        self.links = [
+            SimpleNamespace(workflow_id=linked_workflow_id, run_id=linked_run_id)
+        ]
         self.principals: list[str] = []
 
     async def get_metadata(self, *, artifact_id: str, principal: str):
-        assert artifact_id == "art_saved"
+        assert artifact_id in {"art_saved", "art_snapshot"}
         self.principals.append(principal)
-        return self.artifact, self.links, False, None
+        return (
+            self.artifact if artifact_id == "art_saved" else self.snapshot,
+            self.links if artifact_id == "art_saved" else [],
+            False,
+            SimpleNamespace(raw_access_allowed=True),
+        )
 
     async def read(self, *, artifact_id: str, principal: str):
+        # HTTP admission checks part metadata; it never extracts the snapshot.
+        assert artifact_id == "art_saved"
         self.principals.append(principal)
         return self.artifact, _SAVED_WORK_MANIFEST
 
@@ -18418,6 +18468,7 @@ def test_saved_work_publication_freezes_one_decision_without_credentials(
         "mm:wf-1:saved-work-publication:"
     )
     assert contract["schemaVersion"] == "saved-work-publication-v1"
+    assert contract["sourceRunId"] == record.run_id
     assert contract["savedWorkDigest"] == (
         "sha256:" + hashlib.sha256(_SAVED_WORK_MANIFEST).hexdigest()
     )
@@ -18432,6 +18483,64 @@ def test_saved_work_publication_freezes_one_decision_without_credentials(
     assert "token" not in json.dumps(contract).lower()
     assert first_call.kwargs["memo"]["publication_semantic_context"] == "saved_work"
     assert set(artifacts.principals) == {str(user.id)}
+
+
+@pytest.mark.parametrize("source_run_id", [None, "run-2"])
+@pytest.mark.parametrize("linked_run_id", [None, "run-stale"])
+def test_saved_work_publication_requires_the_exact_source_run_link(
+    monkeypatch: pytest.MonkeyPatch,
+    source_run_id: str | None,
+    linked_run_id: str | None,
+) -> None:
+    artifacts = _SavedWorkArtifacts(linked_run_id=linked_run_id)
+    # Separate links matching each identity never establish the requested pair.
+    artifacts.links.append(
+        SimpleNamespace(workflow_id="mm:other", run_id="run-2")
+    )
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, artifacts)
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+    body = dict(_SAVED_WORK_BODY)
+    if source_run_id is not None:
+        body["sourceRunId"] = source_run_id
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=body
+        )
+
+    assert response.status_code == 409, response.json()
+    assert response.json()["detail"]["code"] == "saved_work_source_mismatch"
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_preserves_selected_run_after_workflow_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = _SavedWorkArtifacts(linked_run_id="run-selected")
+    app, adapter, record, _user = _saved_work_app(monkeypatch, artifacts)
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+    body = {**_SAVED_WORK_BODY, "sourceRunId": "run-selected"}
+
+    with TestClient(app) as test_client:
+        first = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=body
+        )
+        record.run_id = "run-next"
+        duplicate = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=body
+        )
+
+    assert first.status_code == 201, first.json()
+    assert first.json() == duplicate.json()
+    assert first.json()["sourceRunId"] == "run-selected"
+    first_call, second_call = adapter.start_workflow.await_args_list
+    assert first_call.kwargs == second_call.kwargs
+    assert first_call.kwargs["input_args"]["sourceRunId"] == "run-selected"
+    assert first_call.kwargs["memo"]["source_run_id"] == "run-selected"
 
 
 @pytest.mark.parametrize(
@@ -18556,6 +18665,143 @@ def test_saved_work_publication_uses_the_existing_rollout_admission(
     assert response.status_code == 409
     assert response.json()["detail"]["reason"] == "publication_recovery_disabled"
     adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("flags", "submit_enabled", "reason"),
+    [
+        # The shipped default: the rollout gate is off and stays off.
+        (
+            {"publication_recovery_enabled": False},
+            True,
+            "publication_recovery_disabled",
+        ),
+        (
+            {"publication_recovery_shadow": True},
+            True,
+            "publication_recovery_shadow_only",
+        ),
+        (
+            {"publication_recovery_allowed_modes": ""},
+            True,
+            "publication_mode_not_allowed",
+        ),
+        (
+            {"publication_recovery_canary_owner_ids": "someone-else"},
+            True,
+            "publication_recovery_not_in_canary",
+        ),
+        ({}, False, "temporal_submit_disabled"),
+    ],
+)
+def test_saved_work_publication_availability_is_projected_from_the_rollout_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    flags: dict[str, Any],
+    submit_enabled: bool,
+    reason: str,
+) -> None:
+    """MoonLadderStudios/MoonMind#4020: Workflow Detail reads publication
+    availability from the execution's action projection, and the projection
+    reports the same reason the publication-only route returns."""
+
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", submit_enabled)
+    for name, value in flags.items():
+        monkeypatch.setattr(settings.feature_flags, name, value)
+
+    with TestClient(app) as test_client:
+        detail = test_client.get("/api/executions/mm:wf-1")
+        published = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert detail.status_code == 200, detail.json()
+    actions = detail.json()["actions"]
+    assert actions["canPublishSavedWork"] is False
+    assert actions["disabledReasons"]["canPublishSavedWork"] == reason
+    assert "publishSavedWork" not in actions["actionEvidence"]
+    # The server stays the final authority and refuses for the same reason.
+    assert published.status_code in {409, 503}
+    detail_body = published.json()["detail"]
+    assert detail_body.get("reason", detail_body.get("code")) == reason
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_availability_survives_an_invalid_rollout_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags, "publication_recovery_allowed_modes", "pr,auto"
+    )
+
+    with TestClient(app) as test_client:
+        detail = test_client.get("/api/executions/mm:wf-1")
+
+    # The execution stays readable; only saved-work publication is unavailable.
+    assert detail.status_code == 200, detail.json()
+    actions = detail.json()["actions"]
+    assert actions["canPublishSavedWork"] is False
+    assert (
+        actions["disabledReasons"]["canPublishSavedWork"]
+        == "publication_recovery_policy_invalid"
+    )
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_availability_reports_destination_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, adapter, _record, user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags, "publication_recovery_allowed_modes", "pr,branch"
+    )
+
+    with TestClient(app) as test_client:
+        unlimited = test_client.get("/api/executions/mm:wf-1").json()["actions"]
+        monkeypatch.setattr(
+            settings.feature_flags,
+            "publication_recovery_canary_repositories",
+            "Dest/Repo, Other/Repo",
+        )
+        canary = test_client.get("/api/executions/mm:wf-1").json()["actions"]
+        admitted = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+        monkeypatch.setattr(
+            settings.feature_flags,
+            "publication_recovery_canary_owner_ids",
+            str(user.id),
+        )
+        canary_owner = test_client.get("/api/executions/mm:wf-1").json()["actions"]
+
+    assert unlimited["canPublishSavedWork"] is True
+    assert "canPublishSavedWork" not in unlimited["disabledReasons"]
+    assert unlimited["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "branch"]
+    }
+    # A repository canary limits destinations without hiding the action.
+    assert canary["canPublishSavedWork"] is True
+    assert canary["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "branch"],
+        "canaryRepositories": ["Dest/Repo", "Other/Repo"],
+    }
+    assert admitted.status_code == 201, admitted.json()
+    # A canary owner may publish to any repository.
+    assert canary_owner["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "branch"]
+    }
 
 
 @pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])

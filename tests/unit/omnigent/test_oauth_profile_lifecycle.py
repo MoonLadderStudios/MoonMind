@@ -5873,6 +5873,9 @@ async def test_coordinator_provider_release_has_bounded_retry_evidence(
 def immutable_bootstrap_images(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64)
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
+    )
 
 
 # ---------------------------------------------------------------------------

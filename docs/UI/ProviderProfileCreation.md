@@ -2,11 +2,11 @@
 
 Status: **Desired-state UI and implementation contract**  
 Owners: MoonMind Engineering  
-Last updated: 2026-09-05
+Last updated: 2026-10-01
 
 Canonical for: the create and edit experience for Provider Profiles on the **Providers & Secrets** Settings page
 
-**Related design documents:** [Settings Configuration Pages](./SettingsPage.md), [Provider Profiles](../Security/ProviderProfiles.md), [Provider Profile Model and Effort Tier Settings](./ProviderProfileModelEffortTierSettings.md), [Secrets System](../Security/SecretsSystem.md), [OAuth Terminal](../ManagedAgents/OAuthTerminal.md), [Dashboard Design System](./DashboardDesignSystem.md)
+**Related design documents:** [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md), [Settings Configuration Pages](./SettingsPage.md), [Provider Profiles](../Security/ProviderProfiles.md), [Provider Profile Model and Effort Tier Settings](./ProviderProfileModelEffortTierSettings.md), [Secrets System](../Security/SecretsSystem.md), [OAuth Terminal](../ManagedAgents/OAuthTerminal.md), [Dashboard Design System](./DashboardDesignSystem.md)
 
 > [!NOTE]
 > This document simplifies the Provider Profile form through progressive disclosure. It does not weaken the Provider Profile execution contract. The backend remains authoritative for validated creation presets, validation, credential activation, runtime materialization, and launch readiness.
@@ -15,11 +15,18 @@ Canonical for: the create and edit experience for Provider Profiles on the **Pro
 
 ## Profile identity and advanced behavior
 
-Settings and workflow authoring use the label **Profile**. Workflow creation,
-schedules, step overrides and replacement selections use the same persisted
-Profile id. Runtime and host details are progressively disclosed. Advanced Profile
-settings may pin an immutable execution configuration; the ordinary path resolves
-compatible deployment behavior automatically. Model discovery is an advisory cache:
+Settings and workflow authoring use **Provider Profile** for this existing
+connection and capacity identity. Workflow creation, schedules, step overrides,
+and replacement selections use the same persisted profile ID. Settings scopes
+profile setup to **Harness**, while **Backend** and host details are progressively
+disclosed during workflow authoring. The accepted
+[selection design](./HarnessProfileBackendSelection.md) owns this vocabulary.
+Advanced Provider Profile settings may pin an immutable execution configuration;
+the shared selection owner reconciles it with the chosen Harness and defaulted or
+explicit Backend. Omission normally resolves Omnigent and does not authorize a
+direct-launch fallback when compatibility or setup is missing.
+
+Model discovery is an advisory cache:
 cached choices and explicit custom entries remain usable during refresh, while
 the execution host validates the actual selected model before work starts.
 
@@ -52,7 +59,7 @@ The creation experience must:
 7. expose model and effort tier policy as a core profile decision rather than burying it with launch internals;
 8. protect existing advanced values during edit, collapse, validation failure, and save;
 9. fail closed when no valid creation preset exists for a runtime, provider, and authentication combination;
-10. let users select supported runtimes and providers without memorizing internal IDs; and
+10. let users select supported Harnesses and Providers without memorizing internal IDs; and
 11. distinguish recommended policy, unsaved overrides, credential connection, and launch readiness in the language shown to users.
 12. keep every field, label, helper, and validation message inside its section at 320px widths: one mobile column, fieldsets with `min-inline-size: 0`, tier legends holding only the group name with Duplicate/Remove in a separate wrapping action area (MoonMind#4559).
 
@@ -80,11 +87,11 @@ This design does not:
 The standard form should read as a short sequence of user decisions.
 
 ```text
-Create Profile
+Create Provider Profile
 
 Identity
-  Runtime                 Select a supported runtime
-  Provider                Select a provider for that runtime
+  Harness                 Select a supported Harness
+  Provider                Select a Provider for that Harness
   Account label           Optional
   Profile ID              Suggested, editable before creation
 
@@ -98,7 +105,7 @@ Model & effort tiers
 
 Capacity and selection
   Max parallel runs
-  Use as runtime default
+  Use as Harness default
 
 [ ] Show advanced options
     Credential bindings, volumes, rate limits, routing, and launch shaping
@@ -118,19 +125,19 @@ A uniqueness or format conflict preserves the whole draft and identifies the Pro
 
 A separate display-name field is not required for this behavior. Until such a contract exists, the form does not silently hide an immutable generated identifier.
 
-### 4.2 Runtime and provider
+### 4.2 Harness and Provider
 
-Runtime and provider remain visible and required. They determine the available authentication methods, model capabilities, creation preset, and approved materialization strategy.
+Harness and Provider remain visible and required. They determine the available authentication methods, model capabilities, creation preset, and approved materialization strategy.
 
-The standard path uses accessible selectors labeled `Runtime` and `Provider`. Choices have backend-provided display labels and canonical IDs as submitted values. Provider choices are scoped to the selected runtime. Display labels do not become identifiers or compatibility rules.
+The standard path uses accessible selectors labeled `Harness` and `Provider`. Choices have backend-provided display labels and canonical IDs as submitted values. Provider choices are scoped to the selected Harness. The Harness control continues to submit the existing `runtime_id`; display labels do not become identifiers or compatibility rules.
 
 The choice source reuses the trusted runtime/provider registries and creation-capability authority. If existing read APIs do not enumerate the choices, a small read-only projection of that authority supplies them. It is not a separately maintained catalog, a browser constant list, or an inference from existing profiles. Creating the first profile must work when no profiles exist. A temporary absence of launch-ready hosts must not erase an otherwise supported configuration choice.
 
-Provider Profiles retain their underlying runtime ownership, such as `codex_cli`, `claude_code`, or `opencode`. An Omnigent execution target is not a Provider Profile runtime, and its product display label must not be submitted as `runtime_id=omnigent`.
+Provider Profiles retain their underlying Harness ownership in `runtime_id`, such as `codex_cli`, `claude_code`, or `opencode`. Omnigent identifies the Backend rather than a Harness choice and must not be submitted as `runtime_id=omnigent`. Profile creation does not introduce a Backend selector or change deployment-default routing.
 
-Changing runtime retains a provider only when the new authoritative choice set confirms compatibility. Otherwise the provider selection is cleared and requires a new selection. Changing runtime or provider invalidates dependent authentication and preset selections until metadata for the new identity is available. Requests and caches include the relevant canonical identity, and stale responses cannot restore a previous selection or authorize submission. User-authored IDs, account labels, and unrelated draft values remain intact. Incompatible model or advanced overrides remain visible for review rather than being silently rewritten into a new launch contract.
+Changing Harness retains a Provider only when the new authoritative choice set confirms compatibility. Otherwise the Provider selection is cleared and requires a new selection. Changing Harness or Provider invalidates dependent authentication and preset selections until metadata for the new identity is available. Requests and caches include the relevant canonical identity, and stale responses cannot restore a previous selection or authorize submission. User-authored IDs, account labels, and unrelated draft values remain intact. Incompatible model or advanced overrides remain visible for review rather than being silently rewritten into a new launch contract.
 
-A Settings runtime filter may seed creation when its runtime is a permitted creation choice. It does not change the immutable runtime of a saved profile. No runtime/provider change silently selects a different credential method or billing route for an existing explicit choice.
+A Settings Harness filter may seed creation when its Harness is a permitted choice. It does not change the immutable `runtime_id` of a saved profile. No Harness/Provider change silently selects a different credential method or billing route for an existing explicit choice.
 
 Loading, empty, denied, and failed-catalog states explain the affected control and any permitted retry. Failure preserves the draft and does not enable arbitrary text entry as an implicit fallback. A custom/manual path is available only when the backend explicitly advertises that capability. Unknown saved values remain inspectable during edit and may round-trip only when backend policy permits. A catalog outage alone must not erase them or prevent unrelated edits that the existing save contract permits.
 
@@ -166,15 +173,15 @@ On narrow viewports the form stays single-column: sections use restrained paddin
 
 `max_parallel_runs` remains visible.
 
-It is the one Runtime Limits value most users can reason about directly. The initial value comes from a backend creation preset. The generic fallback is `1` only when the backend contract permits that fallback.
+It is the core Capacity value most users can reason about directly. The initial value comes from a backend creation preset. The generic fallback is `1` only when the backend contract permits that fallback.
 
 An OAuth home backed by an exclusive mutable identity may lock the value to `1` and explain why.
 
-### 4.7 Runtime default selection
+### 4.7 Harness default selection
 
-`is_default` may remain visible as `Use as runtime default` because it represents understandable selection intent.
+`is_default` may remain visible as `Use as Harness default` because it represents understandable selection intent.
 
-The action must not make a disabled or non-launch-ready profile the runtime default. When creation includes credential setup, default assignment occurs only after readiness succeeds. Otherwise the request remains pending or the checkbox is unavailable with an explanation.
+The action must not make a disabled or non-launch-ready profile the default for its Harness. The persisted default remains scoped to canonical `runtime_id` and does not select a Backend. When creation includes credential setup, default assignment occurs only after readiness succeeds. Otherwise the request remains pending or the checkbox is unavailable with an explanation.
 
 ### 4.8 Enabled state
 
@@ -292,8 +299,8 @@ Resetting an advanced field to its recommended value should be an explicit field
 | Field or concept | Standard behavior | Default authority |
 |---|---|---|
 | `profile_id` | Visible, suggested, reviewable, immutable after create | Frontend may suggest. Backend validates uniqueness and format. |
-| `runtime_id` | Visible required selector | Backend runtime catalog |
-| `provider_id` | Visible required selector scoped to runtime | Backend provider catalog and creation capabilities |
+| `runtime_id` | Visible required Harness selector; existing canonical ID | Backend Harness/runtime registry |
+| `provider_id` | Visible required Provider selector scoped to Harness | Backend provider catalog and creation capabilities |
 | `account_label` | Visible optional friendly label | Empty, OAuth identity, or user value |
 | Authentication method | Visible guided choice | Backend capabilities for runtime and provider |
 | `model_tiers` and `default_model_tier` | Visible core policy, initially one runtime-default tier | Backend tier capabilities and resolution |
@@ -550,7 +557,7 @@ The form must:
 - expose derived, locked, default, and override states in text;
 - avoid relying on color alone;
 - keep guided credential flows keyboard accessible and secret safe;
-- label runtime/provider selectors and expose loading, unavailable, and invalid-selection states accessibly; and
+- label Harness/Provider selectors and expose loading, unavailable, and invalid-selection states accessibly; and
 - associate action explanations with the primary button and announce save/setup outcomes without moving focus unexpectedly.
 
 ---
@@ -617,7 +624,7 @@ These are responsibilities, not a requirement to split the existing form into ev
 ### 14.1 Standard creation
 
 - Advanced options are collapsed on create.
-- Runtime, provider, account label, authentication, tier policy, max parallel runs, and runtime-default selection remain available.
+- Harness, Provider, account label, authentication, tier policy, max parallel runs, and Harness-default selection remain available.
 - A validated preset supplies the advanced summary.
 - Untouched advanced values are omitted or submitted according to the backend contract.
 - Profile creation never defaults to enabled when required credentials are missing.
@@ -692,9 +699,9 @@ npm run ui:test:settings-redesign
 ### 14.7 Identity selection
 
 - Supported creation works with an empty profile collection and no launch-ready host.
-- Runtime/provider labels display correctly while payloads retain canonical IDs.
-- Runtime changes clear incompatible provider/authentication choices and reject delayed old responses as authority.
-- A Settings runtime filter seeds only a permitted creation runtime.
+- Harness/Provider labels display correctly while payloads retain canonical `runtime_id` and `provider_id` values.
+- Harness changes clear incompatible Provider/authentication choices and reject delayed old responses as authority.
+- A Settings Harness filter seeds only a permitted creation Harness.
 - Catalog failure preserves drafts, exposes retry, and never enables an unauthorized manual fallback.
 - Unknown saved values remain inspectable and are not silently replaced.
 - Generated IDs follow current server constraints and update only while suggestion-managed.
@@ -710,7 +717,7 @@ npm run ui:test:settings-redesign
 - A repeated click while saving does not duplicate creation or enrollment.
 - Confirmed creation followed by canceled or failed enrollment retains the saved identity and offers setup recovery, not another create action for that profile.
 - Notices distinguish saved, pending connection, connected, enabled, and launch-ready results from the server.
-- Runtime-default intent is not applied before readiness permits it.
+- Harness-default intent is not applied before readiness permits it and never changes the Backend default.
 - Keyboard, accessible names/descriptions, focus, narrow screens, and secret-safe summaries are verified through the production form.
 
 ---
@@ -721,7 +728,7 @@ The design is correctly implemented when:
 
 1. Provider Profile creation starts with advanced options collapsed.
 2. One `Show advanced options` checkbox controls the low-level region.
-3. The standard form keeps runtime, provider, account label, authentication, model tier policy, max parallel runs, and runtime-default intent visible.
+3. The standard form keeps Harness, Provider, account label, authentication, model tier policy, max parallel runs, and Harness-default intent visible.
 4. Credentials remain easy to connect without exposing raw credential plumbing.
 5. Credential source and materialization mode are backend-derived for guided paths.
 6. Credentials & Volumes fields live behind advanced options or a dedicated guided credential action.
@@ -737,7 +744,7 @@ The design is correctly implemented when:
 16. Hidden validation errors automatically reveal the affected controls.
 17. No secret plaintext appears in the profile payload, URL, summary, or saved UI state.
 18. A missing validated creation preset never falls back to a guessed materialization contract.
-19. Supported runtime/provider choices come from existing backend authority and remain usable for first-profile setup without memorized internal IDs.
+19. Supported Harness/Provider choices come from existing backend authority and remain usable for first-profile setup without memorized internal IDs.
 20. A suggested Profile ID remains reviewable, respects user edits, and is never silently changed after a conflict or creation.
 21. Primary action wording matches the permitted save/setup operation, and successful persistence is not confused with successful connection or readiness.
 22. Collapsed summaries distinguish confirmed recommendations, custom overrides, and unknown or invalid state without changing the underlying draft.
@@ -749,7 +756,7 @@ The design is correctly implemented when:
 
 - Provider Profile creation uses progressive disclosure within one form, not a separate wizard.
 - The default form focuses on identity, authentication, model policy, capacity, and default-selection intent.
-- Runtime and provider use backend-owned choices. Their display labels never replace canonical IDs.
+- Harness and Provider use backend-owned choices. Display labels never replace canonical IDs or select a Backend.
 - Profile ID suggestions are reviewable and stop changing automatically once the user edits them.
 - `max_parallel_runs` remains visible.
 - Cooldown and rate-limit policy remain behind advanced options.

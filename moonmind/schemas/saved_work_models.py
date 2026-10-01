@@ -768,3 +768,90 @@ def commit_saved_work_manifest(
         # Optional preview/report evidence is informational only.
         result["previewFailures"] = list(preview_failures)
     return result
+
+
+def _artifact_id_from_ref(value: Any) -> str | None:
+    text = str(value or "").strip()
+    for prefix in ("artifact://", "artifact:"):
+        text = text.removeprefix(prefix)
+    return text or None
+
+
+def saved_work_artifact_metadata(
+    artifact_kind: str, payload: bytes
+) -> dict[str, Any]:
+    """Compact listing metadata projected from one committed capture index.
+
+    Workflow Detail's Saved Results section (MoonLadderStudios/MoonMind#4020)
+    reads only the run artifact listing, so the saved-work manifest carries
+    its format claims, exclusion counts, limitations, and retention handle,
+    and the checkpoint file manifest names the archive it indexes. Paths stay
+    inside the scanned manifest bytes. Unknown kinds or unreadable bytes add
+    nothing rather than a permissive default.
+    """
+    if artifact_kind not in {"saved_work_manifest", "checkpoint_manifest"}:
+        return {}
+    try:
+        document = json.loads(payload)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(document, dict):
+        return {}
+    if artifact_kind == "checkpoint_manifest":
+        archive = document.get("archive")
+        git = document.get("git")
+        index_patch = git.get("indexPatch") if isinstance(git, dict) else None
+        parts = {
+            "archive_artifact_id": _artifact_id_from_ref(
+                archive.get("ref") if isinstance(archive, dict) else None
+            ),
+            "index_patch_artifact_id": _artifact_id_from_ref(
+                index_patch.get("ref") if isinstance(index_patch, dict) else None
+            ),
+        }
+        parts = {key: value for key, value in parts.items() if value}
+        return {"checkpoint_parts": parts} if parts else {}
+    outputs: list[dict[str, Any]] = []
+    for output in document.get("outputs") or []:
+        if not isinstance(output, dict):
+            continue
+        claim = {
+            "format": str(output.get("format") or ""),
+            "status": str(output.get("status") or ""),
+        }
+        artifact_id = _artifact_id_from_ref(output.get("ref"))
+        if artifact_id:
+            claim["artifact_id"] = artifact_id
+        outputs.append(claim)
+    reasons: dict[str, int] = {}
+    exclusions = [
+        item for item in document.get("exclusions") or [] if isinstance(item, dict)
+    ]
+    for exclusion in exclusions:
+        reason = str(exclusion.get("reason") or "unspecified")
+        reasons[reason] = reasons.get(reason, 0) + 1
+    quiescence = document.get("quiescence")
+    scan = document.get("scan")
+    return {
+        "saved_work_summary": {
+            "capture_id": str(document.get("captureId") or ""),
+            "required_formats": [
+                str(item) for item in document.get("requiredFormats") or []
+            ],
+            "outputs": outputs,
+            "exclusion_count": len(exclusions),
+            "exclusion_reasons": [
+                {"reason": reason, "count": count}
+                for reason, count in sorted(reasons.items())
+            ],
+            "limitations": [str(item) for item in document.get("limitations") or []],
+            "retention_ref": document.get("retentionRef"),
+            "scan_disposition": str(
+                (scan.get("disposition") if isinstance(scan, dict) else None)
+                or "unknown"
+            ),
+            "quiescence_verified": bool(
+                isinstance(quiescence, dict) and quiescence.get("verified") is True
+            ),
+        }
+    }

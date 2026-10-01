@@ -6,7 +6,7 @@ from moonmind.auth import github_credentials
 from moonmind.auth.github_credentials import (
     GitHubCredentialSource,
     resolve_github_credential,
-    resolve_github_credential_sync,
+    resolve_connection_github_credential,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -132,48 +132,91 @@ async def test_only_an_unreadable_secret_reference_is_retryable(monkeypatch):
     assert (missing.token, missing.retryable) == ("", False)
 
 
-async def test_sync_resolver_uses_all_direct_env_sources_inside_running_loop(monkeypatch):
-    for key in (
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "WORKFLOW_GITHUB_TOKEN",
-        "GITHUB_TOKEN_SECRET_REF",
-        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
-        "MOONMIND_GITHUB_TOKEN_REF",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("GH_TOKEN", "gh-env-token")
+def _connection(credential: dict[str, object]):
+    from types import SimpleNamespace
 
-    resolved = resolve_github_credential_sync(repo="owner/repo")
-
-    assert resolved.token == "gh-env-token"
-    assert resolved.source == GitHubCredentialSource.DIRECT_ENV
-    assert resolved.source_name == "GH_TOKEN"
-
-
-async def test_sync_resolver_resolves_secret_refs_inside_running_loop(monkeypatch):
-    for key in (
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "WORKFLOW_GITHUB_TOKEN",
-        "GITHUB_TOKEN_SECRET_REF",
-        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
-        "MOONMIND_GITHUB_TOKEN_REF",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("WORKFLOW_GITHUB_TOKEN_SECRET_REF", "db://github-token")
-
-    async def _fake_secret_ref(ref: str) -> str:
-        assert ref == "db://github-token"
-        return "secret-ref-token"
-
-    monkeypatch.setattr(
-        "moonmind.auth.github_credentials._resolve_secret_ref",
-        _fake_secret_ref,
+    from moonmind.workflows.executions.repository_contract import (
+        GitHubAppCredential,
+        SecretRefCredential,
     )
 
-    resolved = resolve_github_credential_sync(repo="owner/repo")
+    model = (
+        SecretRefCredential if credential["source"] == "secret_ref" else GitHubAppCredential
+    )
+    return SimpleNamespace(
+        id="repository-connection:selected",
+        credential=model.model_validate(credential),
+    )
 
-    assert resolved.token == "secret-ref-token"
-    assert resolved.source == GitHubCredentialSource.SECRET_REF_ENV
-    assert resolved.source_name == "WORKFLOW_GITHUB_TOKEN_SECRET_REF"
+
+async def test_selected_connection_reads_only_its_own_reference(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("SELECTED_PAT", "selected-token-B")
+
+    resolved = await resolve_connection_github_credential(
+        _connection(
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "SELECTED_PAT"},
+            }
+        ),
+        repo="owner/repo",
+    )
+
+    assert resolved.token == "selected-token-B"
+    assert resolved.source_name == "repository-connection:selected"
+
+
+async def test_selected_connection_failure_never_uses_ambient_token(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("GITHUB_TOKEN_SECRET_REF", "env://ALSO_AMBIENT")
+    monkeypatch.setenv("ALSO_AMBIENT", "ambient-token-C")
+    monkeypatch.delenv("SELECTED_PAT", raising=False)
+
+    resolved = await resolve_connection_github_credential(
+        _connection(
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "SELECTED_PAT"},
+            }
+        ),
+        repo="owner/repo",
+    )
+
+    assert resolved.token == ""
+    assert resolved.source == GitHubCredentialSource.UNRESOLVABLE
+    assert "env://SELECTED_PAT" in resolved.safe_summary
+    assert "ambient-token" not in resolved.safe_summary
+
+
+async def test_selected_connection_empty_reference_is_not_retryable(monkeypatch):
+    monkeypatch.setenv("SELECTED_PAT", "   ")
+
+    resolved = await resolve_connection_github_credential(
+        _connection(
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "SELECTED_PAT"},
+            }
+        )
+    )
+
+    assert (resolved.token, resolved.retryable) == ("", False)
+    assert resolved.source == GitHubCredentialSource.UNRESOLVABLE
+
+
+async def test_selected_app_connection_is_not_replaced_by_ambient_token(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+
+    resolved = await resolve_connection_github_credential(
+        _connection(
+            {
+                "source": "github_app",
+                "appRef": "github-app:1",
+                "installationRef": "github-installation:2",
+            }
+        )
+    )
+
+    assert resolved.token == ""
+    assert resolved.source == GitHubCredentialSource.UNRESOLVABLE

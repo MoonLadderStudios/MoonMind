@@ -10,6 +10,7 @@ import time
 from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -121,7 +122,7 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
 
     monkeypatch.setattr(activity_runtime_module, "_run_command", run_git)
     activities = TemporalAgentRuntimeActivities(
-        run_store=object(), artifact_service=object(), client_adapter=object()
+        run_store=object(), artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -193,7 +194,7 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
     artifacts: dict[str, bytes] = {}
 
@@ -230,7 +231,7 @@ async def test_managed_capture_reuses_pre_source_identity_idempotency_record(
 ) -> None:
     store = ManagedRunStore(tmp_path / "managed_runs")
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
     request = _request(
         digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest
@@ -292,7 +293,7 @@ async def test_managed_capture_coalesces_temporal_heartbeat_backpressure(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -357,7 +358,7 @@ async def test_managed_capture_heartbeats_during_slow_archive_file(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -429,7 +430,7 @@ async def test_managed_capture_archive_digest_is_deterministic(tmp_path) -> None
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -499,7 +500,7 @@ async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_pat
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
     artifacts: dict[str, bytes] = {}
 
@@ -559,7 +560,7 @@ async def test_managed_capture_accepts_session_record_bound_to_parent_workflow(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -624,7 +625,7 @@ async def test_managed_capture_accepts_cross_step_workflow_session_baseline(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -693,7 +694,7 @@ async def test_managed_capture_accepts_terminal_prior_execution_as_retry_baselin
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -757,7 +758,7 @@ async def test_managed_capture_accepts_terminal_verifier_as_remediation_baseline
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(
@@ -827,7 +828,7 @@ async def test_managed_capture_rejects_active_prior_execution_as_retry_baseline(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
     request = _request(
         digest=resolve_runtime_execution_capabilities(
@@ -878,7 +879,7 @@ async def test_managed_capture_rejects_step_execution_mismatch(
     store = ManagedRunStore(tmp_path / "managed_runs")
     store.save(ManagedRunRecord(**record))
     activities = TemporalAgentRuntimeActivities(
-        run_store=store, artifact_service=object(), client_adapter=object()
+        run_store=store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
     with pytest.raises(Exception, match="source Step Execution"):
         await activities.agent_runtime_capture_workspace_checkpoint(

@@ -39,7 +39,7 @@ describe("DashboardAlerts", () => {
 
   afterEach(() => fetchSpy?.mockRestore());
 
-  it("shows generic provider-profile and GitHub guidance when both are missing", async () => {
+  it("shows generic provider-profile guidance without a GitHub requirement", async () => {
     fetchSpy = mockFetch([], []);
     renderWithClient(<DashboardAlerts />);
 
@@ -49,17 +49,17 @@ describe("DashboardAlerts", () => {
         "Set up and enable at least one provider profile in Settings.",
       ),
     ).toBeTruthy();
-    expect(screen.getByText("Set up GitHub access in Settings.")).toBeTruthy();
+    expect(screen.queryByText(/Set up GitHub access/i)).toBeNull();
     expect(document.body.textContent).not.toMatch(
       /ANTHROPIC_API_KEY|OPENAI_API_KEY|MINIMAX_API_KEY/,
     );
   });
 
   it.each(["oauth", "api-backed"])(
-    "does not warn for a launch-ready %s profile with GitHub access",
+    "does not warn for a launch-ready %s profile",
     async (kind) => {
       fetchSpy = mockFetch(
-        [{ slug: "GITHUB_TOKEN", status: "active" }],
+        [],
         [{ profile_id: kind, enabled: true, launch_ready: true }],
       );
       renderWithClient(<DashboardAlerts />);
@@ -97,18 +97,6 @@ describe("DashboardAlerts", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/Set up GitHub access/i)).toBeNull();
-  });
-
-  it("shows only GitHub guidance when a provider is ready", async () => {
-    fetchSpy = mockFetch(
-      [],
-      [{ profile_id: "ready", enabled: true, launch_ready: true }],
-    );
-    renderWithClient(<DashboardAlerts />);
-    expect(await screen.findByText(/Set up GitHub access/i)).toBeTruthy();
-    expect(
-      screen.queryByText(/Set up and enable at least one provider profile/i),
-    ).toBeNull();
   });
 
   it("renders a neutral notice when provider readiness cannot be checked", async () => {

@@ -65,6 +65,18 @@ def _no_deployment_resolved_images(monkeypatch):
     )
 
 
+def deployment_shared_host_follows(monkeypatch, resolved, key="host"):
+    """Make the image leg's persisted shared host track ``resolved[key]``.
+
+    Codex and Claude policies launch the deployment-resolved shared host image.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=resolved[key]),
+    )
+
+
 @asynccontextmanager
 async def policy_db(tmp_path):
     engine = create_async_engine(
@@ -603,7 +615,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
         "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
     )
     # The deployment image leg persists the shared host digest before policy
-    # reconciliation; the default configuration seeds Claude from it.
+    # reconciliation; the default configuration seeds Codex and Claude from it.
     monkeypatch.setattr(
         "moonmind.omnigent.bootstrap.store.load_resolved_state",
         lambda: SimpleNamespace(shared_host_image_ref=opencode_host_digest),
@@ -666,7 +678,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             }
             assert (
                 by_policy[policy_id].document_json["host"]["hostImageRef"]
-                == host_digest
+                == opencode_host_digest
             )
         assert by_policy["claude-on-demand"].document_json["execution"] == {
             "profileRef": "omnigent-claude@1",
@@ -695,7 +707,12 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             await seed_bootstrap_policies(session, env={}, image_resolver=resolver)
             == []
         )
-        assert len(resolution_calls) == 6
+        # Only the server and OpenCode inputs are acquired; the upstream host
+        # image is never pulled because no policy launches it.
+        assert len(resolution_calls) == 4
+        assert not any(
+            "omnigent-ai/omnigent-host" in image_ref for image_ref in resolution_calls
+        )
 
 
 @pytest.mark.asyncio
@@ -762,6 +779,91 @@ async def test_qualified_claude_bootstrap_uses_installed_shared_host_image(
 
 
 @pytest.mark.asyncio
+async def test_codex_bootstrap_policies_launch_the_shared_tool_owning_host_image(
+    tmp_path, monkeypatch
+):
+    """Codex hosts run on the image that owns ``/opt/moonmind-tools``.
+
+    The upstream ``omnigent-host`` image carries no MoonMind tools, so a Codex
+    run that needs ``gh`` fails its launch preflight there. Fresh Codex
+    policies and bootstrap-owned defaults already pinned to the upstream image
+    both move to the shared host image the Codex Host Class selects.
+    """
+
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "false")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "false")
+    server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    upstream_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    shared_host_digest = (
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=shared_host_digest),
+    )
+
+    async def resolver(image_ref: str) -> str:
+        if "host-moonmind" in image_ref:
+            return shared_host_digest
+        return upstream_host_digest if "host" in image_ref else server_digest
+
+    async def live_server(_image_ref: str) -> str:
+        return server_digest
+
+    codex_policies = {"omnigent-codex", "codex-static", "codex-on-demand"}
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        # An existing deployment bootstrapped codex-on-demand on the upstream host.
+        await service.create(
+            policy_id="codex-on-demand",
+            name="Codex on-demand host",
+            visibility="deployment",
+            document=bootstrap_document(
+                host_mode="on_demand_docker",
+                execution_profile_ref="omnigent-codex@1",
+                server_image_ref=server_digest,
+                host_image_ref=upstream_host_digest,
+            ),
+            actor="bootstrap",
+        )
+        await service.transition(
+            policy_id="codex-on-demand",
+            version=1,
+            state=PolicyState.ACTIVE,
+            actor="bootstrap",
+            make_default=True,
+        )
+
+        await seed_bootstrap_policies(
+            session,
+            env={
+                "MOONMIND_OMNIGENT_OPENCODE_ENABLED": "false",
+                "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "false",
+            },
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        for policy_id in codex_policies:
+            snapshot = await service.resolve_default_runtime_snapshot(policy_id)
+            assert (
+                snapshot["boundaries"]["host"]["hostImageRef"] == shared_host_digest
+            ), policy_id
+        # Recorded history keeps the image it was admitted with.
+        original = await service.get_version("codex-on-demand", 1)
+        assert original.document_json["host"]["hostImageRef"] == upstream_host_digest
+        assert await bootstrap_policies_ready(session) is True
+
+        # Until the shared image resolves, Codex defaults are not launchable.
+        monkeypatch.setattr(
+            "moonmind.omnigent.bootstrap.store.load_resolved_state", lambda: None
+        )
+        monkeypatch.delenv("OMNIGENT_SHARED_HOST_IMAGE_REF", raising=False)
+        assert await bootstrap_policies_ready(session) is False
+
+
+@pytest.mark.asyncio
 async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
     tmp_path, monkeypatch
 ):
@@ -823,12 +925,15 @@ async def test_unavailable_opencode_image_does_not_withhold_codex_policies(
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
-    codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    shared_host_digest = (
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "2" * 64
+    )
+    deployment_shared_host_follows(monkeypatch, {"host": shared_host_digest})
 
     async def resolver(image_ref: str) -> str | None:
         if "host-moonmind" in image_ref:
             return None
-        return codex_host_digest if "host" in image_ref else server_digest
+        return server_digest
 
     async with policy_db(tmp_path) as sessions, sessions() as session:
         seeded = await seed_bootstrap_policies(session, env={}, image_resolver=resolver)
@@ -837,6 +942,7 @@ async def test_unavailable_opencode_image_does_not_withhold_codex_policies(
             "omnigent-codex",
             "codex-static",
             "codex-on-demand",
+            "claude-on-demand",
         }
         assert await OmnigentPolicyService(session).resolve_runtime_snapshot(
             "codex-on-demand@1"
@@ -854,12 +960,15 @@ async def test_opencode_kill_switch_does_not_add_policy_or_image_dependencies(
     # A Codex-only deployment also stops the shared-image Claude family.
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "false")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
-    host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    shared_host_digest = (
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "2" * 64
+    )
+    deployment_shared_host_follows(monkeypatch, {"host": shared_host_digest})
     resolution_calls: list[str] = []
 
     async def resolver(image_ref: str) -> str:
         resolution_calls.append(image_ref)
-        return host_digest if "host" in image_ref else server_digest
+        return server_digest
 
     async with policy_db(tmp_path) as sessions, sessions() as session:
         seeded = await seed_bootstrap_policies(
@@ -876,7 +985,7 @@ async def test_opencode_kill_switch_does_not_add_policy_or_image_dependencies(
             "codex-static",
             "codex-on-demand",
         }
-        assert len(resolution_calls) == 2
+        assert len(resolution_calls) == 1
         assert await bootstrap_policies_ready(session) is True
 
 
@@ -890,6 +999,7 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
     next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
     resolved = {"server": first_server, "host": first_host}
+    deployment_shared_host_follows(monkeypatch, resolved)
 
     async def resolver(image_ref: str) -> str:
         return resolved["host" if "host" in image_ref else "server"]
@@ -940,6 +1050,7 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
             "omnigent-codex",
             "codex-static",
             "codex-on-demand",
+            "claude-on-demand",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -956,7 +1067,7 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
             .scalars()
             .all()
         )
-        assert len(defaults) == 5
+        assert len(defaults) == 6
         assert all(
             row.document_json["host"]["serverImageRef"] == next_server
             for row in defaults
@@ -986,6 +1097,7 @@ async def test_bootstrap_does_not_rewrite_operator_owned_default_images(
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
     next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
     resolved = {"server": first_server, "host": first_host}
+    deployment_shared_host_follows(monkeypatch, resolved)
 
     async def resolver(image_ref: str) -> str:
         return resolved["host" if "host" in image_ref else "server"]
@@ -1033,6 +1145,7 @@ async def test_bootstrap_revisits_image_binding_after_active_lease_drains(
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
     next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
     resolved = {"server": first_server, "host": first_host}
+    deployment_shared_host_follows(monkeypatch, resolved)
 
     async def resolver(image_ref: str) -> str:
         return resolved["host" if "host" in image_ref else "server"]
@@ -1132,6 +1245,7 @@ async def test_bootstrap_server_authority_follows_live_container_before_tag(
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
     next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
     resolved = {"server": first_server, "host": first_host}
+    deployment_shared_host_follows(monkeypatch, resolved)
     live = {"server": first_server}
 
     async def resolver(image_ref: str) -> str:
@@ -1190,6 +1304,7 @@ async def test_bootstrap_advances_stale_interrupted_draft_lineage(
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "5" * 64
     next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "6" * 64
     resolved = {"server": first_server, "host": first_host}
+    deployment_shared_host_follows(monkeypatch, resolved)
 
     async def resolver(image_ref: str) -> str:
         return resolved["host" if "host" in image_ref else "server"]
@@ -1426,11 +1541,14 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(
     """Legacy bootstrap identity advances through an immutable version cutover."""
 
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "false")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
 
     async def resolver(image_ref: str) -> str:
         return host_digest if "host" in image_ref else server_digest
+
+    deployment_shared_host_follows(monkeypatch, {"host": host_digest})
 
     async with policy_db(tmp_path) as sessions, sessions() as session:
         await seed_bootstrap_policies(session, image_resolver=resolver)

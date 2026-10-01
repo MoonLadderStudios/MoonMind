@@ -43,6 +43,7 @@ from api_service.services.omnigent_policies import (
     seed_bootstrap_policies,
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.config.settings import settings
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
@@ -313,13 +314,25 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
         return_value=manifest["preparedCommitSha"]
     )
 
-    async def resolved_github_credential(*, repo: str) -> SimpleNamespace:
+    async def resolved_github_credential(*, repo: str) -> ResolvedGitHubCredential:
         assert repo == manifest["repository"]
-        return SimpleNamespace(resolved=True, safe_summary="resolved")
+        return ResolvedGitHubCredential(token="replay-token", source="direct_env")
 
     monkeypatch.setattr(
         "moonmind.auth.github_credentials.resolve_github_credential",
         resolved_github_credential,
+    )
+
+    # The replay records no repository connection, so the default derives
+    # from the deployment's GitHub declaration (MoonLadderStudios/MoonMind#4023).
+    async def no_recorded_connection(connection_ref: str, **_kwargs: object) -> None:
+        assert connection_ref == "repository-connection:git-default"
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        no_recorded_connection,
     )
     request = AgentExecutionRequest.model_validate(manifest["request"])
 
@@ -503,6 +516,11 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
     async def live_server(_image_ref: str) -> str:
         return resolved["server"]
 
+    # The deployment image leg's resolved shared host is Codex/Claude authority.
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=resolved["host"]),
+    )
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'policy.db'}")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:
@@ -3696,6 +3714,7 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     )
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -5115,6 +5134,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
     expected = load_replay(replay_id, "expected-outcome.json")
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -5762,7 +5782,7 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
 
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,
-        artifact_service=object(),
+        artifact_service=SimpleNamespace(link_artifact=AsyncMock()),
         client_adapter=object(),
     )
 
@@ -5960,7 +5980,7 @@ async def test_retry_before_execution_captures_terminal_prior_workspace(
     )
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,
-        artifact_service=object(),
+        artifact_service=SimpleNamespace(link_artifact=AsyncMock()),
         client_adapter=object(),
     )
 
@@ -6222,7 +6242,7 @@ async def test_checkpoint_capture_heartbeat_backpressure_replay(
         )
     )
     activities = TemporalAgentRuntimeActivities(
-        run_store=run_store, artifact_service=object(), client_adapter=object()
+        run_store=run_store, artifact_service=SimpleNamespace(link_artifact=AsyncMock()), client_adapter=object()
     )
 
     async def put(

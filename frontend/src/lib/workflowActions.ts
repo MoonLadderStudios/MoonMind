@@ -19,6 +19,7 @@ export const ExecutionActionsSchema = z
     canResumeFromFailedStep: z.boolean().optional(),
     canContinueRemediation: z.boolean().optional(),
     canRetryPublication: z.boolean().optional(),
+    canPublishSavedWork: z.boolean().optional(),
     canFullRetry: z.boolean().optional(),
     actionEvidence: z.record(
       z.string(),
