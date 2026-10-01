@@ -217,6 +217,7 @@ async def _restore_manager(monkeypatch: pytest.MonkeyPatch) -> _RestartedManager
         capacity_scope_ref=f"provider-profile:{PROFILE_REF}",
     )
     assert await manager._load_leases_from_db() is True
+    manager._startup_restored = True
     return manager
 
 
@@ -258,7 +259,7 @@ async def test_the_lease_fence_survives_a_manager_restart(
     # generation the manager quotes is asserted by its own fencing tests.
     assert [item[:2] for item in manager.reconnected] == [(OWNER_ID, PROFILE_REF)]
 
-    inspection = manager.inspect_credential_lease(
+    inspection = await manager.inspect_credential_lease(
         {"lease_id": OWNER_ID, "owner_id": OWNER_ID}
     )
 
@@ -283,7 +284,7 @@ async def test_a_restored_lease_still_fails_closed_on_a_mismatched_fence(
         runtime_id=RUNTIME_ID, leases=[_granted_lease_payload()], action="grant"
     )
     manager = await _restore_manager(monkeypatch)
-    inspection = manager.inspect_credential_lease(
+    inspection = await manager.inspect_credential_lease(
         {"lease_id": OWNER_ID, "owner_id": OWNER_ID}
     )
 
@@ -298,7 +299,7 @@ async def test_a_restored_lease_still_fails_closed_on_a_mismatched_fence(
         assert "not usable" in str(exc_info.value)
 
     # An owner that never held this lease gets no evidence at all.
-    assert manager.inspect_credential_lease(
+    assert await manager.inspect_credential_lease(
         {"lease_id": "some-other-run", "owner_id": "some-other-run"}
     ) == {"active": False, "lease_id": "some-other-run"}
 
@@ -319,7 +320,7 @@ async def test_an_expired_restored_lease_is_not_consumable(
         action="grant",
     )
     manager = await _restore_manager(monkeypatch)
-    inspection = manager.inspect_credential_lease(
+    inspection = await manager.inspect_credential_lease(
         {"lease_id": OWNER_ID, "owner_id": OWNER_ID}
     )
 
