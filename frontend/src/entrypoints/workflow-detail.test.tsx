@@ -8486,7 +8486,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('heading', { name: 'Saved Results' })).toBeTruthy();
   });
 
-  it('presents API-shaped saved work and dispatches saved-result actions through their contracts', async () => {
+  it.each([true, false])('presents API-shaped saved work and dispatches saved-result actions with delta raw access %s', async (deltaRawAccess) => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
@@ -8605,7 +8605,7 @@ describe('Workflow Detail Entrypoint', () => {
                 metadata: { artifact_kind: 'checkpoint_archive' },
               }),
               listed('art-delta', 'output.checkpoint', {
-                raw_access_allowed: false,
+                raw_access_allowed: deltaRawAccess,
                 metadata: { artifact_kind: 'checkpoint_delta' },
               }),
               listed('art-authorized', 'output.primary'),
@@ -8632,11 +8632,19 @@ describe('Workflow Detail Entrypoint', () => {
     expect(cleanupCard?.textContent).toMatch(/Cleanup:\s*unknown/i);
     expect(cleanupCard?.textContent).not.toMatch(/Preserved/);
 
-    // The manifest is the saved unit; a restricted part never offers raw bytes.
+    // The manifest is the saved unit; raw access controls both download and publication.
     const parts = inSaved.getByRole('list', { name: 'Saved work parts' });
     const delta = within(parts).getByText('art-delta').closest('li') as HTMLElement;
-    expect(within(delta).getByText('Raw unavailable')).toBeTruthy();
-    expect(within(parts).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+    if (deltaRawAccess) {
+      expect(within(delta).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+        '/api/artifacts/art-delta/download',
+      );
+    } else {
+      expect(within(delta).getByText('Raw unavailable')).toBeTruthy();
+      expect(within(delta).queryByRole('link', { name: 'Download' })).toBeNull();
+    }
+    const archive = within(parts).getByText('art-archive').closest('li') as HTMLElement;
+    expect(within(archive).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
       '/api/artifacts/art-archive/download',
     );
 
@@ -8644,22 +8652,28 @@ describe('Workflow Detail Entrypoint', () => {
     // failed-publication recovery one; it sends the saved-work body to the
     // publication-only path.
     const publish = inSaved.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
-    expect(publish.disabled).toBe(false);
-    fireEvent.click(publish);
-    fireEvent.submit(inSaved.getByRole('form', { name: 'Publish saved work' }));
-    await waitFor(() => {
-      expect(inSaved.getByText(/Publication started for Owner\/Repo/)).toBeTruthy();
-    });
-    expect(publishBody).toEqual({
-      savedWorkRef: 'art-saved-work',
-      destination: {
-        repository: 'Owner/Repo',
-        objective: 'pr',
-        baseBranch: 'main',
-        headBranch: 'saved-work/test-123',
-        strategy: 'baseline_delta',
-      },
-    });
+    expect(publish.disabled).toBe(!deltaRawAccess);
+    if (deltaRawAccess) {
+      fireEvent.click(publish);
+      fireEvent.submit(inSaved.getByRole('form', { name: 'Publish saved work' }));
+      await waitFor(() => {
+        expect(inSaved.getByText(/Publication started for Owner\/Repo/)).toBeTruthy();
+      });
+      expect(publishBody).toEqual({
+        savedWorkRef: 'art-saved-work',
+        sourceRunId: '01-run',
+        destination: {
+          repository: 'Owner/Repo',
+          objective: 'pr',
+          baseBranch: 'main',
+          headBranch: 'saved-work/test-123',
+          strategy: 'baseline_delta',
+        },
+      });
+
+    } else {
+      expect(publishBody).toBeNull();
+    }
 
     const continueButton = inSaved.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement;
     await waitFor(() => expect(continueButton.disabled).toBe(false));
