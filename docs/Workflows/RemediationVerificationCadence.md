@@ -129,6 +129,25 @@ Use an explicitly named canonical remediation Skill, not `auto` selection that m
 
 Instruct remediation to consume all safe current gaps, exercise the actual production boundary requested by the verifier, record per-gap decisions and targeted checks, and stop without mutation when the input verdict is terminal. A test-only dictionary, fabricated success field, or helper mock does not satisfy a requirement about real workflow/Activity/adapter/persistence wiring.
 
+Runtime prompt preparation forwards the existing workflow-owned remediation
+cadence (role, admitted attempt and maximum) and current candidate/verifier refs
+as compact JSON to the actual agent message, including explicit and
+artifact-backed prompts. This is context from the existing owner, not a second
+attempt ledger or new admission authority. Missing historical dependency-setup
+records alone do not block safe repository repairs. Skills honor supplied limits
+and known exhausted attempts without inventing a universal setup budget or
+requiring a separate trusted retained-attempt ledger before editing.
+
+The resolved MoonSpec acceptance policy makes browser execution advisory by
+default, including for UI work. Browser availability, installation, screenshots,
+live UI access, and visual signoff never block default verification or fail its
+workflow. Verify the requested functional boundaries with executed non-browser
+evidence and record unexecuted browser diagnostics honestly. Only an explicit
+caller instruction requiring a browser gate for this verification run opts in;
+a previous report or derived plan cannot add that gate. Concrete defects and
+missing controlling non-browser evidence still require remediation or evidence
+collection under the existing owner.
+
 The full verifier checks the resulting whole candidate against the authoritative scope and publishes an attempt-bound result. Presets and schedules use the same contract, not independent loops with subtly different stopping or preservation rules.
 
 ## 13. Continuation and terminal handling

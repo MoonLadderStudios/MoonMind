@@ -273,6 +273,67 @@ async def test_first_message_includes_terminal_continuation_authority(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("attempt", [1, 3])
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        {"text": "Fix the Profile list gaps."},
+        {"instructionRef": "artifact://prompt"},
+        {},
+    ],
+)
+async def test_first_message_carries_admitted_remediation_context(prompt, attempt):
+    request = _request()
+    request.instruction_ref = "Fix the Profile list gaps."
+    request.parameters = {
+        "metadata": {
+            "moonmind": {
+                "remediationCadence": {
+                    "cadence": "attempt_scoped_remediation_verification",
+                    "role": "moonspec-remediation",
+                    "attempt": attempt,
+                    "maxAttempts": 6,
+                }
+            }
+        },
+        "remediationLoopId": "repair-profile-list",
+        "remediationWorkspaceHeadRef": f"artifact://candidate/C{attempt - 1}",
+        "gateResultRef": f"artifact://verification/V{attempt - 1}",
+        "remainingWorkRef": f"artifact://remaining/R{attempt - 1}",
+    }
+
+    class Gateway:
+        async def read_text(self, ref):
+            assert ref == "artifact://prompt"
+            return "Fix the Profile list gaps."
+
+    message = await _build_omnigent_first_message(
+        request=request,
+        prompt=prompt,
+        artifact_gateway=Gateway(),
+    )
+    text = _first_message_text(message)
+    marker = "MoonMind remediation attempt context (JSON):\n"
+    assert marker in text
+    context, _ = json.JSONDecoder().raw_decode(text.split(marker, 1)[1])
+    assert context == {
+        "role": "moonspec-remediation",
+        "attempt": attempt,
+        "maxAttempts": 6,
+        "remediationLoopId": "repair-profile-list",
+        "remediationWorkspaceHeadRef": f"artifact://candidate/C{attempt - 1}",
+        "gateResultRef": f"artifact://verification/V{attempt - 1}",
+        "remainingWorkRef": f"artifact://remaining/R{attempt - 1}",
+    }
+    replayed = await _build_omnigent_first_message(
+        request=request,
+        prompt={"text": text},
+        artifact_gateway=Gateway(),
+    )
+    assert _first_message_text(replayed).count(marker) == 1
+
+
+@pytest.mark.asyncio
 async def test_profile_bound_first_message_activates_resolved_skill_snapshot() -> None:
     request = _request()
     request.resolved_skillset_ref = "art-resolved-fix-comments"

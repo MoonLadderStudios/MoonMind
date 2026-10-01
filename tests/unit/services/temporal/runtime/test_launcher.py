@@ -4667,8 +4667,11 @@ async def test_launch_preserves_missing_instruction_ref_without_jira_skill(
 
 
 @pytest.mark.asyncio
-async def test_launch_skips_skill_projection_when_no_snapshot_ref(tmp_path, monkeypatch):
-    """Without ``resolved_skillset_ref`` the launcher leaves instruction_ref alone."""
+@pytest.mark.parametrize("remediation", [False, True])
+async def test_launch_skips_skill_projection_when_no_snapshot_ref(
+    tmp_path, monkeypatch, remediation
+):
+    """Skip Skill projection while retaining admitted remediation context."""
 
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -4682,6 +4685,21 @@ async def test_launch_skips_skill_projection_when_no_snapshot_ref(tmp_path, monk
         runtime_id="claude_code", command_template=["claude", "-p"]
     )
     request = _make_request(instruction_ref="Plain task")
+    if remediation:
+        request.parameters = {
+            "metadata": {
+                "moonmind": {
+                    "remediationCadence": {
+                        "cadence": "attempt_scoped_remediation_verification",
+                        "role": "moonspec-remediation",
+                        "attempt": 3,
+                        "maxAttempts": 6,
+                    }
+                }
+            },
+            "remediationLoopId": "repair-profile-list",
+            "remediationWorkspaceHeadRef": "artifact://candidate/C2",
+        }
     workspace = tmp_path / "workspaces" / "run-no-snap" / "repo"
     workspace.mkdir(parents=True)
 
@@ -4727,7 +4745,18 @@ async def test_launch_skips_skill_projection_when_no_snapshot_ref(tmp_path, monk
     await process.wait()
 
     prompt_args = [arg for arg in captured_args if isinstance(arg, str)]
-    assert "Plain task" in prompt_args
+    if remediation:
+        marker = "MoonMind remediation attempt context (JSON):\n"
+        matching_prompts = [arg for arg in prompt_args if marker in arg]
+        assert len(matching_prompts) == 1
+        prompt = matching_prompts[0]
+        context, _ = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1])
+        assert context["attempt"] == 3
+        assert context["maxAttempts"] == 6
+        assert context["remediationWorkspaceHeadRef"] == "artifact://candidate/C2"
+        assert "Plain task" in prompt
+    else:
+        assert "Plain task" in prompt_args
     assert not any(
         "Active MoonMind skill snapshot:" in arg for arg in prompt_args
     )

@@ -276,20 +276,15 @@ assessment requirements verification map; fill missing historical entries from
 visible source requirements before executing checks. Never change acceptance
 scope to fit the available environment.
 
-Prerequisite preparation has at most two authorized setup attempts per owning
-service and candidate. Persist readiness, setup actions, failures and resume
-commands with the inventory; continuation preserves this budget. Use available
-repository and managed container capabilities before declaring a dependency
-unavailable. A verification infrastructure failure preserves the same saved
-candidate. Request evidence retry only when an authorized setup attempt remains
-or a concrete environment or authority change allows a controlling check to
-obtain different evidence without another setup attempt. An exhausted setup
-budget remains exhausted across continuation. If the prerequisite is unchanged
-and no authorized recovery action remains, follow the Continuation Decision
-rules to return `blocked`, or `needs_human` only for an actual human-owned
-authority decision. A demonstrated code defect requests remediation. Missing
-authority names the actual granting owner. These outcomes must not be conflated
-or consume each other's budgets.
+Apply the acceptance policy's setup recovery and attempt accounting. Persist
+readiness, setup actions, original errors, and resume commands with the inventory;
+reuse supplied history and honor the owning workflow's limits. Missing historical
+setup records do not establish exhausted attempts or prevent safe repository
+fixes. Use available repository and managed container capabilities before
+classifying a controlling dependency as unavailable. Preserve the same saved
+candidate on infrastructure failures and distinguish evidence retry from code
+remediation. Do not repeat an unchanged rejected setup. Browser tooling follows
+the browser-independent defaults below and is never an implicit prerequisite.
 
 Inspect production code before tests so behavior is verified directly.
 
@@ -331,6 +326,23 @@ invalid verification evidence. A missing host-local runner does not make a
 test unavailable while the documented delegated capability exists. If that
 capability is missing or rejects the job, preserve its explicit evidence and
 classify the environment according to `AGENTS.md`.
+
+### Browser-independent verification
+
+Apply the acceptance policy's browser-independent defaults in every mode. Browser
+checks are optional diagnostics unless the caller explicitly requires a browser
+acceptance gate for this verification run. Missing browsers, Playwright, browser
+installation, screenshots, live UI access, or human visual review must never
+block the default verifier or fail its workflow. Record unavailable browser
+checks as advisory `NOT RUN`; do not put them in Remaining Work or choose a
+non-passing verdict or stop action solely for that reason.
+
+Use executed server/API, client-contract, component, and other non-browser
+integration checks to prove the same requested behavior across its real
+producers and consumers. Reuse valid candidate-bound evidence where available.
+Keep functional defects and missing controlling non-browser evidence actionable;
+passing unit helpers alone do not prove an end-to-end requirement. Describe
+visual diagnostic limits honestly without requiring a browser to close them.
 
 ### Discover Docker Test Options
 

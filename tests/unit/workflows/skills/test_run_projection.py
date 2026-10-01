@@ -22,6 +22,7 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.workflows.skills.run_projection import (
     SkillProjectionError,
+    append_remediation_attempt_context,
     build_skill_activation_summary,
     load_resolved_skillset,
     materialize_run_skill_snapshot,
@@ -559,3 +560,64 @@ async def test_load_resolved_skillset_wraps_artifact_errors() -> None:
 
     with pytest.raises(SkillProjectionError, match="failed to read"):
         await load_resolved_skillset(_BrokenArtifactService(), "bad-ref")
+
+
+def test_continued_prompt_replaces_old_attempt_context():
+    parameters = {
+        "metadata": {
+            "moonmind": {
+                "remediationCadence": {
+                    "role": "moonspec-remediation",
+                    "attempt": 1,
+                    "maxAttempts": 6,
+                }
+            }
+        },
+        "remediationLoopId": "repair-profile-list",
+        "remediationWorkspaceHeadRef": "artifact://candidate/C0",
+        "privateSetting": "must not be projected",
+    }
+    first = append_remediation_attempt_context("Fix the gaps.", parameters=parameters)
+    parameters["metadata"]["moonmind"]["remediationCadence"]["attempt"] = 2
+    parameters["remediationWorkspaceHeadRef"] = "artifact://candidate/C1"
+    updated = append_remediation_attempt_context(first, parameters=parameters)
+    marker = "MoonMind remediation attempt context (JSON):\n"
+    assert updated.count(marker) == 1
+    context, _ = json.JSONDecoder().raw_decode(updated.split(marker, 1)[1])
+    assert context["attempt"] == 2
+    assert context["remediationWorkspaceHeadRef"] == "artifact://candidate/C1"
+    assert "must not be projected" not in updated
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        None,
+        {},
+        {"metadata": None},
+        {"metadata": {"moonmind": {"remediationCadence": {"role": []}}}},
+        {"metadata": {"moonmind": {"remediationCadence": {"role": {}}}}},
+    ],
+)
+def test_absent_attempt_metadata_preserves_instruction(parameters):
+    assert (
+        append_remediation_attempt_context("Fix the gaps.", parameters=parameters)
+        == "Fix the gaps."
+    )
+
+
+def test_partial_attempt_metadata_does_not_invent_budget_or_history():
+    parameters = {
+        "metadata": {
+            "moonmind": {
+                "remediationCadence": {
+                    "role": "moonspec-remediation",
+                    "attempt": 1,
+                }
+            }
+        }
+    }
+    result = append_remediation_attempt_context("Fix the gaps.", parameters=parameters)
+    marker = "MoonMind remediation attempt context (JSON):\n"
+    context = json.loads(result.split(marker, 1)[1])
+    assert context == {"role": "moonspec-remediation", "attempt": 1}

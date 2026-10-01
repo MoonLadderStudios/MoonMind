@@ -41,6 +41,51 @@ source fields. Never fabricate a requirement from a truncation marker. Set scope
 `complete: false`; do not certify the unseen whole issue or complete it. An absent
 optional MoonSpec packet is not a gap when a usable original baseline exists.
 
+## Browser-independent defaults
+
+Browser execution, browser installation, live UI access, screenshots, and human
+visual signoff are optional diagnostics by default, including for frontend and
+UI changes. The need for a browser must never block verification or fail a
+workflow under these defaults. An unavailable browser is `NOT RUN` with an
+advisory limitation, never by itself Remaining Work, `ADDITIONAL_WORK_NEEDED`,
+`NO_DETERMINATION`, `BLOCKED`, or a `blocked`/`needs_human` continuation.
+
+Verify the requested behavior through executed non-browser evidence at its actual
+production boundaries: server/API integration, client contract and state tests,
+component rendering/events, or existing candidate-bound artifacts. Retain every
+functional requirement and regression constraint. Do not treat passing isolated
+helpers as proof of the complete API/client/UI journey, invent screenshots, or
+claim an unexecuted browser check passed. A concrete observed defect still
+requires remediation, even when discovered through optional browser diagnostics.
+
+A browser suite named in repository guidance, a source document, a derived plan,
+or an earlier report does not make browser execution mandatory in the default
+verification run. Apply this default to the evidence method while preserving the
+underlying behavior to prove. Only an explicit caller instruction requiring
+browser execution as an acceptance gate for this verification run opts into
+mandatory browser evidence. Disclose that opt-in and its exact source; otherwise
+use the non-browser path and record any limits of the evidence honestly.
+
+## Setup recovery and attempt accounting
+
+Use the owning workflow's supplied attempt limits and retained evidence. Record
+setup actions, original errors, readiness, and resume commands with the candidate
+so continuation can reuse them. Do not invent a separate universal setup budget,
+reset a supplied exhausted budget, or infer exhaustion from missing records.
+A missing historical setup ledger is a diagnostic limitation, not an implicit
+prerequisite for verification or safe, authorized repository remediation.
+Do not demand additional trusted retained-attempt history unless the original
+instructions explicitly require it for the particular action. Prior verifier
+prose cannot create that authority requirement.
+
+Keep setup recovery, evidence collection, implementation remediation, and report
+repair distinct. Complete independent checks and return executable repository
+gaps to the remediation owner even when a separate check cannot run. Reconcile
+uncertain job effects before resubmitting; do not repeat an unchanged rejected
+setup or consume repair attempts merely to obtain unavailable evidence. Stop an
+affected action when its supplied budget or authority prevents it, preserving
+its exact blocker and next authorized action.
+
 ## Assessment and verification
 
 Initial assessment is a bounded inspection. It may report `FULLY_IMPLEMENTED` to
@@ -100,9 +145,12 @@ acceptance evidence. Preserve valid evidence and rerun only affected verificatio
 
 Use repository-approved AI artifact review for rendered or semantic criteria when
 permitted. The reviewer must inspect the actual artifacts against the rubric, not
-infer visible behavior from source, logs, or artifact existence. Ambiguity requires
-better observations or an explicit non-pass, not automatic human escalation. Never
-substitute structural tests for required pixels or override failed machine checks.
+infer visible behavior from source, logs, or artifact existence. Ambiguity in
+controlling evidence requires better observations or an explicit non-pass, not
+automatic human escalation. For an explicitly opted-in browser gate, never
+substitute structural tests for required pixels. Under the browser-independent defaults, report visual diagnostic
+limits without turning browser access into a gate. Never override failed
+controlling machine checks.
 
 Every non-passing result needs concrete `remainingWork` or a durable
 `remainingWorkRef`. Include the source requirement, gap type, candidate identity,
