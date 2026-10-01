@@ -145,6 +145,10 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "org/repo"
+    workflow._runtime_inheritance_parameters = {
+        "targetRuntime": "codex_cli",
+        "profileId": "codex_openai_oauth",
+    }
     captured: list[tuple[str, Any, dict[str, Any]]] = []
 
     async def fake_execute_activity(
@@ -254,6 +258,12 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
         call for call in tool_calls if call[1]["invocation_payload"]["id"] == "consume"
     )
     assert consume_call[1]["invocation_payload"]["inputs"]["ticket"] == "MM-1"
+    # Tools see the run's provider selection, e.g. so issue search can check
+    # the profile's capacity before claiming work the run cannot start.
+    assert consume_call[1]["context"]["runtime_selection"] == {
+        "targetRuntime": "codex_cli",
+        "profileId": "codex_openai_oauth",
+    }
 
 
 @pytest.mark.asyncio

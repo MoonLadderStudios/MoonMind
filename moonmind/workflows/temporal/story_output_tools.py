@@ -5213,6 +5213,98 @@ async def load_github_issue_preset_brief(
         "error": "Three candidates changed before announcement; selection retry budget exhausted."})
 
 
+_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS = 2.0
+
+
+async def _provider_profile_manager_state(runtime_id: str) -> Mapping[str, Any] | None:
+    """Query the runtime's ProviderProfileManager; ``None`` when unobservable."""
+    import asyncio
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        workflow_id_for_runtime,
+    )
+
+    client = await TemporalClientAdapter().get_client()
+    state = await asyncio.wait_for(
+        client.get_workflow_handle(workflow_id_for_runtime(runtime_id)).query(
+            "get_state"
+        ),
+        timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
+    )
+    return state if isinstance(state, Mapping) else None
+
+
+def _profile_has_free_slot(profile: Any, now: datetime) -> bool | None:
+    """Whether a profile can grant a slot now; ``None`` when not observable."""
+    from moonmind.workflows.temporal.github_issue_claim_lease import parse_time
+
+    if not isinstance(profile, Mapping):
+        return None
+    leases = profile.get("current_leases")
+    capacity = profile.get("effective_capacity", profile.get("max_parallel_runs"))
+    if not isinstance(leases, list) or type(capacity) is not int:
+        return None
+    cooldown = parse_time(_string(profile.get("cooldown_until")))
+    if cooldown is not None and cooldown > now:
+        return False
+    return len(leases) < capacity
+
+
+async def _local_capacity_deferral(
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Idle evidence when the run's provider profile observably has no free slot.
+
+    Claiming an issue this deployment cannot start only announces, waits, and
+    backs off with ``ISSUE_CLAIM_CAPACITY_BLOCKED``. The run's own runtime
+    selection names the profile its agent steps will request. Unknown
+    capacity is not saturation: selection proceeds and admission keeps its
+    existing backoff, which also covers a slot taken after this check.
+    """
+    selection = _mapping((context or {}).get("runtime_selection"))
+    runtime_id = _string(selection.get("targetRuntime"))
+    if not runtime_id:
+        return None
+    try:
+        state = await _provider_profile_manager_state(runtime_id)
+    except Exception:  # noqa: BLE001 - an unobservable manager is not saturation
+        return None
+    profiles = _mapping((state or {}).get("profiles"))
+    profile_ref = _string(selection.get("profileId"))
+    if profile_ref:
+        candidates = {profile_ref: profiles.get(profile_ref)}
+    else:
+        candidates = {
+            key: profile
+            for key, profile in profiles.items()
+            if isinstance(profile, Mapping) and profile.get("enabled") is not False
+        }
+    now = datetime.now(timezone.utc)
+    availability = [_profile_has_free_slot(profile, now) for profile in candidates.values()]
+    if not availability or any(free is not False for free in availability):
+        return None
+    in_use = sum(len(profile["current_leases"]) for profile in candidates.values())
+    pending = (state or {}).get("pending_requests")
+    queued = len(pending) if isinstance(pending, list) else 0
+    names = sorted(candidates)
+    return {
+        "disposition": "idle",
+        "reasonCode": "local_capacity_unavailable",
+        "summary": (
+            f"Search deferred: provider profile {', '.join(names)} for {runtime_id} "
+            f"has no free slot ({in_use} in use, {queued} queued). No issue was "
+            "claimed; a later run selects once capacity frees."
+        ),
+        "capacityEvidence": {
+            "runtimeId": runtime_id,
+            "profileIds": names,
+            "slotsInUse": in_use,
+            "queuedRequests": queued,
+        },
+    }
+
+
 async def _load_github_issue_preset_brief(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -5256,6 +5348,13 @@ async def _load_github_issue_preset_brief(
 
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
+        deferral = await _local_capacity_deferral(_context)
+        if deferral is not None:
+            return ToolResult(
+                status="COMPLETED",
+                outputs={"repository": repository, **deferral},
+                completion_disposition="idle",
+            )
         # A recovery candidate without usable handoff evidence would fail
         # deterministically at the start transition (it requires
         # predecessor_stopped plus handoff_usable); the routed handoff above
