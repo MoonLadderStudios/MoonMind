@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -1051,6 +1052,8 @@ def test_stop_all_new_omnigent_work_never_substitutes_another_runtime(monkeypatc
 
 
 _DURABLE_SKILL_NAME = "batch-pr-resolver"
+#: ``agent_skill.resolve`` writes the snapshot; the gateway under test only reads.
+_SNAPSHOT_PRODUCER_PRINCIPAL = "agent_workflow"
 
 
 def _durable_skill_payload(name: str) -> bytes:
@@ -1112,41 +1115,81 @@ def _durable_skill_snapshot_request(plan):
     )
 
 
-async def _write_durable_skill_snapshot(gateway, request) -> str:
-    """Persist a Skill and its resolved snapshot as durable ``art_...`` artifacts."""
+async def _write_durable_skill_snapshot(
+    session_factory, workflow_id: str, run_id: str
+) -> str:
+    """Persist a Skill snapshot the way ``agent_skill.resolve`` produces one.
 
-    skill_ref = await gateway.write_bytes(
-        request=request,
-        name="skill-batch-pr-resolver.md",
-        payload=_durable_skill_payload(_DURABLE_SKILL_NAME),
-        link_type="input.skill_content",
-        content_type="text/markdown",
+    ``AgentSkillsActivities`` writes under ``agent_workflow`` and links the
+    artifact to the executing execution. The reader under test must therefore
+    resolve a snapshot it does not own, or the test would pass on self-ownership
+    alone and never exercise the ref resolution this PR fixes.
+    """
+
+    from moonmind.workflows.temporal.artifacts import (
+        ExecutionRef,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
     )
-    return await gateway.write_json(
-        request=request,
-        name="resolved-skills.json",
-        payload={
-            "snapshot_id": "skillset_codex_durable",
-            "deployment_id": "test-deployment",
-            "resolved_at": datetime.now(tz=UTC).isoformat(),
-            "skills": [
-                {
-                    "skill_name": _DURABLE_SKILL_NAME,
-                    "content_ref": skill_ref,
-                    "content_digest": "sha256:"
-                    + hashlib.sha256(
-                        _durable_skill_payload(_DURABLE_SKILL_NAME)
-                    ).hexdigest(),
-                    "format": "markdown",
-                    "provenance": {
-                        "source_kind": "built_in",
-                        "source_path": "/app/.agents/skills/batch-pr-resolver",
-                    },
-                }
-            ],
-        },
-        link_type="input.skill_snapshot",
-    )
+
+    async with session_factory() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        body = _durable_skill_payload(_DURABLE_SKILL_NAME)
+        skill, _upload = await service.create(
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            content_type="text/markdown",
+            size_bytes=len(body),
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="input.agent_skill_body",
+            ),
+        )
+        await service.write_complete(
+            artifact_id=skill.artifact_id,
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            payload=body,
+            content_type="text/markdown",
+        )
+        snapshot_payload = json.dumps(
+            {
+                "snapshot_id": "skillset_codex_durable",
+                "deployment_id": workflow_id,
+                "resolved_at": datetime.now(tz=UTC).isoformat(),
+                "skills": [
+                    {
+                        "skill_name": _DURABLE_SKILL_NAME,
+                        "content_ref": skill.artifact_id,
+                        "content_digest": "sha256:" + hashlib.sha256(body).hexdigest(),
+                        "format": "markdown",
+                        "provenance": {
+                            "source_kind": "built_in",
+                            "source_path": "/app/.agents/skills/batch-pr-resolver",
+                        },
+                    }
+                ],
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        snapshot, _snapshot_upload = await service.create(
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            content_type="application/json",
+            size_bytes=len(snapshot_payload),
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="input.skill_snapshot",
+            ),
+        )
+        await service.write_complete(
+            artifact_id=snapshot.artifact_id,
+            principal=_SNAPSHOT_PRODUCER_PRINCIPAL,
+            payload=snapshot_payload,
+            content_type="application/json",
+        )
+    return snapshot.artifact_id
 
 
 @pytest.mark.asyncio
@@ -1172,8 +1215,12 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
     plan = compile_execution_plan(**_codex_plan_inputs())
     request = _durable_skill_snapshot_request(plan)
     durable_gateway = TemporalOmnigentArtifactGateway(durable_artifact_storage)
-    skillset_ref = await _write_durable_skill_snapshot(durable_gateway, request)
-    assert skillset_ref.startswith("artifact:art_")
+    skillset_ref = await _write_durable_skill_snapshot(
+        durable_artifact_storage,
+        request.correlation_id,
+        "run-codex-skill",
+    )
+    assert skillset_ref.startswith("art_")
 
     installed: dict[str, Any] = {}
 
@@ -1255,12 +1302,12 @@ async def test_production_composition_installs_the_durable_artifact_gateway(
         _RecordingCoordinator,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.client.TemporalClientAdapter", lambda: object()
+        "moonmind.workflows.temporal.client.TemporalClientAdapter", object
     )
     monkeypatch.setattr(
         "moonmind.repositories.lore_runtime."
         "build_lore_repository_adapter_from_environment",
-        lambda: object(),
+        object,
     )
 
     plan = compile_execution_plan(**_codex_plan_inputs())
