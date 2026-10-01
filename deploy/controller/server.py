@@ -32,6 +32,9 @@ LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
 # The deployment checkout bootstrap mounts read-only at its host path.
 TARGET_REPO_ENV = "MOONMIND_CONTROLLER_TARGET_REPO"
+# The MoonMind Compose project bootstrap recorded in the controller identity
+# (--target-project, COMPOSE_PROJECT_NAME, or the checkout name).
+TARGET_PROJECT_ENV = "MOONMIND_CONTROLLER_TARGET_PROJECT"
 TARGET_CONFIG_TIMEOUT_SECONDS = 120
 # The Docker transport substrate is never recreated through an update, the
 # same exclusion the host entrypoint applies to its explicit target.
@@ -400,12 +403,15 @@ def _compose_files_for_repo(repo: str, env: dict) -> list:
     return files
 
 
-def default_target(stack: str, *, repo: str, runner=None) -> dict:
+def default_target(
+    stack: str, *, repo: str, recorded_project: str = "", runner=None
+) -> dict:
     """Derive the Compose target from the mounted deployment checkout.
 
     Callers without host knowledge (Settings Operations) submit only the
     stack and image; the controller reads what the deployment already
-    determines: ``COMPOSE_FILE``/``COMPOSE_PROJECT_NAME`` from the
+    determines: the Compose project bootstrap recorded for the deployment
+    (else ``COMPOSE_PROJECT_NAME``), ``COMPOSE_FILE`` from the
     deployment-owned ``.env`` (else ``docker-compose.yaml`` plus its
     override), and the services Compose renders for that selection, minus
     the Docker transport substrate.
@@ -415,7 +421,9 @@ def default_target(stack: str, *, repo: str, runner=None) -> dict:
     env_path = os.path.join(repo, ".env")
     env = read_env_file(env_path)
     files = _compose_files_for_repo(repo, env)
-    project = str(env.get("COMPOSE_PROJECT_NAME") or stack).strip()
+    project = str(
+        recorded_project or env.get("COMPOSE_PROJECT_NAME") or stack
+    ).strip()
     if not _SAFE_NAME_RE.match(project):
         raise ValueError(f"unsafe Compose project name: {project!r}")
     env_files = [env_path] if os.path.isfile(env_path) else None
@@ -462,7 +470,11 @@ def default_target(stack: str, *, repo: str, runner=None) -> dict:
 
 
 def production_target_resolver(stack: str) -> dict:
-    return default_target(stack, repo=os.environ.get(TARGET_REPO_ENV, ""))
+    return default_target(
+        stack,
+        repo=os.environ.get(TARGET_REPO_ENV, ""),
+        recorded_project=os.environ.get(TARGET_PROJECT_ENV, ""),
+    )
 
 
 def _apply_with_bounded_retries(
@@ -724,7 +736,7 @@ def build_app(
                     try:
                         store.begin_retry(operation_id)
                     except RuntimeError:
-                        # Constant body: retry-budget internals never reach the response.
+                        # Constant body: refusal reasons (status, budget) never reach the response.
                         return _json_response(start_response, "409 Conflict", {"error": "operation cannot be retried in its current state"})
                 operation = _apply_recording_failure(
                     store, operation_id, run_apply
@@ -945,6 +957,7 @@ def _verify_applied_release(
     target = operation.get("target") or {}
     services = tuple(target.get("services", ()))
     operation_id = operation["operationId"]
+    completed_services: list = []
     try:
         base = engine.compose_base(
             project=project,
@@ -954,6 +967,7 @@ def _verify_applied_release(
         )
         observed = engine.observe_services(runner, base, services)
         services_running = observed["services"]
+        completed_services = list(observed.get("completed") or ())
     except Exception as exc:
         store.record_verification(
             operation_id,
@@ -985,6 +999,7 @@ def _verify_applied_release(
         services_running=services_running,
         dispatch_ok=dispatch_ok,
         operator_access=operator_access or None,
+        completed_services=completed_services,
     )
     recorded = list(result["checks"])
     if dispatch_probe is None:

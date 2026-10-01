@@ -72,6 +72,39 @@ def test_explicit_retry_starts_fresh_attempt_with_history_retained(
     assert len(store.load(op["operationId"])["attempts"]) == record.MAX_AUTO_ATTEMPTS + 1
 
 
+def test_retry_is_refused_for_every_non_failed_status(controller_path, tmp_path):
+    import pytest
+
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    op = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:abc",
+        source_revision="abc123",
+    )
+    with pytest.raises(RuntimeError):
+        store.begin_retry(op["operationId"])  # pending: owned by a writer
+    store.supersede(op["operationId"], reason="newer target")
+    with pytest.raises(RuntimeError):
+        store.begin_retry(op["operationId"])  # superseded: stale intent
+    loaded = store.load(op["operationId"])
+    assert (loaded["status"], loaded["attemptGroup"]) == ("superseded", 1)
+
+    done = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app@sha256:def",
+        source_revision="def456",
+    )
+    store.confirm_installed(done["operationId"], image="ghcr.io/org/app@sha256:def")
+    with pytest.raises(RuntimeError):
+        store.begin_retry(done["operationId"])  # succeeded: already installed
+    store.record_verification(done["operationId"], name="service:api", status="failed")
+    with pytest.raises(RuntimeError):
+        store.begin_retry(done["operationId"])  # partially_verified: installed
+    loaded = store.load(done["operationId"])
+    assert (loaded["status"], loaded["attemptGroup"]) == ("partially_verified", 1)
+
+
 def test_first_error_survives_later_noise(controller_path, tmp_path):
     record = _record_module(controller_path)
     store = record.OperationStore(tmp_path)

@@ -7673,7 +7673,7 @@ export interface components {
              * Evidence
              * @enum {string}
              */
-            evidence: "desired_state" | "environment" | "policy" | "unavailable";
+            evidence: "controller" | "desired_state" | "environment" | "policy" | "unavailable";
         };
         /** DeploymentImageRequest */
         DeploymentImageRequest: {

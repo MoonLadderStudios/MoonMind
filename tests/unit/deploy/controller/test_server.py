@@ -84,11 +84,13 @@ def test_submit_status_and_retry_round_trip(controller_path, tmp_path):
         )
         assert status == 200
         assert fetched["installed"]["image"] == "ghcr.io/org/app@sha256:abc"
-        status, retried = harness.call(
+        status, refused = harness.call(
             "POST", f"/v1/operations/{op_id}/retry", secret="test-secret"
         )
-        assert status == 202
-        assert retried["attemptGroup"] == 2
+        # A succeeded operation is never re-applied through Retry.
+        assert status == 409, refused
+        assert harness.applied == [op_id]
+        assert harness.store.load(op_id)["attemptGroup"] == 1
     finally:
         harness.close()
 
@@ -559,6 +561,80 @@ def test_production_apply_verifies_release_before_success(
     assert all(check["status"] == "passed" for check in loaded["verification"])
 
 
+def test_production_apply_accepts_completed_one_shot_services(
+    controller_path, tmp_path, monkeypatch
+):
+    import json as _json
+
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    target = {
+        "project": "moonmind",
+        "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api", "init-db", "codex-auth-init"],
+    }
+    op = _begin_op(record, store, target)
+
+    class _Runner:
+        def run(self, args, timeout_seconds):
+            if "ps" in args:
+                rows = [{"Service": "api", "State": "running"}]
+                if "--all" in args:  # Compose hides exited containers otherwise.
+                    rows.append({"Service": "init-db", "State": "exited", "ExitCode": 0})
+                    rows.append(
+                        {"Service": "codex-auth-init", "State": "exited", "ExitCode": 0}
+                    )
+                return {"exit": 0, "output": "\n".join(_json.dumps(r) for r in rows)}
+            return {"exit": 0, "output": "ok"}
+
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: _Runner())
+    result = server_mod.production_apply(store, op, dispatch_probe=lambda: True)
+    assert result["status"] == "succeeded", result
+    loaded = store.load(op["operationId"])
+    assert loaded["status"] == "succeeded"
+    checks = {check["name"]: check for check in loaded["verification"]}
+    assert checks["service:init-db"]["status"] == "passed"
+    assert checks["service:init-db"]["detail"] == "completed (exit 0)"
+    assert checks["service:api"]["detail"] == "running"
+
+
+def test_production_apply_still_fails_a_one_shot_that_exited_non_zero(
+    controller_path, tmp_path, monkeypatch
+):
+    import json as _json
+
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    target = {
+        "project": "moonmind",
+        "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api", "init-db"],
+    }
+    op = _begin_op(record, store, target)
+
+    class _Runner:
+        def run(self, args, timeout_seconds):
+            if "ps" in args:
+                rows = [
+                    {"Service": "api", "State": "running"},
+                    {"Service": "init-db", "State": "exited", "ExitCode": 3},
+                ]
+                return {"exit": 0, "output": "\n".join(_json.dumps(r) for r in rows)}
+            return {"exit": 0, "output": "ok"}
+
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: _Runner())
+    result = server_mod.production_apply(store, op, dispatch_probe=lambda: True)
+    assert result["status"] == "partially_verified", result
+    checks = {
+        check["name"]: check for check in store.load(op["operationId"])["verification"]
+    }
+    assert checks["service:init-db"]["status"] == "failed"
+
+
 def test_production_apply_partially_verifies_failed_operator_access(
     controller_path, tmp_path, monkeypatch
 ):
@@ -907,6 +983,29 @@ def test_default_target_is_derived_from_the_mounted_checkout(
     assert ("--env-file", str(repo / ".env")) == commands[0][
         commands[0].index("--env-file") : commands[0].index("--env-file") + 2
     ]
+
+
+def test_production_target_resolver_uses_the_recorded_target_project(
+    controller_path, tmp_path, monkeypatch
+):
+    """A `-p` deployment is updated in place, never as a parallel `moonmind`."""
+    server_mod = load("server")
+    repo = tmp_path / "moonmind-prod"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    commands = []
+
+    class _Runner:
+        def run(self, args, timeout_seconds):
+            commands.append(tuple(args))
+            return {"exit": 0, "output": "api\n"}
+
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: _Runner())
+    monkeypatch.setenv("MOONMIND_CONTROLLER_TARGET_REPO", str(repo))
+    monkeypatch.setenv("MOONMIND_CONTROLLER_TARGET_PROJECT", "my-instance")
+    target = server_mod.production_target_resolver("moonmind")
+    assert target["project"] == "my-instance"
+    assert commands[0][commands[0].index("--project-name") + 1] == "my-instance"
 
 
 def _compose_file_args(command):

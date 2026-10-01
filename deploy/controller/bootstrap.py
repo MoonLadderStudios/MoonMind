@@ -39,7 +39,6 @@ DERIVED_PORT_RANGE = 100
 # setting, and the controller joins it under a stable alias. No agent
 # service is attached, and the host keeps its loopback endpoint.
 TARGET_NETWORK_SETTING = "MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK"
-DEFAULT_TARGET_NETWORK = "moonmind_deployment-controller-network"
 TARGET_NETWORK_KEY = "deployment-controller-network"
 CONTROLLER_ALIAS = "moonmind-controller"
 
@@ -115,12 +114,16 @@ def _repo_env_value(repo: Path, key: str) -> str:
     return value
 
 
-def target_network_for_repo(repo: Path, env=None) -> str:
-    """Resolve the API link network the way Compose interpolates it."""
+def target_network_for_repo(repo: Path, env=None, project: str | None = None) -> str:
+    """Resolve the API link network the way Compose interpolates it.
+
+    An explicit setting wins; otherwise the name follows the MoonMind Compose
+    project, so independent deployments never share the controller alias.
+    """
     return (
         str((env or {}).get(TARGET_NETWORK_SETTING) or "").strip()
         or _repo_env_value(repo, TARGET_NETWORK_SETTING)
-        or DEFAULT_TARGET_NETWORK
+        or f"{project or target_project_for_repo(repo, env)}_{TARGET_NETWORK_KEY}"
     )
 
 
@@ -388,6 +391,7 @@ def render_compose_file(
     port: int = DEFAULT_PORT,
     project: str | None = None,
     target_network: str | None = None,
+    target_project: str | None = None,
 ) -> Path:
     """Render the separate controller Compose project (REQ-02).
 
@@ -403,6 +407,13 @@ def render_compose_file(
     repo_src = mounts_mod.resolve_bind_source(str(repo))
     project_name = project or project_for_repo(repo)
     path = state_dir / "controller-compose.yaml"
+    # No-target submissions update the project bootstrap recorded, so a
+    # `-p` deployment is never addressed as a parallel default project.
+    target_project_env = (
+        f'      MOONMIND_CONTROLLER_TARGET_PROJECT: "{target_project}"\n'
+        if target_project
+        else ""
+    )
     service_networks = ""
     project_networks = ""
     if target_network:
@@ -433,7 +444,7 @@ services:
       MOONMIND_CONTROLLER_PORT: "{port}"
       MOONMIND_CONTROLLER_SECRET_FILE: /var/lib/moonmind-controller/secrets/controller-bearer
       MOONMIND_CONTROLLER_TARGET_REPO: "{repo}"
-    ports:
+{target_project_env}    ports:
       - "127.0.0.1:{port}:{port}"
     volumes:
       - {state_src}:/var/lib/moonmind-controller
@@ -500,6 +511,7 @@ def cmd_install(args, env) -> int:
         port=identity["port"],
         project=identity["project"],
         target_network=identity.get("targetNetwork"),
+        target_project=identity.get("targetProject"),
     )
     print(f"Controller project rendered: {compose_file}", flush=True)
     print(f"Deployment-owned secret: {_secret_path(state_dir)}", flush=True)
@@ -569,6 +581,7 @@ def cmd_update(args, env) -> int:
             port=identity["port"],
             project=identity["project"],
             target_network=identity.get("targetNetwork"),
+            target_project=identity.get("targetProject"),
         )
         _ensure_identity_network(identity)
         code = _compose(state_dir, identity["project"], "pull", CONTROLLER_SERVICE)
@@ -605,6 +618,7 @@ def cmd_restore(args, env) -> int:
         port=identity["port"],
         project=identity["project"],
         target_network=identity.get("targetNetwork"),
+        target_project=identity.get("targetProject"),
     )
     _ensure_identity_network(identity)
     code = _compose(state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE)
@@ -647,7 +661,10 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument(
             "--target-network",
             default=None,
-            help=f"API link network (default ${TARGET_NETWORK_SETTING} or {DEFAULT_TARGET_NETWORK}).",
+            help=(
+                f"API link network (default ${TARGET_NETWORK_SETTING} or "
+                f"<target project>_{TARGET_NETWORK_KEY})."
+            ),
         )
         child.add_argument(
             "--target-project",
@@ -669,10 +686,12 @@ def main(argv=None, env=None) -> int:
     if not args.repo:
         args.repo = str(repo)
     environment = dict(os.environ) if env is None else dict(env)
-    if not args.target_network:
-        args.target_network = target_network_for_repo(repo, environment)
     if not args.target_project:
         args.target_project = target_project_for_repo(repo, environment)
+    if not args.target_network:
+        args.target_network = target_network_for_repo(
+            repo, environment, project=args.target_project
+        )
     # Only the managed marker is consulted; the rest of the host env is used.
     marker = {"MOONMIND_CONTROLLER_MANAGED": environment.get("MOONMIND_CONTROLLER_MANAGED", "")}
     commands = {
