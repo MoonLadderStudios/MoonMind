@@ -48,6 +48,7 @@ from moonmind.config.container_backend_settings import (
 from moonmind.observability.transport import SpoolLogPublisher
 from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.schemas.container_job_models import (
+    MAX_LOG_PAGE_ENTRIES,
     ArtifactCollectionStatus,
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
@@ -55,18 +56,39 @@ from moonmind.schemas.container_job_models import (
     ContainerJobArtifact,
     ContainerJobArtifactPage,
     ContainerJobBackendError,
-    ContainerJobState,
-    ContainerJobLogEntry,
-    MAX_LOG_PAGE_ENTRIES,
-    RegistryAuthorization,
     ContainerJobFailureClass,
+    ContainerJobLogEntry,
+    ContainerJobState,
     GpuObservation,
     ImageObservation,
+    RegistryAuthorization,
     ResourceLimits,
     gpu_observation,
     is_historical_shared_or_adaptive,
     legacy_fixed_successor_resources,
     require_explicit_resources,
+)
+from moonmind.schemas.workload_models import (
+    WORKLOAD_GPU_VENDORS,
+    WorkloadGpuRequest,
+    parse_size_bytes,
+)
+from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+)
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    DOCKER_FINISHED_STATES,
+    attest_docker_egress,
+    attest_docker_workload_egress,
+    bounded_denial_diagnostics,
+    denied_connection_count,
+    restricted_proxy_env,
+)
+from moonmind.security.egress_conformance_evidence import (
+    serialize_conformance_evidence,
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.container_image_acquisition import (
@@ -87,37 +109,15 @@ from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
     RegistryCredential,
     resolve_registry_pull_credentials,
 )
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    ManagedRunRecordStore,
+    resolve_managed_workspace_locator,
+)
 from moonmind.workloads.docker_launcher import structured_container_security_args
 from moonmind.workloads.gpu import (
     GpuLaunchFailureReason,
     gpu_device_request_args,
     gpu_launch_refusal,
-)
-from moonmind.security.egress import (
-    DEFAULT_EGRESS_PROFILE,
-    DOCKER_FINISHED_STATES,
-    attest_docker_workload_egress,
-    bounded_denial_diagnostics,
-    denied_connection_count,
-    attest_docker_egress,
-    restricted_proxy_env,
-)
-from moonmind.security.egress_conformance_evidence import (
-    serialize_conformance_evidence,
-)
-from moonmind.schemas.workload_models import (
-    WORKLOAD_GPU_VENDORS,
-    WorkloadGpuRequest,
-    parse_size_bytes,
-)
-from moonmind.schemas.workspace_locator_models import (
-    ExternalStateLocator,
-    ManagedWorkspaceLocator,
-    SandboxWorkspaceLocator,
-)
-from moonmind.workflows.temporal.runtime.workspace_locators import (
-    ManagedRunRecordStore,
-    resolve_managed_workspace_locator,
 )
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
@@ -520,6 +520,7 @@ class DockerContainerJobBackend:
         self._docker_host = docker_host or self._settings.endpoint
         self._backend_ref = backend_ref
         self._runner = command_runner or self._run
+        self._uses_default_runner = command_runner is None
         self._publish = evidence_publisher
         self._write_projection = projection_writer
         self._resolve_registry_auth = (
@@ -556,21 +557,23 @@ class DockerContainerJobBackend:
         # container itself sees at /workspace). When unset, live logging is a
         # no-op and only the durable terminal artifacts are produced.
         self._log_spool_root = (
-            Path(log_spool_root).resolve()
-            if log_spool_root is not None
-            else None
+            Path(log_spool_root).resolve() if log_spool_root is not None else None
         )
         self._live_log_max_events = max(0, int(live_log_max_events))
 
     # ------------------------------------------------------------------ helpers
 
-    async def _run(self, args: Sequence[str]) -> tuple[int, bytes, bytes]:
+    async def _run(
+        self, args: Sequence[str], *, on_output=None
+    ) -> tuple[int, bytes, bytes]:
         env = os.environ.copy()
         if self._docker_host:
             env["DOCKER_HOST"] = self._docker_host
         return await run_runtime_command(
             (self._docker_binary, *args),
             env=env,
+            on_output=on_output,
+            output_limit_bytes=_PULL_DIAGNOSTICS_MAX_BYTES if on_output else None,
         )
 
     async def _checked(self, *args: str) -> str:
@@ -1177,15 +1180,56 @@ class DockerContainerJobBackend:
         """
 
         started = time.monotonic()
-        argv = ("pull", image) if auth_dir is None else ("--config", str(auth_dir), "pull", image)
-        code, stdout, stderr = await self._runner(argv)
+        argv = (
+            ("pull", image)
+            if auth_dir is None
+            else ("--config", str(auth_dir), "pull", image)
+        )
+        tails = {"stdout": b"", "stderr": b""}
+        diagnostics_ref = None
+        last_publish_at = None
+
+        async def publish_progress() -> None:
+            nonlocal diagnostics_ref, last_publish_at
+            ref = await self._publish_pull_diagnostics(
+                request, tails["stdout"], tails["stderr"]
+            )
+            last_publish_at = time.monotonic()
+            if ref is not None:
+                diagnostics_ref = ref
+                request.logs_ref = ref
+                if self._write_projection is not None:
+                    try:
+                        await self._write_projection(request)
+                    except Exception:
+                        # A stale live projection is auxiliary; it must never
+                        # interrupt or reclassify the pull itself.
+                        pass
+
+        async def on_output(stream: str, line: bytes) -> None:
+            safe = _redact(line.decode(errors="replace"), secrets).encode()
+            tails[stream] = (tails[stream] + safe)[-_PULL_DIAGNOSTICS_MAX_BYTES:]
+            if last_publish_at is None or time.monotonic() - last_publish_at >= 15:
+                await publish_progress()
+
+        if self._uses_default_runner:
+            try:
+                code, stdout, stderr = await self._run(argv, on_output=on_output)
+            finally:
+                # Cancellation kills the CLI through the shared runner; retain
+                # the last safe output before the Activity releases ownership.
+                if any(tails.values()):
+                    await publish_progress()
+        else:
+            code, stdout, stderr = await self._runner(argv)
         duration_ms = int((time.monotonic() - started) * 1000)
         if secrets:
             stdout = _redact(stdout.decode(errors="replace"), secrets).encode()
             stderr = _redact(stderr.decode(errors="replace"), secrets).encode()
-        diagnostics_ref = await self._publish_pull_diagnostics(
-            request, stdout, stderr
-        )
+        if not self._uses_default_runner:
+            diagnostics_ref = await self._publish_pull_diagnostics(
+                request, stdout, stderr
+            )
         if code:
             failure = classify_pull_failure(stderr.decode(errors="replace"))
             detail = f"docker pull failed for the requested image ({failure.value})"

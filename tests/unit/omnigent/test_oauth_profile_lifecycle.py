@@ -3903,6 +3903,7 @@ async def _drive_authority_chain_coordinator(
     publication: dict | None = None,
     completion_evidence: list[dict] | None = None,
     request_parameters: dict | None = None,
+    session_interruption: bool = True,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -4092,6 +4093,7 @@ async def _drive_authority_chain_coordinator(
         document["host"]["mode"] = "on_demand_docker"
         document["host"]["backendRef"] = "container-backend"
         document["session"]["cleanup"] = "remove"
+        document["session"]["interruption"] = session_interruption
         return compile_policy_snapshot(
             policy_id="codex-on-demand",
             version=1,
@@ -4365,7 +4367,10 @@ async def test_no_commit_publication_rejects_remote_head_mismatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_coordinator_continues_same_session_until_terminal_answer() -> None:
+@pytest.mark.parametrize("session_interruption", [True, False])
+async def test_coordinator_continues_same_session_until_terminal_answer(
+    session_interruption,
+) -> None:
     """A tool-output-only turn is continued before any branch is published."""
 
     runner_calls: list[tuple[str, dict]] = []
@@ -4392,11 +4397,10 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
         "terminalAssistantAfterWork": True,
     }
 
-    ordered, _authority, metadata, result = (
-        await _drive_authority_chain_coordinator(
-            execute,
-            completion_evidence=[incomplete, complete],
-        )
+    ordered, _authority, metadata, result = await _drive_authority_chain_coordinator(
+        execute,
+        completion_evidence=[incomplete, complete],
+        session_interruption=session_interruption,
     )
 
     assert result.failure_class is None
@@ -4408,6 +4412,10 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert "Continue the current task" in runner_calls[1][1]["first_message_text"]
     assert runner_calls[1][1]["defer_bridge_terminal"] is True
     assert all(call[1]["allow_same_session_continuation"] is True for call in runner_calls)
+    assert all(
+        call[1].get("allow_stall_interruption") is session_interruption
+        for call in runner_calls
+    )
     assert "repository_continuation_1" in ordered
     checkpoint = metadata["omnigentCheckpointCapture"]
     assert checkpoint["bridgeSessionId"] == "bridge-2"

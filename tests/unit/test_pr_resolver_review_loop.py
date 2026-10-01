@@ -452,8 +452,14 @@ def test_historical_resolver_keeps_recorded_remediation_order():
 
 @pytest.mark.parametrize("inventory_available", [True, False])
 @pytest.mark.parametrize("head_changed", [False, True])
+@pytest.mark.parametrize("statuses_available", [True, False])
 def test_snapshot_collects_findings_after_review_completion(
-    snapshot_module, monkeypatch, tmp_path, inventory_available, head_changed
+    snapshot_module,
+    monkeypatch,
+    tmp_path,
+    inventory_available,
+    head_changed,
+    statuses_available,
 ):
     main = snapshot_module["main"]
     scope = main.__globals__
@@ -476,6 +482,11 @@ def test_snapshot_collects_findings_after_review_completion(
     monkeypatch.setitem(scope, "fetch_pr_data", fetch_pr)
     monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
     monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
+    monkeypatch.setitem(
+        scope,
+        "_fetch_commit_statuses",
+        lambda **_kwargs: [] if statuses_available else None,
+    )
     monkeypatch.setitem(scope, "_fetch_previous_commit_sha", lambda **_kwargs: None)
     monkeypatch.setitem(
         scope, "_fetch_head_commit_timestamp", lambda **_kwargs: HEAD_COMMITTED_AT
@@ -543,7 +554,11 @@ def test_snapshot_collects_findings_after_review_completion(
     decision = classify_snapshot(normalize_portable_snapshot(captured))
     if inventory_available:
         assert captured["commentsSummary"]["actionableCommentIds"] == [51]
-        assert decision.remediation_skill == "fix-comments"
+        if statuses_available:
+            assert decision.remediation_skill == "fix-comments"
+        else:
+            assert decision.reason_code == "ci_signal_degraded"
+            assert "head_statuses_unavailable" in captured["ci"]["degradedReasons"]
     else:
         assert decision.reason_code == "comments_unavailable"
 

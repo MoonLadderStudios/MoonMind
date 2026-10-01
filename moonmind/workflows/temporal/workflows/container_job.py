@@ -33,6 +33,7 @@ CONTAINER_JOB_TERMINAL_ROOT_CAUSE_MESSAGE_PATCH = (
     "container-job-terminal-root-cause-message-v1"
 )
 CONTAINER_JOB_CAPACITY_WAIT_PATCH = "container-job-shared-capacity-wait-v1"
+CONTAINER_JOB_IMAGE_PULL_BUDGET_PATCH = "container-job-image-pull-budget-v1"
 
 
 def _workflow_patch_enabled(patch_id: str) -> bool:
@@ -75,16 +76,22 @@ class MoonMindContainerJobWorkflow:
         route = CATALOG.resolve_activity(name)
         start_to_close_seconds = route.timeouts.start_to_close_seconds
         schedule_to_close_seconds = route.timeouts.schedule_to_close_seconds
-        if (
+        if name == "container_job.acquire_image" and _workflow_patch_enabled(
+            CONTAINER_JOB_IMAGE_PULL_BUDGET_PATCH
+        ):
+            # Cold pulls/builds can take longer than the requested workload.
+            # Acquisition has its own bounded window; retained histories keep
+            # their original command through the patch boundary.
+            start_to_close_seconds = 1800
+            schedule_to_close_seconds = 2100
+        elif (
             name == "container_job.acquire_image"
             and request.request.spec.image_source_ref is not None
         ):
             # Existing direct-image histories retain the original five-minute
             # command shape. New deployment-owned local recipes receive a
             # bounded build budget without changing replay for in-flight jobs.
-            start_to_close_seconds = min(
-                1800, request.request.spec.timeout_seconds
-            )
+            start_to_close_seconds = min(1800, request.request.spec.timeout_seconds)
             schedule_to_close_seconds = min(
                 2100, request.request.spec.timeout_seconds + 300
             )
@@ -92,12 +99,8 @@ class MoonMindContainerJobWorkflow:
             name,
             request.model_dump(mode="json", by_alias=True, exclude_none=True),
             task_queue=route.task_queue,
-            start_to_close_timeout=timedelta(
-                seconds=start_to_close_seconds
-            ),
-            schedule_to_close_timeout=timedelta(
-                seconds=schedule_to_close_seconds
-            ),
+            start_to_close_timeout=timedelta(seconds=start_to_close_seconds),
+            schedule_to_close_timeout=timedelta(seconds=schedule_to_close_seconds),
             retry_policy=RetryPolicy(
                 maximum_attempts=route.retries.max_attempts,
                 maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),

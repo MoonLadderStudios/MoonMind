@@ -620,6 +620,91 @@ def _fake_head_verification(
     monkeypatch.setattr(helper_module.subprocess, "run", fake_run)
 
 
+@pytest.mark.parametrize("receipt_matches", [True, False])
+def test_resolver_timeout_retains_only_this_executions_verified_push(
+    helper_module,
+    monkeypatch,
+    tmp_path,
+    receipt_matches,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "resolver-step-1")
+    result_path, snapshot_path = _review_clean_workspace(tmp_path, attempt_history=[])
+    result = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "status": "attempts_exhausted",
+        "final_reason": "timeout",
+        "mergeAutomationDisposition": "reenter_gate",
+    }
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    _fake_head_verification(helper_module, monkeypatch)
+    artifacts = tmp_path / "artifacts"
+    receipt = helper_module.write_pushed(
+        skill_id="fix-ci",
+        repo="MoonLadderStudios/MoonMind",
+        branch="feature",
+        artifacts_dir=artifacts,
+    )
+    if not receipt_matches:
+        prior = _payload(receipt)
+        prior["executionRef"] = "another-step"
+        receipt.write_text(json.dumps(prior), encoding="utf-8")
+    helper_module.from_pr_resolver_result(
+        result_path=result_path,
+        snapshot_path=snapshot_path,
+        artifacts_dir=artifacts,
+    )
+    evidence = parse_auto_publish_evidence(_payload(receipt))
+    assert evidence.pushed is receipt_matches
+    assert evidence.remote_verified is receipt_matches
+    assert evidence.merged is False
+    assert evidence.status == ("verified" if receipt_matches else "blocked")
+    assert (
+        _payload(result_path) == result
+    ), "a confirmed push must not turn an unresolved PR into success"
+
+
+def test_resolver_retains_confirmed_receipt_when_head_probe_is_unavailable(
+    helper_module,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "resolver-step-1")
+    result_path, snapshot_path = _review_clean_workspace(tmp_path, attempt_history=[])
+    result_path.write_text(
+        json.dumps(
+            {
+                "repository": "MoonLadderStudios/MoonMind",
+                "status": "blocked",
+                "final_reason": "ci_running",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _fake_head_verification(helper_module, monkeypatch)
+    artifacts = tmp_path / "artifacts"
+    receipt = helper_module.write_pushed(
+        skill_id="fix-ci",
+        repo="MoonLadderStudios/MoonMind",
+        branch="feature",
+        artifacts_dir=artifacts,
+    )
+    confirmed = receipt.read_text(encoding="utf-8")
+
+    def unavailable(*_):
+        raise helper_module.PublishEvidenceError("remote unavailable")
+
+    monkeypatch.setattr(helper_module, "_verify_exact_remote_head", unavailable)
+    helper_module.from_pr_resolver_result(
+        result_path=result_path, snapshot_path=snapshot_path, artifacts_dir=artifacts
+    )
+    assert _payload(receipt)["status"] == "blocked"
+    retained = list(artifacts.glob("publish_result.confirmed.*.json"))
+    assert len(retained) == 1
+    assert retained[0].read_text(encoding="utf-8") == confirmed
+
+
 def test_from_pr_resolver_result_review_clean_is_a_verified_no_op(
     helper_module: Any,
     monkeypatch: pytest.MonkeyPatch,

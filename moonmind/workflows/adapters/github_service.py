@@ -16,17 +16,16 @@ from typing import Any, Literal, Mapping, Optional
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from pr_resolver_core.review_providers import (
-    automated_review_provider_or_raise,
-    is_clean_review_comment,
-    normalize_reviewer_login,
-)
-
 from moonmind.workflows.provider_failures import (
     PROVIDER_ERROR_CLASS_RATE_LIMIT,
     ProviderFailureEvent,
     build_provider_failure_event,
     resolve_provider_cooldown_seconds,
+)
+from pr_resolver_core.review_providers import (
+    automated_review_provider_or_raise,
+    is_clean_review_comment,
+    normalize_reviewer_login,
 )
 
 logger = logging.getLogger(__name__)
@@ -2001,6 +2000,9 @@ class GitHubService:
                     repo=repo,
                     head_sha=observed_head_sha,
                     headers=headers,
+                    base_branch=(
+                        str(base.get("ref") or "") if isinstance(base, dict) else None
+                    ),
                 )
                 checks_complete = check_evidence["complete"]
                 checks_passing = check_evidence["passing"]
@@ -2072,24 +2074,37 @@ class GitHubService:
         repo: str,
         head_sha: str,
         headers: dict[str, str],
+        base_branch: str | None = None,
     ) -> dict[str, Any]:
+        from pr_resolver_core.github_checks import partition_commit_statuses
+
         blockers: list[dict[str, Any]] = []
+
+        async def fetch_collection(url: str, field: str) -> dict[str, Any]:
+            first = None
+            items = []
+            while url:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                if first is None:
+                    first = data
+                items.extend(data.get(field) or [])
+                url = response.links.get("next", {}).get("url")
+            return {**first, field: items}
+
         try:
-            status_response = await client.get(
-                f"https://api.github.com/repos/{repo}/commits/{head_sha}/status",
-                headers=headers,
+            status_data = await fetch_collection(
+                f"https://api.github.com/repos/{repo}/commits/{head_sha}/status?per_page=100",
+                "statuses",
             )
-            status_response.raise_for_status()
-            status_data = status_response.json()
             status_state = str(status_data.get("state") or "").lower()
             commit_statuses = status_data.get("statuses") or []
 
-            checks_response = await client.get(
-                f"https://api.github.com/repos/{repo}/commits/{head_sha}/check-runs",
-                headers=headers,
+            checks_data = await fetch_collection(
+                f"https://api.github.com/repos/{repo}/commits/{head_sha}/check-runs?filter=latest&per_page=100",
+                "check_runs",
             )
-            checks_response.raise_for_status()
-            checks_data = checks_response.json()
             check_runs = checks_data.get("check_runs") or []
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 403:
@@ -2161,6 +2176,19 @@ class GitHubService:
                 ],
             }
 
+        required_contexts = await self._required_github_check_contexts(
+            client=client,
+            repo=repo,
+            base_branch=base_branch,
+            headers=headers,
+        )
+        commit_statuses, advisory_statuses = partition_commit_statuses(
+            commit_statuses, required_contexts
+        )
+        present = {str(run.get("name") or "") for run in check_runs} | {
+            str(status.get("context") or "") for status in commit_statuses
+        }
+        missing_required = set(required_contexts or []) - present
         pending_runs = [
             run
             for run in check_runs
@@ -2174,13 +2202,20 @@ class GitHubService:
         ]
         has_commit_statuses = bool(commit_statuses)
         has_check_runs = bool(check_runs)
-        status_pending = status_state in {"pending", "expected"} and (
-            has_commit_statuses or not has_check_runs
+        status_pending = any(
+            str(status.get("state") or "").lower() in {"pending", "expected"}
+            for status in commit_statuses
         )
-        status_failed = status_state in {"failure", "error"} and (
-            has_commit_statuses or not has_check_runs
+        status_failed = any(
+            str(status.get("state") or "").lower() in {"failure", "error"}
+            for status in commit_statuses
         )
-        has_running_checks = status_pending or bool(pending_runs)
+        if required_contexts is None and not has_commit_statuses and not has_check_runs:
+            status_pending = status_state in {"pending", "expected"}
+            status_failed = status_state in {"failure", "error"}
+        has_running_checks = (
+            status_pending or bool(pending_runs) or bool(missing_required)
+        )
         has_failed_checks = status_failed or bool(failed_runs)
 
         if has_running_checks:
@@ -2206,7 +2241,41 @@ class GitHubService:
             "complete": not has_running_checks,
             "passing": not has_running_checks and not has_failed_checks,
             "blockers": blockers,
+            "advisoryStatuses": advisory_statuses,
         }
+
+    async def _required_github_check_contexts(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        base_branch: str | None,
+        headers: dict[str, str],
+    ) -> list[str] | None:
+        from urllib.parse import quote
+
+        from pr_resolver_core.github_checks import required_check_contexts
+
+        if not base_branch:
+            return None
+        branch = quote(base_branch, safe="")
+
+        async def optional_read(path: str):
+            try:
+                response = await client.get(
+                    f"https://api.github.com/repos/{repo}/{path}", headers=headers
+                )
+                response.raise_for_status()
+                return response.json()
+            except (httpx.HTTPError, ValueError):
+                return None
+
+        branch_data = await optional_read(f"branches/{branch}")
+        if isinstance(branch_data, Mapping) and branch_data.get("protected") is False:
+            return required_check_contexts(branch_data, None, None)
+        protection = await optional_read(f"branches/{branch}/protection")
+        rules = await optional_read(f"rules/branches/{branch}")
+        return required_check_contexts(branch_data, protection, rules)
 
     async def _evaluate_requested_review(
         self,

@@ -11,7 +11,7 @@ from temporalio import activity
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.activity_catalog import (
@@ -29,8 +29,11 @@ from moonmind.workflows.temporal.workflows.merge_gate import (
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from tests.integration.services.temporal.workflows.test_agent_run import (
-    MockProviderProfileManager,
     _COMMON_AGENT_RUN_ACTIVITIES,
+    MockProviderProfileManager,
+    mock_agent_runtime_fetch_result,
+    mock_agent_runtime_status,
+    mock_provider_profile_list,
 )
 from tests.unit.workflows.temporal.workflows.test_run_integration import (
     _mock_resilience_policy_envelope,
@@ -38,6 +41,55 @@ from tests.unit.workflows.temporal.workflows.test_run_integration import (
 
 
 pytestmark = [pytest.mark.integration]
+
+
+@activity.defn(name="provider_profile.list")
+async def _ready_profiles(payload: dict[str, Any]) -> dict[str, Any]:
+    from api_service.services.provider_profile_readiness import (
+        provider_profile_launch_ready_from_payload,
+    )
+    from moonmind.provider_profiles.isolation_policy import derive_isolation_policy
+
+    if (payload.get("runtime_id") or payload.get("runtimeId")) != "claude_code":
+        return {"profiles": []}
+    result = await mock_provider_profile_list(payload)
+    for profile in result["profiles"]:
+        profile.update(
+            {
+                "provider_id": "anthropic",
+                "credential_source": "secret_ref",
+                "runtime_materialization_mode": "api_key_env",
+                "auth_state": "connected",
+                "secret_refs": {"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
+            }
+        )
+        isolation = derive_isolation_policy(
+            runtime_id="claude_code",
+            provider_id="anthropic",
+            authentication_method="api_key",
+            credential_source="secret_ref",
+            runtime_materialization_mode="api_key_env",
+        )
+        profile["clear_env_keys"] = list(isolation.keys)
+        assert provider_profile_launch_ready_from_payload(profile)
+    return result
+
+
+@activity.defn(name="agent_runtime.status")
+async def _running_status(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "runId": payload.get("runId") or payload.get("run_id"),
+        "agentKind": "managed",
+        "agentId": "claude_code",
+        "status": "running",
+    }
+
+
+@activity.defn(name="agent_runtime.fetch_result")
+async def _completed_result(_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": "Harness completed; resolver evidence must determine its outcome."
+    }
 
 
 @activity.defn(name="plan.generate")
@@ -109,6 +161,39 @@ async def _record_terminal_state(_payload: Any) -> dict[str, bool]:
 
 @activity.defn(name="merge_automation.evaluate_readiness")
 async def _readiness(_payload: dict[str, Any]) -> dict[str, Any]:
+    global _ci_wait_observed
+    if _terminal_evidence_calls >= 2:
+        return {
+            "headSha": "abcdef1",
+            "ready": False,
+            "pullRequestOpen": False,
+            "pullRequestMerged": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+        }
+    if (
+        _scenario == "ci_wait"
+        and _terminal_evidence_calls == 1
+        and not _ci_wait_observed
+    ):
+        _ci_wait_observed = True
+        return {
+            "headSha": "abcdef1",
+            "ready": False,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": False,
+            "checksPassing": False,
+            "blockers": [
+                {
+                    "kind": "checks_running",
+                    "summary": "Self-hosted CI is queued",
+                    "retryable": True,
+                    "source": "github",
+                }
+            ],
+        }
     return {
         "headSha": "abcdef1",
         "ready": True,
@@ -123,6 +208,7 @@ async def _readiness(_payload: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn(name="merge_automation.request_automated_review")
 async def _request_automated_review(_payload: dict[str, Any]) -> dict[str, Any]:
+    assert _scenario == "review", "batch adoption must not request a fresh review"
     return {
         "status": "requested",
         "requestCommentId": 98765,
@@ -131,6 +217,8 @@ async def _request_automated_review(_payload: dict[str, Any]) -> dict[str, Any]:
 
 
 _terminal_evidence_calls = 0
+_scenario = "review"
+_ci_wait_observed = False
 
 
 @activity.defn(name="agent_runtime.evaluate_terminal_evidence")
@@ -139,6 +227,26 @@ async def _terminal_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     _terminal_evidence_calls += 1
     contract = payload["terminalContract"]
     if _terminal_evidence_calls == 1:
+        if _scenario == "ci_wait":
+            return {
+                "summary": "CI wait returned to durable owner",
+                "failureClass": "execution_error",
+                "providerErrorCode": "PR_RESOLVER_REENTER_GATE",
+                "metadata": {
+                    "terminalContractOutcome": "continuation_requested",
+                    "terminalContractExecutionRef": contract["executionRef"],
+                    "mergeAutomationDisposition": "reenter_gate",
+                    "gatedContinuation": {
+                        "schemaVersion": "gated-continuation/v1",
+                        "gateType": "merge_automation",
+                        "action": "reenter_gate",
+                        "executionRef": contract["executionRef"],
+                        "headSha": "abcdef1",
+                        "retryAfterSeconds": 1,
+                        "reason": "ci_running",
+                    },
+                },
+            }
         return {
             "summary": "durable continuation requested",
             "failureClass": "execution_error",
@@ -209,8 +317,13 @@ async def _register_search_attributes(env: WorkflowEnvironment) -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_three_workflow_topology_requests_review_then_merges() -> None:
-    global _terminal_evidence_calls
+@pytest.mark.parametrize("scenario", ["review", "ci_wait"])
+async def test_real_three_workflow_topology_requests_review_then_merges(
+    scenario,
+) -> None:
+    global _terminal_evidence_calls, _scenario, _ci_wait_observed
+    _scenario = scenario
+    _ci_wait_observed = False
     _terminal_evidence_calls = 0
     parent_id = "mm1209-full-topology"
     child_queue = "mm.workflow.user.v2"
@@ -223,7 +336,23 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await _register_search_attributes(env)
-        common = [*_COMMON_AGENT_RUN_ACTIVITIES, _terminal_evidence, _resolve_skill]
+        common = [
+            *(
+                item
+                for item in _COMMON_AGENT_RUN_ACTIVITIES
+                if item
+                not in {
+                    mock_provider_profile_list,
+                    mock_agent_runtime_status,
+                    mock_agent_runtime_fetch_result,
+                }
+            ),
+            _ready_profiles,
+            _running_status,
+            _completed_result,
+            _terminal_evidence,
+            _resolve_skill,
+        ]
         async with (
             Worker(env.client, task_queue=LLM_TASK_QUEUE, activities=[_plan_generate]),
             Worker(
@@ -254,7 +383,11 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
             Worker(
                 env.client,
                 task_queue=child_queue,
-                workflows=[MoonMindUserWorkflow, MoonMindAgentRun, MockProviderProfileManager],
+                workflows=[
+                    MoonMindUserWorkflow,
+                    MoonMindAgentRun,
+                    MockProviderProfileManager,
+                ],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
             Worker(
@@ -266,7 +399,7 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
         ):
             await env.client.start_workflow(
                 MockProviderProfileManager.run,
-                {"runtime_id": "claude_code"},
+                {"runtime_id": "claude_code", "default_profile_id": "claude-managed"},
                 id="provider-profile-manager:claude_code",
                 task_queue=child_queue,
             )
@@ -287,12 +420,19 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
                     "mergeAutomationConfig": {
                         "timeouts": {"fallbackPollSeconds": 2},
                         "reviewLoop": {
-                            "enabled": True,
+                            "enabled": scenario == "review",
                             "provider": "codex",
                             "maxCycles": 2,
                         },
                     },
-                    "resolverTemplate": {"targetRuntime": "claude_code"},
+                    "resolverTemplate": {
+                        "targetRuntime": "claude_code",
+                        **(
+                            {"inputs": {"maxIterations": 7, "returnToGate": True}}
+                            if scenario == "ci_wait"
+                            else {}
+                        ),
+                    },
                 },
                 id=parent_id,
                 task_queue="mm1209-parent",
@@ -365,6 +505,7 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
             ).describe()
             first_memo = await first_description.memo()
             second_memo = await second_description.memo()
+            history = await handle.fetch_history()
 
     assert result["status"] == "merged", (
         result.get("summary"),
@@ -373,7 +514,19 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
     )
     assert result["cycles"] == 2
     assert result["continuationCounters"]["continuation_cycle_completed"] == 1
-    assert result["reviewLoop"]["cycles"] == 1
+    if scenario == "review":
+        assert result["reviewLoop"]["cycles"] == 1
+    else:
+        assert "reviewLoop" not in result
     assert _terminal_evidence_calls == 2
     assert first_memo["title"] == "Resolve PR #1209 (Attempt 1)"
     assert second_memo["title"] == "Resolve PR #1209 (Attempt 2)"
+    if scenario == "ci_wait":
+        assert _ci_wait_observed
+        assert any(
+            event.HasField("timer_started_event_attributes") for event in history.events
+        )
+    await Replayer(
+        workflows=[MoonMindMergeAutomationWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)

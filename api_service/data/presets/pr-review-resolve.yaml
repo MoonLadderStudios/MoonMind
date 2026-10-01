@@ -1,9 +1,9 @@
 slug: pr-review-resolve
 title: Fix and Review Loop
-description: Request an automated review for every new head, wait for its complete
-  result before fixing comments, CI, or conflicts, and repeat until the pull request
-  is clean. Optionally finish with a
-  final pr-resolver pass that merges the pull request.
+description: Fix comments, CI, or conflicts on an existing pull request and wait
+  durably for external checks. By default, request an automated review for every
+  new head. Optionally finish with a final pr-resolver pass that merges the pull
+  request.
 scope: global
 tags:
 - github
@@ -24,16 +24,15 @@ annotations:
     mergeAutomation:
       enabled: true
       checks: required
-      automatedReview: required
-      # The merge method is a fixed implementation detail of the optional finish
-      # pass, not an operator control.
-      mergeMethod: squash
+      automatedReview: '{{ "disabled" if inputs.review_provider == "none" else "required" }}'
+      mergeMethod: '{{ inputs.merge_method }}'
+      maxIterations: '{{ inputs.max_iterations }}'
       # `merge` runs a final pr-resolver pass with merge authority once nothing
       # is left to address. `fix_only` stops the loop at that same open gate.
       finishMode: '{{ "merge" if inputs.finish_with_pr_resolver else "fix_only" }}'
       reviewLoop:
-        enabled: true
-        provider: '{{ inputs.review_provider }}'
+        enabled: '{{ inputs.review_provider != "none" }}'
+        provider: '{{ "codex" if inputs.review_provider == "none" else inputs.review_provider }}'
         requestMode: pr_comment
         requireFreshReviewForEveryHead: true
         requestAfterRemediation: true
@@ -59,11 +58,25 @@ annotations:
       review_provider:
         type: string
         title: Automated review provider
-        description: Automated reviewer that must review every head SHA before the
-          loop can finish.
+        description: Automated reviewer for every head SHA. None uses existing review
+          evidence without requesting a fresh automated review.
         enum:
         - codex
+        - none
         default: codex
+      merge_method:
+        type: string
+        title: Merge method
+        description: Method used by the final resolver pass when merge is requested.
+        enum: [squash, merge, rebase]
+        default: squash
+      max_iterations:
+        type: integer
+        title: Resolver repair budget
+        description: Maximum remediation iterations in each portable resolver pass.
+        default: 5
+        minimum: 1
+        maximum: 50
       finish_with_pr_resolver:
         type: boolean
         title: Finish with pr-resolver
@@ -74,7 +87,8 @@ annotations:
       advanced_options:
         type: boolean
         title: Advanced options
-        description: Show the review-cycle budget and expiry controls.
+        description: Show merge method, resolver repair budget, review-cycle budget,
+          and expiry controls.
         default: false
       max_review_cycles:
         type: integer
@@ -100,6 +114,16 @@ annotations:
       widget: checkbox
     advanced_options:
       widget: checkbox
+    merge_method:
+      widget: select
+      visibleWhen:
+        field: advanced_options
+        equals: true
+    max_iterations:
+      widget: number
+      visibleWhen:
+        field: advanced_options
+        equals: true
     max_review_cycles:
       widget: number
       visibleWhen:
@@ -112,6 +136,8 @@ annotations:
         equals: true
   defaults:
     review_provider: codex
+    merge_method: squash
+    max_iterations: 5
     finish_with_pr_resolver: false
     advanced_options: false
     max_review_cycles: 5
@@ -131,6 +157,16 @@ inputs:
   type: text
   required: false
   default: codex
+- name: merge_method
+  label: Merge method
+  type: text
+  required: false
+  default: squash
+- name: max_iterations
+  label: Resolver repair budget
+  type: text
+  required: false
+  default: '5'
 - name: finish_with_pr_resolver
   label: Finish With pr-resolver
   type: boolean

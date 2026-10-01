@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
+from collections.abc import Mapping
 from typing import Any
 
 IMPLEMENTATION_CONTRACT = "pr-resolver-core/v1"
 RESOLVER_CORE_VERSION = "1.0.0"
 # SHA-256 over models.py + normalize.py + classify.py + transition.py +
-# review_providers.py in that order. It is deliberately embedded in the
+# review_providers.py + github_checks.py in that order. It is deliberately embedded in the
 # immutable package so workflow code never reads mutable filesystem state
 # during replay.
 RESOLVER_CORE_DIGEST = (
-    "sha256:07f29494420c48f40b49ad1e21024ccf4ed639314004797610e61f3a78f6d596"
+    "sha256:a354d8c5460b38d39f4725fa055fe0438c2c2819d7b6e90ac86a3110f7c9ac2b"
 )
 
 

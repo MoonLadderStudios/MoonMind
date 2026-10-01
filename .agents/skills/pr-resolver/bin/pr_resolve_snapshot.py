@@ -24,16 +24,16 @@ for _package_root in (SCRIPT_DIR.parent / "lib", *SCRIPT_DIR.parents):
         sys.path.insert(0, str(_package_root))
         break
 
+from pr_resolve_contract import EXIT_CODE_FAILED  # noqa: E402
+
+from pr_resolver_core.code_hosts import (  # noqa: E402
+    ensure_github_only_selector,
+)
 from pr_resolver_core.review_providers import (  # noqa: E402
     is_clean_review_comment,
     is_low_severity_only_finding,
     resolve_automated_review_provider,
 )
-from pr_resolver_core.code_hosts import (  # noqa: E402
-    ensure_github_only_selector,
-)
-
-from pr_resolve_contract import EXIT_CODE_FAILED  # noqa: E402
 
 _RUNNING_CHECK_STATES = {"IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"}
 _FAILURE_CHECK_STATES = {
@@ -1001,7 +1001,14 @@ def _check_name(check: dict) -> str:
     return str(check.get("name") or check.get("context") or "Unknown Check").strip()
 
 def _check_url(check: dict) -> str:
-    return str(check.get("targetUrl") or check.get("detailsUrl") or "").strip()
+    return str(
+        check.get("targetUrl")
+        or check.get("target_url")
+        or check.get("detailsUrl")
+        or check.get("details_url")
+        or ""
+    ).strip()
+
 
 def _check_state(check: dict) -> str:
     state = str(check.get("state") or "").strip().upper()
@@ -1319,20 +1326,23 @@ def _fetch_required_status_checks(
     branch = str(base_branch or "").strip()
     if not repo or not branch:
         return None
+    # Branch metadata remains readable when protection/rules endpoints are
+    # unavailable on an unprotected private repository. A 403 alone never
+    # means there are no requirements; the explicit provider observation does.
+    from urllib.parse import quote
+
+    from pr_resolver_core.github_checks import required_check_contexts
+
+    branch = quote(branch, safe="")
+    branch_data = run_command_optional(["gh", "api", f"repos/{repo}/branches/{branch}"])
+    if isinstance(branch_data, dict) and branch_data.get("protected") is False:
+        return required_check_contexts(branch_data, None, None)
     payload = run_command_optional(
         ["gh", "api", f"repos/{repo}/branches/{branch}/protection"]
     )
-    if not isinstance(payload, dict):
-        return None
-    required = payload.get("required_status_checks")
-    if required is None:
-        return []
-    if not isinstance(required, dict):
-        return []
-    contexts = required.get("contexts")
-    if not isinstance(contexts, list):
-        return []
-    return [str(item).strip() for item in contexts if str(item).strip()]
+    rules = run_command_optional(["gh", "api", f"repos/{repo}/rules/branches/{branch}"])
+    return required_check_contexts(branch_data, payload, rules)
+
 
 def _fetch_previous_commit_sha(
     *,
@@ -1372,24 +1382,58 @@ def _fetch_previous_commit_sha(
 
 def _fetch_commit_check_runs(
     *, pr_repo: str | None, commit_sha: str | None
-) -> list[dict]:
+) -> list[dict] | None:
     repo = str(pr_repo or "").strip()
     sha = str(commit_sha or "").strip()
     if not repo or not sha:
-        return []
+        return None
     payload = run_command_optional(
-        ["gh", "api", f"repos/{repo}/commits/{sha}/check-runs"]
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{repo}/commits/{sha}/check-runs?filter=latest&per_page=100",
+        ]
     )
-    if not isinstance(payload, dict):
-        return []
-    check_runs = payload.get("check_runs")
-    if not isinstance(check_runs, list):
-        return []
+    pages = [payload] if isinstance(payload, dict) else payload
+    if not isinstance(pages, list):
+        return None
     result: list[dict] = []
-    for entry in check_runs:
-        if isinstance(entry, dict):
-            result.append(entry)
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
+            return None
+        result.extend(entry for entry in page["check_runs"] if isinstance(entry, dict))
     return result
+
+
+def _fetch_commit_statuses(
+    *, pr_repo: str | None, commit_sha: str | None
+) -> list[dict] | None:
+    if not pr_repo or not commit_sha:
+        return None
+    payload = run_command_optional(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{pr_repo}/commits/{commit_sha}/statuses?per_page=100",
+        ]
+    )
+    if not isinstance(payload, list):
+        return None
+    pages = payload if payload and isinstance(payload[0], list) else [payload]
+    latest: dict[str, dict] = {}
+    for page in pages:
+        if not isinstance(page, list):
+            return None
+        for status in page:
+            if isinstance(status, dict) and str(status.get("context") or "").strip():
+                # The provider orders statuses newest first across pages.
+                latest.setdefault(str(status["context"]).strip(), dict(status))
+    return list(latest.values())
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1459,11 +1503,56 @@ def main():
         for check in rollup:
             if isinstance(check, dict):
                 rollup_checks.append(check)
-    ci_summary = summarize_ci_checks(rollup_checks)
-
     required_checks = _fetch_required_status_checks(
         pr_repo=pr_repo, base_branch=pr_data.get("baseRefName")
     )
+
+    # Build one authoritative HEAD observation from both provider surfaces.
+    # Check-runs remain gating even on an unprotected branch. Legacy statuses
+    # gate when required, or when requirements could not be established.
+    head_sha = str(pr_data.get("headRefOid") or "").strip()
+    fetched_runs = _fetch_commit_check_runs(pr_repo=pr_repo, commit_sha=head_sha)
+    fetched_statuses = _fetch_commit_statuses(pr_repo=pr_repo, commit_sha=head_sha)
+    head_check_runs = fetched_runs or []
+    statuses = fetched_statuses or []
+    from pr_resolver_core.github_checks import partition_commit_statuses
+
+    gating_statuses, advisory_statuses = partition_commit_statuses(
+        statuses, required_checks
+    )
+    ci_summary = summarize_ci_checks([*head_check_runs, *gating_statuses])
+    ci_summary["advisoryStatuses"] = advisory_statuses
+    ci_summary["headShaVerified"] = head_sha
+    head_non_sec = summarize_ci_checks(head_check_runs)["nonSecurityCheckCount"]
+    ci_summary["headShaNonSecurityCheckCount"] = head_non_sec
+    degraded = list(ci_summary["degradedReasons"])
+    if (
+        required_checks == []
+        and advisory_statuses
+        and fetched_runs is not None
+        and fetched_statuses is not None
+    ):
+        # Policy confirms nothing gates, and HEAD did report (advisory) status:
+        # an empty gating set is a clean signal, not a missing one.
+        degraded = [r for r in degraded if r != "no_status_checks_reported"]
+        if not degraded:
+            ci_summary["signalQuality"] = "ok"
+            ci_summary["hasFailures"] = bool(ci_summary["hasAuthoritativeFailures"])
+    if fetched_runs is None or fetched_statuses is None:
+        degraded.append(
+            "head_checks_unavailable"
+            if fetched_runs is None
+            else "head_statuses_unavailable"
+        )
+        ci_summary["isRunning"] = True
+    rollup_runs = [check for check in rollup_checks if not check.get("context")]
+    if (
+        summarize_ci_checks(rollup_runs)["nonSecurityCheckCount"] > 0
+        and head_non_sec == 0
+    ):
+        degraded.append("rollup_stale_head_sha_has_no_non_security_checks")
+        ci_summary["isRunning"] = True
+
     if required_checks is not None:
         present_check_names = set(ci_summary.get("checkNames") or [])
         missing_required = sorted(
@@ -1478,10 +1567,7 @@ def main():
         ci_summary["missingRequiredChecks"] = missing_required
         if len(missing_required) > 0:
             ci_summary["hasFailures"] = True
-            ci_summary["signalQuality"] = "degraded"
-            degraded = list(ci_summary.get("degradedReasons") or [])
             degraded.append("missing_required_checks")
-            ci_summary["degradedReasons"] = sorted(dict.fromkeys(degraded))
             ci_summary["failedChecks"].append(
                 {
                     "name": "Missing required checks",
@@ -1490,49 +1576,10 @@ def main():
                 }
             )
 
-    # --- HEAD SHA cross-check ---------------------------------------------------
-    # The GraphQL statusCheckRollup may include stale checks from a previous
-    # commit when CI for the newest commit hasn't started yet.  Cross-validate
-    # by fetching REST API check-runs for the exact HEAD SHA and comparing
-    # against the rollup.
-    head_sha = str(pr_data.get("headRefOid") or "").strip()
-    head_check_runs: list[dict] = []
-    if head_sha and pr_repo:
-        head_check_runs = _fetch_commit_check_runs(
-            pr_repo=pr_repo, commit_sha=head_sha
-        )
-        head_summary = summarize_ci_checks(head_check_runs) if head_check_runs else {
-            "nonSecurityCheckCount": 0,
-            "isRunning": False,
-            "hasFailures": False,
-            "hasAuthoritativeFailures": False,
-        }
-        head_non_sec = int(head_summary.get("nonSecurityCheckCount", 0))
-        rollup_non_sec = int(ci_summary.get("nonSecurityCheckCount", 0))
-
-        if rollup_non_sec > 0 and head_non_sec == 0:
-            # Rollup reports non-security checks but REST API has none for the
-            # actual HEAD — the rollup is stale.  Mark CI as running so the
-            # resolver waits instead of merging.
-            ci_summary["isRunning"] = True
-            ci_summary["signalQuality"] = "degraded"
-            ci_summary["hasAuthoritativeFailures"] = False
-            degraded = list(ci_summary.get("degradedReasons") or [])
-            degraded.append("rollup_stale_head_sha_has_no_non_security_checks")
-            ci_summary["degradedReasons"] = sorted(dict.fromkeys(degraded))
-        elif head_non_sec > 0:
-            # REST API has check-runs for the HEAD — use the HEAD summary as
-            # the authoritative source for running / failure state.
-            ci_summary["isRunning"] = bool(head_summary.get("isRunning"))
-            ci_summary["hasFailures"] = bool(head_summary.get("hasFailures"))
-            ci_summary["hasAuthoritativeFailures"] = bool(
-                head_summary.get("hasAuthoritativeFailures")
-            )
-            head_failed = head_summary.get("failedChecks") or []
-            if head_failed:
-                ci_summary["failedChecks"] = head_failed
-        ci_summary["headShaVerified"] = head_sha
-        ci_summary["headShaNonSecurityCheckCount"] = head_non_sec
+    ci_summary["degradedReasons"] = sorted(set(degraded))
+    if degraded:
+        ci_summary["signalQuality"] = "degraded"
+        ci_summary["hasFailures"] = True
 
     previous_sha = _fetch_previous_commit_sha(
         pr_repo=pr_repo,
@@ -1577,6 +1624,12 @@ def main():
         and ci_summary.get("hasAuthoritativeFailures")
         and ci_summary.get("signalQuality") == "ok"
         and int(ci_summary.get("headShaNonSecurityCheckCount") or 0) > 0
+        # Infrastructure classification covers Actions check-runs only; any
+        # failing gating legacy status is an independent, PR-owned failure.
+        and not any(
+            _check_state(status) in _FAILURE_CHECK_STATES
+            for status in gating_statuses
+        )
     ):
         ci_summary.update(
             summarize_ci_infrastructure(
