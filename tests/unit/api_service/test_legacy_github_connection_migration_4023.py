@@ -219,7 +219,9 @@ def test_unknowable_reference_is_reported_without_a_mapping(
 
     assert result.outcome == "unresolvable"
     assert "GITHUB_TOKEN_SECRET_REF" in result.diagnostic
-    assert "Source Control" in result.diagnostic
+    # The correction is one the operator can apply in this deployment: set
+    # the variable to a supported reference.
+    assert "env://" in result.diagnostic and "db://" in result.diagnostic
     assert TOKEN_VALUE not in result.diagnostic
     assert TOKEN_VALUE not in caplog.text
     # A configured-but-unusable source is not silently replaced by the next
