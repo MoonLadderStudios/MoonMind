@@ -18558,6 +18558,143 @@ def test_saved_work_publication_uses_the_existing_rollout_admission(
     adapter.start_workflow.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("flags", "submit_enabled", "reason"),
+    [
+        # The shipped default: the rollout gate is off and stays off.
+        (
+            {"publication_recovery_enabled": False},
+            True,
+            "publication_recovery_disabled",
+        ),
+        (
+            {"publication_recovery_shadow": True},
+            True,
+            "publication_recovery_shadow_only",
+        ),
+        (
+            {"publication_recovery_allowed_modes": ""},
+            True,
+            "publication_mode_not_allowed",
+        ),
+        (
+            {"publication_recovery_canary_owner_ids": "someone-else"},
+            True,
+            "publication_recovery_not_in_canary",
+        ),
+        ({}, False, "temporal_submit_disabled"),
+    ],
+)
+def test_saved_work_publication_availability_is_projected_from_the_rollout_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    flags: dict[str, Any],
+    submit_enabled: bool,
+    reason: str,
+) -> None:
+    """MoonLadderStudios/MoonMind#4020: Workflow Detail reads publication
+    availability from the execution's action projection, and the projection
+    reports the same reason the publication-only route returns."""
+
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", submit_enabled)
+    for name, value in flags.items():
+        monkeypatch.setattr(settings.feature_flags, name, value)
+
+    with TestClient(app) as test_client:
+        detail = test_client.get("/api/executions/mm:wf-1")
+        published = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert detail.status_code == 200, detail.json()
+    actions = detail.json()["actions"]
+    assert actions["canPublishSavedWork"] is False
+    assert actions["disabledReasons"]["canPublishSavedWork"] == reason
+    assert "publishSavedWork" not in actions["actionEvidence"]
+    # The server stays the final authority and refuses for the same reason.
+    assert published.status_code in {409, 503}
+    detail_body = published.json()["detail"]
+    assert detail_body.get("reason", detail_body.get("code")) == reason
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_availability_survives_an_invalid_rollout_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags, "publication_recovery_allowed_modes", "pr,auto"
+    )
+
+    with TestClient(app) as test_client:
+        detail = test_client.get("/api/executions/mm:wf-1")
+
+    # The execution stays readable; only saved-work publication is unavailable.
+    assert detail.status_code == 200, detail.json()
+    actions = detail.json()["actions"]
+    assert actions["canPublishSavedWork"] is False
+    assert (
+        actions["disabledReasons"]["canPublishSavedWork"]
+        == "publication_recovery_policy_invalid"
+    )
+    adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_availability_reports_destination_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, adapter, _record, user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags, "publication_recovery_allowed_modes", "pr,branch"
+    )
+
+    with TestClient(app) as test_client:
+        unlimited = test_client.get("/api/executions/mm:wf-1").json()["actions"]
+        monkeypatch.setattr(
+            settings.feature_flags,
+            "publication_recovery_canary_repositories",
+            "Dest/Repo, Other/Repo",
+        )
+        canary = test_client.get("/api/executions/mm:wf-1").json()["actions"]
+        admitted = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+        monkeypatch.setattr(
+            settings.feature_flags,
+            "publication_recovery_canary_owner_ids",
+            str(user.id),
+        )
+        canary_owner = test_client.get("/api/executions/mm:wf-1").json()["actions"]
+
+    assert unlimited["canPublishSavedWork"] is True
+    assert "canPublishSavedWork" not in unlimited["disabledReasons"]
+    assert unlimited["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "branch"]
+    }
+    # A repository canary limits destinations without hiding the action.
+    assert canary["canPublishSavedWork"] is True
+    assert canary["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "branch"],
+        "canaryRepositories": ["Dest/Repo", "Other/Repo"],
+    }
+    assert admitted.status_code == 201, admitted.json()
+    # A canary owner may publish to any repository.
+    assert canary_owner["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "branch"]
+    }
+
+
 @pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])
 def test_workflow_gate_actions_ignore_malformed_optional_control_stop_fields(
     monkeypatch: pytest.MonkeyPatch,

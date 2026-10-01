@@ -9,6 +9,10 @@
  * `POST /executions/{workflowId}/continue`); Publish Saved Work reuses the
  * publication-only `POST /executions/{workflowId}/retry-publication` path with
  * the saved-work body (`savedWorkRef` + destination), so no model is rerun.
+ * Its availability is the execution's server action projection
+ * (`canPublishSavedWork` and its disabled reason), and an accepted publication
+ * is followed through the existing execution detail read of the returned
+ * operation.
  *
  * A committed saved-work manifest is presented as one saved unit with the
  * snapshot, delta, history, and file-manifest parts it names. Its format
@@ -63,6 +67,9 @@ export interface SavedResultExecutionLike {
   status?: string | null | undefined;
   closeStatus?: string | null | undefined;
   close_status?: string | null | undefined;
+  temporalStatus?: string | null | undefined;
+  temporal_status?: string | null | undefined;
+  actions?: unknown;
   finishSummary?: unknown;
   finish_summary?: unknown;
   outputBranch?: unknown;
@@ -332,6 +339,7 @@ export function savedResultContinuationKey(
 }
 
 export type SavedWorkObjective = 'pr' | 'draft_pr' | 'branch';
+const SAVED_WORK_OBJECTIVES: readonly SavedWorkObjective[] = ['pr', 'draft_pr', 'branch'];
 export type SavedWorkStrategy =
   | 'baseline_delta'
   | 'additive_import'
@@ -374,14 +382,16 @@ function branchSlug(value: string): string {
 export function defaultSavedWorkDestination(
   execution: SavedResultExecutionLike,
   workflowId: string,
+  allowedModes: readonly SavedWorkObjective[] = SAVED_WORK_OBJECTIVES,
 ): SavedWorkDestinationDraft {
   // Derive the destination the execution already determines; the operator
   // edits it through the form rather than declaring it from scratch.
   const fields = execution as Record<string, unknown>;
   const publishMode = text(fields.publishMode ?? fields.publish_mode).toLowerCase();
+  const objective: SavedWorkObjective = publishMode === 'branch' ? 'branch' : 'pr';
   return {
     repository: text(fields.repository),
-    objective: publishMode === 'branch' ? 'branch' : 'pr',
+    objective: allowedModes.includes(objective) ? objective : allowedModes[0] ?? objective,
     baseBranch: text(fields.startingBranch ?? fields.starting_branch),
     headBranch: `saved-work/${branchSlug(workflowId) || 'result'}`,
     strategy: 'baseline_delta',
@@ -402,8 +412,9 @@ export function buildSavedWorkPublicationRequest(
     headBranch: draft.headBranch.trim(),
     strategy: draft.strategy,
   };
+  // Initializing an empty destination has no base to apply onto.
   const baseBranch = draft.baseBranch.trim();
-  if (baseBranch) {
+  if (baseBranch && draft.strategy !== 'empty_initialization') {
     destination.baseBranch = baseBranch;
   }
   const request: SavedWorkPublicationRequest = { savedWorkRef, destination };
@@ -490,6 +501,102 @@ export async function publishSavedWork(
     throw new Error('The publication response could not be read.');
   }
   return payload as SavedWorkPublicationResult;
+}
+
+export interface SavedWorkPublicationAvailability {
+  available: boolean;
+  /** The server's disabled reason; null when available or not reported. */
+  reason: string | null;
+  allowedModes: SavedWorkObjective[];
+  /** Set when a rollout canary admits only these destination repositories. */
+  canaryRepositories: string[];
+}
+
+export function savedWorkPublicationAvailability(
+  execution: SavedResultExecutionLike,
+): SavedWorkPublicationAvailability {
+  // Availability is the execution's server action projection, which applies
+  // the same submission gate and rollout admission as the publication route.
+  // An unreported capability is unavailable, never assumed.
+  const actions = record(execution.actions);
+  if (actions.canPublishSavedWork !== true) {
+    return {
+      available: false,
+      reason: text(record(actions.disabledReasons).canPublishSavedWork) || null,
+      allowedModes: [],
+      canaryRepositories: [],
+    };
+  }
+  const limits = record(record(actions.actionEvidence).publishSavedWork);
+  const allowedModes = Array.isArray(limits.allowedModes)
+    ? SAVED_WORK_OBJECTIVES.filter((mode) => (limits.allowedModes as unknown[]).includes(mode))
+    : [...SAVED_WORK_OBJECTIVES];
+  const canaryRepositories = Array.isArray(limits.canaryRepositories)
+    ? limits.canaryRepositories.map(text).filter(Boolean)
+    : [];
+  return { available: true, reason: null, allowedModes, canaryRepositories };
+}
+
+const PUBLICATION_UNAVAILABLE_MESSAGES: Record<string, string> = {
+  publication_recovery_disabled:
+    "Publishing saved work is turned off by this deployment's publication rollout policy.",
+  publication_recovery_shadow_only:
+    'The publication rollout is in shadow mode, so saved work cannot be published yet.',
+  publication_mode_not_allowed: 'The publication rollout policy allows no publication mode.',
+  publication_recovery_not_in_canary: 'The publication rollout canary does not include this operator.',
+  publication_recovery_policy_invalid:
+    'The publication rollout setting is invalid, so saved work cannot be published.',
+  temporal_submit_disabled: 'Workflow submission is disabled on this deployment.',
+  historical_workflow_type: 'Retired workflow history is read-only.',
+};
+
+export function savedWorkPublicationUnavailableMessage(reason: string | null): string {
+  if (!reason) {
+    return 'The server has not reported whether saved work can be published. Refresh to check again.';
+  }
+  return (
+    PUBLICATION_UNAVAILABLE_MESSAGES[reason] ?? `Publishing saved work is unavailable (${reason}).`
+  );
+}
+
+export interface SavedWorkPublicationOperation {
+  workflowId: string;
+  /** Compute-style outcome of the publication run (for example `completed`). */
+  outcome: string;
+  terminal: boolean;
+}
+
+export async function fetchSavedWorkPublicationOperation(
+  apiBase: string,
+  workflowId: string,
+): Promise<SavedWorkPublicationOperation> {
+  // The returned publication operation is an ordinary execution, so it is
+  // followed through the existing execution detail read. Nothing here starts,
+  // retries, or cancels work.
+  const response = await fetch(
+    joinApiBasePath(apiBase, `/executions/${encodeURIComponent(workflowId)}?source=temporal`),
+    { credentials: 'include', headers: { Accept: 'application/json' } },
+  );
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    const detail = record(record(payload).detail);
+    throw new SavedWorkPublicationError(
+      savedResultErrorMessage(payload) || `Publication status read failed (${response.status})`,
+      response.status,
+      text(detail.code) || null,
+    );
+  }
+  const execution = record(payload) as SavedResultExecutionLike;
+  // The server's close status already maps timed-out and terminated runs.
+  const closed = text(execution.temporalStatus ?? execution.temporal_status).toLowerCase();
+  if (['completed', 'failed', 'canceled'].includes(closed)) {
+    return { workflowId, outcome: closed, terminal: true };
+  }
+  return {
+    workflowId,
+    outcome: computeOutcome(execution),
+    terminal: isTerminalExecution(execution),
+  };
 }
 
 export interface SavedWorkPartEntry {

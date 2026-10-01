@@ -80,6 +80,13 @@ const failedExecution = {
   repository: 'Owner/Repo',
   startingBranch: 'main',
   publishMode: 'pr',
+  // The execution detail's action projection, as the server serializes it.
+  actions: {
+    canRetryPublication: false,
+    canPublishSavedWork: true,
+    actionEvidence: { publishSavedWork: { allowedModes: ['pr', 'draft_pr', 'branch'] } },
+    disabledReasons: { canRetryPublication: 'publication_retry_not_eligible' },
+  },
   finishSummary: {
     controlStop: {
       auxiliaryOutcomes: {
@@ -88,6 +95,19 @@ const failedExecution = {
         providerProfileRelease: { status: 'pending' },
         janitorRequired: false,
       },
+    },
+  },
+};
+
+const publicationDisabledExecution = {
+  ...failedExecution,
+  actions: {
+    canRetryPublication: false,
+    canPublishSavedWork: false,
+    actionEvidence: {},
+    disabledReasons: {
+      canRetryPublication: 'publication_retry_not_eligible',
+      canPublishSavedWork: 'publication_recovery_disabled',
     },
   },
 };
@@ -120,10 +140,20 @@ let fetchSpy: MockInstance;
 let handlers: {
   publish: (init: RequestInit | undefined) => Promise<Response>;
   continue: (init: RequestInit | undefined) => Promise<Response>;
+  publicationRun: () => Promise<Response>;
 };
+
+const PUBLICATION_RUN_URL = '/api/executions/mm%3Apublication%3Aabc?source=temporal';
 
 beforeEach(() => {
   handlers = {
+    publicationRun: async () =>
+      jsonResponse({
+        workflowId: 'mm:publication:abc',
+        workflowType: 'MoonMind.PublicationRecoveryV1',
+        state: 'executing',
+        temporalStatus: 'running',
+      }),
     publish: async () => jsonResponse(publication, 201),
     continue: async () =>
       jsonResponse(
@@ -140,6 +170,7 @@ beforeEach(() => {
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === PUBLICATION_RUN_URL) return handlers.publicationRun();
       if (url.endsWith('/retry-publication')) return handlers.publish(init);
       if (url.endsWith('/continue')) return handlers.continue(init);
       if (url.endsWith('/captured-evidence')) {
@@ -389,5 +420,191 @@ describe('Saved Results section', () => {
     expect(
       (screen.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  it('reports a server-disabled publication without blocking download or continue', async () => {
+    renderSection({ execution: publicationDisabledExecution });
+
+    // The server's reason is shown, distinct from the save's own state.
+    const note = screen.getByRole('note');
+    expect(note.textContent).toMatch(/Publish saved work is unavailable/);
+    expect(note.textContent).toMatch(/publication rollout policy/);
+    const text = (label: string) =>
+      screen.getByText(new RegExp(`^${label}:`), { selector: 'strong' }).closest('.card')
+        ?.textContent;
+    expect(text('Save')).toMatch(/Save:\s*committed/i);
+    expect(text('Compute')).toMatch(/Compute:\s*failed/i);
+    const publish = screen.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    expect(publish.title).toMatch(/publication rollout policy/);
+    fireEvent.click(publish);
+    expect(screen.queryByRole('form', { name: 'Publish saved work' })).toBeNull();
+    expect(calls('/retry-publication')).toHaveLength(0);
+
+    // Ordinary downloads and Continue stay available.
+    const parts = screen.getByRole('list', { name: 'Saved work parts' });
+    expect(within(parts).getAllByRole('link', { name: 'Download' }).length).toBeGreaterThan(0);
+    const toggle = screen.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement;
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+    fireEvent.click(toggle);
+    const form = screen.getByRole('form', { name: 'Continue working' });
+    fireEvent.change(within(form).getByLabelText('New instructions'), {
+      target: { value: 'Finish the report.' },
+    });
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Continuation admitted/)).toBeTruthy();
+    expect(calls('/continue')).toHaveLength(1);
+    expect(calls('/retry-publication')).toHaveLength(0);
+  });
+
+  it('treats an unreported publication capability as unavailable', () => {
+    const { actions: _actions, ...withoutActions } = failedExecution;
+    renderSection({ execution: withoutActions });
+    expect(
+      (screen.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByRole('note').textContent).toMatch(/has not reported/);
+  });
+
+  it('refreshes availability when the server refuses publication by policy', async () => {
+    handlers.publish = async () =>
+      jsonResponse(
+        {
+          detail: {
+            code: 'publication_retry_not_admitted',
+            message: 'Publication is not admitted by current rollout policy.',
+            reason: 'publication_recovery_disabled',
+          },
+        },
+        409,
+      );
+    const view = renderSection();
+    fireEvent.submit(await openPublishForm());
+    expect(
+      await screen.findByText('Publication is not admitted by current rollout policy.'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Publication started/)).toBeNull();
+    expect(view.onRefresh).toHaveBeenCalled();
+  });
+
+  it('offers only the publication modes the server admits', async () => {
+    renderSection({
+      execution: {
+        ...failedExecution,
+        actions: {
+          ...failedExecution.actions,
+          actionEvidence: {
+            publishSavedWork: { allowedModes: ['branch'], canaryRepositories: ['Owner/Repo'] },
+          },
+        },
+      },
+    });
+    const form = await openPublishForm();
+    const mode = within(form).getByLabelText('Publish as') as HTMLSelectElement;
+    expect(Array.from(mode.options).map((option) => option.value)).toEqual(['branch']);
+    expect(mode.value).toBe('branch');
+    expect(within(form).getByText(/rollout currently admits only Owner\/Repo/)).toBeTruthy();
+  });
+
+  it('follows the returned publication operation to its persisted outcome', async () => {
+    handlers.publicationRun = async () =>
+      jsonResponse({
+        workflowId: 'mm:publication:abc',
+        workflowType: 'MoonMind.PublicationRecoveryV1',
+        state: 'failed',
+        rawState: 'failed',
+        temporalStatus: 'failed',
+        closeStatus: 'timed_out',
+      });
+    renderSection();
+    const form = await openPublishForm();
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Publication started/)).toBeTruthy();
+
+    const outcome = await screen.findByRole('status', { name: 'Publication outcome' });
+    await waitFor(() => expect(outcome.textContent).toMatch(/^Publication failed\./));
+    expect(outcome.textContent).toMatch(/saved work is unchanged/);
+    expect(calls(PUBLICATION_RUN_URL).length).toBeGreaterThan(0);
+    for (const [, init] of calls(PUBLICATION_RUN_URL)) {
+      expect((init as RequestInit | undefined)?.method ?? 'GET').toBe('GET');
+    }
+    // Following the operation never starts more work: one publication request
+    // and nothing else is posted.
+    const posts = fetchSpy.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'POST',
+    );
+    expect(posts.map(([input]) => String(input))).toEqual([
+      '/api/executions/wf-4020/retry-publication',
+    ]);
+
+    // Closing the form does not stop following the accepted operation.
+    fireEvent.click(within(form).getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('status', { name: 'Publication outcome' })).toBeTruthy();
+  });
+
+  it('shows a completed publication run without claiming more than the run records', async () => {
+    handlers.publicationRun = async () =>
+      jsonResponse({
+        workflowId: 'mm:publication:abc',
+        state: 'completed',
+        temporalStatus: 'completed',
+      });
+    renderSection();
+    fireEvent.submit(await openPublishForm());
+    const outcome = await screen.findByRole('status', { name: 'Publication outcome' });
+    await waitFor(() => expect(outcome.textContent).toMatch(/^Publication completed/));
+  });
+
+  it('keeps simple destination choices first and reveals advanced ones when asked', async () => {
+    renderSection();
+    const form = await openPublishForm();
+    expect(within(form).getByLabelText('Repository')).toBeTruthy();
+    expect(within(form).getByLabelText('Publish as')).toBeTruthy();
+    expect(within(form).getByLabelText('Head branch')).toBeTruthy();
+    expect(within(form).queryByLabelText('Base branch')).toBeNull();
+    expect(within(form).queryByLabelText('Apply saved work as')).toBeNull();
+    expect(within(form).getByText('main')).toBeTruthy();
+
+    fireEvent.click(
+      within(form).getByRole('button', { name: 'Change base or how saved work is applied' }),
+    );
+    const advanced = within(form).getByRole('group', { name: 'Advanced destination options' });
+    fireEvent.change(within(advanced).getByLabelText('Apply saved work as'), {
+      target: { value: 'empty_initialization' },
+    });
+    fireEvent.change(within(form).getByLabelText('Publish as'), {
+      target: { value: 'branch' },
+    });
+    // An empty destination has no base, so none is sent.
+    expect(within(advanced).queryByLabelText('Base branch')).toBeNull();
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Publication started/)).toBeTruthy();
+    expect(bodyOf(calls('/retry-publication')[0])).toEqual({
+      savedWorkRef: 'art-manifest',
+      destination: {
+        repository: 'Owner/Repo',
+        objective: 'branch',
+        headBranch: 'saved-work/wf-4020',
+        strategy: 'empty_initialization',
+      },
+    });
+  });
+
+  it('reveals the base branch when the destination still needs one', async () => {
+    const { startingBranch: _base, ...withoutBase } = failedExecution;
+    renderSection({ execution: withoutBase });
+    const form = await openPublishForm();
+    const advanced = within(form).getByRole('group', { name: 'Advanced destination options' });
+    expect(within(advanced).getByText(/needs its base branch/)).toBeTruthy();
+    fireEvent.change(within(advanced).getByLabelText('Base branch'), {
+      target: { value: 'develop' },
+    });
+    // The choice stays visible after it is filled in.
+    expect(
+      (within(form).getByLabelText('Base branch') as HTMLInputElement).value,
+    ).toBe('develop');
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Publication started/)).toBeTruthy();
+    expect(bodyOf(calls('/retry-publication')[0]).destination.baseBranch).toBe('develop');
   });
 });

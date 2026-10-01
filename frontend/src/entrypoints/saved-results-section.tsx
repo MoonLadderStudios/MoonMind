@@ -16,18 +16,38 @@ import {
   canDownloadSavedResultRaw,
   canPublishSavedWork,
   defaultSavedWorkDestination,
+  fetchSavedWorkPublicationOperation,
   projectSavedResults,
   publishSavedWork,
   savedResultContinuationKey,
+  savedWorkPublicationAvailability,
   savedWorkPublicationIdentity,
+  savedWorkPublicationUnavailableMessage,
   type SavedResultArtifactLike,
   type SavedResultEntry,
   type SavedResultExecutionLike,
   type SavedWorkDestinationDraft,
+  type SavedWorkObjective,
   type SavedWorkPartEntry,
+  type SavedWorkPublicationOperation,
   type SavedWorkPublicationRequest,
   type SavedWorkPublicationResult,
+  type SavedWorkStrategy,
 } from './saved-results';
+
+const PUBLICATION_FOLLOW_INTERVAL_MS = 5_000;
+
+const OBJECTIVE_LABELS: Record<SavedWorkObjective, string> = {
+  pr: 'Pull request',
+  draft_pr: 'Draft pull request',
+  branch: 'Branch only',
+};
+
+const STRATEGY_LABELS: Record<SavedWorkStrategy, string> = {
+  baseline_delta: 'Recorded delta onto the saved baseline',
+  additive_import: 'Additive import',
+  empty_initialization: 'Initialize an empty destination',
+};
 
 type ContinueOperation = {
   status: 'pending' | 'admitted' | 'failed' | 'uncertain';
@@ -69,6 +89,29 @@ function destinationSummary(request: SavedWorkPublicationRequest): string {
   return `${destination.repository} ${destination.headBranch}${base} (${formatStatusLabel(
     destination.objective,
   )}, ${formatStatusLabel(destination.strategy)})`;
+}
+
+// Simple destination choices come first. The base and how saved work is
+// applied are shown when an existing destination still needs a base or a
+// non-default application is chosen.
+function needsAdvancedDestination(draft: SavedWorkDestinationDraft): boolean {
+  const baseMissing = draft.strategy !== 'empty_initialization' && !draft.baseBranch.trim();
+  return baseMissing || draft.strategy !== 'baseline_delta';
+}
+
+function publicationOutcomeText(operation: SavedWorkPublicationOperation): string {
+  if (!operation.terminal) {
+    return operation.outcome === 'unknown'
+      ? 'The publication run has not reported its status yet; following it until it finishes.'
+      : `Publication run ${formatStatusLabel(operation.outcome).toLowerCase()}; following it until it finishes.`;
+  }
+  if (operation.outcome === 'completed') {
+    return 'Publication completed: the saved work was published, or the destination already had it. The run records the result.';
+  }
+  if (operation.outcome === 'canceled') {
+    return 'Publication canceled. The run records any change it had already confirmed.';
+  }
+  return `Publication ${formatStatusLabel(operation.outcome).toLowerCase()}. The run records the reason; the saved work is unchanged.`;
 }
 
 function SavedWorkParts({
@@ -218,10 +261,15 @@ export function SavedResultsSection({
   const [continueTitle, setContinueTitle] = useState('');
   const [continueInstructions, setContinueInstructions] = useState('');
   const [continueOp, setContinueOp] = useState<ContinueOperation | null>(null);
+  const publication = useMemo(
+    () => savedWorkPublicationAvailability(sourceExecution),
+    [sourceExecution],
+  );
   const [publishTarget, setPublishTarget] = useState<string | null>(null);
   const [draft, setDraft] = useState<SavedWorkDestinationDraft>(() =>
-    defaultSavedWorkDestination(sourceExecution, workflowId),
+    defaultSavedWorkDestination(sourceExecution, workflowId, publication.allowedModes),
   );
+  const [advancedRequested, setAdvancedRequested] = useState(false);
   const [publishOp, setPublishOp] = useState<PublishOperation | null>(null);
 
   useEffect(() => {
@@ -232,8 +280,22 @@ export function SavedResultsSection({
     setContinueOpen(false);
     setContinueOp(null);
     setPublishTarget(null);
+    setAdvancedRequested(false);
     setPublishOp(null);
   }, [projection.selectedKey]);
+
+  // An accepted publication is followed through its own execution read until
+  // it finishes; closing the form or changing the destination does not stop it.
+  const followedPublication =
+    publishOp?.status === 'started' && publishOp.result ? publishOp.result.workflowId : null;
+  const publicationOperationQuery = useQuery({
+    queryKey: ['saved-work-publication-operation', followedPublication],
+    queryFn: () => fetchSavedWorkPublicationOperation(apiBase, followedPublication ?? ''),
+    enabled: Boolean(followedPublication),
+    refetchInterval: (query) =>
+      query.state.data?.terminal ? false : PUBLICATION_FOLLOW_INTERVAL_MS,
+    retry: false,
+  });
 
   const terminalSource = projection.terminalSource;
   const continueDisabledReason = !actionsEnabled
@@ -290,14 +352,21 @@ export function SavedResultsSection({
 
   const openPublish = (savedWorkRef: string) => {
     if (publishTarget !== savedWorkRef) {
-      setDraft(defaultSavedWorkDestination(sourceExecution, workflowId));
+      const next = defaultSavedWorkDestination(
+        sourceExecution,
+        workflowId,
+        publication.allowedModes,
+      );
+      setDraft(next);
+      // Stay open once shown, so filling in the base does not hide it.
+      setAdvancedRequested(needsAdvancedDestination(next));
     }
     setPublishTarget(savedWorkRef);
   };
 
   const submitPublish = async (event: FormEvent) => {
     event.preventDefault();
-    if (!publishTarget || publishInFlight.current) {
+    if (!publishTarget || publishInFlight.current || !publication.available) {
       return;
     }
     const request = buildSavedWorkPublicationRequest(publishTarget, draft);
@@ -318,7 +387,8 @@ export function SavedResultsSection({
       if (!applies()) return;
       if (err instanceof SavedWorkPublicationError) {
         setPublishOp({ status: 'failed', request, error: errorMessage(err) });
-        if (admissionChanged(err)) onRefresh();
+        // A policy refusal means the projected availability is out of date.
+        if (admissionChanged(err) || err.code === 'publication_retry_not_admitted') onRefresh();
       } else {
         setPublishOp({ status: 'uncertain', request, error: errorMessage(err) });
       }
@@ -340,6 +410,13 @@ export function SavedResultsSection({
   const continuePending = continueOp?.status === 'pending';
   const updateDraft = (patch: Partial<SavedWorkDestinationDraft>) =>
     setDraft((current) => ({ ...current, ...patch }));
+  const publicationUnavailable = publication.available
+    ? null
+    : savedWorkPublicationUnavailableMessage(publication.reason);
+  const hasSavedWork = projection.entries.some((entry) => entry.savedWork);
+  const initializesEmpty = draft.strategy === 'empty_initialization';
+  const baseMissing = !initializesEmpty && !draft.baseBranch.trim();
+  const advancedVisible = advancedRequested || needsAdvancedDestination(draft);
 
   return (
     <section className="stack td-saved-results-region td-evidence-region">
@@ -401,6 +478,12 @@ export function SavedResultsSection({
               {formatStatusLabel(projection.cleanupOutcome)}
             </Card>
           </div>
+          {hasSavedWork && actionsEnabled && publicationUnavailable ? (
+            <p className="small" role="note">
+              Publish saved work is unavailable: {publicationUnavailable} Download,
+              preview, and Continue working are not affected.
+            </p>
+          ) : null}
           <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
             <table>
               <thead>
@@ -480,13 +563,13 @@ export function SavedResultsSection({
                             <button
                               type="button"
                               className="secondary"
-                              disabled={!actionsEnabled || !publishable}
+                              disabled={!actionsEnabled || !publishable || !publication.available}
                               title={
                                 !actionsEnabled
                                   ? 'Workflow actions are disabled.'
-                                  : publishable
-                                    ? undefined
-                                    : 'Only complete, unexpired saved work with raw access can be published.'
+                                  : !publishable
+                                    ? 'Only complete, unexpired saved work with raw access can be published.'
+                                    : publicationUnavailable ?? undefined
                               }
                               aria-expanded={publishTarget === entry.artifactId}
                               onClick={() => openPublish(entry.artifactId)}
@@ -522,6 +605,12 @@ export function SavedResultsSection({
                   onChange={(event) => updateDraft({ repository: event.target.value })}
                 />
               </label>
+              {publication.canaryRepositories.length > 0 ? (
+                <p className="small">
+                  The publication rollout currently admits only{' '}
+                  {publication.canaryRepositories.join(', ')}.
+                </p>
+              ) : null}
               <label className="field">
                 <span className="small">Publish as</span>
                 <select
@@ -532,18 +621,15 @@ export function SavedResultsSection({
                     })
                   }
                 >
-                  <option value="pr">Pull request</option>
-                  <option value="draft_pr">Draft pull request</option>
-                  <option value="branch">Branch only</option>
+                  {(publication.allowedModes.includes(draft.objective)
+                    ? publication.allowedModes
+                    : [draft.objective, ...publication.allowedModes]
+                  ).map((mode) => (
+                    <option key={mode} value={mode}>
+                      {OBJECTIVE_LABELS[mode]}
+                    </option>
+                  ))}
                 </select>
-              </label>
-              <label className="field">
-                <span className="small">Base branch</span>
-                <input
-                  type="text"
-                  value={draft.baseBranch}
-                  onChange={(event) => updateDraft({ baseBranch: event.target.value })}
-                />
               </label>
               <label className="field">
                 <span className="small">Head branch</span>
@@ -554,21 +640,60 @@ export function SavedResultsSection({
                   onChange={(event) => updateDraft({ headBranch: event.target.value })}
                 />
               </label>
-              <label className="field">
-                <span className="small">Apply saved work as</span>
-                <select
-                  value={draft.strategy}
-                  onChange={(event) =>
-                    updateDraft({
-                      strategy: event.target.value as SavedWorkDestinationDraft['strategy'],
-                    })
-                  }
-                >
-                  <option value="baseline_delta">Recorded delta onto the saved baseline</option>
-                  <option value="additive_import">Additive import</option>
-                  <option value="empty_initialization">Initialize an empty destination</option>
-                </select>
-              </label>
+              {advancedVisible ? (
+                <fieldset className="stack" aria-label="Advanced destination options">
+                  {initializesEmpty ? (
+                    <p className="small">
+                      Initializing an empty destination publishes one branch with
+                      no base branch.
+                    </p>
+                  ) : (
+                    <label className="field">
+                      <span className="small">Base branch</span>
+                      <input
+                        type="text"
+                        required
+                        value={draft.baseBranch}
+                        onChange={(event) => updateDraft({ baseBranch: event.target.value })}
+                      />
+                    </label>
+                  )}
+                  {baseMissing ? (
+                    <p className="small">
+                      Publishing onto an existing destination needs its base branch.
+                    </p>
+                  ) : null}
+                  <label className="field">
+                    <span className="small">Apply saved work as</span>
+                    <select
+                      value={draft.strategy}
+                      onChange={(event) =>
+                        updateDraft({
+                          strategy: event.target.value as SavedWorkDestinationDraft['strategy'],
+                        })
+                      }
+                    >
+                      {(Object.keys(STRATEGY_LABELS) as SavedWorkStrategy[]).map((strategy) => (
+                        <option key={strategy} value={strategy}>
+                          {STRATEGY_LABELS[strategy]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </fieldset>
+              ) : (
+                <p className="small">
+                  Base branch <code>{draft.baseBranch.trim()}</code> ·{' '}
+                  {STRATEGY_LABELS[draft.strategy]}.{' '}
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setAdvancedRequested(true)}
+                  >
+                    Change base or how saved work is applied
+                  </button>
+                </p>
+              )}
               {draft.objective !== 'branch' ? (
                 <label className="field">
                   <span className="small">Pull request title (optional)</span>
@@ -584,8 +709,12 @@ export function SavedResultsSection({
                 <button
                   type="submit"
                   disabled={
-                    publishPending || !draft.repository.trim() || !draft.headBranch.trim()
+                    publishPending ||
+                    !publication.available ||
+                    !draft.repository.trim() ||
+                    !draft.headBranch.trim()
                   }
+                  title={publicationUnavailable ?? undefined}
                 >
                   {publishPending ? 'Publishing...' : 'Publish to this destination'}
                 </button>
@@ -682,6 +811,17 @@ export function SavedResultsSection({
                 {publishOp.result.workflowId}
               </a>{' '}
               (operation <code>{publishOp.result.publicationIdempotencyKey}</code>).
+            </p>
+          ) : null}
+          {followedPublication ? (
+            <p className="small" role="status" aria-label="Publication outcome">
+              {publicationOperationQuery.data
+                ? publicationOutcomeText(publicationOperationQuery.data)
+                : publicationOperationQuery.error
+                  ? `Publication status is unavailable (${errorMessage(
+                      publicationOperationQuery.error,
+                    )}). The accepted publication continues; open its run for details.`
+                  : 'Reading the publication run status.'}
             </p>
           ) : null}
           {publishOp?.status === 'uncertain' ? (

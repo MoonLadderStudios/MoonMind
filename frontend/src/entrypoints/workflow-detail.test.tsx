@@ -8505,6 +8505,8 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canRetryPublication: false,
+        canPublishSavedWork: true,
+        actionEvidence: { publishSavedWork: { allowedModes: ['pr', 'draft_pr', 'branch'] } },
         disabledReasons: { canRetryPublication: 'publication_not_failed' },
       },
     };
@@ -8638,8 +8640,9 @@ describe('Workflow Detail Entrypoint', () => {
       '/api/artifacts/art-archive/download',
     );
 
-    // Publish Saved Work does not depend on the failed-publication recovery
-    // capability; it sends the saved-work body to the publication-only path.
+    // Publish Saved Work follows its own server capability, not the
+    // failed-publication recovery one; it sends the saved-work body to the
+    // publication-only path.
     const publish = inSaved.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
     expect(publish.disabled).toBe(false);
     fireEvent.click(publish);

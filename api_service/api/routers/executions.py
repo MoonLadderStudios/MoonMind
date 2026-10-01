@@ -4395,7 +4395,7 @@ def _serialize_execution(
     ):
         waiting_reason = None
     dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(record.state, "queued")
-    actions = _build_action_capabilities(record)
+    actions = _build_action_capabilities(record, user=user)
     intervention_audit = _parse_intervention_audit_entries(memo)
     debug_fields = _build_debug_fields(
         record=record,
@@ -7687,7 +7687,9 @@ def _degraded_step_execution_projection_payload(
     }
 
 
-def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
+def _build_action_capabilities(
+    record, *, user: User | None = None
+) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     memo = dict(getattr(record, "memo", None) or {})
@@ -7841,6 +7843,24 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             and publication_eligible
         ):
             enabled = enabled | {"can_retry_publication"}
+    # Saved-work publication is independent of compute state; it reports the
+    # same submission gate and rollout admission its publication-only route
+    # applies, so the result view never offers a publication that cannot start.
+    try:
+        publication_policy = _publication_recovery_policy()
+    except ValueError:
+        # A malformed rollout setting disables publication, not the read.
+        publication_policy = None
+    if not settings.temporal_dashboard.submit_enabled:
+        saved_work_publication_reason = "temporal_submit_disabled"
+    elif publication_policy is None:
+        saved_work_publication_reason = "publication_recovery_policy_invalid"
+    else:
+        saved_work_publication_reason = publication_policy.availability_reason(
+            owner_id=_owner_id(user)
+        )
+    if saved_work_publication_reason is None:
+        enabled = enabled | {"can_publish_saved_work"}
     historical = is_historical_workflow_type(workflow_type_value)
     if historical:
         # MoonLadderStudios/MoonMind#4189: retired history is read-only.
@@ -7856,6 +7876,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_failed_step_resume": "canResumeFromFailedStep",
         "can_continue_remediation": "canContinueRemediation",
         "can_retry_publication": "canRetryPublication",
+        "can_publish_saved_work": "canPublishSavedWork",
         "can_full_retry": "canFullRetry",
         "can_cancel": "canCancel",
         "can_force_cancel": "canForceCancel",
@@ -7923,6 +7944,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     reason or "publication_retry_not_eligible"
                 )
             continue
+        if field_name == "can_publish_saved_work" and saved_work_publication_reason:
+            disabled_reasons[alias] = saved_work_publication_reason
+            continue
         disabled_reasons[alias] = "state_not_eligible"
     common_control_stop_evidence = {
         "candidateRef": control_stop.get("workspaceHeadRef"),
@@ -7981,6 +8005,10 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             else {}
         ),
     }
+    if publication_policy is not None and "can_publish_saved_work" in enabled:
+        action_evidence["publishSavedWork"] = publication_policy.destination_limits(
+            owner_id=_owner_id(user)
+        )
     if workflow_type_value == "MoonMind.PublicationRecoveryV1":
         action_evidence["publicationRecovery"] = {
             "sourceWorkflowId": memo.get("source_workflow_id"),
@@ -8003,6 +8031,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_failed_step_resume="can_failed_step_resume" in enabled,
         can_continue_remediation="can_continue_remediation" in enabled,
         can_retry_publication="can_retry_publication" in enabled,
+        can_publish_saved_work="can_publish_saved_work" in enabled,
         can_full_retry="can_full_retry" in enabled,
         action_evidence=action_evidence,
         can_cancel="can_cancel" in enabled,
