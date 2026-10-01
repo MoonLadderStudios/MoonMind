@@ -476,6 +476,7 @@ def test_snapshot_collects_findings_after_review_completion(
     monkeypatch.setitem(scope, "fetch_pr_data", fetch_pr)
     monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
     monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
+    monkeypatch.setitem(scope, "_fetch_commit_statuses", lambda **_kwargs: [])
     monkeypatch.setitem(scope, "_fetch_previous_commit_sha", lambda **_kwargs: None)
     monkeypatch.setitem(
         scope, "_fetch_head_commit_timestamp", lambda **_kwargs: HEAD_COMMITTED_AT
