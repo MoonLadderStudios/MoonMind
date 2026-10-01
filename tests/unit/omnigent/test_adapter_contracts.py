@@ -386,7 +386,7 @@ def _acquire_kwargs(plan_ref: str) -> dict:
         "launch_policy_ref": "omnigent-on-demand@1",
         "harness_id": "opencode-native",
         "harness_implementation_ref": "impl",
-        "provider_profile_refs": ("opencode-go-primary",),
+        "provider_profile_refs": ("omnigent-go-primary",),
     }
 
 
@@ -449,6 +449,35 @@ async def test_host_lease_heartbeat_requires_the_current_generation(
     with pytest.raises(HarnessPlatformError):
         await repository.heartbeat(
             lease.leaseRef, expected_generation=lease.generation + 5
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("implementation", ("in_memory", "postgres_style"))
+async def test_host_lease_heartbeat_refuses_to_revive_an_expired_lease(
+    session_factory, implementation: str
+) -> None:
+    """Expiry must be a one-way door, not a renewable pause.
+
+    Generic host capacity stops counting a lease once ``expires_at`` passes, so
+    its slot is available to the next allocation. If the original owner could
+    still renew afterwards, it would resume against a host it no longer owns
+    and a capacity of one would admit two live hosts. The heartbeat CAS
+    therefore refuses to renew a lease whose deadline has passed.
+    """
+
+    repository = _host_lease_repository(session_factory, implementation)
+    plan_ref = "omnigent-execution-plan:sha256:" + "e" * 64
+
+    # A zero TTL leaves the deadline already in the past on acquire, so the
+    # renewal below is a revival attempt rather than a stale-but-live beat.
+    lease = await repository.acquire(
+        **_acquire_kwargs(plan_ref), ttl_seconds=0
+    )
+
+    with pytest.raises(HarnessPlatformError):
+        await repository.heartbeat(
+            lease.leaseRef, expected_generation=lease.generation
         )
 
 

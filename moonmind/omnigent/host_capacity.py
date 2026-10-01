@@ -238,14 +238,19 @@ class GenericHostCapacityAdmission:
                 # of a lease's authority; counting it here too let one
                 # abandoned host hold every queued run in `awaiting_slot`
                 # forever, because its owner never returned to release it.
-                # The realizer renews `expires_at` on each heartbeat, so a
-                # host still being driven always carries a future expiry and
-                # is never freed from under itself. A row with no recorded
-                # expiry stays counted: an unknown deadline is not evidence
-                # of a free slot.
+                # Heartbeat refuses to renew an expired lease, so expiry is a
+                # one-way door: the previous owner cannot resume against a
+                # host whose slot this count has already released.
+                #
+                # A row with no recorded expiry stays counted -- an unknown
+                # deadline is not evidence of a free slot -- and so does
+                # `cleanup_pending`, where teardown is owed but unconfirmed.
+                # Only `cleaned` proves the container is gone, and until then
+                # the machine is still running it.
                 or_(
                     OmnigentHostLeaseRecordV2.expires_at.is_(None),
                     OmnigentHostLeaseRecordV2.expires_at > observed_at,
+                    OmnigentHostLeaseRecordV2.status == "cleanup_pending",
                 ),
             )
         )
