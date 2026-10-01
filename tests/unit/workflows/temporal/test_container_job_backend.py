@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sys
 from unittest.mock import AsyncMock
 
 import pytest
@@ -122,6 +123,55 @@ def test_production_backend_satisfies_protocol() -> None:
     assert isinstance(
         DockerContainerJobBackend(workspace_root="/tmp"), ContainerJobBackend
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="test Docker CLI uses a POSIX executable"
+)
+async def test_pull_progress_is_durable_and_projected_before_command_finishes(
+    tmp_path,
+) -> None:
+    docker = tmp_path / "docker"
+    docker.write_text(
+        f"#!{sys.executable}\n"
+        "import time\n"
+        "print('Layer downloading password=private-example', flush=True)\n"
+        "time.sleep(0.5)\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    published = asyncio.Event()
+    outputs: list[bytes] = []
+    projected: list[str | None] = []
+
+    async def publish(_request, _name, data):
+        outputs.append(data)
+        (tmp_path / "pull.txt").write_bytes(data)
+        published.set()
+        return "artifact://image-pull"
+
+    async def project(request):
+        projected.append(request.logs_ref)
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        docker_binary=str(docker),
+        evidence_publisher=publish,
+        projection_writer=project,
+    )
+    task = asyncio.create_task(backend._pull_image(_request(tmp_path), "python:3.13"))
+    try:
+        await asyncio.wait_for(published.wait(), timeout=3)
+        assert (
+            not task.done()
+        ), "cold acquisition must publish progress while still pulling"
+        assert projected == ["artifact://image-pull"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert b"downloading" in (tmp_path / "pull.txt").read_bytes()
+    assert all(b"private-example" not in data and len(data) <= 8192 for data in outputs)
 
 
 @pytest.mark.asyncio

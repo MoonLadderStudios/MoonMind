@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from pr_resolver_core import (
-    CanonicalPullRequestSnapshot,
     IMPLEMENTATION_CONTRACT,
     RESOLVER_CORE_DIGEST,
+    CanonicalPullRequestSnapshot,
     ResolverAction,
     ResolverEvent,
     ResolverPolicy,
@@ -20,6 +20,36 @@ from pr_resolver_core import (
     normalize_temporal_snapshot,
     reduce_resolver_state,
 )
+
+
+@pytest.mark.parametrize("mergeable", [True, "MERGEABLE"])
+def test_confirmed_mergeability_with_advisory_status_reaches_clean_gate(mergeable):
+    snapshot = normalize_portable_snapshot(
+        {
+            "pr": {
+                "state": "OPEN",
+                "mergeable": mergeable,
+                "mergeStateStatus": "UNSTABLE",
+            },
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True},
+            "commentsSummary": {"includeBotReviewComments": True},
+        }
+    )
+    decision = classify_snapshot(snapshot)
+    assert decision.action == ResolverAction.ATTEMPT_MERGE
+
+
+def test_unstable_state_without_confirmed_mergeability_still_waits():
+    snapshot = normalize_portable_snapshot(
+        {
+            "pr": {"state": "OPEN", "mergeStateStatus": "UNSTABLE"},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True},
+            "commentsSummary": {"includeBotReviewComments": True},
+        }
+    )
+    assert classify_snapshot(snapshot).action == ResolverAction.WAIT
 
 
 @pytest.mark.parametrize(
@@ -315,6 +345,7 @@ def test_core_exports_immutable_identity() -> None:
             "classify.py",
             "transition.py",
             "review_providers.py",
+            "github_checks.py",
         )
     )
     assert RESOLVER_CORE_DIGEST == (

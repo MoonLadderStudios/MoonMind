@@ -62,6 +62,14 @@ inputSchema:
         "fix_only" keeps remediating comments, CI, and conflicts but stops once
         nothing resolver-owned is left to address and reports review_clean
         instead of merging.
+    returnToGate:
+      type: boolean
+      default: false
+      description: >-
+        Derived by a validated MergeAutomation owner. Return CI/provider waits
+        with gatedContinuation so the parent retains the candidate and waits
+        durably while the agent releases its Provider Profile slot. This value
+        does not authorize a standalone workflow to create a continuation owner.
   anyOf:
     - required:
         - pr
@@ -233,10 +241,15 @@ metadata flag.
    - `deferred_comments`: the comment ledger deferred or could not fix at least
      one comment that is still present. Publish `manual_review` and stop; a
      repeated remediation pass cannot clear a deferred disposition.
-    - `ci_running`, provider-grace waits reported by the portable adapter (for
+   - `ci_running`, provider-grace waits reported by the portable adapter (for
       example the snapshot's review-grace classification), or another
-      documented transient: wait with the bounded backoff configured by the
-      Skill inputs, then return to step 2.
+      documented transient: when the admitted owner supplied `returnToGate`,
+      pass `--return-to-gate` to `pr_resolve_orchestrate.py`, retain its
+      `gatedContinuation`, and stop this agent turn with `reenter_gate`. The
+      existing parent owns the durable wait and subsequent resolver attempt.
+      A standalone invocation retains the bounded foreground backoff, then
+      returns to step 2. Tactics CI stays on its self-hosted runners; runner
+      queueing is an external wait, never a reason to change runner selection.
    - any unavailable, ambiguous, permission-sensitive, or non-retryable state:
      publish `manual_review` or `failed` evidence and stop without merging.
 4. After every remediation, verify the exact local `HEAD` is visible on the PR

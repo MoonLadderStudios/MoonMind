@@ -1115,6 +1115,92 @@ async def test_evaluate_pull_request_readiness_reports_checks_permission_missing
     assert result.blockers[0]["kind"] == "readiness_evidence_unavailable"
     assert result.blockers[0]["missingPermission"] == "Checks: read"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "protected,status_state,expected_ready",
+    [
+        (False, "pending", True),
+        (False, "failure", True),
+        (True, "pending", False),
+        (True, "failure", False),
+        (None, "pending", False),
+    ],
+)
+async def test_durable_readiness_uses_branch_policy_for_current_head_statuses(
+    monkeypatch,
+    protected,
+    status_state,
+    expected_ready,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    async def get(url, **kwargs):
+        if url.endswith("/pulls/341"):
+            return _mock_get_response(
+                200,
+                {"state": "open", "head": {"sha": "current"}, "base": {"ref": "main"}},
+            )
+        if "/branches/main/protection" in url:
+            return _mock_get_response(
+                200,
+                {
+                    "required_status_checks": {
+                        "contexts": [],
+                        "checks": [{"context": "GitBook", "app_id": 123}],
+                    }
+                },
+            )
+        if "/rules/branches/main" in url:
+            return _mock_get_response(200, [])
+        if "/branches/main" in url:
+            return (
+                _mock_get_response(200, {"protected": protected})
+                if protected is not None
+                else _mock_get_response(403, {})
+            )
+        if "/commits/current/status" in url:
+            return _mock_get_response(
+                200,
+                {
+                    "state": status_state,
+                    "statuses": [{"context": "GitBook", "state": status_state}],
+                },
+            )
+        if "/commits/current/check-runs" in url:
+            return _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {
+                            "name": "Unreal",
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(url)
+
+    client = AsyncMock()
+    client.get = get
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="prior",
+            policy={"checks": "required", "automatedReview": "disabled"},
+        )
+    assert result.head_sha == "current"
+    assert result.ready is expected_ready
+    assert result.checks_passing is expected_ready
+
+
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_opens_after_checks_and_review(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")

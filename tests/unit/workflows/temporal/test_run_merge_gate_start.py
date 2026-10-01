@@ -487,6 +487,51 @@ def test_build_merge_gate_start_payload_from_published_pr() -> None:
     assert payload["mergeAutomationConfig"]["resolver"]["mergeMethod"] == "squash"
     assert payload["resolverTemplate"]["repository"] == "MoonLadderStudios/MoonMind"
 
+
+@pytest.mark.parametrize("new_history", [True, False])
+@pytest.mark.parametrize("repair_budget", [None, 7])
+def test_merge_gate_returns_external_waits_without_an_explicit_repair_budget(
+    new_history,
+    repair_budget,
+) -> None:
+    from moonmind.workflows.temporal.workflows.merge_gate import (
+        build_resolver_run_request,
+    )
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_MERGE_AUTOMATION_RESOLVER_SELECTION_PATCH,
+    )
+
+    parent = MoonMindRunWorkflow()
+    parent._repo = "MoonLadderStudios/Tactics"
+    parent._publish_context.update({"branch": "saved-repair", "baseRef": "main"})
+    parent._workflow_patch_enabled = lambda patch: (
+        new_history if patch == RUN_MERGE_AUTOMATION_RESOLVER_SELECTION_PATCH else True
+    )
+    payload = parent._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "maxIterations": repair_budget},
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/Tactics/pull/2770",
+        head_sha="abcdef1",
+        parent_workflow_id="parent",
+        parent_run_id="run-1",
+    )
+    child = build_resolver_run_request(
+        parent_workflow_id="gate",
+        pull_request=payload["pullRequest"],
+        jira_issue_key=None,
+        merge_method="squash",
+        resolver_template=payload["resolverTemplate"],
+    )
+    args = child["initial_parameters"]["task"]["skill"]["args"]
+    assert args.get("returnToGate", False) is new_history
+    if new_history and repair_budget is not None:
+        assert args["maxIterations"] == repair_budget
+    else:
+        assert "maxIterations" not in args
+
+
 def test_build_merge_gate_start_payload_carries_inferred_jira_orchestrate_key() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/Tactics"

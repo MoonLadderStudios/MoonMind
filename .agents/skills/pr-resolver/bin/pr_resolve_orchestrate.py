@@ -122,6 +122,7 @@ def _build_result(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": RESULT_SCHEMA_VERSION,
+        "executionRef": current_execution_ref(),
         "tool": "pr_resolve_orchestrate",
         "status": status,
         "merge_outcome": merge_outcome,
@@ -177,6 +178,7 @@ def run_orchestration(
     max_elapsed_seconds: int,
     merge_not_ready_grace_retries: int,
     min_attempts_before_exhausted: int = DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED,
+    return_to_gate: bool = False,
 ) -> tuple[dict[str, Any], int]:
     min_attempts_before_exhausted = max(1, int(min_attempts_before_exhausted))
     max_attempts = max(
@@ -340,6 +342,29 @@ def run_orchestration(
             reason,
             merge_not_ready_grace_remaining=grace_remaining,
         )
+        if (
+            return_to_gate
+            and retry_action == "finalize_only_retry"
+            and isinstance(gated_continuation, dict)
+        ):
+            # The admitted parent owns timers and external-state polling. Do
+            # not occupy its provider slot while waiting for self-hosted CI.
+            result = _build_result(
+                status="blocked",
+                decision="return external wait to owning merge gate",
+                merge_outcome="blocked",
+                final_reason=reason,
+                next_step="retry_finalize_after_backoff",
+                max_attempts=max_attempts,
+                finalize_max_retries=finalize_max_retries,
+                fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
+                history=history,
+                escalations=escalations,
+                started_at=started_at,
+                finished_at=now_utc_iso(),
+            )
+            return result, EXIT_CODE_BLOCKED
         if retry_action == "stop":
             result = _build_result(
                 status="blocked",
@@ -556,9 +581,18 @@ def _write_publish_evidence_fallback(reason: str) -> None:
         "blockedReason": reason,
         "verificationCommands": [],
     }
-    (artifacts_dir / "publish_result.json").write_text(
-        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
-    )
+    evidence_path = artifacts_dir / "publish_result.json"
+    prior = _read_json(evidence_path) or {}
+    if (
+        prior.get("schemaVersion") == "moonmind.publish.auto.v1"
+        and prior.get("status") == "verified"
+        and prior.get("remoteVerified") is True
+        and (prior.get("pushed") is True or prior.get("merged") is True)
+    ):
+        # Failed reporting does not invalidate a previously confirmed action.
+        # Keep its receipt and record the unavailable current report separately.
+        evidence_path = artifacts_dir / "publish_result.diagnostics.json"
+    evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def _redact_diagnostic_text(value: object) -> str:
@@ -687,6 +721,11 @@ def main() -> None:
         help="Do not execute merge in finalize stage.",
     )
     parser.add_argument(
+        "--return-to-gate",
+        action="store_true",
+        help="Return external waits to the admitted durable merge-automation owner.",
+    )
+    parser.add_argument(
         "--review-provider",
         default=os.environ.get("PR_RESOLVER_REVIEW_PROVIDER", ""),
         help=(
@@ -795,6 +834,7 @@ def main() -> None:
         max_sleep_seconds=args.max_sleep_seconds,
         max_elapsed_seconds=args.max_elapsed_seconds,
         merge_not_ready_grace_retries=args.merge_not_ready_grace_retries,
+        return_to_gate=args.return_to_gate,
     )
 
     result_path.parent.mkdir(parents=True, exist_ok=True)

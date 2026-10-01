@@ -7,6 +7,8 @@ import hashlib
 import inspect
 import json
 import logging
+import math
+import time
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -223,6 +225,12 @@ class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
         super().__init__(message, session_id=session_id, snapshot=snapshot)
 
 
+class _MarkedTurnStalledError(OmnigentSessionStillRunningError):
+    """Recovery is needed; a quiet active projection is never terminal proof."""
+
+    code = "OMNIGENT_CURRENT_TURN_PROGRESS_STALLED"
+
+
 class OmnigentTurnUnrecoverableError(OmnigentSessionStillRunningError):
     """Raised when the accepted marked turn can never produce provider work.
 
@@ -357,6 +365,7 @@ class _MarkedTurnStartWatchdog:
         timeout_seconds: float,
         started_at: float | None = None,
         host_loss_grace_seconds: float | None = None,
+        stall_timeout_seconds: float | None = None,
     ):
         self._loop = loop
         self.started_at = loop.time() if started_at is None else float(started_at)
@@ -376,6 +385,78 @@ class _MarkedTurnStartWatchdog:
         self.active_response_known_terminal = False
         self.progress = False
         self._terminal_response_ids: dict[str, None] = {}
+        self.stall_timeout_seconds = stall_timeout_seconds
+        self.last_progress_at = self.started_at
+        self.last_progress_wall_time = time.time() - (loop.time() - self.started_at)
+        self.progress_signature: str | None = None
+
+    def restore_progress(self, state: Mapping[str, Any]) -> None:
+        signature = state.get("turnProgressSignature")
+        observed_at = state.get("turnLastProgressAt")
+        if (
+            isinstance(signature, str)
+            and signature
+            and isinstance(observed_at, (int, float))
+            and not isinstance(observed_at, bool)
+            and math.isfinite(observed_at)
+            and observed_at > 0
+            and (
+                self.progress_signature is None
+                or observed_at >= self.last_progress_wall_time
+            )
+        ):
+            self.progress_signature = signature
+            self.last_progress_wall_time = min(time.time(), float(observed_at))
+            self.last_progress_at = self._loop.time() - max(
+                0.0, time.time() - self.last_progress_wall_time
+            )
+
+    def restore_progress_events(self, events: list[dict[str, Any]]) -> None:
+        for event in events:
+            metadata = event.get("metadata")
+            if isinstance(metadata, Mapping):
+                state = metadata.get("reconciliation")
+                if isinstance(state, Mapping):
+                    self.restore_progress(state)
+
+    def _record_progress(self, observed_at: float) -> None:
+        self.last_progress_at = observed_at
+        self.last_progress_wall_time = time.time() - (self._loop.time() - observed_at)
+
+    def observe_progress_event(self, event: Mapping[str, Any]) -> None:
+        if str(event.get("type") or event.get("eventType") or "") in {
+            "response.output_text.delta",
+            "response.function_call_arguments.delta",
+            "response.output_item.added",
+            "response.output_item.done",
+        }:
+            self._record_progress(self._loop.time())
+
+    def _observe_progress(
+        self, snapshot, turn_state, *, started_at, completed_at
+    ) -> None:
+        if turn_state.get("boundarySource") is None:
+            return
+        signature = hashlib.sha256(
+            json.dumps(turn_state.get("signature"), sort_keys=True).encode()
+        ).hexdigest()
+        if signature != self.progress_signature:
+            self.progress_signature = signature
+            self._record_progress(completed_at)
+        if (
+            self.stall_timeout_seconds is not None
+            and self.currently_active
+            and normalize_omnigent_observation(snapshot)
+            not in {"awaiting_approval", "intervention_requested"}
+            and started_at - self.last_progress_at >= self.stall_timeout_seconds
+        ):
+            raise _MarkedTurnStalledError(
+                f"Omnigent active turn made no observable progress for {started_at - self.last_progress_at:.3f}s; "
+                "liveness heartbeats cannot renew its progress budget",
+                snapshot=snapshot,
+                timeout_seconds=self.stall_timeout_seconds,
+                turn_state=turn_state,
+            )
 
     def _remember_terminal_response_id(self, response_id: str) -> None:
         self._terminal_response_ids.pop(response_id, None)
@@ -450,6 +531,12 @@ class _MarkedTurnStartWatchdog:
             turn_state,
             observation_started_at=observation_observed_at,
         )
+        self._observe_progress(
+            snapshot,
+            turn_state,
+            started_at=observation_started_at,
+            completed_at=observation_observed_at,
+        )
         if not self.armed or turn_state.get("boundarySource") is None:
             return
         if observation_started_at < self.deadline:
@@ -505,6 +592,8 @@ class _MarkedTurnStartWatchdog:
             "turnCurrentlyActive": self.currently_active,
             "turnActiveResponseKnownTerminal": self.active_response_known_terminal,
             "turnTerminalResponseIds": list(self._terminal_response_ids),
+            "turnProgressSignature": self.progress_signature,
+            "turnLastProgressAt": self.last_progress_wall_time,
             "turnStartWaitSeconds": (
                 round(self._loop.time() - self.started_at, 3)
                 if not self.progress
@@ -1223,6 +1312,24 @@ def _marked_turn_item_state(
         str(last_item.get("status") or ""),
         str(last_item_data.get("role") or ""),
         str(last_item_data.get("call_id") or ""),
+        hashlib.sha256(
+            json.dumps(
+                [
+                    {
+                        "id": item.get("id"),
+                        "type": item.get("type"),
+                        "status": item.get("status"),
+                        "data": item.get("data"),
+                    }
+                    for item in raw_items[progress_start_index:]
+                    if isinstance(item, Mapping)
+                    and item.get("type")
+                    in {"function_call", "function_call_output", "message"}
+                ],
+                sort_keys=True,
+                default=str,
+            ).encode()
+        ).hexdigest(),
     )
     unfinished_tool_name = next(
         (name for name in pending_call_names.values() if name),
@@ -2324,6 +2431,7 @@ async def run_omnigent_execution(
     first_message_text: str | None = None,
     defer_bridge_terminal: bool = False,
     allow_same_session_continuation: bool = False,
+    allow_stall_interruption: bool = False,
     session_authority_sink: Any | None = None,
     transport_pool: Any | None = None,
 ) -> AgentRunResult:
@@ -2462,9 +2570,7 @@ async def run_omnigent_execution(
                         credential_generation=int(
                             profile_authorization["credentialGeneration"]
                         ),
-                        host_binding_ref=str(
-                            profile_authorization["hostBindingRef"]
-                        ),
+                        host_binding_ref=str(profile_authorization["hostBindingRef"]),
                         host_lease_ref=str(profile_authorization["hostLeaseRef"]),
                         omnigent_host_id=str(
                             profile_authorization.get("omnigentHostId") or ""
@@ -3083,7 +3189,13 @@ async def run_omnigent_execution(
                 loop=asyncio.get_running_loop(),
                 timeout_seconds=_MARKED_TURN_START_TIMEOUT_SECONDS,
                 started_at=turn_dispatched_at,
+                # Quiet tools retain the execution budget they were granted.
+                # Reserve the existing recovery window before Activity expiry;
+                # the over-base progress-extension grace is not an early kill.
+                stall_timeout_seconds=marked_turn_timeout_seconds,
             )
+            start_watchdog.restore_progress(retry_state)
+            start_watchdog.restore_progress_events(normalized_events)
             start_watchdog.restore_terminal_response_ids(
                 retry_state.get("turnTerminalResponseIds")
             )
@@ -3262,12 +3374,17 @@ async def run_omnigent_execution(
                         bridge_session_id=bridge_session_id,
                     )
                     if arrived_after_message_post:
+                        start_watchdog.observe_terminal_response_event(event)
+                        start_watchdog.observe_progress_event(event)
                         # Persist observation provenance with the same journal
                         # pair as the event, before any crash-prone snapshot or
                         # harvest work. Provider payloads cannot set this field.
                         normalized_bridge_event.event["metadata"]["reconciliation"][
                             "postDispatchRawEventIndex"
                         ] = (len(raw_events) - 1)
+                        normalized_bridge_event.event["metadata"][
+                            "reconciliation"
+                        ].update(start_watchdog.heartbeat_fields())
                     if normalized_bridge_event.diagnostic is not None:
                         event_diagnostics.append(normalized_bridge_event.diagnostic)
                     normalized_events.append(normalized_bridge_event.event)
@@ -3293,8 +3410,6 @@ async def run_omnigent_execution(
                             bridge_session_id, [normalized_bridge_event.event]
                         )
                     normalized = normalized_bridge_event.event["normalizedStatus"]
-                    if arrived_after_message_post:
-                        start_watchdog.observe_terminal_response_event(event)
                     _safe_heartbeat(
                         {
                             "omnigentSessionId": session_id,
@@ -4031,6 +4146,91 @@ async def run_omnigent_execution(
             retryRecommendation=remediation_for(exc.code),
             metadata=result_metadata,
         )
+    except _MarkedTurnStalledError as exc:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        _safe_heartbeat(start_watchdog.heartbeat_fields())
+        # Commit the recovery observation before interrupting provider work.
+        # A retry restores the same semantic clock even if its heartbeat was lost.
+        with suppress(Exception):
+            recovery_event = build_omnigent_bridge_event(
+                payload={"type": "session.status", "status": "running"},
+                sequence=event_count["value"] + 1,
+                request=request,
+                omnigent_session_id=session_id,
+                bridge_session_id=bridge_session_id,
+            ).event
+            recovery_event["metadata"]["reconciliation"].update(
+                {
+                    "source": "progress_stall_recovery",
+                    "providerErrorCode": exc.code,
+                    **start_watchdog.heartbeat_fields(),
+                }
+            )
+            normalized_events.append(recovery_event)
+            raw_ref, normalized_ref = await _publish_active_journals(
+                artifact_gateway=artifact_gateway,
+                request=request,
+                raw_events=raw_events,
+                normalized_events=normalized_events,
+            )
+            if run_store is not None and bridge_session_id:
+                await run_store.attach_active_journal_refs(
+                    bridge_session_id,
+                    raw_ref=raw_ref,
+                    normalized_ref=normalized_ref,
+                )
+                recovery_event["artifactRef"] = normalized_ref
+                await run_store.append_events(bridge_session_id, [recovery_event])
+        # Keep the original stall diagnostic in the existing artifact owner;
+        # failed reporting cannot erase the journal or authorize terminalization.
+        with suppress(Exception):
+            diagnostic_ref = await artifact_gateway.write_text(
+                request=request,
+                name="runtime.omnigent.progress-stall.json",
+                payload=json.dumps(
+                    {
+                        "providerErrorCode": exc.code,
+                        "error": str(exc),
+                        **start_watchdog.heartbeat_fields(),
+                    }
+                ),
+                link_type="runtime.omnigent.diagnostics",
+                content_type="application/json",
+            )
+            _safe_heartbeat({"turnRecoveryDiagnosticsRef": diagnostic_ref})
+        # This catches every observation path, including reattachment. Only
+        # the admitted same-session recovery owner may interrupt the turn.
+        if (
+            allow_same_session_continuation
+            and allow_stall_interruption
+            and client is not None
+        ):
+            try:
+                # The execution transport has exited its context. Reopen it
+                # through its existing owner for the bounded recovery probe.
+                async with omnigent_httpx_client(transport_pool) as recovery_httpx:
+                    recovery_client = OmnigentHttpClient(
+                        base_url=resolved_server_url(),
+                        api_token=resolved_api_token(),
+                        client=recovery_httpx,
+                        upstream_header_allowlist=resolved_proxy_forward_headers(),
+                    )
+                    await asyncio.wait_for(
+                        recovery_client.interrupt(session_id), timeout=30
+                    )
+                    recovered_snapshot = await asyncio.wait_for(
+                        recovery_client.get_session(session_id), timeout=30
+                    )
+            except Exception:
+                raise exc
+            if _snapshot_projects_inactive_turn(recovered_snapshot):
+                raise OmnigentSameSessionContinuationRequired(
+                    str(exc),
+                    session_id=session_id,
+                    snapshot=recovered_snapshot,
+                ) from exc
+        raise
     except OmnigentSessionStillRunningError:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)

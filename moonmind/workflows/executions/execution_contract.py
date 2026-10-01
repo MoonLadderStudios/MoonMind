@@ -2417,10 +2417,25 @@ class WorkflowExecutionSpec(BaseModel):
             if step.instructions:
                 instruction_chunks.append(step.instructions)
 
-        if self.publish.mode == "none" and "pr-resolver" not in skill_ids:
+        merge_automation = (
+            getattr(self.publish, "mergeAutomation", None)
+            or getattr(self.publish, "merge_automation", None)
+            or getattr(self, "mergeAutomation", None)
+            or getattr(self, "merge_automation", None)
+        )
+        gate_owns_resolution = (
+            isinstance(merge_automation, Mapping)
+            and merge_automation.get("enabled") is True
+        )
+        if (
+            self.publish.mode == "none"
+            and "pr-resolver" not in skill_ids
+            and not gate_owns_resolution
+        ):
             raise WorkflowContractError(
                 "resolve-PR objectives with task.publish.mode='none' require "
-                "skill 'pr-resolver' so commit/push/merge can be handled directly"
+                "skill 'pr-resolver' or enabled merge automation "
+                "so commit/push/merge has an execution owner"
             )
 
         if any(

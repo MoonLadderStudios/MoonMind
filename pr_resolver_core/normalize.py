@@ -65,21 +65,14 @@ def normalize_temporal_snapshot(
             }
             & set(kinds)
         )
-        or (
-            "external_state_unavailable" in kinds
-            and not non_retryable_external_state
-        ),
+        or ("external_state_unavailable" in kinds and not non_retryable_external_state),
         checks_complete=(ready or "checks_failed" in kinds or _bool(checks_complete)),
         checks_passing=(
             ready or ("checks_failed" not in kinds and _bool(checks_passing))
         ),
         checks_failed=(
             "checks_failed" in kinds
-            or (
-                not ready
-                and _bool(checks_complete)
-                and not _bool(checks_passing)
-            )
+            or (not ready and _bool(checks_complete) and not _bool(checks_passing))
         ),
         checks_degraded=bool(degraded_kinds & set(kinds)),
         checks_signal_available=isinstance(checks_complete, bool),
@@ -175,7 +168,12 @@ def normalize_portable_snapshot(
             or mergeable_text in {"CONFLICTING", "DIRTY", "CONFLICT"}
         ),
         mergeability_unknown=(
-            merge_state in {"UNKNOWN", "UNSTABLE", "BLOCKED"}
+            merge_state in {"UNKNOWN", "BLOCKED"}
+            or (
+                merge_state == "UNSTABLE"
+                and mergeable is not True
+                and mergeable_text != "MERGEABLE"
+            )
             or mergeable_text in {"UNKNOWN", "UNSTABLE"}
         ),
         approving_review_required=(

@@ -509,21 +509,18 @@ def _build_queue_request(
         "task": {
             "title": branch,
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
-            "skill": {
-                "name": "pr-resolver",
-            },
+            # Reuse existing-PR adoption: the trusted tool qualifies the target,
+            # Temporal owns external waits, and ordinary Skill children own
+            # repairs and merge effects. A batch does not add a review policy.
+            "taskTemplate": {"slug": "pr-review-resolve"},
             "inputs": {
-                "repo": repo,
-                "pr": str(pr_number),
-                "branch": branch,
-                "mergeMethod": merge_method,
-                "maxIterations": max_iterations,
+                "repository": repo,
+                "pull_request": str(pr_number),
+                "review_provider": "none",
+                "finish_with_pr_resolver": True,
+                "merge_method": merge_method,
+                "max_iterations": max_iterations,
             },
-            "git": {
-                "startingBranch": branch,
-                "branch": branch,
-            },
-            "publish": {"mode": "auto"},
         },
     }
     idempotency_key = _child_idempotency_key(

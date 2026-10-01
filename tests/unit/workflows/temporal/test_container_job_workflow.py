@@ -129,6 +129,10 @@ async def test_local_source_gets_build_budget_without_changing_direct_image_hist
     monkeypatch,
 ) -> None:
     calls: list[dict] = []
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.container_job.workflow.patched",
+        lambda _patch: False,
+    )
 
     async def execute_activity(_name, _payload, **kwargs):
         calls.append(kwargs)
@@ -151,6 +155,34 @@ async def test_local_source_gets_build_budget_without_changing_direct_image_hist
     assert calls[0]["schedule_to_close_timeout"] == timedelta(seconds=300)
     assert calls[1]["start_to_close_timeout"] == timedelta(seconds=1800)
     assert calls[1]["schedule_to_close_timeout"] == timedelta(seconds=2100)
+
+
+@pytest.mark.asyncio
+async def test_cold_direct_image_pull_has_acquisition_budget_independent_of_workload(
+    monkeypatch,
+) -> None:
+    execute_activity = AsyncMock(return_value={})
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.container_job.workflow.execute_activity",
+        execute_activity,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.container_job.workflow.patched",
+        lambda _patch: True,
+    )
+    inp = _input(timeout=900)
+    request = ContainerJobActivityRequest(
+        jobId=inp.job_id,
+        ownershipToken=inp.ownership_token,
+        request=inp.request,
+    )
+    await MoonMindContainerJobWorkflow()._activity(
+        "container_job.acquire_image", request
+    )
+    options = execute_activity.await_args.kwargs
+    assert options["start_to_close_timeout"] == timedelta(seconds=1800)
+    assert options["schedule_to_close_timeout"] == timedelta(seconds=2100)
+    assert request.request.spec.timeout_seconds == 900
 
 
 @pytest.mark.asyncio
