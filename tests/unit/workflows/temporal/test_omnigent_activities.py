@@ -10,7 +10,7 @@ import pytest_asyncio
 from temporalio.testing import ActivityEnvironment
 
 from moonmind.omnigent import execute as omnigent_execute_module
-from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -793,7 +793,10 @@ async def test_omnigent_execute_activity_delegates(
     mock_run.assert_called_once()
     called_req = mock_run.call_args.args[0]
     assert called_req == req
-    assert isinstance(mock_run.call_args.kwargs["artifact_gateway"], LocalOmnigentArtifactGateway)
+    assert isinstance(
+        mock_run.call_args.kwargs["artifact_gateway"],
+        TemporalOmnigentArtifactGateway,
+    )
     assert isinstance(mock_run.call_args.kwargs["run_store"], OmnigentBridgeSessionStore)
     assert len(heartbeats) >= 2
     heartbeat_payloads = [

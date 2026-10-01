@@ -85,6 +85,7 @@ def get_default_registry() -> OmnigentExecutionRealizerRegistry:
         return _default_registry
 
     from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
     from moonmind.omnigent.control_plane import (
         CanonicalTurnCommandService,
         OmnigentControlPlaneStore,
@@ -97,6 +98,9 @@ def get_default_registry() -> OmnigentExecutionRealizerRegistry:
     registry.register(
         CodexProfileBoundRealizer(
             session_factory=async_session_maker,
+            # Codex shares the deployment's durable artifact gateway so an
+            # admitted request's ``art_...`` refs resolve on every path.
+            artifact_gateway=TemporalOmnigentArtifactGateway(async_session_maker),
             # Codex shares the canonical session/turn ownership model even when
             # the generic host is disabled (#3707 AC10).
             turn_command_service=CanonicalTurnCommandService(

@@ -990,10 +990,7 @@ async def _omnigent_execute_activity(
     """
 
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.bridge_artifacts import (
-        LocalOmnigentArtifactGateway,
-        TemporalOmnigentArtifactGateway,
-    )
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
     from moonmind.omnigent.control_plane.turn_commands import (
@@ -1020,7 +1017,11 @@ async def _omnigent_execute_activity(
     )
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
-    artifact_gateway = LocalOmnigentArtifactGateway()
+    # One durable gateway for every Omnigent path in this Activity. A
+    # filesystem-scoped gateway cannot dereference an admitted request's durable
+    # ``art_...`` refs, and the evidence it captured would not survive the
+    # worker that produced it.
+    artifact_gateway = TemporalOmnigentArtifactGateway(async_session_maker)
     run_store = OmnigentBridgeSessionStore(async_session_maker)
 
     # --- Generic Omnigent host realizer dispatch (Phase 1) ---
@@ -1029,7 +1030,7 @@ async def _omnigent_execute_activity(
     # registry. This path is harness-neutral: no `if harness == "opencode"` branches.
     generic_dispatch = await _try_generic_realizer_dispatch(
         request,
-        artifact_gateway=TemporalOmnigentArtifactGateway(async_session_maker),
+        artifact_gateway=artifact_gateway,
         run_store=run_store,
     )
     if generic_dispatch is not None:
