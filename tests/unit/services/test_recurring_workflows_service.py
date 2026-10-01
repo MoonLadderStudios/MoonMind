@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -362,6 +362,131 @@ async def test_create_definition_rejects_retired_manifest_ingest(
                     },
                     policy={},
                 )
+
+@pytest.mark.parametrize(
+    "initial_parameters",
+    [
+        {"task": {"instructions": "Queue job"}, "rag": {"collections": ["docs"]}},
+        {"task": {"instructions": "Queue job"}, "followUpRetrieval": {"enabled": True}},
+        {"task": {"instructions": "Queue job", "rag": {"collections": ["docs"]}}},
+    ],
+)
+async def test_create_definition_rejects_retired_vector_retrieval(
+    tmp_path: Path, mock_temporal_adapter, initial_parameters
+) -> None:
+    # MoonLadderStudios/MoonMind#4103: a schedule must not persist retired
+    # retrieval authority that every later dispatch would refuse.
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            with pytest.raises(
+                RecurringWorkflowValidationError, match="has been retired"
+            ):
+                await service.create_definition(
+                    name="Retired Retrieval",
+                    description=None,
+                    enabled=True,
+                    schedule_type="cron",
+                    cron="0 6 * * *",
+                    timezone="UTC",
+                    scope_type="personal",
+                    scope_ref=None,
+                    owner_user_id=uuid4(),
+                    target={
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": initial_parameters,
+                    },
+                    policy={},
+                )
+
+            mock_temporal_adapter.create_schedule.assert_not_called()
+            stored = await session.scalar(
+                select(func.count()).select_from(RecurringWorkflowDefinition)
+            )
+            assert stored == 0
+
+
+async def test_create_definition_strips_absent_vector_retrieval(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Stale Draft",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "task": {"instructions": "Queue job", "rag": {}},
+                        "rag": {},
+                        "followUpRetrieval": {"enabled": False},
+                    },
+                },
+                policy={},
+            )
+
+            assert definition.target["initialParameters"] == {
+                "task": {"instructions": "Queue job"},
+            }
+
+
+async def test_update_definition_rejects_retired_vector_retrieval(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            target = {
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {"task": {"instructions": "Queue job"}},
+            }
+            definition = await service.create_definition(
+                name="Daily Demo",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target=target,
+                policy={},
+            )
+
+            with pytest.raises(
+                RecurringWorkflowValidationError, match="has been retired"
+            ):
+                await service.update_definition(
+                    definition,
+                    target={
+                        **target,
+                        "initialParameters": {
+                            "task": {"instructions": "Queue job"},
+                            "followUpRetrieval": {"enabled": True, "topK": 4},
+                        },
+                    },
+                )
+
+            mock_temporal_adapter.update_schedule.assert_not_called()
+            assert definition.target["initialParameters"] == {
+                "task": {"instructions": "Queue job"},
+            }
+
 
 async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:

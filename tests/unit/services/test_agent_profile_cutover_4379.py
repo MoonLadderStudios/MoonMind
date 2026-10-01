@@ -80,12 +80,14 @@ async def profile_db(tmp_path):
         await engine.dispose()
 
 
-async def _seed_profile(session, profile_id="profile-1", policy_ref="p@1"):
+async def _seed_profile(
+    session, profile_id="profile-1", policy_ref="p@1", document=None
+):
     from api_service.services.omnigent_agent_profile_selection import (
         _profile_document_digest,
     )
 
-    document = _v1_document(policy_ref)
+    document = document or _v1_document(policy_ref)
     session.add(
         OmnigentAgentProfile(
             profile_id=profile_id,
@@ -131,6 +133,43 @@ async def test_profile_advances_across_same_policy_cutover(tmp_path):
         assert current.document["execution"]["allowedLaunchPolicyRefs"] == ["p@3"]
         assert current.document["policyRef"] == "p@3"
         assert current.parent_version == 1
+
+
+@pytest.mark.asyncio
+async def test_profile_cutover_successor_drops_retired_retrieval_section(tmp_path):
+    from api_service.services.omnigent_agent_profile_selection import (
+        _profile_document_digest,
+    )
+
+    # A version recorded before #4103 keeps its retrieval section; the
+    # automatic successor must not mint new retired authority.
+    recorded = {
+        **_v1_document("p@1"),
+        "rag": {"initial": {"collections": ["docs"]}, "followUp": {}},
+    }
+    async with profile_db(tmp_path) as sessions, sessions() as session:
+        await _seed_profile(session, document=recorded)
+        advanced = await advance_agent_profiles_for_policy_cutover(
+            session, cutovers={"p@1": "p@3"}
+        )
+        await session.commit()
+        assert [entry["version"] for entry in advanced] == [2]
+        from sqlalchemy import select
+
+        rows = {
+            row.version: row
+            for row in (
+                await session.scalars(
+                    select(OmnigentAgentProfileVersion).where(
+                        OmnigentAgentProfileVersion.profile_id == "profile-1"
+                    )
+                )
+            ).all()
+        }
+        assert rows[1].document == recorded
+        assert "rag" not in rows[2].document
+        assert rows[2].document["policyRef"] == "p@3"
+        assert rows[2].digest == _profile_document_digest(rows[2].document)
 
 
 @pytest.mark.asyncio

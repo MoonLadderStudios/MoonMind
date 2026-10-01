@@ -337,6 +337,72 @@ def test_profile_authoring_drops_an_absent_retired_retrieval_section():
     assert "rag" not in _normalized(versioned.document)
 
 
+def test_profile_write_contract_does_not_advertise_the_retired_section():
+    assert "rag" not in AgentProfileDocument.model_json_schema()["properties"]
+
+
+async def _clone_version(monkeypatch, source_document):
+    from api_service.api.routers import omnigent_agent_profiles as api
+    from api_service.db.models import OmnigentAgentProfileVersion
+
+    source = SimpleNamespace(
+        profile_id="source", visibility="workspace", owner_id=None,
+        description=None, active_version=1,
+    )
+    recorded = SimpleNamespace(
+        version=1, document=source_document, digest=_digest(source_document)
+    )
+    added = []
+
+    class Session:
+        async def get(self, kind, key):
+            return None
+
+        def add_all(self, rows):
+            added.extend(rows)
+
+        async def commit(self):
+            pass
+
+    async def load(session, profile_id):
+        return source, [recorded]
+
+    monkeypatch.setattr(api, "_load", load)
+    monkeypatch.setattr(api, "_require_provider_profile_permission", lambda *a: None)
+    await api.clone_profile(
+        "source",
+        api.CloneCreate(profileId="copy", displayName="Copy"),
+        session=Session(),
+        current_user=SimpleNamespace(id=None),
+    )
+    (version,) = [row for row in added if isinstance(row, OmnigentAgentProfileVersion)]
+    return recorded, version
+
+
+@pytest.mark.asyncio
+async def test_clone_drops_a_recorded_retired_retrieval_section(monkeypatch):
+    recorded_document = {
+        **_normalized(document(upstreamId="agent-123")),
+        "rag": {"initial": {"collections": ["docs"]}, "followUp": {}},
+    }
+
+    recorded, clone = await _clone_version(monkeypatch, recorded_document)
+
+    assert recorded.document == recorded_document
+    assert "rag" not in clone.document
+    assert clone.digest == _digest(clone.document)
+
+
+@pytest.mark.asyncio
+async def test_clone_keeps_a_current_document_and_digest(monkeypatch):
+    current = _normalized(document(upstreamId="agent-123"))
+
+    recorded, clone = await _clone_version(monkeypatch, current)
+
+    assert clone.document == current
+    assert clone.digest == recorded.digest
+
+
 def test_fixed_post_routes_precede_lifecycle_catch_all():
     post_paths = [
         route.path

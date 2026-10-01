@@ -121,6 +121,13 @@ def test_successors_derived_from_history_drop_only_the_retired_section():
     assert historical["rag"]["collectionRefs"] == ["default"]
     reject_retired_policy_sections(PolicyDocument.model_validate(successor))
 
+
+def test_policy_write_contract_does_not_advertise_the_retired_section():
+    # Historical documents still decode ``rag``; the published schema that
+    # clients author against must not offer a value every write refuses.
+    assert "rag" not in PolicyDocument.model_json_schema()["properties"]
+
+
 def test_policy_rejects_secret_bodies_raw_paths_and_docker_socket():
     for key, value in (
         ("secretBody", "not-safe"),
