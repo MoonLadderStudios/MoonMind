@@ -146,6 +146,47 @@ def test_real_failure_beside_quota_failure_stays_a_ci_failure(
     assert summary["infrastructureOnly"] is False
 
 
+def test_generic_exit_beside_quota_in_the_same_job_stays_a_ci_failure(
+    snapshot_module: dict[str, Any],
+) -> None:
+    # A test step's own exit status and an ``if: always()`` upload that hit the
+    # quota leave both annotations; the test failure must not be masked.
+    summary = _summarize(
+        snapshot_module,
+        [_check_run(1, "Build and test")],
+        {1: [_failure("Process completed with exit code 1."), _failure(QUOTA_MESSAGE)]},
+    )
+
+    assert summary["infrastructureOnly"] is False
+
+
+def test_annotations_are_read_from_every_page(
+    snapshot_module: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        commands.append(list(cmd))
+        pages = json.dumps([_failure(QUOTA_MESSAGE)]) + json.dumps(
+            [_failure("error TS2345: Argument of type 'string' is not assignable")]
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=pages, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    annotations = snapshot_module["_fetch_check_run_annotations"](
+        pr_repo="MoonLadderStudios/Tactics", check_id=1
+    )
+
+    assert "--paginate" in commands[0]
+    assert [item["message"][:11] for item in annotations] == [
+        QUOTA_MESSAGE[:11],
+        "error TS234",
+    ]
+
+
 def test_missing_artifact_without_infrastructure_cause_is_a_real_failure(
     snapshot_module: dict[str, Any],
 ) -> None:
@@ -283,6 +324,23 @@ def test_finalize_reports_precise_blocker_after_rerun_budget(
     assert decision == {"action": "blocked", "reason": "ci_infra_rerun_exhausted"}
 
 
+def test_finalize_waits_for_the_final_attempt_to_finish(
+    finalize_module: dict[str, Any],
+) -> None:
+    # The commit's check runs still show the prior attempt's failures while the
+    # last bounded rerun is queued; that is not exhaustion yet.
+    snapshot = _infra_snapshot(run_attempt=3, updated_at="2026-09-30T23:27:40Z")
+    snapshot["ci"]["infrastructureRuns"][0]["status"] = "in_progress"
+
+    decision = finalize_module["evaluate_finalize_action"](snapshot)
+    plan = finalize_module["plan_infrastructure_reruns"](
+        snapshot, now=datetime(2026, 9, 30, 23, 37, 40, tzinfo=UTC)
+    )
+
+    assert decision == {"action": "rerun_infrastructure_ci", "reason": "ci_infra_transient"}
+    assert plan == {"dueRunIds": [], "retryAfterSeconds": 60}
+
+
 def test_rerun_plan_waits_out_quota_backoff_before_rerunning(
     finalize_module: dict[str, Any],
 ) -> None:
@@ -314,6 +372,7 @@ def _run_finalize(
     tmp_path: Path,
     snapshot: dict,
     reruns: list[tuple[str, int]],
+    rerun_error: str = "",
 ) -> tuple[int, dict]:
     main = finalize_module["main"]
     globals_dict = main.__globals__
@@ -328,7 +387,8 @@ def _run_finalize(
     monkeypatch.setitem(
         globals_dict,
         "_rerun_failed_jobs",
-        lambda repo, run_id: reruns.append((repo, run_id)) or True,
+        lambda repo, run_id: reruns.append((repo, run_id))
+        or (not rerun_error, rerun_error),
     )
     monkeypatch.setitem(
         globals_dict, "_merge_pr", lambda *_args: pytest.fail("must not merge")
@@ -425,6 +485,45 @@ def test_finalize_exhausted_infrastructure_budget_names_the_outage(
     assert "3 attempts" in payload["decision"]
 
 
+def test_finalize_reports_a_rerun_github_refuses(
+    finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    long_ago = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    reruns: list[tuple[str, int]] = []
+
+    _code, payload = _run_finalize(
+        finalize_module,
+        monkeypatch,
+        tmp_path,
+        _infra_snapshot(updated_at=long_ago),
+        reruns,
+        rerun_error="HTTP 403: Resource not accessible by integration",
+    )
+
+    assert reruns == [("MoonLadderStudios/Tactics", 36790876840)]
+    assert payload["final_reason"] == "ci_infra_rerun_failed"
+    assert payload["mergeAutomationDisposition"] == "manual_review"
+    assert "Resource not accessible by integration" in payload["decision"]
+
+
+def test_rerun_already_started_elsewhere_is_not_a_failure(
+    finalize_module: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(
+            cmd, 1, stdout="", stderr="HTTP 403: This workflow is already running"
+        ),
+    )
+
+    assert finalize_module["_rerun_failed_jobs"]("owner/repo", 1) == (False, "")
+
+
 def test_contract_routes_infrastructure_reasons(
     contract_module: dict[str, Any],
 ) -> None:
@@ -439,6 +538,7 @@ def test_contract_routes_infrastructure_reasons(
         "stop"
     )
     assert "ci_infra_rerun_exhausted" in contract_module["NON_RETRYABLE_REASONS"]
+    assert "ci_infra_rerun_failed" in contract_module["NON_RETRYABLE_REASONS"]
 
 
 def test_orchestrate_waits_the_finalize_supplied_infrastructure_delay() -> None:

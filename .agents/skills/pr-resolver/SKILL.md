@@ -213,6 +213,9 @@ metadata flag.
    - `ci_infra_rerun_exhausted`: the same platform failure persisted through
      the bounded reruns. Publish the finalize result unchanged; its `decision`
      names the outage and the attempts.
+   - `ci_infra_rerun_failed`: GitHub refused the rerun itself (for example the
+     token lacks Actions write access). Publish the finalize result unchanged;
+     its `decision` carries GitHub's error.
    - `actionable_comments`: follow `fix-comments` completely, including fresh
      comment retrieval, its disposition ledger, push verification, and resolving
      handled current review threads on GitHub.

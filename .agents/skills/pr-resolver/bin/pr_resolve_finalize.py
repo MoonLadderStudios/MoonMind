@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -221,8 +222,12 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
     if decision.classification == "ci_failures":
         _failures, runs = _infrastructure_ci(snapshot)
         if runs:
+            # Only a finished final attempt exhausts the budget; while it is
+            # queued the head still reports the prior attempt's failures.
             if any(
-                run["runAttempt"] >= INFRASTRUCTURE_MAX_RUN_ATTEMPTS for run in runs
+                run["runAttempt"] >= INFRASTRUCTURE_MAX_RUN_ATTEMPTS
+                and normalize_text(run.get("status")).lower() == "completed"
+                for run in runs
             ):
                 return {"action": "blocked", "reason": "ci_infra_rerun_exhausted"}
             return {
@@ -276,24 +281,37 @@ def _read_snapshot(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _rerun_failed_jobs(repository: str, run_id: int) -> bool:
-    """Rerun the failed jobs of one completed run on its original head."""
+_RERUN_ALREADY_STARTED = re.compile(
+    r"already running|is in progress|has not completed", re.IGNORECASE
+)
+
+
+def _rerun_failed_jobs(repository: str, run_id: int) -> tuple[bool, str]:
+    """Rerun the failed jobs of one completed run on its original head.
+
+    Returns ``(started, error)``. A rerun another resolver already started is
+    neither; any other refusal (permissions, authentication, a broken run) is
+    returned so the blocker names it instead of waiting on an impossible rerun.
+    """
 
     cmd = ["gh", "run", "rerun", str(run_id), "--failed", "--repo", repository]
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, check=False, timeout=60
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"Rerun of run {run_id} failed: {exc}", file=sys.stderr)
-        return False
-    if result.returncode != 0:
-        # Typically another resolver already started the rerun; the next
-        # snapshot observes it either way.
-        detail = normalize_text(result.stderr) or normalize_text(result.stdout)
-        print(f"Rerun of run {run_id} was not started: {detail}", file=sys.stderr)
-        return False
-    return True
+    except subprocess.TimeoutExpired:
+        # The request may have landed; the next snapshot observes it.
+        print(f"Rerun of run {run_id} timed out", file=sys.stderr)
+        return False, ""
+    except OSError as exc:
+        return False, str(exc)
+    if result.returncode == 0:
+        return True, ""
+    detail = normalize_text(result.stderr) or normalize_text(result.stdout)
+    if _RERUN_ALREADY_STARTED.search(detail):
+        print(f"Rerun of run {run_id} is already in flight: {detail}", file=sys.stderr)
+        return False, ""
+    return False, detail or f"gh run rerun exited {result.returncode}"
 
 
 def _merge_pr(pr_selector: str, merge_method: str, expected_head: str) -> None:
@@ -648,12 +666,28 @@ def main() -> None:
         if action == "rerun_infrastructure_ci":
             plan = plan_infrastructure_reruns(snapshot, now=datetime.now(UTC))
             repository = normalize_text(snapshot.get("repository"))
-            rerun_ids = [
-                run_id
-                for run_id in plan["dueRunIds"]
-                if repository and _rerun_failed_jobs(repository, run_id)
-            ]
+            rerun_ids: list[int] = []
+            rerun_errors: list[str] = []
+            for run_id in plan["dueRunIds"] if repository else []:
+                started, error = _rerun_failed_jobs(repository, run_id)
+                if started:
+                    rerun_ids.append(run_id)
+                elif error:
+                    rerun_errors.append(f"run {run_id}: {error}")
             summary = _infrastructure_summary(snapshot, exhausted=False)
+            if rerun_errors:
+                reason = "ci_infra_rerun_failed"
+                summary += "; GitHub refused the rerun: " + "; ".join(rerun_errors)
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision=summary,
+                    merge_outcome="blocked",
+                    status="blocked",
+                    reason=reason,
+                )
+                print(f"Blocked: {reason}: {summary}")
+                sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
             if rerun_ids:
                 summary += (
                     "; reran failed jobs in run(s) "

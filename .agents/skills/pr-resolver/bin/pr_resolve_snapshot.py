@@ -168,22 +168,7 @@ def run_command(
             if output.strip() == "" and not paginated:
                 return {}
             if paginated:
-                # gh --paginate emits consecutive JSON arrays, including on the
-                # distribution-provided CLI. Do not require the newer --slurp.
-                decoder = json.JSONDecoder()
-                records = []
-                remaining = output.strip()
-                if not remaining:
-                    raise ValueError("empty paginated response")
-                while remaining:
-                    page, end = decoder.raw_decode(remaining)
-                    if not isinstance(page, list) or any(
-                        not isinstance(item, dict) for item in page
-                    ):
-                        raise ValueError("expected an array of records on every page")
-                    records.extend(page)
-                    remaining = remaining[end:].strip()
-                return records
+                return _decode_paginated_records(output)
             return json.loads(output)
         except FileNotFoundError:
             print(f"Command not found: {resolved_cmd[0]}", file=sys.stderr)
@@ -1149,7 +1134,10 @@ def _classify_failure_annotations(annotations: list[dict]) -> str | None:
     """Return the infrastructure kind when every failure annotation is one.
 
     ``missing_upstream_artifact`` is provisional: it only counts when another
-    job in the same run has a confirmed infrastructure failure.
+    job in the same run has a confirmed infrastructure failure. A generic step
+    exit is tolerated only beside that gate case; next to a platform failure it
+    may be a real test failure followed by an ``if: always()`` upload, so the
+    job fails closed.
     """
 
     messages = [
@@ -1159,8 +1147,10 @@ def _classify_failure_annotations(annotations: list[dict]) -> str | None:
         and str(item.get("annotation_level") or "").strip().lower() == "failure"
     ]
     kinds: set[str] = set()
+    generic_exit = False
     for message in messages:
         if _GENERIC_EXIT_PATTERN.match(message):
+            generic_exit = True
             continue
         kind = next(
             (
@@ -1177,7 +1167,7 @@ def _classify_failure_annotations(annotations: list[dict]) -> str | None:
         kinds.add(kind)
     platform_kinds = sorted(kinds - {"missing_upstream_artifact"})
     if platform_kinds:
-        return platform_kinds[0]
+        return None if generic_exit else platform_kinds[0]
     if kinds:
         return "missing_upstream_artifact"
     return None
@@ -1266,11 +1256,53 @@ def summarize_ci_infrastructure(
     }
 
 
+def _decode_paginated_records(output: str) -> list[dict]:
+    """Flatten ``gh api --paginate`` output, which is consecutive JSON arrays.
+
+    The distribution-provided CLI predates ``--slurp``, so pages are decoded
+    one after another rather than requiring a single document.
+    """
+
+    decoder = json.JSONDecoder()
+    records: list[dict] = []
+    remaining = output.strip()
+    if not remaining:
+        raise ValueError("empty paginated response")
+    while remaining:
+        page, end = decoder.raw_decode(remaining)
+        if not isinstance(page, list) or any(
+            not isinstance(item, dict) for item in page
+        ):
+            raise ValueError("expected an array of records on every page")
+        records.extend(page)
+        remaining = remaining[end:].strip()
+    return records
+
+
 def _fetch_check_run_annotations(*, pr_repo: str, check_id: object) -> list[dict]:
-    payload = run_command_optional(
-        ["gh", "api", f"repos/{pr_repo}/check-runs/{check_id}/annotations"]
+    """Every annotation page, or nothing; a partial view must not pass as complete."""
+
+    cmd = _resolve_command(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{pr_repo}/check-runs/{check_id}/annotations?per_page=100",
+        ]
     )
-    return payload if isinstance(payload, list) else []
+    try:
+        completed = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_build_subprocess_env(),
+        )
+        if completed.returncode != 0:
+            return []
+        return _decode_paginated_records(completed.stdout)
+    except (OSError, ValueError):
+        return []
 
 
 def _fetch_actions_run(*, pr_repo: str, run_id: int) -> dict | None:
