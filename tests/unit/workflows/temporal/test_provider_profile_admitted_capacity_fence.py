@@ -88,7 +88,8 @@ def test_request_slot_keeps_the_fence_and_still_rejects_unknown_metadata() -> No
     assert "apiKey" not in safe
 
 
-def test_an_inspected_grant_carries_the_whole_admitted_identity() -> None:
+@pytest.mark.asyncio
+async def test_an_inspected_grant_carries_the_whole_admitted_identity() -> None:
     """AC2: inspection must be able to establish the fence, not just liveness."""
 
     profile = _profile()
@@ -98,7 +99,7 @@ def test_an_inspected_grant_carries_the_whole_admitted_identity() -> None:
     wf = _workflow(profile)
     wf._rebuild_lease_indexes()
 
-    inspection = wf.inspect_credential_lease({"lease_id": OWNER})
+    inspection = await wf.inspect_credential_lease({"lease_id": OWNER})
 
     assert inspection["active"] is True
     assert inspection["profile_id"] == "opencode-zen-free"
@@ -189,7 +190,7 @@ async def test_a_restored_lease_is_still_consumable_by_the_execution_activity(
         assert await wf._load_leases_from_db()
 
     assert signalled == [(OWNER, "opencode-zen-free")]
-    inspection = wf.inspect_credential_lease({"lease_id": OWNER})
+    inspection = await wf.inspect_credential_lease({"lease_id": OWNER})
 
     # The restored evidence is complete enough for the consuming coordinator.
     OmnigentProviderLeaseCoordinator._assert_admitted_lease_matches(
