@@ -1279,6 +1279,13 @@ Each runtime family gets one singleton manager workflow:
 - `provider-profile-manager:claude_code`
 - `provider-profile-manager:codex_cli`
 
+The singleton coordinates profiles; it does not impose a runtime-wide execution
+limit. Each profile has its own `max_parallel_runs` budget and defaults to the
+independent capacity scope `provider-profile:<profile_id>`. A full or cooling-down
+profile must not block a request for another profile on the same runtime. Profiles
+share an upstream budget only when explicitly assigned the same capacity scope;
+deployment host and worker capacity still bound aggregate execution.
+
 Per-runtime singletons are preferred over one global manager because they:
 
 - keep workflow history growth independent per runtime,
