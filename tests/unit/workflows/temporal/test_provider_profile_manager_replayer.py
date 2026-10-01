@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 from temporalio import activity, exceptions, workflow
-from temporalio.client import WithStartWorkflowOperation, WorkflowHistory
+from temporalio.client import (
+    WithStartWorkflowOperation,
+    WorkflowHistory,
+    WorkflowUpdateStage,
+)
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.converter import DataConverter
 from temporalio.testing import WorkflowEnvironment
@@ -1340,4 +1344,54 @@ async def test_a_slot_request_in_the_first_task_is_not_dropped_by_restore() -> N
                 await requester.result()
 
     assert assignment["profile_id"] == "test-default"
+    await _replay(history)
+
+
+@pytest.mark.asyncio
+async def test_a_maintenance_lease_in_the_first_task_waits_for_restored_consumers() -> None:
+    """Exclusive maintenance must not be granted beside an unrestored consumer.
+
+    Before the restore fence, the Update synthesized a placeholder profile with
+    no consumers and granted credential repair while the restored ledger still
+    recorded a live execution lease on the same profile.
+    """
+
+    activities = _HeldLeaseActivities()
+    queue = "test-first-task-maintenance"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        workflow_worker, activity_worker = _first_task_workers(env, activities, queue)
+        async with workflow_worker, activity_worker:
+            start = WithStartWorkflowOperation(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue=queue,
+                id_conflict_policy=WorkflowIDConflictPolicy.FAIL,
+            )
+            with env.auto_time_skipping_disabled():
+                maintenance = await env.client.start_update_with_start_workflow(
+                    "AcquireCredentialMaintenanceLease",
+                    {
+                        "requester_workflow_id": "test-credential-repair",
+                        "owner_id": "test-credential-repair",
+                        "runtime_id": "opencode",
+                        "execution_profile_ref": "test-default",
+                        "purpose": "credential_repair",
+                        "metadata": {
+                            "ownerIsWorkflow": False,
+                            "workflowId": "http:test-credential-repair",
+                        },
+                    },
+                    start_workflow_operation=start,
+                    wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+                )
+                pending = asyncio.ensure_future(maintenance.result())
+                done, _ = await asyncio.wait({pending}, timeout=3)
+                pending.cancel()
+                assert not done, pending.result()
+            manager = await start.workflow_handle()
+            state = await manager.query("get_state")
+            history = await _shutdown_and_fetch_history(env, manager)
+
+    assert state["profiles"]["test-default"]["current_leases"] == [activities.HOLDER]
     await _replay(history)

@@ -2115,6 +2115,7 @@ class MoonMindProviderProfileManagerWorkflow:
         preserving the existing signal protocol for AgentRun workflows.
         """
 
+        await self._await_restored_ledger()
         requester_id = self._normalize_optional_string(
             payload.get("requester_workflow_id")
         )
@@ -2298,6 +2299,9 @@ class MoonMindProviderProfileManagerWorkflow:
           existing credential consumer to drain (invariant 4).
         """
 
+        # Before restore the ledger has no consumers, so an exclusive grant
+        # here could sit beside a live lease the snapshot still records.
+        await self._await_restored_ledger()
         requester_id = self._normalize_optional_string(
             payload.get("requester_workflow_id") or payload.get("owner_id")
         )
