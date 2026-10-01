@@ -13540,6 +13540,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 "workflow_id": workflow.info().workflow_id,
                                 "run_id": workflow.info().run_id,
                                 "node_id": node_id,
+                                # Issue search checks this profile's capacity
+                                # before claiming work the run cannot start.
+                                "runtime_selection": dict(
+                                    self._runtime_inheritance_parameters
+                                ),
                                 **self._skill_remediation_context(),
                             },
                             "idempotency_key": step_execution_operation_idempotency_key(
