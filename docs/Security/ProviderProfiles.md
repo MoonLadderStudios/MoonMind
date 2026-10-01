@@ -1417,10 +1417,12 @@ fairness depends on.
   removes the queue entry, so a caller that gave up never leaves an admission
   block behind.
 - Signals and Updates delivered with a successor's first workflow task run
-  before its `run()` restores the ledger. Lease inspection, slot requests,
-  releases, cleanup reports, waiter withdrawals, and cooldown reports wait for
-  that restore (`startup_restored`) first, so a successor never reports a live
-  lease as gone, revives a released lease from its snapshot, or drops a request.
+  before its `run()` restores the ledger. Lease inspection, slot requests and
+  acquisitions, maintenance acquisitions, releases, cleanup reports, waiter
+  withdrawals, and cooldown reports wait for that restore (`startup_restored`)
+  first, so a successor never reports a live lease as gone, revives a released
+  lease from its snapshot, drops a request, or grants maintenance beside a live
+  consumer.
 
 #### Grants are fenced
 
