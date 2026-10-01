@@ -192,3 +192,85 @@ def test_remote_receives_only_the_admitted_credential(tmp_path: Path) -> None:
         if value.startswith("Basic ")
     ]
     assert not any(_AMBIENT_A in value for value in decoded)
+
+
+def _write_ambient_netrc(home: Path, *, host: str) -> None:
+    """A login cache libcurl reads from HOME before Git asks any helper."""
+
+    netrc = home / ".netrc"
+    netrc.write_text(
+        f"machine {host.split(':', 1)[0]} login ambient password {_AMBIENT_A}\n",
+        encoding="utf-8",
+    )
+    netrc.chmod(0o600)
+
+
+@pytest.mark.skipif(_REAL_GIT is None, reason="requires the real git client")
+def test_ambient_netrc_login_cache_never_reaches_the_remote(tmp_path: Path) -> None:
+    """libcurl answers the first challenge from ~/.netrc unless Git supplies a login."""
+
+    from tests.support.credential_recording_remote import (
+        credential_recording_remote,
+    )
+
+    with credential_recording_remote(tmp_path) as remote:
+        base_env = _ambient_worker_env(tmp_path, host=remote.host)
+        _write_ambient_netrc(Path(base_env["HOME"]), host=remote.host)
+        env = build_github_token_git_environment(
+            _ADMITTED_B, base_env=base_env, host=remote.host
+        )
+        env["GIT_SSL_CAINFO"] = str(remote.ca_file)
+        _git(["ls-remote", f"{remote.url}/owner/repo.git"], env, cwd=tmp_path)
+        received = list(remote.authorization_headers)
+
+    decoded = [
+        base64.b64decode(value.split(" ", 1)[1]).decode()
+        for value in received
+        if value.startswith("Basic ")
+    ]
+    assert f"x-access-token:{_ADMITTED_B}" in decoded
+    assert not any(_AMBIENT_A in value for value in decoded)
+    # The model's HOME, including its login cache, is left in place.
+    assert (
+        (Path(base_env["HOME"]) / ".netrc")
+        .read_text(encoding="utf-8")
+        .endswith(f"password {_AMBIENT_A}\n")
+    )
+
+
+@pytest.mark.skipif(_REAL_GIT is None, reason="requires the real git client")
+def test_config_override_retargeting_another_host_receives_no_credential(
+    tmp_path: Path,
+) -> None:
+    """An ``insteadOf`` layer that rewrites the admitted endpoint to another
+    host selects a different credential context, so neither the admitted nor
+    an ambient credential is offered there."""
+
+    from tests.support.credential_recording_remote import (
+        credential_recording_remote,
+    )
+
+    with credential_recording_remote(tmp_path / "other") as other:
+        with credential_recording_remote(tmp_path / "admitted") as admitted:
+            base_env = _ambient_worker_env(tmp_path, host=admitted.host)
+            _write_ambient_netrc(Path(base_env["HOME"]), host=other.host)
+            with (Path(base_env["HOME"]) / ".gitconfig").open("a") as config:
+                config.write(f'[url "{other.url}/"]\n\tinsteadOf = {admitted.url}/\n')
+            env = build_github_token_git_environment(
+                _ADMITTED_B, base_env=base_env, host=admitted.host
+            )
+            bundle = tmp_path / "ca-bundle.pem"
+            bundle.write_bytes(
+                admitted.ca_file.read_bytes() + other.ca_file.read_bytes()
+            )
+            env["GIT_SSL_CAINFO"] = str(bundle)
+            _git(["ls-remote", f"{admitted.url}/owner/repo.git"], env, cwd=tmp_path)
+            received = [*admitted.authorization_headers, *other.authorization_headers]
+
+    decoded = [
+        base64.b64decode(value.split(" ", 1)[1]).decode()
+        for value in received
+        if value.startswith("Basic ")
+    ]
+    assert not any(_ADMITTED_B in value for value in decoded)
+    assert not any(_AMBIENT_A in value for value in decoded)

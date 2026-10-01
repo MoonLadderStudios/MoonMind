@@ -1107,20 +1107,79 @@ async def test_materializer_never_clones_a_selected_connection_with_the_deployme
     assert calls == []
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="requires the real git client")
-def test_daemon_clone_sends_only_the_stdin_credential_to_the_remote(tmp_path):
-    """Real git: the admitted stdin credential B wins over an ambient helper A."""
+@pytest.mark.asyncio
+async def test_missing_deployment_credential_never_downgrades_to_an_anonymous_clone(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """Anonymous access is not a runtime workspace source, so an unconfigured
+    credential is reported explicitly instead of retried unauthenticated."""
 
-    from tests.support.credential_recording_remote import (
-        credential_recording_remote,
+    calls: list[list[str]] = []
+
+    async def runner(argv, input_bytes=None):
+        calls.append(argv)
+        return 0, "", ""
+
+    async def no_credential(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_github_token_for_launch",
+        no_credential,
+    )
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=runner, workspace_root=tmp_path
     )
 
-    admitted = "ghs_admittedCloneCredentialB00000000000000"
-    ambient = "ghp_ambientCloneCredentialA000000000000000"
+    with pytest.raises(HarnessPlatformError) as exc:
+        await materializer.materialize(
+            _request(
+                {
+                    "workspaceLocator": {
+                        "kind": "sandbox",
+                        "workspaceId": _workspace_id(),
+                        "relativePath": "repo",
+                    },
+                    "repositoryTarget": {
+                        "provider": "git",
+                        "repository": {"name": "MoonLadderStudios/Tactics"},
+                        "branch": {"name": "main"},
+                    },
+                }
+            )
+        )
+
+    assert exc.value.code == "OMNIGENT_HOST_LAUNCH_FAILED"
+    assert "anonymous" in str(exc.value)
+    assert not [argv for argv in calls if "clone" in " ".join(argv)]
+
+
+_CLONE_ADMITTED_B = "ghs_admittedCloneCredentialB00000000000000"
+_CLONE_AMBIENT_A = "ghp_ambientCloneCredentialA000000000000000"
+_requires_real_git = pytest.mark.skipif(
+    shutil.which("git") is None, reason="requires the real git client"
+)
+
+
+def _run_daemon_clone(
+    tmp_path, *, source: str, ca_file, system_config: str = ""
+) -> None:
+    """Run the real clone script against ``source`` with an ambient HOME."""
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    # Login caches and configuration layers that select A for every loopback
+    # endpoint; the image's Git consults them unless the script resets them.
+    (home / ".netrc").write_text(
+        f"machine 127.0.0.1 login ambient password {_CLONE_AMBIENT_A}-netrc\n"
+    )
+    (home / ".netrc").chmod(0o600)
     (tmp_path / "system.gitconfig").write_text(
         "[credential]\n"
         '\thelper = "!f() { test \\"$1\\" = get || exit 0; '
-        f'echo username=ambient; echo password={ambient}; }}; f"\n'
+        f'echo username=ambient; echo password={_CLONE_AMBIENT_A}; }}; f"\n'
+        + system_config
     )
     argv = build_daemon_git_clone_argv(
         volume="agent_workspaces",
@@ -1132,38 +1191,118 @@ def test_daemon_clone_sends_only_the_stdin_credential_to_the_remote(tmp_path):
         git_user_email="moonmind-worker@users.noreply.github.com",
     )
     script = argv[argv.index("-ceu") + 1]
-    with credential_recording_remote(tmp_path) as remote:
-        subprocess.run(
-            [
-                "/bin/sh",
-                "-ceu",
-                script,
-                "--",
-                "main",
-                f"{remote.url}/org/repo.git",
-                str(tmp_path / "checkout"),
-                "MoonMind Worker",
-                "moonmind-worker@users.noreply.github.com",
-            ],
-            input=admitted.encode(),
-            env={
-                "PATH": os.environ["PATH"],
-                "HOME": str(tmp_path),
-                "GIT_CONFIG_SYSTEM": str(tmp_path / "system.gitconfig"),
-                "GIT_SSL_CAINFO": str(remote.ca_file),
-                "GIT_TERMINAL_PROMPT": "0",
-            },
-            capture_output=True,
-            check=False,
-            timeout=60,
-            cwd=tmp_path,
-        )
-        received = list(remote.authorization_headers)
+    subprocess.run(
+        [
+            "/bin/sh",
+            "-ceu",
+            script,
+            "--",
+            "main",
+            source,
+            str(tmp_path / "checkout"),
+            "MoonMind Worker",
+            "moonmind-worker@users.noreply.github.com",
+        ],
+        input=_CLONE_ADMITTED_B.encode(),
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(home),
+            "GIT_CONFIG_SYSTEM": str(tmp_path / "system.gitconfig"),
+            "GIT_SSL_CAINFO": str(ca_file),
+            "GIT_TERMINAL_PROMPT": "0",
+        },
+        capture_output=True,
+        check=False,
+        timeout=60,
+        cwd=tmp_path,
+    )
 
-    decoded = [
+
+def _decoded_basic(headers: list[str]) -> list[str]:
+    return [
         base64.b64decode(value.split(" ", 1)[1]).decode()
-        for value in received
+        for value in headers
         if value.startswith("Basic ")
     ]
-    assert f"x-access-token:{admitted}" in decoded
-    assert not any(ambient in value for value in decoded)
+
+
+@_requires_real_git
+def test_daemon_clone_sends_only_the_stdin_credential_to_the_remote(tmp_path):
+    """Real git: the admitted stdin credential B wins over ambient helpers and
+    the image HOME's ~/.netrc login cache A."""
+
+    from tests.support.credential_recording_remote import (
+        credential_recording_remote,
+    )
+
+    with credential_recording_remote(tmp_path / "remote") as remote:
+        _run_daemon_clone(
+            tmp_path, source=f"{remote.url}/org/repo.git", ca_file=remote.ca_file
+        )
+        decoded = _decoded_basic(list(remote.authorization_headers))
+
+    assert f"x-access-token:{_CLONE_ADMITTED_B}" in decoded
+    assert not any(_CLONE_AMBIENT_A in value for value in decoded)
+
+
+@_requires_real_git
+def test_daemon_clone_never_offers_the_credential_to_a_redirect_target(tmp_path):
+    """A redirect to another host is not the admitted endpoint (INV-005)."""
+
+    from tests.support.credential_recording_remote import (
+        credential_recording_remote,
+    )
+
+    with credential_recording_remote(tmp_path / "target") as target:
+        with credential_recording_remote(
+            tmp_path / "admitted", redirect_to=target.url
+        ) as admitted:
+            bundle = tmp_path / "ca-bundle.pem"
+            bundle.write_bytes(
+                admitted.ca_file.read_bytes() + target.ca_file.read_bytes()
+            )
+            _run_daemon_clone(
+                tmp_path, source=f"{admitted.url}/org/repo.git", ca_file=bundle
+            )
+            received = [*admitted.authorization_headers, *target.authorization_headers]
+
+    assert not any(_CLONE_ADMITTED_B in value for value in _decoded_basic(received))
+    assert not any(_CLONE_AMBIENT_A in value for value in _decoded_basic(received))
+
+
+@_requires_real_git
+@pytest.mark.parametrize("retarget", ["sibling_repository", "other_host"])
+def test_daemon_clone_never_offers_the_credential_to_a_retargeted_source(
+    tmp_path, retarget
+):
+    """A configuration override that rewrites the admitted source (here a host
+    ``url.<base>.insteadOf`` layer) selects another repository or host, which
+    receives neither the admitted credential nor an ambient one."""
+
+    from tests.support.credential_recording_remote import (
+        credential_recording_remote,
+    )
+
+    with credential_recording_remote(tmp_path / "other") as other:
+        with credential_recording_remote(tmp_path / "admitted") as admitted:
+            bundle = tmp_path / "ca-bundle.pem"
+            bundle.write_bytes(
+                admitted.ca_file.read_bytes() + other.ca_file.read_bytes()
+            )
+            source = f"{admitted.url}/org/repo.git"
+            replacement = (
+                f"{admitted.url}/org/other.git"
+                if retarget == "sibling_repository"
+                else f"{other.url}/org/repo.git"
+            )
+            _run_daemon_clone(
+                tmp_path,
+                source=source,
+                ca_file=bundle,
+                system_config=f'[url "{replacement}"]\n\tinsteadOf = {source}\n',
+            )
+            received = [*admitted.authorization_headers, *other.authorization_headers]
+
+    assert received, "the retargeted endpoint was never contacted"
+    assert not any(_CLONE_ADMITTED_B in value for value in _decoded_basic(received))
+    assert not any(_CLONE_AMBIENT_A in value for value in _decoded_basic(received))

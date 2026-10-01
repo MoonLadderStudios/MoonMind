@@ -154,7 +154,7 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     # An empty entry resets the lists Git accumulated from inherited config,
     # so the admitted helper is the only helper Git asks for github.com and no
     # inherited Authorization header rides along (MoonLadderStudios/MoonMind#4011).
-    assert environment["GIT_CONFIG_COUNT"] == "3"
+    assert environment["GIT_CONFIG_COUNT"] == "4"
     assert environment["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
     assert environment["GIT_CONFIG_VALUE_0"] == ""
     assert environment["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
@@ -163,6 +163,8 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     )
     assert environment["GIT_CONFIG_KEY_2"] == "http.https://github.com/.extraHeader"
     assert environment["GIT_CONFIG_VALUE_2"] == ""
+    assert environment["GIT_CONFIG_KEY_3"] == "http.https://github.com/.emptyAuth"
+    assert environment["GIT_CONFIG_VALUE_3"] == "true"
     assert environment["PATH"].startswith("/home/app/.omnigent/moonmind/bin:")
     passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
     proxy_names = {
@@ -184,6 +186,8 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
         "GIT_CONFIG_VALUE_1",
         "GIT_CONFIG_KEY_2",
         "GIT_CONFIG_VALUE_2",
+        "GIT_CONFIG_KEY_3",
+        "GIT_CONFIG_VALUE_3",
     } <= passthrough
     assert not any("TOKEN" in name or "SECRET" in name for name in environment)
     assert "cp /run/mm-credentials/github/hosts.yml" in _script
@@ -388,6 +392,13 @@ def _run_generic_host(
         (home / ".gitconfig").write_text(
             f"[credential]\n\thelper = {_ambient_helper(_AMBIENT_A + '-global')}\n"
         )
+        # libcurl answers the first challenge from this file before Git asks
+        # any helper (MoonLadderStudios/MoonMind#4011).
+        (home / ".netrc").write_text(
+            f"machine {credential_host.split(':', 1)[0]} "
+            f"login ambient password {_AMBIENT_A}-netrc\n"
+        )
+        (home / ".netrc").chmod(0o600)
         ambient_header = base64.b64encode(f"ambient:{_AMBIENT_A}".encode()).decode()
         (tmp_path / "system.gitconfig").write_text(
             f"[credential]\n\thelper = {_ambient_helper(_AMBIENT_A)}\n"
@@ -408,6 +419,8 @@ def _run_generic_host(
     # The projection never removes the model's credential or OAuth home.
     assert (model / "auth.json").read_text() == _MODEL_OAUTH
     assert (home / ".codex/auth.json").read_text() == _MODEL_OAUTH
+    if ambient:
+        assert (home / ".netrc").read_text().endswith(f"{_AMBIENT_A}-netrc\n")
     return host_environment, home
 
 

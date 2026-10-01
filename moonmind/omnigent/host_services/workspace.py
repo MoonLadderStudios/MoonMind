@@ -738,8 +738,14 @@ class OmnigentWorkspaceMaterializer:
         require_deployment_resolver_connection(connection_ref)
         token = await resolve_github_token_for_launch()
         if not token:
+            # Anonymous access is an explicit plan-side choice with no runtime
+            # workspace source yet, so a missing credential is never retried
+            # as an unauthenticated clone.
             raise HarnessPlatformError(
-                "sandbox workspace clone requires GitHub credentials",
+                "sandbox workspace clone requires the default connection's GitHub "
+                "credential, which is not configured; anonymous repository access "
+                "is not a supported runtime workspace source, so the clone is not "
+                "retried unauthenticated",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         image = os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0")
@@ -886,8 +892,13 @@ def build_daemon_git_clone_argv(
         'cat "$MM_GIT_TOKEN_FILE"; printf "\\n"; }; f\'; '
         # The empty helper resets any helper the image or its configuration
         # layers supply, so Git asks only the stdin-backed admitted helper.
+        # That helper is scoped to the exact admitted source URL: a redirect,
+        # an ``insteadOf`` rewrite, or another repository on the same host is
+        # a different credential context and is never offered the token
+        # (gitcredentials(7)). ``emptyAuth`` gives libcurl an explicit empty
+        # login, so no ``~/.netrc`` entry answers a challenge either.
         'MM_GIT_TOKEN_FILE="$token_file" git -c credential.helper= '
-        '-c "credential.helper=$credential_helper" clone '
+        '-c "credential.$2.helper=$credential_helper" -c http.emptyAuth=true clone '
         '--branch "$1" --single-branch -- "$2" "$3"; '
         'git -C "$3" config --local user.name "$4"; '
         'git -C "$3" config --local user.email "$5"'

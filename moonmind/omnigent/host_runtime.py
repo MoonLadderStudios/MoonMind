@@ -23,6 +23,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
+from moonmind.omnigent.realizers.turn_delivery import canonical_turn_idempotency_key
 from moonmind.omnigent.host_ports import (
     HostLaunchSpec,
     OmnigentEgressAttestationPort,
@@ -167,19 +168,23 @@ class GenericOmnigentHostRuntime:
         if authority_sink is not None:
             for tool in tools:
                 await authority_sink({"kind": "tool", **tool})
+        # A re-admitted execution keeps its idempotency key; the projection
+        # owner also carries the admission epoch, so an earlier attempt's
+        # deferred cleanup cannot pass the ownership fence for this issuance.
+        github_owner_ref = canonical_turn_idempotency_key(request)
         anticipated_github = self._github_credentials.anticipated_attachment(
             plan.payload.resolvedTools,
-            owner_ref=request.idempotency_key,
+            owner_ref=github_owner_ref,
             request=request,
         )
         if anticipated_github is not None and authority_sink is not None:
             await authority_sink(
-                {"kind": "github_credentials", **anticipated_github}
+                {**anticipated_github, "kind": "github_credentials"}
             )
         github_credentials = await self._github_credentials.materialize(
             request=request,
             resolved_tools=plan.payload.resolvedTools,
-            owner_ref=request.idempotency_key,
+            owner_ref=github_owner_ref,
             writer_image_ref=host_class.imageRef,
             runtime_uid=int(host_class.runtime.get("uid", 1000)),
             runtime_gid=int(host_class.runtime.get("gid", 1000)),
@@ -423,9 +428,13 @@ class GenericOmnigentHostRuntime:
         for authority in reversed(authorities):
             if isinstance(authority, dict) and authority.get("kind") == "skills":
                 await self._skills.cleanup(authority)
-            elif (
-                isinstance(authority, dict)
-                and authority.get("kind") == "github_credentials"
+            elif isinstance(authority, dict) and (
+                authority.get("kind") == "github_credentials"
+                # Recorded before the kind stopped being overwritten by the
+                # attachment's own ``volume`` kind.
+                or str(authority.get("cleanupRef") or "").startswith(
+                    "github-credential-cleanup:"
+                )
             ):
                 await self._github_credentials.cleanup(authority)
 

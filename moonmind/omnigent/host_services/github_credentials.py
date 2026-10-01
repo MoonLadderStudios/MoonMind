@@ -6,7 +6,11 @@ import hashlib
 import re
 from typing import Any
 
-from moonmind.auth.github_credentials import resolve_github_credential
+from moonmind.auth.github_credentials import (
+    DEPLOYMENT_CREDENTIAL_CONFINEMENT_UNSUPPORTED,
+    deployment_credential_exposure_permitted,
+    resolve_github_credential,
+)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -58,8 +62,9 @@ def require_deployment_resolver_connection(connection_ref: str | None) -> None:
     selected = str(connection_ref or "").strip() or DEFAULT_GIT_CONNECTION_REF
     if selected != DEFAULT_GIT_CONNECTION_REF:
         raise HarnessPlatformError(
-            "the selected repository connection has no generic-host credential "
-            "delivery; the deployment GitHub credential is never substituted",
+            "the selected repository connection has no credential delivery on "
+            "this runtime path; the deployment GitHub credential is never "
+            "substituted",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
 
@@ -77,7 +82,9 @@ class OmnigentGithubCredentialService:
         """Whether this launch needs the repository's admitted GitHub authority.
 
         Tool presence alone does not: scratch work has no repository, so it
-        gets no projection, resolver call, or ``gh auth`` preflight.
+        gets no projection, resolver call, or ``gh auth`` preflight. The
+        projection is agent-readable, so the exposure policy decides whether
+        the deployment credential may be delivered at all.
         """
 
         if "gh" not in {
@@ -89,6 +96,11 @@ class OmnigentGithubCredentialService:
         if not github_repository_from_request(request):
             return False
         require_deployment_resolver_connection(authored_connection_ref(request))
+        if not deployment_credential_exposure_permitted():
+            raise HarnessPlatformError(
+                DEPLOYMENT_CREDENTIAL_CONFINEMENT_UNSUPPORTED,
+                code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+            )
         return True
 
     @staticmethod

@@ -1330,6 +1330,35 @@ async def test_selected_connection_never_receives_the_deployment_github_credenti
 
 
 @pytest.mark.asyncio
+async def test_high_security_mode_rejects_projecting_the_deployment_credential(
+    monkeypatch,
+) -> None:
+    """The projection hands agent code a broad token that a read-only file
+    does not confine; high-security mode rejects it before any resolution
+    or volume write instead of advertising confinement (#4011)."""
+
+    monkeypatch.setenv("MOONMIND_HIGH_SECURITY_MODE", "true")
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        _unexpected_credential_resolution,
+    )
+    backend = _RecordingProjectionBackend(owner_ref="lease-owner-1")
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await OmnigentGithubCredentialService(backend).materialize(
+            request=_repository_request(),
+            resolved_tools={"tools": ["gh"]},
+            owner_ref="lease-owner-1",
+            writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+            runtime_uid=1000,
+            runtime_gid=1000,
+        )
+
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
 async def test_default_connection_projection_uses_the_admitted_resolver(
     monkeypatch,
 ) -> None:
@@ -1412,6 +1441,59 @@ async def test_github_projection_writer_replaces_hosts_file_completely(
         assert oct((config / "hosts.yml").stat().st_mode & 0o777) == "0o600"
         assert oct(config.stat().st_mode & 0o777) == "0o700"
         assert sorted(path.name for path in config.iterdir()) == ["hosts.yml"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_github_projection_refreshes_never_expose_a_partial_issuance(
+    monkeypatch, tmp_path
+) -> None:
+    """Racing refreshes of one projection: a reader copying hosts.yml always
+    sees one complete issuance, and no writer's staged bytes remain."""
+
+    import threading
+
+    script = await _captured_projection_writer(monkeypatch)
+    config = tmp_path / "config"
+    tokens = ("refreshed-issuance-a", "refreshed-issuance-b")
+
+    def hosts_file(token: str) -> str:
+        return (
+            "github.com:\n    user: x-access-token\n"
+            f"    oauth_token: {token}\n    git_protocol: https\n"
+        )
+
+    refreshed = {hosts_file(token) for token in tokens}
+    complete = {hosts_file("live-issuance"), *refreshed}
+    seed = _run_projection_writer(script, config)
+    seed.communicate(b"live-issuance", timeout=30)
+    assert seed.returncode == 0
+
+    observed: list[str] = []
+    stop = threading.Event()
+
+    def read_continuously() -> None:
+        while not stop.is_set():
+            observed.append((config / "hosts.yml").read_text())
+
+    reader = threading.Thread(target=read_continuously)
+    reader.start()
+    try:
+        writers = [_run_projection_writer(script, config) for _ in tokens]
+        for writer, token in zip(writers, tokens):
+            assert writer.stdin is not None
+            writer.stdin.write(token[:8].encode())
+            writer.stdin.flush()
+        await asyncio.sleep(0.2)
+        for writer, token in zip(writers, tokens):
+            _stdout, stderr = writer.communicate(token[8:].encode(), timeout=30)
+            assert writer.returncode == 0, stderr
+    finally:
+        stop.set()
+        reader.join(timeout=10)
+
+    assert observed and set(observed) <= complete
+    assert (config / "hosts.yml").read_text() in refreshed
+    assert sorted(path.name for path in config.iterdir()) == ["hosts.yml"]
 
 
 @pytest.mark.asyncio
@@ -1503,6 +1585,171 @@ async def test_stale_owner_cannot_remove_a_newer_github_projection() -> None:
 
     assert exc.value.code == HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT
     assert not [argv for argv, _ in backend.calls if argv[1:3] == ["volume", "rm"]]
+
+
+class _DockerVolumeDaemon:
+    """Docker double holding named volumes, their labels and written bytes.
+
+    ``volume create`` on an existing name keeps the existing labels, ``run``
+    auto-creates an absent mounted volume, and ``volume rm`` removes it, as
+    the daemon does.
+    """
+
+    def __init__(self) -> None:
+        self.labels: dict[str, str] = {}
+        self.contents: dict[str, bytes] = {}
+
+    async def run(self, argv, **kwargs):
+        argv = list(argv)
+        if argv[1:3] == ["volume", "create"]:
+            name = argv[-1]
+            digest = next(
+                value.split("=", 1)[1]
+                for value in argv
+                if value.startswith("moonmind.owner_digest=")
+            )
+            self.labels.setdefault(name, digest)
+            return 0, name, ""
+        if argv[1:3] == ["volume", "inspect"]:
+            name = argv[-1]
+            if name not in self.labels:
+                return 1, "", f"Error: No such volume: {name}"
+            return 0, self.labels[name], ""
+        if argv[1:3] == ["volume", "rm"]:
+            self.labels.pop(argv[-1], None)
+            self.contents.pop(argv[-1], None)
+            return 0, "", ""
+        if argv[1:2] == ["run"]:
+            mount = next(value for value in argv if value.startswith("type=volume,"))
+            name = mount.split("src=", 1)[1].split(",", 1)[0]
+            self.labels.setdefault(name, "")
+            self.contents[name] = bytes(kwargs.get("input_bytes") or b"")
+            return 0, "", ""
+        return 0, "", ""
+
+
+def _admitted_attempt(request: AgentExecutionRequest, epoch: int) -> AgentExecutionRequest:
+    from moonmind.schemas.agent_runtime_models import AdmittedProviderCapacity
+
+    return request.model_copy(
+        update={
+            "admitted_provider_capacity": AdmittedProviderCapacity(
+                leaseOwnerId="agent-run-1",
+                profiles=[
+                    {
+                        "providerProfileRef": "codex-primary",
+                        "providerRuntimeId": "codex_cli",
+                    }
+                ],
+                executionPlanRef="omnigent-plan:" + "a" * 64,
+                stepExecutionId="step-1",
+                idempotencyKey=request.idempotency_key,
+                admissionEpoch=epoch,
+            )
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_cleanup_of_an_earlier_admission_keeps_the_live_projection(
+    monkeypatch,
+) -> None:
+    """A re-admitted execution keeps its idempotency key, so the projection
+    identity must also carry the admission epoch: the earlier attempt's
+    deferred cleanup then removes only its own issuance."""
+
+    from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
+
+    issued = iter(("first-attempt-token", "re-admitted-token"))
+
+    async def resolve(*, repo=None):
+        return ResolvedGitHubCredential(
+            token=next(issued),
+            source=GitHubCredentialSource.DIRECT_ENV,
+            sourceName="GITHUB_TOKEN",
+            repo=repo,
+        )
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        resolve,
+    )
+    daemon = _DockerVolumeDaemon()
+
+    class _Workspace:
+        async def materialize(self, request, **_kwargs):
+            return {"kind": "bind", "sourceRef": "/work/ws", "targetPath": "/workspace"}
+
+    class _Skills:
+        async def anticipated_attachment(self, _skills, *, owner_ref):
+            return {"kind": "bind", "sourceRef": f"/skills/{owner_ref}"}
+
+        async def materialize(self, _skills, *, owner_ref):
+            return {"kind": "bind", "sourceRef": f"/skills/{owner_ref}"}
+
+    class _Tools:
+        async def materialize(self, _tools, *, image_ref):
+            return []
+
+    class _Egress:
+        async def attest(self, **_kwargs):
+            return {"networkRef": "egress"}
+
+    class Unused:
+        """Port that ``prepare`` does not reach."""
+
+    runtime = GenericOmnigentHostRuntime(
+        launcher=Unused(),
+        workspace_service=_Workspace(),
+        skill_service=_Skills(),
+        tool_service=_Tools(),
+        github_credential_service=OmnigentGithubCredentialService(daemon),
+        egress_service=_Egress(),
+        runtime_environment_service=Unused(),
+        registration_waiter=Unused(),
+        host_attestor=Unused(),
+        cleanup_service=Unused(),
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            workspaceMutation=None,
+            resolvedSkills={},
+            resolvedTools={"tools": ["gh"]},
+        )
+    )
+    host_class = SimpleNamespace(
+        runtime={"uid": 1000, "gid": 1000},
+        imageRef="ghcr.io/example/host@sha256:" + "1" * 64,
+        omnigentVersion="",
+    )
+
+    async def prepare(request):
+        authorities: list[dict] = []
+
+        async def sink(authority):
+            authorities.append(authority)
+
+        prepared = await runtime.prepare(
+            request=request,
+            plan=plan,
+            host_class=host_class,
+            launch_policy=None,
+            authority_sink=sink,
+        )
+        return prepared, tuple(authorities)
+
+    first, first_authorities = await prepare(_admitted_attempt(_repository_request(), 1))
+    second, _ = await prepare(_admitted_attempt(_repository_request(), 2))
+    live_volume = second.github_credential_attachment["sourceRef"]
+
+    # The first attempt's cleanup was deferred; it runs from its persisted
+    # authority after the re-admitted attempt projected its issuance.
+    await runtime.cleanup_authorities(first_authorities)
+
+    assert live_volume in daemon.labels
+    assert daemon.contents[live_volume] == b"re-admitted-token"
+    assert live_volume != first.github_credential_attachment["sourceRef"]
+    assert first.github_credential_attachment["sourceRef"] not in daemon.labels
 
 
 @pytest.mark.asyncio

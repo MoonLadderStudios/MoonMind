@@ -68,6 +68,9 @@ _EGRESS_PROXY_ENV_NAMES = frozenset(
 # configured extra header. An empty entry resets each list (gitcredentials(7),
 # git-config(1) ``http.extraHeader``), so the projected helper is the only one
 # Git consults for GitHub and no inherited Authorization header rides along.
+# ``emptyAuth`` gives libcurl an explicit empty login, so a ``~/.netrc`` entry
+# in the model's HOME never answers GitHub's challenge ahead of the helper; the
+# file stays in place for the hosts it was written for.
 _GITHUB_GIT_CONFIG = (
     ("credential.https://github.com.helper", ""),
     (
@@ -75,6 +78,7 @@ _GITHUB_GIT_CONFIG = (
         f"!{_RUNTIME_BIN_DIR}/gh auth git-credential",
     ),
     ("http.https://github.com/.extraHeader", ""),
+    ("http.https://github.com/.emptyAuth", "true"),
 )
 # GitHub CLI prefers these over the stored hosts.yml, and GH_HOST retargets it
 # (https://cli.github.com/manual/gh_help_environment), so GH_CONFIG_DIR alone

@@ -37,6 +37,8 @@ from moonmind.workflows.executions.repository_contract import (
     AuthoredLoreRepositoryTarget,
     CapabilityReadinessRegistry,
     DEFAULT_GIT_CONNECTION_REF,
+    REPOSITORY_CREDENTIAL_UNAVAILABLE,
+    REPOSITORY_POLICY_CONFLICT,
     REPOSITORY_REMOTE_TIP_MISMATCH,
     RepositoryClientEvidence,
     RepositoryClientPolicy,
@@ -704,13 +706,16 @@ class ManagedRuntimeLauncher:
         worker via direct values or secret refs. GitHub CLI selectors that
         outrank the launch-resolved credential, and Git selectors that would be
         asked for or handed it, are not inherited either; a profile can still
-        admit one explicitly through its passthrough keys.
+        admit one explicitly through its passthrough keys. The worker's own
+        ``GITHUB_TOKEN`` reaches a run only as launch-resolved repository
+        authority, so scratch work never inherits it.
         """
 
         return {
             key: value
             for key, value in os.environ.items()
-            if key not in AMBIENT_GH_CREDENTIAL_ENV_NAMES
+            if key != "GITHUB_TOKEN"
+            and key not in AMBIENT_GH_CREDENTIAL_ENV_NAMES
             and key not in AMBIENT_GIT_CREDENTIAL_ENV_NAMES
             and not any(
                 key.startswith(prefix)
@@ -772,6 +777,190 @@ class ManagedRuntimeLauncher:
         if not isinstance(repo_ref, str):
             return False
         return cls._source_uses_github_https(cls._normalize_clone_source(repo_ref))
+
+    @staticmethod
+    def _checkout_remote_urls(workspace: Path) -> list[str]:
+        """Return the remote URLs a local checkout records, without running it."""
+
+        marker = workspace / ".git"
+        git_dir = marker
+        if marker.is_file():
+            pointer = marker.read_text(encoding="utf-8", errors="replace").strip()
+            if not pointer.startswith("gitdir:"):
+                return []
+            git_dir = (workspace / pointer.removeprefix("gitdir:").strip()).resolve()
+            common = git_dir / "commondir"
+            if common.is_file():
+                git_dir = (git_dir / common.read_text(encoding="utf-8").strip()).resolve()
+        config = git_dir / "config"
+        if not config.is_file():
+            return []
+        try:
+            completed = subprocess.run(
+                (
+                    "git",
+                    "config",
+                    "--file",
+                    str(config),
+                    "--get-regexp",
+                    r"^remote\..*\.url$",
+                ),
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return [
+            line.split(maxsplit=1)[1]
+            for line in completed.stdout.splitlines()
+            if len(line.split(maxsplit=1)) == 2
+        ]
+
+    @staticmethod
+    def _named_repository_refs(request: AgentExecutionRequest) -> list[str]:
+        """Return the Git repository references the request names, if any."""
+
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        target = workspace_spec.get("repositoryTarget")
+        target_mapping = target if isinstance(target, Mapping) else {}
+        provider = str(
+            target_mapping.get("provider") or workspace_spec.get("provider") or ""
+        ).strip().lower()
+        if provider == "lore":
+            return []
+        target_repository = target_mapping.get("repository")
+        return [
+            value.strip()
+            for value in (
+                workspace_spec.get("repository"),
+                workspace_spec.get("repo"),
+                target_repository.get("name")
+                if isinstance(target_repository, Mapping)
+                else None,
+            )
+            if isinstance(value, str) and value.strip()
+        ]
+
+    @classmethod
+    async def _uses_github_repository(
+        cls,
+        request: AgentExecutionRequest,
+        workspace_path: str | Path | None,
+    ) -> bool:
+        """Whether the run's named repository or supplied checkout is on GitHub."""
+
+        if any(
+            cls._source_uses_github_https(cls._normalize_clone_source(ref))
+            for ref in cls._named_repository_refs(request)
+        ):
+            return True
+        if workspace_path is None:
+            return False
+        remotes = await asyncio.to_thread(
+            cls._checkout_remote_urls, Path(workspace_path).expanduser()
+        )
+        return any(
+            cls._source_uses_github_https(cls._normalize_clone_source(url))
+            for url in remotes
+        )
+
+    @classmethod
+    async def _deployment_github_credential_admitted(
+        cls,
+        request: AgentExecutionRequest,
+        workspace_path: str | Path | None,
+    ) -> bool:
+        """Whether this run's repository authority is the deployment credential.
+
+        Only repository work of the default connection uses it. Scratch work
+        and a supplied local checkout without a GitHub remote need no
+        repository login, so the credential is not resolved, brokered, or
+        inherited for them. A GitHub repository of a selected connection fails
+        closed rather than receiving it (MoonLadderStudios/MoonMind#4011).
+        """
+
+        if await cls._uses_github_repository(request, workspace_path):
+            cls._require_deployment_credential_connection(request)
+            return True
+        if not cls._named_repository_refs(request):
+            return False
+        from moonmind.omnigent.workspace_intent import authored_connection_ref
+
+        return (
+            authored_connection_ref(request) or DEFAULT_GIT_CONNECTION_REF
+        ) == DEFAULT_GIT_CONNECTION_REF
+
+    @staticmethod
+    def _declared_capabilities(request: AgentExecutionRequest) -> set[str]:
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+        skill = request.skill if isinstance(request.skill, Mapping) else {}
+        declared: set[str] = set()
+        for values in (
+            parameters.get("requiredCapabilities"),
+            parameters.get("repositoryToolCapabilities"),
+            skill.get("requiredCapabilities"),
+        ):
+            if isinstance(values, (list, tuple)):
+                declared.update(
+                    str(value).strip().lower() for value in values if str(value).strip()
+                )
+        return declared
+
+    @classmethod
+    def _agent_receives_deployment_credential(
+        cls, request: AgentExecutionRequest
+    ) -> bool:
+        """Apply the admitted exposure policy to the run's agent processes.
+
+        The default policy hands repository work the deployment credential
+        through the workspace broker and records that exposure. High-security
+        mode keeps it out of the agent; MoonMind-managed clone and publication
+        do not need it there. A run that declares agent-side GitHub authority
+        is rejected because nothing confines a broad token in agent code.
+        """
+
+        from moonmind.auth.github_credentials import (
+            DEPLOYMENT_CREDENTIAL_CONFINEMENT_UNSUPPORTED,
+            deployment_credential_exposure_permitted,
+        )
+
+        if deployment_credential_exposure_permitted():
+            return True
+        if "gh" in cls._declared_capabilities(request):
+            raise RepositoryContractError(
+                REPOSITORY_POLICY_CONFLICT, DEPLOYMENT_CREDENTIAL_CONFINEMENT_UNSUPPORTED
+            )
+        return False
+
+    @staticmethod
+    def _require_deployment_credential_connection(
+        request: AgentExecutionRequest,
+    ) -> None:
+        """Fail closed before a selected connection could receive the
+        deployment credential that belongs to the default connection only."""
+
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+        from moonmind.omnigent.host_services.github_credentials import (
+            require_deployment_resolver_connection,
+        )
+        from moonmind.omnigent.workspace_intent import authored_connection_ref
+
+        try:
+            require_deployment_resolver_connection(authored_connection_ref(request))
+        except HarnessPlatformError as exc:
+            raise RepositoryContractError(
+                REPOSITORY_CREDENTIAL_UNAVAILABLE, str(exc)
+            ) from exc
 
     def _emit_system_annotation(
         self,
@@ -1749,7 +1938,9 @@ class ManagedRuntimeLauncher:
             git_helper_command = shlex.quote(str(git_helper_path))
             # The empty entries reset any helper, Authorization header, or
             # askpass program a system or checkout layer supplies, so Git asks
-            # only the admitted broker.
+            # only the admitted broker. ``emptyAuth`` gives libcurl an explicit
+            # empty login, so a ~/.netrc entry in the model's HOME never answers
+            # GitHub's challenge ahead of the broker.
             git_config_lines.extend(
                 [
                     "[credential]\n",
@@ -1757,6 +1948,7 @@ class ManagedRuntimeLauncher:
                     f"\thelper = !{git_helper_command}\n",
                     '[http "https://github.com/"]\n',
                     "\textraHeader =\n",
+                    "\temptyAuth = true\n",
                     "[core]\n",
                     "\taskPass =\n",
                 ]
@@ -1782,11 +1974,15 @@ class ManagedRuntimeLauncher:
         existing_config = repo_git_config_path.read_text(encoding="utf-8")
         if marker not in existing_config:
             git_helper_command = shlex.quote(str(git_helper_path))
+            # The checkout's own layer is read after the global one, so its
+            # reset repeats the helper and Authorization header resets.
             credential_section = (
                 f"\n{marker}\n"
                 f"[credential]\n"
                 "\thelper =\n"
                 f"\thelper = !{git_helper_command}\n"
+                '[http "https://github.com/"]\n'
+                "\textraHeader =\n"
             )
             repo_git_config_path.write_text(
                 existing_config + credential_section,
@@ -2174,6 +2370,13 @@ class ManagedRuntimeLauncher:
             profile=profile,
             strategy=strategy,
         )
+        deployment_credential_admitted = (
+            await self._deployment_github_credential_admitted(request, workspace_path)
+        )
+        agent_receives_deployment_credential = (
+            deployment_credential_admitted
+            and self._agent_receives_deployment_credential(request)
+        )
         launch_github_token = (
             await resolve_github_token_for_launch()
             if self._request_workspace_needs_github_https_auth(
@@ -2467,9 +2670,12 @@ class ManagedRuntimeLauncher:
                 runtime_id=normalize_runtime_id(profile.runtime_id),
             )
 
-            github_token = await resolve_github_token_for_launch(env_overrides)
-            if not github_token:
-                github_token = launch_github_token
+            github_token: str | None = None
+            if agent_receives_deployment_credential:
+                github_token = (
+                    await resolve_github_token_for_launch(env_overrides)
+                    or launch_github_token
+                )
             # The claude CLI refuses --dangerously-skip-permissions when running as root
             # (security restriction). For claude_code runtime, drop to the app user.
             _run_as_root = os.geteuid() == 0
@@ -2492,6 +2698,22 @@ class ManagedRuntimeLauncher:
                     )
                 deferred_cleanup_paths.append(github_socket_path)
                 deferred_cleanup_paths.append(str(Path(github_socket_path).parent))
+                self._emit_system_annotation(
+                    run_id=run_id,
+                    workspace_path=resolved_workspace_path,
+                    annotation_type="repository_credential_exposure",
+                    text=(
+                        "Launcher: the agent holds the repository's GitHub "
+                        "credential through the workspace broker. It is a "
+                        "broad token: routing does not confine it, and a "
+                        "local disable does not revoke copied bytes."
+                    ),
+                    metadata={
+                        "reason": "repository_credential_exposure",
+                        "exposurePolicy": "default_agent_exposure",
+                        "confinement": "none",
+                    },
+                )
                 if self._runtime_requires_direct_github_env(profile.runtime_id):
                     env_overrides["GITHUB_TOKEN"] = github_token
                     env_overrides.setdefault("GIT_TERMINAL_PROMPT", "0")

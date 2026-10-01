@@ -39,9 +39,13 @@ def build_github_token_git_environment(
 
     The token is the admitted authority for both clients: empty entries reset
     the credential helpers and extra headers inherited configuration layers
-    supply, askpass is disabled, and GitHub CLI selectors that outrank
+    supply, for the admitted host and for any host a redirect or ``insteadOf``
+    rewrite retargets the command to, askpass is disabled, and GitHub CLI selectors that outrank
     ``GITHUB_TOKEN`` or retarget another host are dropped
-    (https://cli.github.com/manual/gh_help_environment).
+    (https://cli.github.com/manual/gh_help_environment). ``http.emptyAuth``
+    hands libcurl an explicit empty login, so it never answers a challenge
+    from a ``~/.netrc`` login cache before Git asks the admitted helper; the
+    file itself stays in the caller's HOME.
     """
 
     env = {str(key): str(value) for key, value in (base_env or {}).items()}
@@ -59,12 +63,17 @@ def build_github_token_git_environment(
         env.get("GIT_TERMINAL_PROMPT") or terminal_prompt
     )
     git_config = (
-        (f"credential.https://{normalized_host}.helper", ""),
+        # Unscoped, so no inherited helper answers for the admitted host or
+        # for any host a redirect or ``insteadOf`` rewrite retargets to.
+        ("credential.helper", ""),
         (
             f"credential.https://{normalized_host}.helper",
             _GITHUB_TOKEN_GIT_CREDENTIAL_HELPER,
         ),
         (f"http.https://{normalized_host}/.extraHeader", ""),
+        # A URL-specific header outranks a generic reset, so both are needed.
+        ("http.extraHeader", ""),
+        ("http.emptyAuth", "true"),
         ("core.askPass", ""),
     )
     env["GIT_CONFIG_COUNT"] = str(len(git_config))

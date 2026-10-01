@@ -29,6 +29,7 @@ from moonmind.workflows.executions.repository_contract import (
     compile_repository_target,
     materialize_resolved_repository_target,
     persist_repository_connection,
+    reconcile_default_git_connection,
 )
 from moonmind.workflows.temporal.runtime.github_auth_broker import (
     GitHubAuthBrokerManager,
@@ -1655,7 +1656,8 @@ async def test_launch_seeds_github_git_auth_before_initial_clone(
     clone_env = clone_envs[0]
     assert clone_env["GITHUB_TOKEN"] == token
     assert clone_env["GIT_TERMINAL_PROMPT"] == "0"
-    assert clone_env["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
+    # The unscoped reset clears every inherited helper before the admitted one.
+    assert clone_env["GIT_CONFIG_KEY_0"] == "credential.helper"
     assert clone_env["GIT_CONFIG_VALUE_0"] == ""
     assert clone_env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
     assert clone_env["HTTPS_PROXY"] == "http://proxy.example"
@@ -3973,7 +3975,9 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
 
     _record, process, _cleanup, deferred_cleanup = await launcher.launch(
         run_id="claude-gh-run",
-        request=_make_request(),
+        request=_make_request(
+            workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+        ),
         profile=profile,
         workspace_path=str(workspace_root),
     )
@@ -5399,6 +5403,25 @@ async def test_launch_env_keeps_ambient_gh_selectors_from_outranking_admitted_to
 
     launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "store"))
     profile = _make_profile(command_template=["echo", "hello"], passthrough_env_keys=[])
+    # A supplied checkout of a GitHub repository: the deployment credential is
+    # its admitted repository authority.
+    workspace = tmp_path / "workspaces" / "run-gh-precedence-1" / "repo"
+    workspace.mkdir(parents=True)
+    git_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path)}
+    subprocess.run(["git", "init", "-q", str(workspace)], env=git_env, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/MoonLadderStudios/MoonMind.git",
+        ],
+        env=git_env,
+        check=True,
+    )
 
     class _FakeProcess:
         pid = 1000
@@ -5422,7 +5445,10 @@ async def test_launch_env_keeps_ambient_gh_selectors_from_outranking_admitted_to
         _fake_create_subprocess_exec,
     )
     _record, process, _cleanup, _deferred = await launcher.launch(
-        run_id="run-gh-precedence-1", request=_make_request(), profile=profile
+        run_id="run-gh-precedence-1",
+        request=_make_request(),
+        profile=profile,
+        workspace_path=str(workspace),
     )
     await process.wait()
 
@@ -5438,18 +5464,24 @@ async def test_launch_env_keeps_ambient_gh_selectors_from_outranking_admitted_to
         assert name not in captured_env
     assert _AMBIENT_A not in json.dumps(captured_env)
 
-    real_gh = shutil.which("gh")
-    if real_gh is None:
+    if shutil.which("gh") is None:
+        await launcher.cleanup_run_support("run-gh-precedence-1")
         pytest.skip("requires the real gh client")
     (tmp_path / "home").mkdir(exist_ok=True)
-    token = subprocess.run(
-        [real_gh, "auth", "token"],
-        env=captured_env,
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=tmp_path,
-    )
+    # The agent's ``gh`` is the brokered wrapper first on its PATH.
+    agent_gh = shutil.which("gh", path=captured_env["PATH"])
+    try:
+        token = await asyncio.to_thread(
+            subprocess.run,
+            [agent_gh, "auth", "token"],
+            env=captured_env,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=tmp_path,
+        )
+    finally:
+        await launcher.cleanup_run_support("run-gh-precedence-1")
     assert token.returncode == 0, token.stderr
     assert token.stdout.strip() == _ADMITTED_B
 
@@ -5460,12 +5492,24 @@ async def test_managed_git_config_asks_only_the_admitted_broker(tmp_path):
     socket_dir = Path("/tmp") / f"mm-gh-4011-{os.getpid()}-{time.monotonic_ns()}"
     socket_path = socket_dir / "github-auth.sock"
     workspace = tmp_path / "repo"
-    (workspace / ".git").mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q", str(workspace)],
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path)},
+        check=True,
+    )
     # A helper left in the checkout and a host-level configuration layer both
     # select the ambient credential for the same host.
     (workspace / ".git" / "config").write_text(
         "[core]\n\trepositoryformatversion = 0\n"
-        f"[credential]\n\thelper = {_ambient_git_helper(_AMBIENT_A + '-local')}\n",
+        f"[credential]\n\thelper = {_ambient_git_helper(_AMBIENT_A + '-local')}\n"
+        '[http "https://github.com/"]\n'
+        f"\textraHeader = Authorization: Basic {_AMBIENT_A}-local\n",
+        encoding="utf-8",
+    )
+    # libcurl answers the first challenge from the model HOME's login cache
+    # before Git asks any helper.
+    (tmp_path / ".netrc").write_text(
+        f"machine github.com login ambient password {_AMBIENT_A}-netrc\n",
         encoding="utf-8",
     )
     (tmp_path / "system.gitconfig").write_text(
@@ -5519,6 +5563,22 @@ async def test_managed_git_config_asks_only_the_admitted_broker(tmp_path):
             check=False,
             cwd=workspace,
         )
+        empty_auth = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "git",
+                "config",
+                "--type=bool",
+                "--get-urlmatch",
+                "http.emptyAuth",
+                "https://github.com/owner/repo.git",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=workspace,
+        )
     finally:
         await manager.stop("run-1")
 
@@ -5529,3 +5589,295 @@ async def test_managed_git_config_asks_only_the_admitted_broker(tmp_path):
     # the brokered host, so neither rides along with or replaces the helper.
     assert header.stdout.strip() == ""
     assert askpass.stdout.strip() == ""
+    # An explicit empty login keeps libcurl from answering GitHub's challenge
+    # with the ~/.netrc entry ahead of the broker; the file itself stays.
+    assert empty_auth.stdout.strip() == "true"
+    assert (tmp_path / ".netrc").read_text(encoding="utf-8").endswith(
+        f"{_AMBIENT_A}-netrc\n"
+    )
+
+
+class _RecordingGitHubAuthBrokers:
+    def __init__(self) -> None:
+        self.starts: list[dict[str, str]] = []
+
+    async def start(self, *, run_id: str, token: str, socket_path: str) -> None:
+        self.starts.append({"run_id": run_id, "token": token, "socket_path": socket_path})
+
+    async def stop(self, run_id: str) -> None:
+        return None
+
+
+def _capture_managed_launch(monkeypatch) -> tuple[dict[str, str], list[tuple]]:
+    """Record the agent environment and every subprocess the launch starts."""
+
+    captured_env: dict[str, str] = {}
+    commands: list[tuple] = []
+
+    class _FakeProcess:
+        pid = 1001
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        commands.append(args)
+        if isinstance(kwargs.get("env"), dict):
+            captured_env.update(kwargs["env"])
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    return captured_env, commands
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_workspace", [False, True])
+async def test_scratch_launch_receives_no_repository_credential(
+    tmp_path, monkeypatch, caller_workspace
+):
+    """Scratch work has no repository, so it needs no repository login.
+
+    The worker's own GitHub credential is neither resolved, brokered, nor
+    inherited, including for a caller-supplied local checkout with no remote.
+    """
+
+    monkeypatch.setenv("PATH", os.environ.get("PATH", "/usr/bin:/bin"))
+    monkeypatch.setenv("GITHUB_TOKEN", _ADMITTED_B)
+    resolver_calls: list[object] = []
+
+    async def _resolver(*args, **kwargs):
+        resolver_calls.append(args)
+        return _ADMITTED_B
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _resolver,
+    )
+    captured_env, _commands = _capture_managed_launch(monkeypatch)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "store"))
+    brokers = _RecordingGitHubAuthBrokers()
+    launcher._github_auth_brokers = brokers
+    workspace: Path | None = None
+    if caller_workspace:
+        workspace = tmp_path / "workspaces" / "scratch-run" / "repo"
+        workspace.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="scratch-run",
+        request=_make_request(),
+        profile=_make_profile(command_template=["echo", "hello"], passthrough_env_keys=[]),
+        workspace_path=str(workspace) if workspace is not None else None,
+    )
+    await process.wait()
+
+    assert resolver_calls == []
+    assert brokers.starts == []
+    assert "GITHUB_TOKEN" not in captured_env
+    assert _ADMITTED_B not in json.dumps(captured_env)
+    if workspace is not None:
+        support_bin = workspace.parent / ".moonmind" / "bin"
+        assert not (support_bin / "gh").exists()
+        assert not (support_bin / "git-credential-moonmind").exists()
+
+
+@pytest.mark.asyncio
+async def test_selected_git_connection_never_receives_the_deployment_credential(
+    tmp_path, monkeypatch
+):
+    """A non-default connection names its own PAT or App installation.
+
+    The deployment resolver belongs to the default connection only, so the
+    launcher fails closed before any clone or broker instead of substituting it.
+    """
+
+    monkeypatch.setenv("GITHUB_TOKEN", _AMBIENT_A)
+    connections_dir = tmp_path / "repository_connections"
+    persist_repository_connection(
+        reconcile_default_git_connection(
+            client_policy=RepositoryClientPolicy(
+                pinnedVersion="2.46.0",
+                toolBundleRef="repository-client:git-system",
+                executableSha256="sha256:git",
+            )
+        ).model_copy(
+            update={
+                "id": "repository-connection:tactics-app",
+                "credential": {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": "TACTICS_TOKEN"},
+                },
+            }
+        ),
+        connections_dir / "tactics-app.json",
+    )
+    monkeypatch.setenv("MOONMIND_REPOSITORY_CONNECTIONS_DIR", str(connections_dir))
+    resolver_calls: list[object] = []
+
+    async def _resolver(*args, **kwargs):
+        resolver_calls.append(args)
+        return _AMBIENT_A
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _resolver,
+    )
+    _captured_env, commands = _capture_managed_launch(monkeypatch)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "store"))
+    brokers = _RecordingGitHubAuthBrokers()
+    launcher._github_auth_brokers = brokers
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/Tactics",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:tactics-app",
+                "repository": {"name": "MoonLadderStudios/Tactics"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={"publishMode": "none"},
+    )
+
+    with pytest.raises(RepositoryContractError) as exc:
+        await launcher.launch(
+            run_id="selected-connection-run",
+            request=request,
+            profile=_make_profile(
+                command_template=["echo", "hello"], passthrough_env_keys=[]
+            ),
+        )
+
+    assert exc.value.code == "REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    assert "never substituted" in str(exc.value)
+    assert _AMBIENT_A not in str(exc.value)
+    assert resolver_calls == []
+    assert brokers.starts == []
+    assert commands == []
+
+
+class _RecordingLogStreamer:
+    def __init__(self) -> None:
+        self.annotations: list[dict[str, object]] = []
+
+    def emit_system_annotation(self, **kwargs) -> None:
+        self.annotations.append(kwargs)
+
+
+def _github_checkout(tmp_path: Path, run_id: str) -> Path:
+    workspace = tmp_path / "workspaces" / run_id / "repo"
+    workspace.mkdir(parents=True)
+    git_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path)}
+    subprocess.run(["git", "init", "-q", str(workspace)], env=git_env, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/MoonLadderStudios/MoonMind.git",
+        ],
+        env=git_env,
+        check=True,
+    )
+    return workspace
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("high_security", [False, True])
+async def test_agent_credential_exposure_follows_the_admitted_policy(
+    tmp_path, monkeypatch, high_security
+):
+    """The default policy hands the agent the deployment credential and says
+    so; high-security mode keeps it out of the agent, which MoonMind-managed
+    publication does not need (it acquires its own at the publisher)."""
+
+    if high_security:
+        monkeypatch.setenv("MOONMIND_HIGH_SECURITY_MODE", "true")
+    else:
+        monkeypatch.delenv("MOONMIND_HIGH_SECURITY_MODE", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", _ADMITTED_B)
+    captured_env, _commands = _capture_managed_launch(monkeypatch)
+    streamer = _RecordingLogStreamer()
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "store"), log_streamer=streamer
+    )
+    brokers = _RecordingGitHubAuthBrokers()
+    launcher._github_auth_brokers = brokers
+    workspace = _github_checkout(tmp_path, "exposure-run")
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="exposure-run",
+        request=_make_request(parameters={"publishMode": "pr"}),
+        profile=_make_profile(command_template=["echo", "hello"], passthrough_env_keys=[]),
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    exposures = [
+        item
+        for item in streamer.annotations
+        if item.get("annotation_type") == "repository_credential_exposure"
+    ]
+    if high_security:
+        assert brokers.starts == []
+        assert _ADMITTED_B not in json.dumps(captured_env)
+        assert exposures == []
+    else:
+        assert [start["token"] for start in brokers.starts] == [_ADMITTED_B]
+        assert len(exposures) == 1
+        assert exposures[0]["metadata"]["confinement"] == "none"
+        assert _ADMITTED_B not in json.dumps(exposures)
+
+
+@pytest.mark.asyncio
+async def test_high_security_rejects_declared_agent_github_authority(
+    tmp_path, monkeypatch
+):
+    """A broker or helper that returns the broad token does not confine
+    arbitrary code, so declared agent-side gh is rejected, not advertised."""
+
+    monkeypatch.setenv("MOONMIND_HIGH_SECURITY_MODE", "true")
+    monkeypatch.setenv("GITHUB_TOKEN", _ADMITTED_B)
+    resolver_calls: list[object] = []
+
+    async def _resolver(*args, **kwargs):
+        resolver_calls.append(args)
+        return _ADMITTED_B
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _resolver,
+    )
+    _captured_env, commands = _capture_managed_launch(monkeypatch)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "store"))
+    brokers = _RecordingGitHubAuthBrokers()
+    launcher._github_auth_brokers = brokers
+    workspace = _github_checkout(tmp_path, "declared-gh-run")
+
+    with pytest.raises(RepositoryContractError) as exc:
+        await launcher.launch(
+            run_id="declared-gh-run",
+            request=_make_request(
+                parameters={"publishMode": "none", "requiredCapabilities": ["git", "gh"]}
+            ),
+            profile=_make_profile(
+                command_template=["echo", "hello"], passthrough_env_keys=[]
+            ),
+            workspace_path=str(workspace),
+        )
+
+    assert exc.value.code == "REPOSITORY_POLICY_CONFLICT"
+    assert _ADMITTED_B not in str(exc.value)
+    assert resolver_calls == []
+    assert brokers.starts == []
+    assert commands == []

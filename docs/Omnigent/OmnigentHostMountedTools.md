@@ -274,6 +274,8 @@ The trusted host entrypoint receives the narrowly scoped credential only long en
 
 The tool bundle never contains token values. MoonMind resolves the credential at the trusted launch boundary and must keep it out of workflow payloads, Temporal history, logs, artifacts, and durable host metadata.
 
+On generic hosts the projection exists only for runs that declare `gh` and name a repository of the default connection. A selected connection fails closed and never receives the deployment credential. The host environment unsets `GH_TOKEN`, `GITHUB_TOKEN`, the enterprise token variables, and `GH_HOST`. It resets inherited Git helpers and Authorization headers for `github.com` and sets `http.emptyAuth`, so a `~/.netrc` entry in the model's HOME is never sent to GitHub. The model's own HOME and OAuth files stay in place. The projection volume is owned by the execution's admission epoch: a re-admitted attempt keeps its idempotency key but gets its own volume, so the earlier attempt's deferred cleanup removes only its own issuance. A projected token is agent-readable, so `MOONMIND_HIGH_SECURITY_MODE` rejects the projection with `OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE` instead of claiming confinement. The OAuth host writes any clone credential into the same agent-readable configuration, so that mode rejects its GitHub launches too.
+
 ### 7.3 Runner environment
 
 On an on-demand or run-dedicated host, GitHub CLI settings that are not part of the stock runner allowlist must be explicitly forwarded to that run's spawned runner:
@@ -312,6 +314,8 @@ or copy merge semantics into the Omnigent integration.
 Mounting `gh` into the host does not authenticate a repository clone that MoonMind performs before the host starts.
 
 When MoonMind prepares a private repository workspace outside the Omnigent container, that clone must use MoonMind's canonical GitHub credential resolver and the existing in-memory Git credential-helper environment. Repository URLs remain token-free.
+
+The shared builder for MoonMind-controlled clone, fetch, restore, and publication commands resets every inherited credential helper and generic Authorization header and sets `http.emptyAuth`. A redirect or `insteadOf` rewrite to another host therefore receives neither the admitted credential nor an ambient one. The sandbox clone scopes its stdin-backed helper to the exact admitted source URL and sets `http.emptyAuth`. A redirect to another host, an `insteadOf` rewrite, or a sibling repository is a different credential context and is never offered the token, and no `~/.netrc` entry answers a challenge. When the default connection's credential is not configured, the clone fails with an explicit diagnostic. It is not retried unauthenticated, because anonymous access has no runtime workspace source.
 
 The pre-host clone and the in-host Git/`gh` commands may use the same resolved credential, but they are distinct execution boundaries and must each receive their required authentication.
 
