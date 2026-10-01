@@ -406,10 +406,67 @@ def prepend_skill_activation_summary(
     return block + instructions
 
 
+def append_remediation_attempt_context(
+    instructions: str,
+    *,
+    parameters: Mapping[str, Any] | None,
+) -> str:
+    """Expose existing attempt metadata to the agent without creating authority."""
+
+    params = parameters if isinstance(parameters, Mapping) else {}
+    metadata = params.get("metadata")
+    moonmind = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+    cadence = (
+        moonmind.get("remediationCadence") if isinstance(moonmind, Mapping) else None
+    )
+    if not isinstance(cadence, Mapping) or cadence.get("role") not in (
+        "moonspec-remediation",
+        "moonspec-verification-gate",
+    ):
+        return instructions
+    context: dict[str, Any] = {"role": cadence["role"]}
+    for field in ("attempt", "maxAttempts"):
+        value = cadence.get(field)
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= (0 if field == "attempt" else 1)
+        ):
+            context[field] = value
+    for field in (
+        "remediationLoopId",
+        "remediationWorkspaceHeadRef",
+        "gateResultRef",
+        "remainingWorkRef",
+    ):
+        value = params.get(field)
+        if isinstance(value, str) and value.strip():
+            context[field] = value.strip()
+    header = "MoonMind remediation attempt context (JSON):\n"
+    block = header + json.dumps(context, indent=2, sort_keys=True)
+    if block in instructions:
+        return instructions
+    offset = instructions.find(header)
+    if offset >= 0:
+        start = offset + len(header)
+        try:
+            previous, length = json.JSONDecoder().raw_decode(instructions[start:])
+        except ValueError:
+            pass
+        else:
+            if isinstance(previous, Mapping) and previous.get("role") in (
+                "moonspec-remediation",
+                "moonspec-verification-gate",
+            ):
+                instructions = instructions[:offset] + instructions[start + length :]
+    return instructions.rstrip() + "\n\n" + block
+
+
 __all__ = [
     "AUTO_SKILL_SENTINEL",
     "ACTIVE_SKILL_SNAPSHOT_HEADER",
     "SkillProjectionError",
+    "append_remediation_attempt_context",
     "build_skill_activation_summary",
     "load_resolved_skillset",
     "materialize_run_skill_snapshot",

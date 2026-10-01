@@ -86,7 +86,10 @@ from moonmind.workflows.provider_failures import (
     build_provider_failure_event,
     classify_provider_failure,
 )
-from moonmind.workflows.skills.run_projection import prepend_skill_activation_summary
+from moonmind.workflows.skills.run_projection import (
+    append_remediation_attempt_context,
+    prepend_skill_activation_summary,
+)
 
 _NON_TERMINAL_STATUSES = {
     "created",
@@ -639,6 +642,7 @@ async def _build_omnigent_first_message(
         if isinstance(input_paths, Mapping) and input_paths:
             text += "\n\nMoonMind materialized input files (relative to the workspace):\n"
             text += "\n".join(f"- {name}: {path}" for name, path in input_paths.items())
+    text = append_remediation_attempt_context(text, parameters=parameters)
     metadata = parameters.get("metadata")
     moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
     if not isinstance(moonmind, dict):

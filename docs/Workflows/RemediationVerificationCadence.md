@@ -97,6 +97,8 @@ Keep durable attempt state under the existing workflow/step owner. The lifecycle
 
 Before runtime launch, persist exact source report, candidate, attempt, Skill/configuration, destination and idempotency identities. Before advancing to full verification, commit accepted compute/candidate evidence. Before another remediation attempt, commit the current verifier outcome and the budget/no-progress decision.
 
+Both remediation and verification agent requests expose the controller's current loop ID, candidate checkpoint, role, attempt, and attempt limit. The runtime projects that compact context into the agent prompt from the materialized node inputs and annotations; runtime defaults cannot replace the current candidate. The `run-remediation-attempt-context-inputs-v1` cutover preserves the request shape recorded by older Temporal histories.
+
 An Activity retry retries the same effect. A restore retry continues the same destination reservation. A semantic repair attempt gets a new Step Execution and increments its admitted attempt count. A verification-only retry reuses the candidate without running the repair again.
 
 ## 9. Dashboard expectations
@@ -128,6 +130,25 @@ A repeated artifact write reconciles committed bytes/digest. A changed payload u
 Use an explicitly named canonical remediation Skill, not `auto` selection that may resolve to an empty bundle. Supply the exact latest `gateResultRef` and `remainingWorkRef` as compact direct inputs. The trusted Activity materializes complete permitted bytes outside history and supplies readable `gateResultPath` and `remainingWorkPath` to the runtime.
 
 Instruct remediation to consume all safe current gaps, exercise the actual production boundary requested by the verifier, record per-gap decisions and targeted checks, and stop without mutation when the input verdict is terminal. A test-only dictionary, fabricated success field, or helper mock does not satisfy a requirement about real workflow/Activity/adapter/persistence wiring.
+
+Runtime prompt preparation forwards the existing workflow-owned remediation
+cadence (role, admitted attempt and maximum) and current candidate/verifier refs
+as compact JSON to the actual agent message, including explicit and
+artifact-backed prompts. This is context from the existing owner, not a second
+attempt ledger or new admission authority. Missing historical dependency-setup
+records alone do not block safe repository repairs. Skills honor supplied limits
+and known exhausted attempts without inventing a universal setup budget or
+requiring a separate trusted retained-attempt ledger before editing.
+
+The resolved MoonSpec acceptance policy makes browser execution advisory by
+default, including for UI work. Browser availability, installation, screenshots,
+live UI access, and visual signoff never block default verification or fail its
+workflow. Verify the requested functional boundaries with executed non-browser
+evidence and record unexecuted browser diagnostics honestly. Only an explicit
+caller instruction requiring a browser gate for this verification run opts in;
+a previous report or derived plan cannot add that gate. Concrete defects and
+missing controlling non-browser evidence still require remediation or evidence
+collection under the existing owner.
 
 The full verifier checks the resulting whole candidate against the authoritative scope and publishes an attempt-bound result. Presets and schedules use the same contract, not independent loops with subtly different stopping or preservation rules.
 
