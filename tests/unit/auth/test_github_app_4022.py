@@ -552,7 +552,7 @@ async def test_app_consumers_use_bound_http_git_gh_with_redaction() -> None:
     assert git_holder[0]["repository"] == "acme/repo"
     assert "GIT_PASSWORD" not in git_holder[0]["env"]
     assert "GIT_USERNAME" not in git_holder[0]["env"]
-    assert git_holder[0]["env"]["GIT_CONFIG_COUNT"] == "4"
+    assert git_holder[0]["env"]["GIT_CONFIG_COUNT"] == "6"
     assert (
         git_holder[0]["env"]["GIT_CONFIG_KEY_1"]
         == "credential.https://github.com.helper"

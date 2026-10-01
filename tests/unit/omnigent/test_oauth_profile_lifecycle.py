@@ -7043,6 +7043,32 @@ async def test_github_token_never_substitutes_the_deployment_credential_for_a_se
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("capabilities", [["git"], ["git", "gh"]])
+async def test_high_security_mode_rejects_projecting_the_deployment_credential_into_the_host(
+    monkeypatch, capabilities
+) -> None:
+    """This host projects any clone credential into its agent-readable gh
+    configuration, so high-security mode rejects the launch instead of
+    advertising confinement a broad token does not have (#4011)."""
+
+    import moonmind.auth.github_credentials as github_credentials
+
+    monkeypatch.setenv("MOONMIND_HIGH_SECURITY_MODE", "true")
+    resolve = AsyncMock(return_value=SimpleNamespace(token="deployment-token"))
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": capabilities}
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+
+    assert exc.value.code == "OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE"
+    assert "deployment-token" not in str(exc.value)
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_github_token_skipped_for_non_github_source(monkeypatch) -> None:
     import moonmind.auth.github_credentials as github_credentials
 

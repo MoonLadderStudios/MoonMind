@@ -67,15 +67,25 @@ class RecordingRemote:
 
 
 @contextmanager
-def credential_recording_remote(directory: Path) -> Iterator[RecordingRemote]:
+def credential_recording_remote(
+    directory: Path, *, redirect_to: str | None = None
+) -> Iterator[RecordingRemote]:
+    """Serve the remote; ``redirect_to`` answers every request with a redirect
+    to that base URL plus the requested path instead of a challenge."""
+
+    directory.mkdir(parents=True, exist_ok=True)
     certificate_path, key_path = _write_self_signed_loopback_certificate(directory)
     recorded: list[str] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             recorded.extend(self.headers.get_all("Authorization") or [])
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="recording-remote"')
+            if redirect_to is not None:
+                self.send_response(302)
+                self.send_header("Location", f"{redirect_to}{self.path}")
+            else:
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="recording-remote"')
             self.send_header("Content-Length", "0")
             self.end_headers()
 

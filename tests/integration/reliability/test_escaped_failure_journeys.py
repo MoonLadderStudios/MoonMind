@@ -8015,7 +8015,7 @@ async def test_generic_omnigent_publication_materializes_resolved_github_auth(
     push_environment = push_environments[0]
     assert push_environment["GITHUB_TOKEN"] == credential_token
     assert push_environment["GIT_TERMINAL_PROMPT"] == "0"
-    assert push_environment["GIT_CONFIG_COUNT"] == "4"
+    assert push_environment["GIT_CONFIG_COUNT"] == "6"
     assert "credential.https://github.com.helper" in {
         push_environment["GIT_CONFIG_KEY_0"],
         push_environment["GIT_CONFIG_KEY_1"],

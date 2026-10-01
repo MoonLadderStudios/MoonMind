@@ -67,6 +67,34 @@ _SECRET_REF_ENVS: tuple[str, ...] = (
 _SETTINGS_REF_ENVS: tuple[str, ...] = ("MOONMIND_GITHUB_TOKEN_REF",)
 
 
+#: Why high-security mode refuses agent-held deployment credentials. The
+#: deployment credential is a broad token: a read-only file, broker, or helper
+#: that returns it does not confine arbitrary agent code, and a local disable
+#: does not revoke bytes it already copied (RepositoryAccessAndWorkspaceDesign
+#: QUALITY-003). Contains no credential material.
+DEPLOYMENT_CREDENTIAL_CONFINEMENT_UNSUPPORTED = (
+    "high-security mode does not deliver the deployment GitHub credential to "
+    "agent code: it is a broad token that no read-only projection, broker, or "
+    "helper confines, so agent-side GitHub authority is rejected rather than "
+    "advertised as confined; MoonMind-managed clone and publication acquire "
+    "it outside the agent"
+)
+
+
+def deployment_credential_exposure_permitted() -> bool:
+    """Whether agent code may hold the deployment GitHub credential.
+
+    The default policy accepts that exposure for repository work, and the
+    delivering runtime reports it. ``MOONMIND_HIGH_SECURITY_MODE`` rejects it:
+    MoonMind has no confining mediation for a broad token and does not add a
+    proxy merely to claim one.
+    """
+
+    from moonmind.security.outbound_scan import resolve_high_security_mode
+
+    return not resolve_high_security_mode()
+
+
 async def _resolve_secret_ref(ref: str) -> str:
     from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
         resolve_managed_api_key_reference,

@@ -1439,7 +1439,7 @@ async def test_controller_clone_uses_launch_scoped_github_token_for_git_auth(
     assert git_env is not None
     assert git_env["GITHUB_TOKEN"] == token
     assert git_env["GIT_TERMINAL_PROMPT"] == "0"
-    assert git_env["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
+    assert git_env["GIT_CONFIG_KEY_0"] == "credential.helper"
     assert git_env["GIT_CONFIG_VALUE_0"] == ""
     assert git_env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
     assert 'password="$GITHUB_TOKEN"' in git_env["GIT_CONFIG_VALUE_1"]

@@ -2963,6 +2963,18 @@ class OmnigentProfileBoundExecutionCoordinator:
             raise OmnigentOAuthHostError(
                 str(exc), code="github_auth_unavailable"
             ) from exc
+        from moonmind.auth.github_credentials import (
+            DEPLOYMENT_CREDENTIAL_CONFINEMENT_UNSUPPORTED,
+            deployment_credential_exposure_permitted,
+        )
+
+        # The credential reaches this host's agent-readable gh configuration
+        # whether it is needed for the clone or for mounted gh.
+        if not deployment_credential_exposure_permitted():
+            raise OmnigentOAuthHostError(
+                DEPLOYMENT_CREDENTIAL_CONFINEMENT_UNSUPPORTED,
+                code="OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE",
+            )
 
         repository = str((request.parameters or {}).get("repository") or "").strip()
         resolved = await resolve_github_credential(repo=repository or None)
