@@ -196,6 +196,8 @@ A runtime/provider-specific model string interpreted by the runtime adapter. A n
 
 A runtime/provider-specific effort string. A null value means runtime default effort if one exists, otherwise omit effort. It does not read `default_effort` compatibility state.
 
+The tier editor's capability catalog lists effort levels in ascending order: `low`, `medium`, `high`, `xhigh`, `max`. `max` is the level above `xhigh`. A runtime or model that records its own supported values still decides whether it accepts `max`: the seeded OpenCode models top out at `xhigh`, so they reject `max` instead of silently forwarding it.
+
 #### `parameters`
 
 Optional non-secret runtime parameters, for example:

@@ -17,6 +17,11 @@ import hashlib
 import json
 from typing import Any
 
+from moonmind.omnigent.bootstrap.opencode import (
+    KNOWN_MODEL_EFFORTS,
+    get_supported_efforts,
+)
+
 _MODEL_OPTIONS_BY_PROVIDER: dict[str, list[dict[str, Any]]] = {
     "openai": [
         {"value": "gpt-5.5", "label": "GPT-5.5", "description": "General coding model", "status": "available", "recommended": True},
@@ -39,6 +44,7 @@ _DEFAULT_EFFORT_OPTIONS: list[dict[str, Any]] = [
     {"value": "medium", "label": "Medium", "description": None, "status": "available", "compatible_models": None},
     {"value": "high", "label": "High", "description": None, "status": "available", "compatible_models": None},
     {"value": "xhigh", "label": "Extra high", "description": None, "status": "available", "compatible_models": None},
+    {"value": "max", "label": "Max", "description": None, "status": "available", "compatible_models": None},
 ]
 
 _RUNTIME_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -54,6 +60,38 @@ def _runtime_defaults(runtime_id: str) -> dict[str, Any]:
 
 def _model_options(provider_id: str) -> list[dict[str, Any]]:
     return _MODEL_OPTIONS_BY_PROVIDER.get(provider_id, _MODEL_OPTIONS_BY_PROVIDER["default"])
+
+
+def _effort_options(
+    runtime_id: str, model_options: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Reuse launch-time model support for the editor's effort choices."""
+    if runtime_id != "opencode":
+        return _DEFAULT_EFFORT_OPTIONS
+    models = dict.fromkeys(
+        [*KNOWN_MODEL_EFFORTS, *(option["value"] for option in model_options)]
+    )
+    options = []
+    for option in _DEFAULT_EFFORT_OPTIONS:
+        if all(
+            option["value"] in supported for supported in KNOWN_MODEL_EFFORTS.values()
+        ):
+            options.append(dict(option))
+            continue
+        compatible_models = [
+            model
+            for model in models
+            if (supported := get_supported_efforts(model)) is None
+            or option["value"] in supported
+        ]
+        options.append(
+            {
+                **option,
+                "status": "available" if compatible_models else "unavailable",
+                "compatible_models": compatible_models,
+            }
+        )
+    return options
 
 
 def _evidence_model_options(evidence: Any, default_model: str | None) -> list[dict[str, Any]] | None:
@@ -159,7 +197,7 @@ def build_tier_capabilities(
         if model_options is not None
         else ([] if runtime_id == "opencode" else _model_options(provider_id))
     )
-    effort_options = _DEFAULT_EFFORT_OPTIONS
+    effort_options = _effort_options(runtime_id, resolved_model_options)
 
     evidence_payload: dict[str, Any] = {
         "source": evidence.get("source") if evidence else ("runtime_draft" if profile_id is None else "profile_catalog_evidence"),

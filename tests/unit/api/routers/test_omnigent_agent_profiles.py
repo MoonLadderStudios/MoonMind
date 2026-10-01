@@ -438,6 +438,12 @@ def test_profile_rejects_unsupported_or_unbounded_defaults(section, field, value
     with pytest.raises(ValidationError):
         AgentProfileDocument.model_validate(payload)
 
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+def test_profile_model_defaults_accept_top_effort_levels(effort):
+    payload = document(upstreamId="agent-123").model_dump(by_alias=True)
+    payload["model"]["effort"] = effort
+    assert AgentProfileDocument.model_validate(payload).model.effort == effort
+
 def test_profile_rejects_unknown_model_capture_and_publish_fields():
     for section in ("model", "capture", "publish"):
         payload = document(upstreamId="agent-123").model_dump(by_alias=True)
