@@ -112,6 +112,10 @@ from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     require_execution_fanout_authorization,
 )
+from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAdapterError,
+    bind_omnigent_model_selection,
+)
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeCapabilityError,
     resolve_runtime_execution_capabilities,
@@ -694,6 +698,18 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         recorded_plan = self._require_recorded_plan_request(request)
+        if recorded_plan is not None:
+            try:
+                request = bind_omnigent_model_selection(
+                    request,
+                    model=recorded_plan.payload.modelConfig.qualifiedId,
+                    effort=recorded_plan.payload.modelConfig.effort,
+                )
+            except OmnigentAdapterError as exc:
+                raise HarnessPlatformError(
+                    str(exc),
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                ) from exc
         budget_rejection = max_budget_enforcement_rejection(request)
         if budget_rejection is not None:
             return budget_rejection

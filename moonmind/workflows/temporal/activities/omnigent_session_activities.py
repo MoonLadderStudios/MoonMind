@@ -54,6 +54,9 @@ from moonmind.schemas.omnigent_session_models import (
     OmnigentSessionTerminalResult,
     OmnigentSessionWorkflowInput,
 )
+from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    bind_omnigent_model_selection,
+)
 
 
 _ARTIFACT_PRINCIPAL = "service:omnigent_session_supervisor"
@@ -813,31 +816,8 @@ async def _reconstruct_plan_bound_request(
     if not planned_agent_id:
         raise ValueError("execution plan Agent source identity is unavailable")
 
-    model_config = plan.payload.modelConfig
-    planned_model = str(model_config.qualifiedId or "").strip() or None
-    planned_effort = str(model_config.effort or "").strip() or None
-    for field, planned in (("model", planned_model), ("effort", planned_effort)):
-        authored = str(authored_parameters.get(field) or "").strip() or None
-        if authored is not None and authored != planned:
-            raise ValueError(
-                f"authored {field} conflicts with persisted execution plan"
-            )
-        if planned is not None:
-            authored_parameters[field] = planned
     omnigent = dict(authored_parameters.get("omnigent") or {})
     session_parameters = dict(omnigent.get("session") or {})
-    for field, planned in (
-        ("modelOverride", planned_model),
-        ("reasoningEffort", planned_effort),
-    ):
-        authored = str(session_parameters.get(field) or "").strip() or None
-        if authored is not None and authored != planned:
-            raise ValueError(
-                f"authored Omnigent session {field} conflicts with persisted "
-                "execution plan"
-            )
-        if planned is not None:
-            session_parameters[field] = planned
     omnigent.update(
         {
             "executionTargetRef": execution_target,
@@ -928,7 +908,7 @@ async def _reconstruct_plan_bound_request(
         workspace_spec["workspaceCheckpointRestoreRef"] = (
             workspace_checkpoint_restore_ref
         )
-    return AgentExecutionRequest(
+    request = AgentExecutionRequest(
         agentKind="external",
         agentId="omnigent",
         executionProfileRef=next(iter(profile_refs)),
@@ -954,6 +934,11 @@ async def _reconstruct_plan_bound_request(
             if isinstance(workflow.get("retryPolicy"), Mapping)
             else {}
         ),
+    )
+    return bind_omnigent_model_selection(
+        request,
+        model=plan.payload.modelConfig.qualifiedId,
+        effort=plan.payload.modelConfig.effort,
     )
 
 

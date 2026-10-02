@@ -135,14 +135,10 @@ def test_snapshot_reconciles_current_head_legacy_statuses(
         ],
     }
 
-    def read_api(command, *args):
+    def read_api(command, *args, **kwargs):
         endpoint = " ".join(command)
         if "/check-runs" in endpoint:
-            return {
-                "check_runs": [
-                    {"name": "Unreal", "status": "completed", "conclusion": "success"}
-                ]
-            }
+            return [{"name": "Unreal", "status": "completed", "conclusion": "success"}]
         if "/statuses" in endpoint:
             # The API returns newest first; older results for the same context
             # must not overturn the latest observation.
@@ -210,10 +206,10 @@ def _run_snapshot_with_head_evidence(
         "statusCheckRollup": [],
     }
 
-    def read_api(command, *args):
+    def read_api(command, *args, **kwargs):
         endpoint = " ".join(command)
         if "/check-runs" in endpoint:
-            return {"check_runs": check_runs}
+            return check_runs
         if "/statuses" in endpoint:
             return statuses
         if "/branches/main/protection" in endpoint:

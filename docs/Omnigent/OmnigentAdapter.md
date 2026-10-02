@@ -6,7 +6,7 @@ Adapter enforcement consumes the deterministic snapshot defined by
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-07-18  
+**Last updated:** 2026-10-02  
 **Authority:** Canonical MoonMind contract for Omnigent agent identity, bridge execution, and profile-bound Codex host orchestration
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines the durable desired state and the compatibility rules that implementations must preserve.
@@ -151,6 +151,7 @@ Rules:
 - The selected profile must be enabled, connected, launch-ready, OpenAI-backed, and compatible with `codex_cli` OAuth materialization.
 - A caller-provided `session.hostId` is always rejected. The trusted coordinator alone injects the exact host id from the durable profile binding immediately before session creation; product flows never accept manual host ids.
 - The coordinator injects `hostType=external`, the exact registered host id, the resolved workspace path, `codex-native`, and a safe profile-authorization envelope immediately before session creation.
+- The admitted execution plan owns the resolved Model and Effort. The shared adapter projects that pair into native `model_override` and `reasoning_effort` fields; Codex dispatch binds it before lifecycle effects and rejects conflicting authored execution or session values. Omitted model/effort use the plan's recorded defaults. Preflight model evidence proves availability, while native session and usage observations record what actually ran.
 - Raw credentials, host registration tokens, Docker volume names, and absolute daemon paths never enter workflow-authored parameters.
 
 Large instructions and inputs remain artifact-backed. The bridge posts the first message only after durable authorization and session identity are persisted.

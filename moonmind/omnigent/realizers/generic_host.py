@@ -48,6 +48,10 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
 )
 from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
+from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAdapterError,
+    bind_omnigent_model_selection,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -197,6 +201,19 @@ class GenericOmnigentHostRealizer:
                 f"plan realizer {plan.payload.executionRealizerRef} != {self.ref}",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
             )
+        # A contradictory model cannot enter the canonical command journal or
+        # consume credential/host capacity. Native creation uses this same pair.
+        try:
+            request = bind_omnigent_model_selection(
+                request,
+                model=plan.payload.modelConfig.qualifiedId,
+                effort=plan.payload.modelConfig.effort,
+            )
+        except OmnigentAdapterError as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            ) from exc
         completed = await self._runtime_bindings.get(
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
@@ -1555,6 +1572,11 @@ class GenericOmnigentHostRealizer:
         host_context: dict[str, Any],
         binding: StableRuntimeBinding,
     ) -> AgentExecutionRequest:
+        request = bind_omnigent_model_selection(
+            request,
+            model=plan.payload.modelConfig.qualifiedId,
+            effort=plan.payload.modelConfig.effort,
+        )
         host_id = str(host_context.get("omnigentHostId") or "").strip()
         if not host_id:
             raise HarnessPlatformError(
@@ -1585,8 +1607,6 @@ class GenericOmnigentHostRealizer:
                 "workspace": str(
                     host_context.get("workspacePath") or "/workspaces/run"
                 ),
-                "modelOverride": plan.payload.modelConfig.qualifiedId,
-                "reasoningEffort": plan.payload.modelConfig.effort,
                 "labels": {
                     **dict(session.get("labels") or {}),
                     "moonmind.runtime_binding_id": binding.bindingId,
