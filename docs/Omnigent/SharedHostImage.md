@@ -100,6 +100,12 @@ native compatibility: the selected Omnigent implementation must accept each
 installed CLI before publication. This check requires no provider credentials;
 OAuth authentication remains a launch-time Provider Profile check.
 
+Ordinary and login shells select the image's existing `/opt/venv/bin/python3`,
+including the `httpx` dependency used by portable workflow queue clients. Offline
+build probes import that dependency in both shell forms as UID 1000. No workflow
+installs Python packages or substitutes the system Python when dependencies are
+missing.
+
 `gh` and `moonmind` live image-owned at `/opt/moonmind-tools/bin` (with the non-secret manifest at `/opt/moonmind-tools/manifest.json` and the login-shell snippet at `/etc/profile.d/moonmind-tools.sh`), installed and probed by `services/omnigent/moonmind-host/install_moonmind_tools.py` from the `manifest.lock.json` pins. The selected image owns its tool contents for the host's lifetime: new tool contents require a new image build, and host launch never downloads, installs, or copies shared tool binaries. There is no tools initializer, tools mount, or tools volume on the shared-host path (MoonLadderStudios/MoonMind#4558); stale volume settings in an existing `.env` are ignored. Full tool-delivery semantics live in [`OmnigentHostMountedTools.md`](./OmnigentHostMountedTools.md).
 
 ### Publication

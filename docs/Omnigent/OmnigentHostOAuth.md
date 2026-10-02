@@ -492,6 +492,18 @@ Run cleanup may not remove:
 
 A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release remains last even when cleanup requires retries.
 
+Runtime-binding cleanup completion is idempotent for the same current binding
+and fencing generation. A coordinator and janitor that observed the same
+authority converge on the already-completed state without advancing its revision
+again. A stale binding, replacement generation, or future revision remains fenced.
+Cleanup-reporting failures retain a separate lifecycle diagnostic and must not
+replace the primary provider result or error, or erase confirmed host cleanup and
+Provider Profile release. The coordinator retries transient database failures up
+to three times, re-reading current fenced authority each time, including before
+any host lease exists. Exhausted recovery records a bounded redacted summary and
+available diagnostics reference; it does not claim a host-janitor handoff for a
+binding-only reporting failure. Stale authority is not retried or bypassed.
+
 ## 19. Credential-redacted evidence
 
 Durable evidence may contain:
