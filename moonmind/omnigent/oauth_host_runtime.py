@@ -4076,35 +4076,41 @@ class OmnigentOAuthHostRuntime:
                     "static OAuth host identity is missing",
                     code=HostPreflightFailure.BINDING_MISMATCH.value,
                 )
+            home = str(adapter["home"])
+            expected_volume = binding.credential_mount_ref.auth_volume_ref.volume_ref
+            # The shared command runner redacts OAuth paths from stdout.
+            # Compare inside Docker, as the generic credential attestor does,
+            # and retain only a bounded verdict. Every credential-subtree
+            # mount contributes a token, so missing, duplicate, and shadowing
+            # mounts cannot masquerade as one selected writable home.
+            subtree = home + "/"
+            template = (
+                "{{range .Mounts}}"
+                f"{{{{if or (eq .Destination {json.dumps(home)}) "
+                f"(and (ge (len .Destination) {len(subtree)}) "
+                f"(eq (slice .Destination 0 {len(subtree)}) {json.dumps(subtree)}))}}}}"
+                f'{{{{if and (eq .Type "volume") '
+                f"(eq .Name {json.dumps(expected_volume)}) "
+                f"(eq .Destination {json.dumps(home)}) (eq .RW true)}}}}"
+                "valid{{else}}invalid{{end}}{{end}}{{end}}"
+            )
             code, output, _error = await self._run(
-                "docker", "inspect", "--format", "{{json .Mounts}}", container_name,
+                "docker",
+                "inspect",
+                "--format",
+                template,
+                container_name,
                 check=False,
             )
-            try:
-                mounts = json.loads(output) if code == 0 else None
-            except (ValueError, TypeError):
-                mounts = None
-            home = str(adapter["home"])
-            credential_mounts = [
-                mount for mount in mounts
-                if isinstance(mount, dict) and (
-                    mount.get("Destination") == home
-                    or str(mount.get("Destination") or "").startswith(home + "/")
-                )
-            ] if isinstance(mounts, list) else []
-            expected_volume = binding.credential_mount_ref.auth_volume_ref.volume_ref
-            if len(credential_mounts) != 1 or not (
-                credential_mounts[0].get("Type") == "volume"
-                and credential_mounts[0].get("Name") == expected_volume
-                and credential_mounts[0].get("Destination") == home
-                and credential_mounts[0].get("RW") is True
-            ):
+            if code != 0 or output.strip() != "valid":
                 raise OmnigentOAuthHostError(
                     "static OAuth host does not mount the selected profile credential volume",
                     code=HostPreflightFailure.BINDING_MISMATCH.value,
                 )
             await self._run(
-                "docker", "exec", container_name,
+                "docker",
+                "exec",
+                container_name,
                 "/opt/moonmind/check-runner-projections.sh",
             )
             return

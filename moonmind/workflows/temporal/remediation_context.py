@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from api_service.db import models as db_models
 from moonmind.workflows.temporal.artifacts import (
@@ -769,6 +770,10 @@ class RemediationLifecyclePublisher:
             link_type=artifact_type,
             label=name,
         )
+        if existing_artifact is None:
+            existing_artifact = await self._legacy_published_artifact(
+                record=remediation_record, link_type=artifact_type, label=name
+            )
         if existing_artifact is not None:
             await self._append_artifact_ref(remediation_record, existing_artifact)
             return existing_artifact
@@ -916,8 +921,6 @@ class RemediationLifecyclePublisher:
                 db_models.TemporalArtifactLink.label == label,
                 db_models.TemporalArtifact.status
                 == db_models.TemporalArtifactStatus.COMPLETE,
-                db_models.TemporalArtifact.created_by_principal
-                == _REMEDIATION_LIFECYCLE_PRINCIPAL,
                 db_models.TemporalArtifact.content_type == "application/json",
                 db_models.TemporalArtifact.metadata_json["artifact_type"].as_string()
                 == link_type,
@@ -940,6 +943,8 @@ class RemediationLifecyclePublisher:
             # after publish_json_artifact validated the source, when checking
             # its supplemental target annotation link.
             statement = statement.where(
+                db_models.TemporalArtifact.created_by_principal
+                == _REMEDIATION_LIFECYCLE_PRINCIPAL,
                 db_models.TemporalArtifactLink.created_by_activity_type
                 == "remediation.lifecycle.publish",
                 db_models.TemporalArtifact.metadata_json["namespace"].as_string()
@@ -950,6 +955,115 @@ class RemediationLifecyclePublisher:
                 == run_id,
             )
         return (await self._session.execute(statement)).scalar_one_or_none()
+
+    async def _legacy_published_artifact(
+        self,
+        *,
+        record: db_models.TemporalExecutionCanonicalRecord,
+        link_type: str,
+        label: str,
+    ) -> db_models.TemporalArtifact | None:
+        """Revalidate retained output without trusting caller-added links."""
+
+        artifact = db_models.TemporalArtifact
+        link = db_models.TemporalArtifactLink
+        other_link = aliased(db_models.TemporalArtifactLink)
+        identity = {
+            "namespace": record.namespace,
+            "workflowId": record.workflow_id,
+            "runId": record.run_id,
+        }
+        missing_identity = and_(
+            *(artifact.metadata_json[key].as_string().is_(None) for key in identity)
+        )
+        matching_identity = and_(
+            *(artifact.metadata_json[key].as_string() == value
+              for key, value in identity.items())
+        )
+        statement = (
+            select(artifact)
+            .join(link)
+            .where(
+                link.namespace == record.namespace,
+                link.workflow_id == record.workflow_id,
+                link.run_id == record.run_id,
+                link.link_type == link_type,
+                link.label == label,
+                link.created_by_activity_type == "remediation.lifecycle.publish",
+                artifact.status == db_models.TemporalArtifactStatus.COMPLETE,
+                artifact.content_type == "application/json",
+                artifact.redaction_level
+                == db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+                artifact.metadata_json["artifact_type"].as_string() == link_type,
+                artifact.metadata_json["name"].as_string() == label,
+                artifact.metadata_json["schemaVersion"].as_string()
+                == REMEDIATION_CONTEXT_SCHEMA_VERSION,
+                or_(missing_identity, matching_identity),
+                # The original producer link survives a public relink. Any
+                # lifecycle association to another execution makes legacy
+                # origin ambiguous; supplemental target annotations do not.
+                ~select(other_link.id).where(
+                    other_link.artifact_id == artifact.artifact_id,
+                    other_link.created_by_activity_type == "remediation.lifecycle.publish",
+                    or_(
+                        other_link.namespace != record.namespace,
+                        other_link.workflow_id != record.workflow_id,
+                        other_link.run_id != record.run_id,
+                    ),
+                ).exists(),
+            )
+            .order_by(artifact.created_at.asc())
+            .limit(1)
+        )
+        producer_authority = artifact.created_by_principal.in_(
+            (
+                _REMEDIATION_LIFECYCLE_PRINCIPAL,
+                "service:remediation-tools",
+                "service:remediation-approval",
+            )
+        )
+        owner_link = await self._session.get(
+            db_models.TemporalExecutionRemediationLink, record.workflow_id
+        )
+        role = {
+            "remediation.approval_request": "approvalRequest",
+            "remediation.approval_decision": "approvalDecision",
+            "remediation.action_request": "actionRequest",
+            "remediation.action_result": "actionResult",
+            "remediation.verification": "verification",
+            "remediation.audit_event": "auditEvent",
+            "remediation.target_annotation": "targetAnnotation",
+        }.get(link_type)
+        if owner_link is not None and owner_link.remediation_run_id == record.run_id:
+            state = owner_link.approval_state or {}
+            refs = state.get("artifactRefs") or {}
+            if role and isinstance(refs, Mapping) and isinstance(refs.get(role), str):
+                # These exact refs are persisted by the approval/action owner,
+                # unlike generic execution refs which may include imported or
+                # provider-submitted evidence.
+                producer_authority = or_(
+                    producer_authority, artifact.artifact_id == refs[role]
+                )
+        retained = (
+            await self._session.execute(statement.where(producer_authority))
+        ).scalar_one_or_none()
+        if retained is not None:
+            # Keep the historical actor, metadata, bytes, digest, and outcome
+            # unchanged. Revalidate its existing authority on every retry.
+            return retained
+        if record.artifact_refs:
+            uncertain = (
+                await self._session.execute(statement.where(
+                    missing_identity,
+                    artifact.artifact_id.in_(record.artifact_refs),
+                ))
+            ).scalar_one_or_none()
+            if uncertain is not None:
+                raise RemediationContextError(
+                    "Legacy remediation artifact producer cannot be verified; "
+                    "retained evidence was preserved instead of republished"
+                )
+        return None
 
     async def _append_artifact_ref(
         self,

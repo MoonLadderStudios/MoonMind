@@ -56,6 +56,7 @@ async def scan(owner, repo, base):
     )
     if result:
         raise RuntimeError(result["push_error"])
+    return None
 
 
 @pytest.mark.asyncio

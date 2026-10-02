@@ -13962,6 +13962,7 @@ class TemporalAgentRuntimeActivities:
                 if line.strip()
             ]
         except FileNotFoundError:
+            # A repository without alternates needs no existing entries preserved.
             pass
         except (OSError, UnicodeError):
             logger.warning("Rejected unsafe Git alternates for workspace %s", workspace)

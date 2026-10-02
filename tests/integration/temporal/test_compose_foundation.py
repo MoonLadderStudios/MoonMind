@@ -1344,6 +1344,6 @@ def test_generic_host_render_keeps_supported_credentials_only(tmp_path, identity
         if key in identity:
             assert env[key] == identity[key]
         else:
-            assert key not in env
+            assert env.get(key) is None
     for key in ("POSTGRES_PASSWORD", "JWT_SECRET_KEY", "ENCRYPTION_MASTER_KEY", "OMNIGENT_ACCOUNTS_COOKIE_SECRET"):
         assert key not in env

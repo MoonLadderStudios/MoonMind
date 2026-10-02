@@ -196,9 +196,7 @@ async def test_contained_file_uri_checkout_preserves_git_revision_behavior(tmp_p
         checkout_revision=revision,
     )
     assert (Path(workspace) / "README.md").read_text() == "preserved source\n"
-    assert (
-        subprocess.check_output(
-            ["git", "-C", workspace, "rev-parse", "HEAD"], text=True
-        ).strip()
-        == revision
-    )
+    observed_revision = subprocess.check_output(
+        ["git", "-C", workspace, "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert observed_revision == revision

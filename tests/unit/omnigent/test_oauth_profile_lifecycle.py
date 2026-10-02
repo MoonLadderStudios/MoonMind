@@ -4,11 +4,14 @@ import io
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -5605,11 +5608,9 @@ async def _run_coordinator_failure_case(
         owner_mock.side_effect = fail_from_production_runtime
 
     async def run_cleanup_command(*args, **_kwargs):
-        if args == ("docker", "inspect", "--format", "{{json .Mounts}}", "container-1"):
-            return 0, json.dumps([{
-                "Type": "volume", "Name": "codex_auth_volume",
-                "Destination": "/home/app/.codex", "RW": True,
-            }]), ""
+        if args[:3] == ("docker", "inspect", "--format") and args[-1] == "container-1":
+            assert args[3].startswith("{{range .Mounts}}")
+            return 0, "valid", ""
         command = tuple(args[:3])
         if command[:2] == ("docker", "stop"):
             owners.calls.append("host_remove")
@@ -7317,42 +7318,328 @@ async def test_static_compose_uses_selected_profile_oauth_volume(
     runtime._run = AsyncMock(return_value=(0, "", ""))
     runtime._deployment_compose_command = lambda: ("docker", "compose")
     binding = _binding()
-    binding = binding.model_copy(update={
-        "harness": harness,
-        "credential_mount_ref": binding.credential_mount_ref.model_copy(update={
-            "target_path": home,
-            "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(update={
-                "runtime_id": runtime_id,
-                "provider_id": provider,
-                "volume_ref": "selected-profile-home",
-            }),
-        }),
-    })
+    binding = binding.model_copy(
+        update={
+            "harness": harness,
+            "credential_mount_ref": binding.credential_mount_ref.model_copy(
+                update={
+                    "target_path": home,
+                    "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(
+                        update={
+                            "runtime_id": runtime_id,
+                            "provider_id": provider,
+                            "volume_ref": "selected-profile-home",
+                        }
+                    ),
+                }
+            ),
+        }
+    )
     await runtime._compose_static_check(binding=binding, workspace_source=tmp_path)
     assert runtime._run.await_args.kwargs["env"][volume_env] == "selected-profile-home"
 
 
+@pytest.fixture
+def docker_mount_transport(tmp_path, monkeypatch):
+    """Exercise Docker's actual formatter against a hermetic inspect endpoint."""
+    docker_cli = shutil.which("docker")
+    if not docker_cli:
+        pytest.skip("Docker CLI is required for its Go-template formatter")
+    state = {"mounts": [], "status": 200, "commands": []}
+
+    class InspectHandler(BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            assert self.path.endswith("/_ping")
+            self.send_response(200)
+            self.send_header("API-Version", "1.99")
+            self.end_headers()
+
+        def do_GET(self):
+            if self.path.endswith("/containers/observed-host/json"):
+                payload = json.dumps(
+                    {"Id": "a" * 64, "Mounts": state["mounts"]}
+                ).encode()
+                status = state["status"]
+            elif self.path.endswith("/_ping"):
+                payload, status = b"OK", 200
+            else:
+                payload, status = b'{"message":"unknown test container"}', 404
+            self.send_response(status)
+            self.send_header("API-Version", "1.99")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), InspectHandler)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    config_dir = tmp_path / "docker-config"
+    config_dir.mkdir()
+    endpoint = f"tcp://127.0.0.1:{server.server_port}"
+    real_subprocess = asyncio.create_subprocess_exec
+
+    async def docker_transport(*argv, **kwargs):
+        state["commands"].append(argv)
+        if argv[:3] == ("docker", "inspect", "--format"):
+            assert argv[-1] == "observed-host"
+            # Explicit endpoint/config prevent discovery of the deployment
+            # daemon or credentials, while the real CLI evaluates the template.
+            child_env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("DOCKER_")
+            }
+            kwargs["env"] = child_env
+            return await real_subprocess(
+                docker_cli,
+                "--config",
+                str(config_dir),
+                "--host",
+                endpoint,
+                *argv[1:],
+                **kwargs,
+            )
+        assert argv == (
+            "docker",
+            "exec",
+            "observed-host",
+            "/opt/moonmind/check-runner-projections.sh",
+        )
+        return await real_subprocess(sys.executable, "-c", "", **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", docker_transport)
+    try:
+        yield state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mounts,allowed", [
-    ([{"Type": "volume", "Name": "codex_auth_volume", "Destination": "/home/app/.codex", "RW": True}], True),
-    ([{"Type": "volume", "Name": "another-profile", "Destination": "/home/app/.codex", "RW": True}], False),
-    ([{"Type": "bind", "Source": "/unrelated", "Destination": "/home/app/.codex", "RW": True}], False),
-    ([], False),
-    ([{"Type": "volume", "Name": "codex_auth_volume", "Destination": "/home/app/.codex", "RW": True},
-      {"Type": "bind", "Source": "/unrelated", "Destination": "/home/app/.codex/auth.json", "RW": True}], False),
-])
-async def test_static_host_probe_attests_actual_oauth_volume(mounts, allowed):
+@pytest.mark.parametrize(
+    "runtime_id,provider,harness,home",
+    [
+        ("codex_cli", "openai", "codex-native", "/home/app/.codex"),
+        ("claude_code", "anthropic", "claude-native", "/home/app/.claude"),
+    ],
+)
+async def test_static_host_mount_probe_survives_runtime_output_redaction(
+    docker_mount_transport, runtime_id, provider, harness, home
+):
+    binding = _binding()
+    binding = binding.model_copy(
+        update={
+            "harness": harness,
+            "credential_mount_ref": binding.credential_mount_ref.model_copy(
+                update={
+                    "target_path": home,
+                    "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(
+                        update={"runtime_id": runtime_id, "provider_id": provider}
+                    ),
+                }
+            ),
+        }
+    )
+    docker_mount_transport["mounts"] = [
+        {
+            "Type": "volume",
+            "Name": binding.credential_mount_ref.auth_volume_ref.volume_ref,
+            "Destination": home,
+            "RW": True,
+        }
+    ]
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    runtime._run = AsyncMock(return_value=(0, json.dumps(mounts), ""))
-    runtime._deployment_compose_command = lambda: ("docker", "compose")
-    if allowed:
-        await runtime._compose_static_exec_check(binding=_binding(), container_name="observed-host")
-        assert runtime._run.await_args.args[-1] == "/opt/moonmind/check-runner-projections.sh"
-    else:
-        with pytest.raises(OmnigentOAuthHostError) as caught:
-            await runtime._compose_static_exec_check(binding=_binding(), container_name="observed-host")
-        assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
-        assert runtime._run.await_count == 1
-    assert runtime._run.await_args_list[0].args == (
+    # Observe the actual runner's redaction, then attest without bypassing it.
+    _, raw_mounts, _ = await runtime._run(
         "docker", "inspect", "--format", "{{json .Mounts}}", "observed-host"
     )
+    assert home not in raw_mounts
+    assert "[REDACTED_AUTH_PATH]" in raw_mounts
+    docker_mount_transport["commands"].clear()
+
+    await runtime._compose_static_exec_check(
+        binding=binding, container_name="observed-host"
+    )
+
+    commands = docker_mount_transport["commands"]
+    assert len(commands) == 2
+    assert "{{json" not in commands[0][3]
+    assert commands[0][-1] == commands[1][2] == "observed-host"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mounts,allowed",
+    [
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ],
+            True,
+            id="selected-home",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "another-profile",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ],
+            False,
+            id="substituted-profile",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "bind",
+                    "Source": "/unrelated",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ],
+            False,
+            id="bind",
+        ),
+        pytest.param([], False, id="missing"),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                },
+                {
+                    "Type": "bind",
+                    "Source": "/unrelated",
+                    "Destination": "/home/app/.codex/auth.json",
+                    "RW": True,
+                },
+            ],
+            False,
+            id="nested",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ]
+            * 2,
+            False,
+            id="duplicate",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": False,
+                }
+            ],
+            False,
+            id="read-only",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": "true",
+                }
+            ],
+            False,
+            id="malformed",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                },
+                {"Type": "volume", "Name": "other", "Destination": "/tmp", "RW": True},
+                {
+                    "Type": "volume",
+                    "Name": "other",
+                    "Destination": "/home/app/.codex-other",
+                    "RW": True,
+                },
+            ],
+            True,
+            id="unrelated-short-and-sibling-mounts",
+        ),
+    ],
+)
+async def test_static_host_probe_attests_actual_oauth_volume(
+    docker_mount_transport, mounts, allowed
+):
+    docker_mount_transport["mounts"] = mounts
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    if allowed:
+        await runtime._compose_static_exec_check(
+            binding=_binding(), container_name="observed-host"
+        )
+        assert len(docker_mount_transport["commands"]) == 2
+    else:
+        with pytest.raises(OmnigentOAuthHostError) as caught:
+            await runtime._compose_static_exec_check(
+                binding=_binding(), container_name="observed-host"
+            )
+        assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
+        assert len(docker_mount_transport["commands"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_static_host_probe_rejects_failed_inspection(docker_mount_transport):
+    docker_mount_transport["status"] = 500
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    with pytest.raises(OmnigentOAuthHostError) as caught:
+        await runtime._compose_static_exec_check(
+            binding=_binding(), container_name="observed-host"
+        )
+    assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
+    assert len(docker_mount_transport["commands"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code,output",
+    [
+        (0, ""),
+        (0, "{}"),
+        (0, "invalid"),
+        (0, "validinvalid"),
+        (0, "validvalid"),
+        (1, "valid"),
+    ],
+)
+async def test_static_host_probe_rejects_invalid_mount_verdict(code, output):
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(return_value=(code, output, ""))
+    with pytest.raises(OmnigentOAuthHostError) as caught:
+        await runtime._compose_static_exec_check(
+            binding=_binding(), container_name="observed-host"
+        )
+    assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
+    assert runtime._run.await_count == 1

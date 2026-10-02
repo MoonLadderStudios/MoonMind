@@ -5483,8 +5483,22 @@ async def test_run_once_universal_worker_executes_claude_task(tmp_path: Path) ->
     assert queue.failed == []
     assert handler.calls == []
 
+@pytest.fixture
+def fake_container_create(monkeypatch):
+    """Keep queue-level container tests focused on their lifecycle boundary."""
+    created = []
+
+    async def create(worker, *, config, name, cwd, log_path, timeout_seconds):
+        created.append(config)
+        worker._append_stage_log(log_path, f"container created: {config['Image']}; environment keys: {', '.join(item.split('=', 1)[0] for item in config['Env'])}")
+        return name
+
+    monkeypatch.setattr(CodexWorker, "_create_task_container", create)
+    return created
+
+
 async def test_run_once_task_container_executes_generic_docker_path(
-    tmp_path: Path,
+    tmp_path: Path, fake_container_create,
 ) -> None:
     """Container-enabled task should execute through docker path, not codex handler."""
 
@@ -5540,13 +5554,13 @@ async def test_run_once_task_container_executes_generic_docker_path(
 
     execute_log = tmp_path / str(job.id) / "artifacts" / "logs" / "execute.log"
     content = execute_log.read_text(encoding="utf-8")
-    assert "docker run" in content
+    assert "docker start --attach" in content
     assert "mcr.microsoft.com/dotnet/sdk:8.0" in content
-    assert "--env NUGET_AUTH_TOKEN" in content
+    assert "NUGET_AUTH_TOKEN" in content
     assert "secret-token-value" not in content
 
 async def test_run_once_task_container_supports_distinct_images(
-    tmp_path: Path,
+    tmp_path: Path, fake_container_create,
 ) -> None:
     """One worker should execute container tasks with different task-provided images."""
 
@@ -5670,7 +5684,7 @@ async def test_run_once_task_container_with_steps_fails_contract_validation(
     assert "workflow.steps is not supported" in queue.failed[0]
 
 async def test_run_once_task_container_timeout_attempts_stop_and_fails(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, fake_container_create,
 ) -> None:
     """Timed out container execution should attempt docker stop and fail the job."""
 
@@ -5721,10 +5735,11 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
         env=None,
         redaction_values=(),
         timeout_seconds=None,
+        cancel_event=None,
     ):
         _ = (cwd, log_path, check, env, redaction_values)
         recorded_commands.append(tuple(str(item) for item in command))
-        if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
+        if len(command) >= 2 and command[0] == "docker" and command[1] == "start":
             raise asyncio.TimeoutError(
                 f"command timed out after {float(timeout_seconds or 0):g}s"
             )
@@ -5742,7 +5757,7 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
     assert any(cmd[:2] == ("docker", "stop") for cmd in recorded_commands)
 
 async def test_run_once_task_container_precreates_artifact_subdir(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, fake_container_create,
 ) -> None:
     """Container artifact subdir should exist before docker run starts."""
 
@@ -5792,7 +5807,7 @@ async def test_run_once_task_container_precreates_artifact_subdir(
         timeout_seconds=None,
     ):
         _ = timeout_seconds
-        if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
+        if len(command) >= 2 and command[0] == "docker" and command[1] == "start":
             artifact_root = (
                 tmp_path / str(job.id) / "artifacts" / "container" / "custom"
             )
@@ -9926,9 +9941,9 @@ async def test_run_once_fails_legacy_job_when_feature_flag_disabled(
 
 
 async def test_container_environment_never_controls_worker_docker_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_container_create,
 ) -> None:
-    """Container settings cross Docker's argv boundary, never its host env."""
+    """Container settings cross the daemon boundary, never the client env."""
     container_env = {
         "PATH": "/workspace/untrusted/bin",
         "LD_PRELOAD": "/workspace/untrusted/inject.so",
@@ -9977,10 +9992,11 @@ async def test_container_environment_never_controls_worker_docker_process(
         container_spec=spec,
     )
     assert result.succeeded
-    command, options = next(item for item in observed if item[0][1] == "run")
+    command, options = next(item for item in observed if item[0][1] == "start")
     assert options["env"] == dict(os.environ)
     for key, value in container_env.items():
-        assert f"{key}={value}" in command
+        assert f"{key}={value}" in fake_container_create[0]["Env"]
+        assert value not in " ".join(command)
         assert value in options["redaction_values"]
     rendered = worker._redact_command_for_log(
         command, redaction_values=options["redaction_values"]
@@ -9990,7 +10006,7 @@ async def test_container_environment_never_controls_worker_docker_process(
 
 @pytest.mark.parametrize("outcome", ["success", "nonzero", "spawn_error"])
 async def test_container_real_handler_redacts_environment_in_logs_and_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, fake_container_create,
 ) -> None:
     """Exercise the production handler through diagnostics and failed launch."""
     value = "arbitrary-container-value-without-a-token-prefix"
@@ -10030,9 +10046,9 @@ async def test_container_real_handler_redacts_environment_in_logs_and_metadata(
 
     async def spawn(*args, **kwargs):
         assert kwargs["env"] is None or kwargs["env"].get("BUILD_SETTING") != value
-        if args[1] == "run" and outcome == "spawn_error":
+        if args[1] == "start" and outcome == "spawn_error":
             raise OSError(f"cannot launch {value}")
-        return Process(args[1] == "run")
+        return Process(args[1] == "start")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     result = await worker._run_container_execute_stage(
