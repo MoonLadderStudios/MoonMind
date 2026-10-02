@@ -315,6 +315,9 @@ OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
 OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-pre-activity-capacity-admission-v1"
 )
+CODEX_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
+    "agent-run-codex-pre-activity-capacity-admission-v1"
+)
 OMNIGENT_CAPACITY_PAYLOAD_PREFLIGHT_PATCH_ID = (
     "agent-run-omnigent-capacity-payload-preflight-v1"
 )
@@ -4375,6 +4378,7 @@ class MoonMindAgentRun:
         request_priority: int | None = None,
         request_queue_metadata: dict[str, Any] | None = None,
         lease_metadata: dict[str, Any] | None = None,
+        lease_purpose: str = "execution_direct",
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the ProviderProfileManager for slot requests; auto-start it on first failure.
 
@@ -4393,7 +4397,7 @@ class MoonMindAgentRun:
         signal_payload = {
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
-            "purpose": "execution_direct",
+            "purpose": lease_purpose,
             "metadata": {
                 "workflowId": workflow.info().workflow_id,
                 # MoonLadderStudios/MoonMind#1089: bind liveness to the exact
@@ -4716,13 +4720,15 @@ class MoonMindAgentRun:
         admission: Any,
         parent_info: Any,
     ) -> AgentExecutionRequest:
-        """Run the target admission order for the generic Omnigent plane.
+        """Admit Provider Profile capacity before Omnigent execution.
 
         MoonLadderStudios/MoonMind#3878 target flow: request Provider Profile
         capacity, wait durably when unavailable, then reserve provisional
         generic-host capacity — all before ``integration.omnigent.execute``
         starts. Effective concurrency is therefore the minimum of the provider
         ceiling, its effective limit, and available host capacity.
+        Codex keeps host allocation in its existing coordinator after the
+        workflow admits Provider Profile capacity.
 
         MoonLadderStudios/MoonMind#3880 completes the handoff: the returned
         request carries a ticket that binds the committed plan, this run's step
@@ -4780,6 +4786,12 @@ class MoonMindAgentRun:
             runtime_id=profiles[0]["providerRuntimeId"],
             profile_id=profiles[0]["providerProfileRef"],
             parent_info=parent_info,
+            lease_purpose=(
+                "execution_omnigent"
+                if getattr(admission, "execution_realizer_ref", None)
+                == "codex-profile-bound@1"
+                else "execution_direct"
+            ),
             lease_metadata={
                 "stepExecutionId": step_execution_id,
                 "idempotencyKey": request.idempotency_key,
@@ -4787,6 +4799,13 @@ class MoonMindAgentRun:
                 "credentialGeneration": profiles[0].get("credentialGeneration"),
             },
         )
+        if (
+            getattr(admission, "execution_realizer_ref", None)
+            == "codex-profile-bound@1"
+        ):
+            # Codex's existing coordinator owns its OAuth host lifecycle. Only
+            # Provider Profile admission moves out of the execution Activity.
+            return admitted_request
         try:
             await self._await_omnigent_host_capacity(
                 parent_info=parent_info,
@@ -4832,6 +4851,10 @@ class MoonMindAgentRun:
         onto the Activity-owned lane it already contains, a new run is rejected.
         """
 
+        if recorded_plan_realizer == "codex-profile-bound@1":
+            # Retained histories already scheduled Activity-owned acquisition.
+            # A fresh marker preserves those commands through worker upgrades.
+            return workflow.patched(CODEX_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID)
         if recorded_plan_realizer != "generic-omnigent-host@1":
             return False
         if not workflow.patched(
@@ -5005,6 +5028,7 @@ class MoonMindAgentRun:
         profile_id: str,
         parent_info: Any,
         lease_metadata: dict[str, Any] | None = None,
+        lease_purpose: str = "execution_direct",
     ) -> None:
         """Admit Provider Profile capacity before the long execution Activity.
 
@@ -5053,6 +5077,7 @@ class MoonMindAgentRun:
             request_priority=self._request_priority(request),
             request_queue_metadata=self._request_queue_metadata(request),
             lease_metadata=fence_metadata,
+            lease_purpose=lease_purpose,
         )
         self._omnigent_capacity_runtime_id = runtime_id
         waited_seconds = 0
@@ -5112,6 +5137,7 @@ class MoonMindAgentRun:
                     request_priority=self._request_priority(request),
                     request_queue_metadata=self._request_queue_metadata(request),
                     lease_metadata=fence_metadata,
+                    lease_purpose=lease_purpose,
                 )
         admitted_profile_id = str(self._assigned_profile_id or "").strip()
         if admitted_profile_id and admitted_profile_id != profile_id:
@@ -5164,6 +5190,11 @@ class MoonMindAgentRun:
         readiness_wait_started = None
         recovering_interrupted_admission = False
         reconcile_admission = self._workflow_patch_enabled("omnigent-resume-owned-admission-v1")
+        codex_capacity = (
+            admit_capacity_before_activity
+            and getattr(admission, "execution_realizer_ref", None)
+            == "codex-profile-bound@1"
+        )
         while True:
             resuming = (
                 reconcile_admission
@@ -5187,8 +5218,12 @@ class MoonMindAgentRun:
                 await self._signal_parent_child_state_changed(
                     parent_info,
                     "launching",
-                    "Provider Profile and generic host capacity admitted; "
-                    "waiting for an execution worker "
+                    (
+                        "Provider Profile capacity admitted; "
+                        if codex_capacity
+                        else "Provider Profile and generic host capacity admitted; "
+                    )
+                    + "waiting for an execution worker "
                     f"(bounded to {_OMNIGENT_EXECUTION_HANDOFF_SECONDS}s "
                     "independently of the execution budget). The Activity "
                     "reports launching again once it actually starts.",
@@ -5311,7 +5346,22 @@ class MoonMindAgentRun:
                 # Keep the admitted request and lease while reconciliation may
                 # find a live session; the runtime's existing binding/turn fence
                 # owns reattachment. Only a completed Activity can release here.
-                if admit_capacity_before_activity and (activity_returned or not reconcile_admission):
+                cleanup_confirmed = activity_returned
+                if codex_capacity and activity_returned:
+                    metadata = (
+                        result_payload.get("metadata", {})
+                        if isinstance(result_payload, Mapping)
+                        else getattr(result_payload, "metadata", {})
+                    )
+                    cleanup_confirmed = (
+                        isinstance(metadata, Mapping)
+                        and metadata.get("admittedProviderCapacityCleanupCompleted")
+                        is True
+                    )
+                if admit_capacity_before_activity and (
+                    cleanup_confirmed
+                    or (not codex_capacity and not reconcile_admission)
+                ):
                     self._omnigent_capacity_state = "granted"
                     await self._release_omnigent_provider_capacity(
                         request=request
@@ -5321,6 +5371,7 @@ class MoonMindAgentRun:
             requeue_reason = (
                 self._omnigent_capacity_requeue_reason(result_payload, request=request)
                 if admit_capacity_before_activity
+                and (not codex_capacity or cleanup_confirmed)
                 else None
             )
             if requeue_reason is None:

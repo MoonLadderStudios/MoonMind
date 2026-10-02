@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,9 +42,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRuntimeStepExecutionLaunch,
 )
-from moonmind.schemas.omnigent_session_models import (
-    OmnigentSessionAdmissionDecision,
-)
+from moonmind.schemas.omnigent_session_models import OmnigentSessionAdmissionDecision
 from moonmind.workflows.temporal.activities.omnigent_session_activities import (
     _plan_capacity_authority,
 )
@@ -53,7 +52,10 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID,
     MoonMindAgentRun,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
+)
 
 
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[float]:
@@ -1539,14 +1541,172 @@ def test_a_workflow_owned_plan_admits_before_the_execution_activity(
         )
         is True
     )
-    # Another realizer never enters this path at all.
+    # An unrelated realizer never enters this path.
     assert (
         run._omnigent_admits_capacity_before_activity(
-            recorded_plan_realizer="codex-profile-bound@1",
+            recorded_plan_realizer="unrelated-realizer@1",
             admission=_owner_gate_admission("workflow"),
         )
         is False
     )
+
+
+def _codex_admission() -> OmnigentSessionAdmissionDecision:
+    return _admission(
+        profile_ref="codex_openai_oauth",
+        runtime_id="codex_cli",
+        capacity_scope_ref="provider-profile:codex_openai_oauth",
+    ).model_copy(update={"execution_realizer_ref": "codex-profile-bound@1"})
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_codex_capacity_admission_preserves_retained_histories(
+    monkeypatch: pytest.MonkeyPatch,
+    retained: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: not (
+            retained
+            and patch_id == "agent-run-codex-pre-activity-capacity-admission-v1"
+        ),
+    )
+    run = _RecordingRun()
+    assert run._omnigent_admits_capacity_before_activity(
+        recorded_plan_realizer="codex-profile-bound@1",
+        admission=_codex_admission(),
+    ) is (not retained)
+
+
+@pytest.mark.asyncio
+async def test_codex_waits_for_its_profile_before_starting_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun(
+        [
+            {
+                "summary": "completed",
+                "metadata": {"admittedProviderCapacityCleanupCompleted": True},
+            }
+        ]
+    )
+    _capture_release_signals(monkeypatch, run)
+    run.grant_on_signal = False
+    request = _omnigent_request(plan_binding=PLAN_REF).model_copy(
+        update={"execution_profile_ref": "codex_openai_oauth"}
+    )
+    parent = MoonMindUserWorkflow()
+    monkeypatch.setattr(parent, "_get_logger", lambda: logging.getLogger(__name__))
+    monkeypatch.setattr(run, "_get_logger", lambda: logging.getLogger(__name__))
+    parent._active_agent_child_workflow_id = "agent-run-1"
+    monkeypatch.setattr(parent, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(parent, "_update_memo", lambda: None)
+    run._init_progress_identity(request)
+
+    def parent_and_manager_handle(_workflow_id, **_kwargs):
+        async def signal(name, payload=None, args=None):
+            if name == "agent_run_progress":
+                parent.agent_run_progress(args[0])
+            else:
+                run.signals.append((name, dict(payload or {})))
+
+        return SimpleNamespace(signal=signal)
+
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        parent_and_manager_handle,
+    )
+    monkeypatch.setattr(
+        run,
+        "_signal_parent_child_state_changed",
+        MoonMindAgentRun._signal_parent_child_state_changed.__get__(run),
+    )
+
+    async def wait_for_grant(predicate, **_kwargs):
+        assert not predicate()
+        assert run.executions == []
+        assert run.run_status is agent_run_module.RunStatus.awaiting_slot
+        assert parent.get_status()["state"] == "awaiting_slot"
+        assert parent.get_status()["waiting_reason"] == "provider_capacity"
+        run.slot_assigned({"profile_id": "codex_openai_oauth", "fencing_generation": 3})
+        assert predicate()
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait_for_grant)
+    result, admitted_at = await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=request,
+        admission=_codex_admission(),
+        parent_info=SimpleNamespace(workflow_id="parent-1", run_id="parent-run-1"),
+        stc_seconds=600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+    assert result["summary"] == "completed"
+    assert admitted_at is not None
+    assert len(run.executions) == 1
+    ticket = run.executions[0].admitted_provider_capacity
+    assert ticket.lease_owner_id == "agent-run-1"
+    assert ticket.profiles[0].provider_profile_ref == "codex_openai_oauth"
+    assert ticket.execution_plan_ref == PLAN_REF
+    grant = next(payload for name, payload in run.signals if name == "request_slot")
+    assert grant["lease_purpose"] == "execution_omnigent"
+    assert parent.get_status()["state"] == "executing"
+    assert parent.get_status()["waiting_reason"] is None
+    assert not any(
+        name == "omnigent.admit_generic_host_capacity" for name, _ in run.activity_calls
+    )
+    # The coordinator confirms teardown; its workflow releases capacity last.
+    assert sum(name == "release_slot" for name, _ in run.signals) == 1
+    assert run._omnigent_capacity_state == "released"
+    assert run._omnigent_pending_request is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconcile_admission", [False, True])
+async def test_codex_result_without_confirmed_release_keeps_capacity_owned(
+    monkeypatch: pytest.MonkeyPatch,
+    reconcile_admission: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun(
+        [
+            {
+                "summary": "work preserved",
+                "metadata": {
+                    "admittedProviderCapacityCleanupCompleted": False,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        run,
+        "_workflow_patch_enabled",
+        lambda name: (
+            reconcile_admission
+            if name == "omnigent-resume-owned-admission-v1"
+            else True
+        ),
+    )
+    _capture_release_signals(monkeypatch, run)
+    await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(plan_binding=PLAN_REF).model_copy(
+            update={"execution_profile_ref": "codex_openai_oauth"}
+        ),
+        admission=_codex_admission(),
+        parent_info=None,
+        stc_seconds=600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+    assert not any(name == "release_slot" for name, _ in run.signals)
+    assert run._omnigent_capacity_state == "consumed"
+    if reconcile_admission:
+        assert run._omnigent_pending_request is not None
 
 
 def test_a_pre_patch_history_never_admits_before_the_activity(
