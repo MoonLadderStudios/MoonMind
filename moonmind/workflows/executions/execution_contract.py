@@ -3399,17 +3399,28 @@ def merge_workflow_input(
     artifact_steps = artifact_task.get("steps")
     parameter_steps = parameter_task.get("steps")
     if isinstance(artifact_steps, list) and isinstance(parameter_steps, list):
+        artifact_steps_by_id = {
+            step["id"]: step
+            for step in artifact_steps
+            if isinstance(step, Mapping) and step.get("id")
+        }
         merged_steps: list[Any] = []
         for index, parameter_step in enumerate(parameter_steps):
             if not isinstance(parameter_step, Mapping):
                 merged_steps.append(parameter_step)
                 continue
-            artifact_step = (
-                artifact_steps[index]
-                if index < len(artifact_steps)
-                and isinstance(artifact_steps[index], Mapping)
-                else {}
-            )
+            step_id = parameter_step.get("id")
+            if step_id:
+                artifact_step = artifact_steps_by_id.get(step_id, {})
+            else:
+                candidate = (
+                    artifact_steps[index] if index < len(artifact_steps) else None
+                )
+                artifact_step = (
+                    candidate
+                    if isinstance(candidate, Mapping) and not candidate.get("id")
+                    else {}
+                )
             step = {**dict(artifact_step), **dict(parameter_step)}
             artifact_runtime = artifact_step.get("runtime")
             parameter_runtime = parameter_step.get("runtime")

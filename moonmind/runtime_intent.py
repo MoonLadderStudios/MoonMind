@@ -222,19 +222,26 @@ async def validate_model_selection_submission(
             )
             if isinstance(ref, str) and ref.strip() and ref != saved_ref:
                 artifact = await read(ref)
-                previous = await saved_context(saved)
                 if isinstance(artifact, Mapping):
                     artifact = artifact.get("draft", artifact)
-                if isinstance(previous, Mapping):
-                    previous = previous.get(
-                        "initialParameters",
-                        previous.get("initial_parameters", previous),
+                try:
+                    validate_model_selection_authoring(
+                        artifact, field_name=f"{path}.inputArtifactRef"
                     )
-                validate_model_selection_authoring(
-                    artifact,
-                    saved_payload=previous,
-                    field_name=f"{path}.inputArtifactRef",
-                )
+                except RuntimeIntentValidationError:
+                    # Only retained strict intent needs the superseded source.
+                    # A valid replacement must be able to repair a missing ref.
+                    previous = await saved_context(saved)
+                    if isinstance(previous, Mapping):
+                        previous = previous.get(
+                            "initialParameters",
+                            previous.get("initial_parameters", previous),
+                        )
+                    validate_model_selection_authoring(
+                        artifact,
+                        saved_payload=previous,
+                        field_name=f"{path}.inputArtifactRef",
+                    )
             for key, child in value.items():
                 if key in _SELECTION_CONTAINERS:
                     saved_child = saved.get(key) if isinstance(saved, Mapping) else None

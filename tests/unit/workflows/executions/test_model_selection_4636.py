@@ -634,11 +634,6 @@ async def test_4636_preview_returns_current_field_sources_for_saved_partial_and_
     from unittest.mock import AsyncMock
 
     import api_service.api.routers.provider_profiles as router
-    from api_service.api.routers.provider_profiles import (
-        ProviderProfileTierPreviewRequest,
-        ProviderProfileTierPreviewResponse,
-        preview_model_tiers,
-    )
 
     selected = profile()
     from datetime import datetime, timezone
@@ -648,9 +643,9 @@ async def test_4636_preview_returns_current_field_sources_for_saved_partial_and_
         router, "_require_provider_profile_permission", lambda *_args: None
     )
     monkeypatch.setattr(router, "_can_view_profile", lambda *_args: True)
-    response = await preview_model_tiers(
+    response = await router.preview_model_tiers(
         profile_id="test-profile",
-        body=ProviderProfileTierPreviewRequest.model_validate(
+        body=router.ProviderProfileTierPreviewRequest.model_validate(
             {
                 "steps": [
                     {"id": "saved", "model": "saved-model"},
@@ -661,7 +656,9 @@ async def test_4636_preview_returns_current_field_sources_for_saved_partial_and_
         session=SimpleNamespace(get=AsyncMock(return_value=selected)),
         current_user=None,
     )
-    saved, custom = ProviderProfileTierPreviewResponse.model_validate(response).items
+    saved, custom = router.ProviderProfileTierPreviewResponse.model_validate(
+        response
+    ).items
     assert saved.effort_source == "provider_profile_default"
     assert saved.effort == "legacy-effort"
     assert custom.model_source == "runtime_default"
@@ -880,3 +877,282 @@ def test_4636_flat_edit_keeps_recorded_behavior_before_repair_patch(monkeypatch)
     )
     assert request.parameters["model"] == "old-model"
     assert request.parameters["runtime"] == {"model": "old-model", "effort": "high"}
+
+
+def test_4636_absent_nested_selection_preserves_legacy_flat_fields():
+    resolved = resolve_model_effort(
+        runtime_id="codex_cli",
+        profile=profile(),
+        authored_runtime=None,
+        requested_model="saved-flat-model",
+        requested_effort="max",
+    )
+    assert (resolved.model, resolved.effort) == ("saved-flat-model", "max")
+    assert resolved.model_source == "task_override"
+    assert resolved.effort_source == "task_override"
+
+
+def test_4636_authored_custom_nulls_supersede_legacy_flat_fields():
+    resolved = resolve_model_effort(
+        runtime_id="codex_cli",
+        profile=profile(),
+        authored_runtime={"model": None, "effort": None},
+        requested_model="stale-flat-model",
+        requested_effort="max",
+        env={
+            "MOONMIND_CODEX_MODEL": "runtime-model",
+            "MOONMIND_CODEX_EFFORT": "medium",
+        },
+    )
+    assert (resolved.model, resolved.effort) == ("runtime-model", "medium")
+
+
+def test_4636_authored_tier_supersedes_legacy_flat_fields():
+    resolved = resolve_model_effort(
+        runtime_id="codex_cli",
+        profile=profile(),
+        authored_runtime={"modelTier": 1},
+        requested_model="stale-flat-model",
+        requested_effort="max",
+    )
+    assert (resolved.model, resolved.effort) == ("tier-one", "low")
+
+
+@pytest.mark.parametrize("complete_selection", [False, True])
+def test_4636_artifact_step_merge_matches_stable_ids_after_reordering(
+    complete_selection,
+):
+    from copy import deepcopy
+
+    from moonmind.runtime_intent import model_selection_fields
+    from moonmind.workflows.executions.execution_contract import merge_workflow_input
+
+    artifact = {
+        "steps": [
+            {
+                "id": "strict",
+                "instructions": "Strict work",
+                "runtime": {
+                    "modelTier": 2,
+                    "tierFallback": "strict",
+                    "parameters": {"seed": 1},
+                },
+            },
+            {
+                "id": "custom",
+                "instructions": "Custom work",
+                "runtime": {
+                    "model": "chosen",
+                    "effort": "max",
+                    "parameters": {"seed": 2},
+                },
+            },
+        ]
+    }
+    before = deepcopy(artifact)
+    merged = merge_workflow_input(
+        artifact,
+        {"steps": [{"id": "custom"}, {"id": "strict"}]},
+        runtime_selection_is_complete=complete_selection,
+    )
+    assert [step["instructions"] for step in merged["steps"]] == [
+        "Custom work",
+        "Strict work",
+    ]
+    assert [step["runtime"]["parameters"] for step in merged["steps"]] == [
+        {"seed": 2},
+        {"seed": 1},
+    ]
+    expected_selections = [
+        {"model": "chosen", "effort": "max"},
+        {"modelTier": 2, "tierFallback": "strict"},
+    ]
+    assert [model_selection_fields(step["runtime"]) for step in merged["steps"]] == (
+        [{}, {}] if complete_selection else expected_selections
+    )
+    assert artifact == before
+
+
+@pytest.mark.parametrize(
+    "artifact_id,edited_id,matched",
+    [
+        (None, None, True),
+        ("saved", None, False),
+        (None, "new", False),
+        ("saved", "new", False),
+    ],
+)
+def test_4636_artifact_step_merge_uses_position_only_without_identity(
+    artifact_id, edited_id, matched
+):
+    from moonmind.workflows.executions.execution_contract import merge_workflow_input
+
+    artifact_step = {
+        "instructions": "Saved work",
+        "runtime": {"parameters": {"seed": 42}},
+    }
+    edited_step = {}
+    if artifact_id is not None:
+        artifact_step["id"] = artifact_id
+    if edited_id is not None:
+        edited_step["id"] = edited_id
+    merged = merge_workflow_input(
+        {"steps": [artifact_step]},
+        {"steps": [edited_step]},
+        runtime_selection_is_complete=False,
+    )["steps"][0]
+    if matched:
+        assert merged["instructions"] == "Saved work"
+        assert merged["runtime"]["parameters"] == {"seed": 42}
+    else:
+        assert "instructions" not in merged
+        assert "runtime" not in merged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict_step_id", ["strict", "custom"])
+async def test_4636_reordered_artifact_strict_provenance_stays_with_its_step(
+    strict_step_id,
+):
+    from unittest.mock import AsyncMock
+
+    from moonmind.runtime_intent import (
+        RuntimeIntentValidationError,
+        validate_model_selection_submission,
+    )
+
+    strict_runtime = {"modelTier": 2, "tierFallback": "strict"}
+    artifact = {
+        "workflow": {
+            "steps": [
+                {"id": "strict", "runtime": dict(strict_runtime)},
+                {"id": "custom", "runtime": {"model": None, "effort": None}},
+            ]
+        }
+    }
+    saved = {
+        "inputArtifactRef": "art-saved",
+        "workflow": {
+            "steps": [
+                {"id": "custom"},
+                {"id": "strict"},
+            ]
+        },
+    }
+    payload = {
+        "workflow": {"steps": [{"id": strict_step_id, "runtime": dict(strict_runtime)}]}
+    }
+    reader = AsyncMock(return_value=artifact)
+    if strict_step_id == "strict":
+        await validate_model_selection_submission(
+            payload, saved_payload=saved, read_input_artifact=reader
+        )
+    else:
+        with pytest.raises(RuntimeIntentValidationError, match="new strict"):
+            await validate_model_selection_submission(
+                payload, saved_payload=saved, read_input_artifact=reader
+            )
+    reader.assert_awaited_once_with("art-saved")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref_key", ["inputArtifactRef", "input_artifact_ref"])
+@pytest.mark.parametrize(
+    "selection", [{}, {"modelTier": 1}, {"model": None, "effort": None}]
+)
+async def test_4636_new_non_strict_artifact_replaces_unreadable_saved_reference(
+    ref_key, selection
+):
+    from unittest.mock import AsyncMock
+
+    from moonmind.runtime_intent import validate_model_selection_submission
+
+    async def read(ref):
+        if ref == "art-old-missing":
+            raise FileNotFoundError("saved artifact is unavailable")
+        assert ref == "art-new"
+        return {
+            "draft": {"workflow": {"instructions": "Replacement", "runtime": selection}}
+        }
+
+    reader = AsyncMock(side_effect=read)
+    await validate_model_selection_submission(
+        {ref_key: "art-new"},
+        saved_payload={ref_key: "art-old-missing"},
+        read_input_artifact=reader,
+    )
+    reader.assert_awaited_once_with("art-new")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("matching_strict", [True, False])
+async def test_4636_new_strict_artifact_still_requires_saved_selection_provenance(
+    matching_strict,
+):
+    from unittest.mock import AsyncMock, call
+
+    from moonmind.runtime_intent import (
+        RuntimeIntentValidationError,
+        validate_model_selection_submission,
+    )
+
+    async def read(ref):
+        tier = 2 if ref == "art-new" or matching_strict else 1
+        return {"workflow": {"runtime": {"modelTier": tier, "tierFallback": "strict"}}}
+
+    reader = AsyncMock(side_effect=read)
+    kwargs = {
+        "saved_payload": {"inputArtifactRef": "art-old"},
+        "read_input_artifact": reader,
+    }
+    if matching_strict:
+        await validate_model_selection_submission(
+            {"inputArtifactRef": "art-new"}, **kwargs
+        )
+    else:
+        with pytest.raises(RuntimeIntentValidationError, match="new strict"):
+            await validate_model_selection_submission(
+                {"inputArtifactRef": "art-new"}, **kwargs
+            )
+    assert reader.await_args_list == [call("art-new"), call("art-old")]
+
+
+def test_4636_tier_metadata_defaults_serialize_without_mutating_profile():
+    import json
+    from copy import deepcopy
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+
+    selected = profile()
+    selected.model_tiers[1]["parameters"] = {
+        "metadata": {
+            "trace": {"label": "tier-owned"},
+            "moonmind": {"source": "profile"},
+        },
+    }
+    before = deepcopy(selected.model_tiers)
+    request = AgentExecutionRequest(
+        agent_kind="managed",
+        agent_id="codex_cli",
+        correlation_id="4636-metadata",
+        idempotency_key="4636-metadata",
+        parameters={"runtime": {"modelTier": 2}},
+    )
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request, profile=selected, strategy=None
+    )
+    parameters = json.loads(request.model_dump_json())["parameters"]
+    metadata = parameters["metadata"]
+    assert metadata["trace"] == {"label": "tier-owned"}
+    assert metadata["moonmind"]["source"] == "profile"
+    assert (
+        metadata["moonmind"]["modelEffortResolution"]["tierParameterDefaults"]
+        == before[1]["parameters"]
+    )
+    assert selected.model_tiers == before
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request, profile=selected, strategy=None
+    )
+    assert json.loads(request.model_dump_json())["parameters"]["model"] == "tier-two"
+    assert selected.model_tiers == before

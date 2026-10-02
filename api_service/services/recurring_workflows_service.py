@@ -42,6 +42,7 @@ from api_service.services.provider_profile_runtime import (
 )
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
+    model_selection_fields,
     validate_model_selection_submission,
 )
 from moonmind.workflows.executions.execution_contract import (
@@ -1285,7 +1286,13 @@ class RecurringWorkflowsService:
                 resolved = resolve_model_effort(
                     runtime_id=provider_profile.runtime_id,
                     profile=provider_profile,
-                    authored_runtime=runtime_intent,
+                    # Raw schedule fields may still author a legacy flat pair.
+                    # Only a nested selection supersedes that saved intent.
+                    authored_runtime=(
+                        runtime_intent
+                        if model_selection_fields(runtime_intent)
+                        else None
+                    ),
                     requested_model=runtime_intent.get(
                         "model", authored_parameters.get("model")
                     ),
