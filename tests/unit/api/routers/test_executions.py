@@ -8366,8 +8366,20 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
     assert initial_parameters["workflow"]["runtime"]["mode"] == "codex_cli"
 
 
-def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
+@pytest.mark.parametrize(
+    "model,effort,invalid_field",
+    [
+        ("chosen-model", "high", None),
+        (None, None, None),
+        (42, "high", "model"),
+        ("chosen-model", True, "effort"),
+    ],
+)
+def test_create_task_shaped_execution_validates_selection_and_normalizes_step_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    model: str | int | None,
+    effort: str | bool | None,
+    invalid_field: str | None,
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
@@ -8389,8 +8401,8 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
                             "instructions": "Use a step profile.",
                             "runtime": {
                                 "mode": "CLAUDE",
-                                "model": 42,
-                                "effort": True,
+                                "model": model,
+                                "effort": effort,
                                 "profileId": 123,
                             },
                         }
@@ -8400,16 +8412,29 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
         },
     )
 
-    assert response.status_code == 201
+    if invalid_field is not None:
+        assert response.status_code == 422, response.json()
+        assert (
+            f"{invalid_field} must be a string or null"
+            in response.json()["detail"]["message"]
+        )
+        service.create_execution.assert_not_awaited()
+        return
+
+    assert response.status_code == 201, response.json()
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
     runtime = initial_parameters["workflow"]["steps"][0]["runtime"]
     assert runtime["mode"] == "claude_code"
-    assert runtime["model"] == "42"
-    assert runtime["requestedModel"] == "42"
-    assert runtime["modelSource"] == "task_override"
-    assert runtime["effort"] == "True"
+    assert runtime["model"] == model
+    assert runtime["effort"] == effort
+    if model is not None:
+        assert runtime["requestedModel"] == model
+        assert runtime["modelSource"] == "task_override"
+    else:
+        assert "requestedModel" not in runtime
+        assert runtime["modelSource"] in {"runtime_default", "none"}
     assert runtime["profileId"] == "123"
     assert runtime["providerProfile"] == "123"
 
@@ -9383,11 +9408,13 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
         owner_id=str(user.id),
         parameters={
             "targetRuntime": "codex",
-            "model": "gpt-5.4",
-            "effort": "high",
+            "model": "stale-resolved-preview",
+            "effort": "medium",
             "workflow": {
                 "runtime": {
                     "executionProfileRef": "codex_default",
+                    "model": "gpt-5.4",
+                    "effort": "high",
                 }
             },
         },
