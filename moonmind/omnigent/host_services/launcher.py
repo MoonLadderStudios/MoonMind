@@ -21,6 +21,29 @@ from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScrip
 from moonmind.security.egress import omnigent_proxy_env
 
 
+def docker_attachment_mount(attachment: Mapping[str, Any]) -> str:
+    """Render the admitted attachment without inventing a daemon host path."""
+
+    kind = str(attachment["kind"])
+    mount = f"type={kind},src={attachment['sourceRef']},dst={attachment['targetPath']}"
+    subpath = str(attachment.get("subPath") or "").strip()
+    if subpath:
+        if (
+            kind != "volume"
+            or subpath.startswith("/")
+            or ".." in PurePosixPath(subpath).parts
+            or "," in subpath
+        ):
+            raise HarnessPlatformError(
+                "attachment volume subpath is unsupported",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        mount += f",volume-subpath={subpath}"
+    if str(attachment.get("accessMode")) == "read-only":
+        mount += ",readonly"
+    return mount
+
+
 def _image_owned_executables(
     tool_attachments: tuple[dict[str, Any], ...] | list[dict[str, Any]],
 ) -> tuple[str, ...]:
@@ -495,31 +518,7 @@ class DockerOmnigentHostLauncher:
                 # workspace and skill projections are bind mounts, and
                 # skipping them would leave the host without its workspace.
                 continue
-            source = str(attachment["sourceRef"])
-            target = str(attachment["targetPath"])
-            readonly = str(attachment.get("accessMode")) == "read-only"
-            mount = f"type={kind},src={source},dst={target}"
-            subpath = str(attachment.get("subPath") or "").strip()
-            if subpath:
-                # Only Docker can resolve a volume's own storage, so a
-                # directory inside a deployment volume is named by subpath
-                # rather than by a daemon host path. A leading slash, a
-                # parent traversal, or an embedded ``,`` would escape the
-                # volume or silently become a different mount option.
-                if (
-                    kind != "volume"
-                    or subpath.startswith("/")
-                    or ".." in PurePosixPath(subpath).parts
-                    or "," in subpath
-                ):
-                    raise HarnessPlatformError(
-                        "attachment volume subpath is unsupported",
-                        code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-                    )
-                mount += f",volume-subpath={subpath}"
-            if readonly:
-                mount += ",readonly"
-            command.extend(["--mount", mount])
+            command.extend(["--mount", docker_attachment_mount(attachment)])
         command.extend(
             [
                 "--entrypoint",
@@ -558,6 +557,7 @@ class DockerOmnigentHostLauncher:
 
 __all__ = [
     "DockerOmnigentHostLauncher",
+    "docker_attachment_mount",
     "HostLaunchSpec",
     "host_correlation_identity",
 ]

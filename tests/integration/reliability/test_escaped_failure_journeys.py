@@ -3618,7 +3618,7 @@ async def test_omnigent_runtime_scripts_cross_remote_daemon_path_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replay mm:b2f61d86 at the worker-to-Docker bind boundary."""
+    """Retain mm:b2f61d86's projection without a daemon-private bind source."""
 
     replay_id = "omnigent-runtime-scripts-daemon-path"
     manifest = load_replay(replay_id, "manifest.json")
@@ -3643,29 +3643,20 @@ async def test_omnigent_runtime_scripts_cross_remote_daemon_path_boundary(
         return_value=(0, f"{daemon_root}\n", "")
     )
 
-    inspected_daemon_root = await runtime._resolve_daemon_workspace_root()
-
-    daemon_scripts = runtime._prepare_daemon_runtime_scripts(
+    worker_scripts = runtime._prepare_runtime_scripts(
         manifest["workspaceKey"],
         current_step_execution_id="workflow:run:step:execution:1",
-        daemon_workspace_root=inspected_daemon_root,
     )
 
-    assert daemon_scripts == Path(expected["daemonScriptsPath"]).resolve()
-    relative = daemon_scripts.relative_to(daemon_root)
-    worker_scripts = worker_root / relative
+    assert worker_scripts == worker_root / expected["scriptsSubpath"]
     assert worker_scripts != source
     assert all((worker_scripts / name).is_file() for name in manifest["requiredScripts"])
     assert (worker_scripts / "moonmind-execution.sh").is_file()
-    runtime._run.assert_awaited_once_with(
-        "docker",
-        "volume",
-        "inspect",
-        "--format",
-        "{{.Mountpoint}}",
-        "agent_workspaces",
-        check=False,
+    assert runtime._workspace_mount(worker_scripts, "/opt/moonmind", readonly=True) == (
+        f"type=volume,src={expected['volumeName']},dst=/opt/moonmind,"
+        f"volume-subpath={expected['scriptsSubpath']},readonly"
     )
+    runtime._run.assert_not_awaited()
 
 
 async def test_agent_workspace_daemon_root_uses_compose_volume_identity() -> None:

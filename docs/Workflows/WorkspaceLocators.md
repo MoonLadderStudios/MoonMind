@@ -13,6 +13,14 @@ and restores it through `workspace.apply_checkpoint`, retaining normal containme
 digest, and symlink checks. Omnigent session restore never applies a local archive,
 and workspace restore does not require the original Omnigent host.
 
+On-demand OAuth hosts use the same daemon attachment resolver as generic hosts.
+A local daemon receives worker-visible bind sources. A remote daemon receives
+the deployment's named workspace volume and a containment-checked relative
+subpath for the repository, Skill projection, runtime scripts, and login-shell
+profile file. A volume's reported storage mountpoint is not a portable bind
+source: Docker Desktop can expose an empty directory at that path. Initialization
+and host launch must resolve the same written projection through the volume.
+
 Sandbox archive safety checks use the same membership rules as archive capture.
 Excluded Skill projection trees (`.agents/skills` and `.gemini/skills`) are neither
 archived nor grounds for rejecting a checkpoint because of their links or owner.
