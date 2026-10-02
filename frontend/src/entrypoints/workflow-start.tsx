@@ -1,6 +1,10 @@
+import { FALLBACK_TIER_EFFORT_OPTIONS, type ProviderProfileTierCapabilities } from "../utils/providerProfileTiers";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { createPortal } from "react-dom";
+import { ModelSelectionFields } from "../components/workflows/ModelSelectionFields";
+import { readModelSelection, inheritModelSelection, hasModelSelection } from "../lib/modelSelection";
+import type { ModelSelection } from "../lib/modelSelection";
 import { useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
 
@@ -787,7 +791,6 @@ interface ProviderModelEffortTier {
   annotations?: Record<string, unknown> | null;
 }
 
-type TierFallbackMode = "clamp" | "strict";
 type ProviderProfileTierPreviewItem =
   components["schemas"]["ProviderProfileTierPreviewItem"];
 type ProviderProfileTierPreviewResponse =
@@ -796,8 +799,7 @@ type ProviderProfileTierPreviewResponse =
 interface ModelTierPreviewSelection {
   id: string;
   profileId: string;
-  modelTier: number;
-  tierFallback: TierFallbackMode;
+  runtime: ModelSelection;
 }
 
 type ProviderProfileTierPreviewLookup = Record<
@@ -808,89 +810,6 @@ type ProviderProfileTierPreviewLookup = Record<
 interface ProviderProfileTierPreviewResult {
   previews: ProviderProfileTierPreviewLookup;
   errors: Record<string, string>;
-}
-
-export interface ModelTierPreview {
-  requestedTier: number;
-  effectiveTier: number;
-  label: string;
-  model: string;
-  effort: string;
-  fallbackReason: string | null;
-  warning: string | null;
-}
-
-function modelTiersForProfile(profile: ProviderProfile | undefined): ProviderModelEffortTier[] {
-  if (!profile) {
-    return [];
-  }
-  if (Array.isArray(profile.model_tiers) && profile.model_tiers.length > 0) {
-    return profile.model_tiers;
-  }
-  return [
-    {
-      label: "Default",
-      model: profile.default_model ?? null,
-      effort: profile.default_effort ?? null,
-      parameters: {},
-      annotations: {},
-    },
-  ];
-}
-
-function defaultModelTierForProfile(
-  profile: ProviderProfile | undefined,
-): ProviderModelEffortTier | undefined {
-  if (!profile || !Array.isArray(profile.model_tiers)) {
-    return undefined;
-  }
-  const defaultTier = profile.default_model_tier ?? 1;
-  return Number.isInteger(defaultTier) && defaultTier >= 1
-    ? profile.model_tiers[defaultTier - 1]
-    : undefined;
-}
-
-export function previewModelTier(
-  profile: ProviderProfile | undefined,
-  resolved: ProviderProfileTierPreviewItem | undefined,
-): ModelTierPreview | null {
-  const requestedTier = resolved?.requestedTier;
-  const effectiveTier = resolved?.effectiveTier;
-  if (
-    !Number.isInteger(requestedTier) ||
-    !Number.isInteger(effectiveTier) ||
-    Number(requestedTier) < 1 ||
-    Number(effectiveTier) < 1
-  ) {
-    return null;
-  }
-  const normalizedRequestedTier = Number(requestedTier);
-  const normalizedEffectiveTier = Number(effectiveTier);
-  const tiers = modelTiersForProfile(profile);
-  const tier = tiers[normalizedEffectiveTier - 1] || {};
-  const fallbackReason = resolved?.fallbackReason || null;
-  const configuredTierCount = Array.isArray(profile?.model_tiers) &&
-      profile.model_tiers.length > 0
-    ? profile.model_tiers.length
-    : normalizedEffectiveTier;
-  return {
-    requestedTier: normalizedRequestedTier,
-    effectiveTier: normalizedEffectiveTier,
-    label: tier.label || `Tier ${normalizedEffectiveTier}`,
-    model: resolved?.model || "runtime default model",
-    effort: resolved?.effort || "runtime default effort",
-    fallbackReason,
-    warning: fallbackReason
-      ? fallbackReason === "requested_tier_above_configured_range"
-        ? `Requested Tier ${normalizedRequestedTier}, used Tier ${normalizedEffectiveTier} because the selected profile only defines ${configuredTierCount} ${configuredTierCount === 1 ? "tier" : "tiers"}.`
-        : `Requested Tier ${normalizedRequestedTier}, used Tier ${normalizedEffectiveTier} because backend tier policy reported ${fallbackReason}.`
-      : null,
-  };
-}
-
-function requestedModelTier(value: string): number | null {
-  const parsed = Number.parseInt(value.trim(), 10);
-  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
 }
 
 function modelTierPreviewEndpoint(
@@ -917,7 +836,7 @@ async function fetchProviderProfileTierPreviews(
     selections: ModelTierPreviewSelection[];
   }> = [];
   for (const selection of selections) {
-    if (selection.tierFallback === "strict") {
+    if (selection.runtime.tierFallback === "strict") {
       requestGroups.push({
         profileId: selection.profileId,
         selections: [selection],
@@ -948,8 +867,7 @@ async function fetchProviderProfileTierPreviews(
               body: JSON.stringify({
                 steps: profileSelections.map((selection) => ({
                   id: selection.id,
-                  modelTier: selection.modelTier,
-                  tierFallback: selection.tierFallback,
+                  ...selection.runtime,
                 })),
               }),
             },
@@ -1182,6 +1100,7 @@ interface PresetListResponse {
 }
 
 interface PresetStepSkill {
+  runtime?: Record<string, unknown>;
   id?: string;
   name?: string;
   type?: string;
@@ -1194,6 +1113,7 @@ interface PresetStepSkill {
 }
 
 interface ExpandedStepPayload {
+  runtime?: Record<string, unknown>;
   id?: string;
   title?: string;
   instructions?: string;
@@ -1378,11 +1298,8 @@ interface StepState {
   // capabilities (skill/tool/preset/runtime/publish) are computed for display.
   explicitRequiredCapabilities: string[];
   runtimeMode: string;
-  runtimeModel: string;
-  runtimeEffort: string;
+  runtimeSelection: ModelSelection;
   runtimeProviderProfile: string;
-  runtimeModelTier: string;
-  runtimeTierFallback: TierFallbackMode;
   presetKey: string;
   presetInputValues: Record<string, unknown>;
   presetInputErrors: Record<string, string>;
@@ -1858,19 +1775,24 @@ export function buildEditParametersPatch({
   if (submittedRuntimeMode) {
     parametersPatch.targetRuntime = submittedRuntimeMode;
   }
-  parametersPatch.model = submittedRuntimeModel || null;
-  parametersPatch.requestedModel = submittedRuntimeModel || null;
-  parametersPatch.resolvedModel = submittedRuntimeModel || null;
-  parametersPatch.effort = submittedRuntimeEffort || null;
-  parametersPatch.modelTier =
-    Number.isInteger(submittedRuntimeModelTier) && submittedRuntimeModelTier >= 1
-      ? submittedRuntimeModelTier
-      : null;
-  parametersPatch.tierFallback =
-    submittedRuntimeTierFallback === "clamp" ||
-    submittedRuntimeTierFallback === "strict"
-      ? submittedRuntimeTierFallback
-      : null;
+  const selectionChanged = JSON.stringify(readModelSelection(submittedRuntime)) !== JSON.stringify(readModelSelection(recordValue(baseWorkflow.runtime)));
+  // Unrelated saves keep recorded resolution fields unchanged. The authored
+  // runtime remains the authority for the next preview and launch.
+  if (selectionChanged) {
+    parametersPatch.model = submittedRuntimeModel || null;
+    parametersPatch.requestedModel = submittedRuntimeModel || null;
+    parametersPatch.resolvedModel = submittedRuntimeModel || null;
+    parametersPatch.effort = submittedRuntimeEffort || null;
+    parametersPatch.modelTier =
+      Number.isInteger(submittedRuntimeModelTier) && submittedRuntimeModelTier >= 1
+        ? submittedRuntimeModelTier
+        : null;
+    parametersPatch.tierFallback =
+      submittedRuntimeTierFallback === "clamp" ||
+      submittedRuntimeTierFallback === "strict"
+        ? submittedRuntimeTierFallback
+        : null;
+  }
   parametersPatch.profileId = submittedRuntimeProfile || null;
   delete parametersPatch.task;
   if (!("mergeAutomation" in submittedPayload)) {
@@ -1964,11 +1886,8 @@ function createStepStateEntry(
     skillInputContractNotice: null,
     explicitRequiredCapabilities: [],
     runtimeMode: "",
-    runtimeModel: "",
-    runtimeEffort: "",
+    runtimeSelection: {},
     runtimeProviderProfile: "",
-    runtimeModelTier: "",
-    runtimeTierFallback: "clamp",
     presetKey: "",
     presetInputValues: {},
     presetInputErrors: {},
@@ -2277,14 +2196,9 @@ function createStepStateEntriesFromTemporalDraft(
         step.skillRequiredCapabilities,
       ),
       runtimeMode: step.runtime?.mode || "",
-      runtimeModel: step.runtime?.model || "",
-      runtimeEffort: step.runtime?.effort || "",
+      runtimeSelection: readModelSelection(step.runtime),
       runtimeProviderProfile:
         step.runtime?.profileId || step.runtime?.providerProfile || "",
-      runtimeModelTier:
-        step.runtime?.modelTier != null ? String(step.runtime.modelTier) : "",
-      runtimeTierFallback:
-        step.runtime?.tierFallback === "strict" ? "strict" : "clamp",
       toolId:
         step.stepType === "tool"
           ? String(toolPayload.id || toolPayload.name || step.skillId || "").trim()
@@ -2336,11 +2250,8 @@ function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
     (step) =>
       Boolean(step.skillArgs.trim()) ||
       Boolean((step.runtimeMode || "").trim()) ||
-      Boolean((step.runtimeModel || "").trim()) ||
-      Boolean((step.runtimeEffort || "").trim()) ||
-      Boolean((step.runtimeProviderProfile || "").trim()) ||
-      Boolean((step.runtimeModelTier || "").trim()) ||
-      step.runtimeTierFallback === "strict",
+      hasModelSelection(step.runtimeSelection) ||
+      Boolean((step.runtimeProviderProfile || "").trim()),
   );
 }
 
@@ -3322,6 +3233,7 @@ function mapExpandedStepToState(
     Boolean(step.tool && !step.skill) ||
     String(step.tool?.type || "").trim().toLowerCase() === "tool";
   const tool = step.tool || step.skill || {};
+  const runtime = recordValue(step.runtime ?? step.skill?.runtime);
   const inlineInputs =
     tool.inputs && typeof tool.inputs === "object"
       ? tool.inputs
@@ -3355,6 +3267,11 @@ function mapExpandedStepToState(
     title: String(step.title || "").trim(),
     stepType: isToolStep ? "tool" : "skill",
     instructions,
+    runtimeMode: String(runtime.mode || "").trim(),
+    runtimeSelection: readModelSelection(runtime),
+    runtimeProviderProfile: String(
+      runtime.profileId || runtime.providerProfile || "",
+    ).trim(),
     repositoryOperation:
       step.repositoryOperation === "read" ||
       step.repositoryOperation === "write"
@@ -5888,26 +5805,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   );
   const [omnigentLaunchPolicyAuthored, setOmnigentLaunchPolicyAuthored] =
     useState(false);
-  const [model, setModel] = useState(
-    String(
-      defaultTaskModelByRuntime[defaultRuntime] ||
-        dashboardConfig.system?.defaultModel ||
-        dashboardConfig.system?.defaultTaskModel ||
-        "",
-    ),
-  );
-  const [modelManualOverride, setModelManualOverride] = useState(false);
-  const [effort, setEffort] = useState(
-    String(
-      defaultTaskEffortByRuntime[defaultRuntime] ||
-        dashboardConfig.system?.defaultEffort ||
-        dashboardConfig.system?.defaultTaskEffort ||
-        "",
-    ),
-  );
-  const [effortManualOverride, setEffortManualOverride] = useState(false);
-  const [modelTier, setModelTier] = useState("");
-  const [tierFallback, setTierFallback] = useState<TierFallbackMode>("clamp");
+  const [modelSelection, setModelSelection] = useState<ModelSelection>({});
   const [repository, setRepository] = useState(initialRepository);
   const [repositoryTouched, setRepositoryTouched] = useState(false);
   const [providerProfile, setProviderProfile] = useState("");
@@ -6415,42 +6313,36 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   }, [providerProfilesQuery.data, providerProfile, pageMode.mode, remediationDraft, omnigentLaunchPolicyAuthored, runtimeAuthored]);
 
   const modelTierPreviewSelections = useMemo<ModelTierPreviewSelection[]>(() => {
-    if (providerProfilesQuery.isPlaceholderData) {
-      return [];
-    }
+    if (providerProfilesQuery.isPlaceholderData) return [];
     const selections: ModelTierPreviewSelection[] = [];
-    const workflowModelTier = requestedModelTier(modelTier);
-    if (providerProfile && workflowModelTier !== null) {
-      selections.push({
-        id: "workflow",
-        profileId: providerProfile,
-        modelTier: workflowModelTier,
-        tierFallback,
-      });
-    }
+    if (providerProfile) selections.push({ id: "workflow", profileId: providerProfile, runtime: readModelSelection(modelSelection) });
     for (const step of steps) {
-      const stepModelTier = requestedModelTier(step.runtimeModelTier);
-      const stepProfileId =
-        step.runtimeProviderProfile.trim() || providerProfile;
-      if (!stepProfileId || stepModelTier === null) {
-        continue;
-      }
-      selections.push({
-        id: `step:${step.localId}`,
-        profileId: stepProfileId,
-        modelTier: stepModelTier,
-        tierFallback:
-          step.runtimeTierFallback === "strict" ? "strict" : "clamp",
-      });
+      const profileId = step.runtimeProviderProfile.trim() || providerProfile;
+      if (profileId) selections.push({ id: `step:${step.localId}`, profileId, runtime: inheritModelSelection(modelSelection, step.runtimeSelection) });
     }
     return selections;
-  }, [
-    modelTier,
-    providerProfile,
-    providerProfilesQuery.isPlaceholderData,
-    steps,
-    tierFallback,
-  ]);
+  }, [modelSelection, providerProfile, providerProfilesQuery.isPlaceholderData, steps]);
+  const modelSelectionProfileIds = Array.from(new Set(modelTierPreviewSelections.map((selection) => selection.profileId))).sort();
+  const modelSelectionCapabilitiesQuery = useQuery({
+    ...configQueryDefaults,
+    queryKey: ["workflow-start", "model-selection-capabilities", providerProfilesEndpoint, modelSelectionProfileIds],
+    enabled: modelSelectionProfileIds.length > 0,
+    queryFn: async ({ signal }): Promise<Record<string, { capabilities?: ProviderProfileTierCapabilities; error?: string }>> => {
+      const entries = await Promise.all(modelSelectionProfileIds.map(async (profileId) => {
+        try {
+          const response = await fetch(`${providerProfilesEndpoint.split("?")[0]}/${encodeURIComponent(profileId)}/capabilities`, { headers: { Accept: "application/json" }, signal });
+          if (!response.ok) throw new Error("Profile suggestions could not be loaded. Manual values are preserved.");
+          const capabilities = await response.json() as ProviderProfileTierCapabilities;
+          if (!Array.isArray(capabilities.model?.options) || !Array.isArray(capabilities.effort?.options)) throw new Error("Malformed capability response");
+          return [profileId, { capabilities }] as const;
+        } catch (error) {
+          if (signal.aborted) throw error;
+          return [profileId, { error: "Profile suggestions could not be loaded. Manual values are preserved." }] as const;
+        }
+      }));
+      return Object.fromEntries(entries);
+    },
+  });
   const modelTierPreviewsQuery = useQuery({
     queryKey: [
       "workflow-start",
@@ -6567,79 +6459,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   ]);
 
   useEffect(() => {
-    const runtimeChanged = prevRuntimeRef.current !== runtime;
-    const profileChanged = prevProviderProfileRef.current !== providerProfile;
-
-    if (runtimeChanged || profileChanged) {
-      setModelManualOverride(false);
-      setEffortManualOverride(false);
-      setModel("");
-      setEffort("");
-    }
-
-    if (runtimeChanged) {
-      prevRuntimeRef.current = runtime;
-    }
-
-    if (profileChanged) {
-      prevProviderProfileRef.current = providerProfile;
-    }
-
-    if (
-      pageMode.mode !== "create" &&
-      temporalDraftAppliedRef.current &&
-      !runtimeChanged &&
-      !profileChanged
-    ) {
-      return;
-    }
-
-    const profileIdForDefaults = runtimeChanged ? "" : providerProfile;
-    const profiles = providerProfilesQuery.data || [];
-    const selectedProfile = profiles.find(
-      (p) => p.profile_id === profileIdForDefaults,
-    );
-    const selectedDefaultTier = defaultModelTierForProfile(selectedProfile);
-    if (!modelManualOverride || runtimeChanged || profileChanged) {
-      setModel(
-        String(
-          selectedDefaultTier?.model ||
-            selectedProfile?.default_model ||
-            defaultTaskModelByRuntime[runtime] ||
-            dashboardConfig.system?.defaultModel ||
-            dashboardConfig.system?.defaultTaskModel ||
-            "",
-        ),
-      );
-    }
-    if (!effortManualOverride || runtimeChanged || profileChanged) {
-      setEffort(
-        String(
-          selectedDefaultTier?.effort ||
-            selectedProfile?.default_effort ||
-            defaultTaskEffortByRuntime[runtime] ||
-            dashboardConfig.system?.defaultEffort ||
-            dashboardConfig.system?.defaultTaskEffort ||
-            "",
-        ),
-      );
-    }
-  }, [
-    dashboardConfig.system?.defaultTaskEffort,
-    dashboardConfig.system?.defaultEffort,
-    dashboardConfig.system?.defaultTaskModel,
-    dashboardConfig.system?.defaultModel,
-    defaultTaskEffortByRuntime,
-    defaultTaskModelByRuntime,
-    effortManualOverride,
-    modelManualOverride,
-    pageMode.mode,
-    providerProfilesQuery.data,
-    providerProfile,
-    runtime,
-  ]);
-
-  useEffect(() => {
     if (pageMode.mode === "create" || !temporalDraftQuery.data) {
       return;
     }
@@ -6669,20 +6488,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setOmnigentLaunchPolicyRef(draft.omnigentLaunchPolicyRef);
       setOmnigentLaunchPolicyAuthored(true);
     }
-    if (draft.model) {
-      setModel(draft.model);
-      setModelManualOverride(true);
-    }
-    if (draft.effort) {
-      setEffort(draft.effort);
-      setEffortManualOverride(true);
-    }
-    if (draft.modelTier != null) {
-      setModelTier(String(draft.modelTier));
-    }
-    if (draft.tierFallback === "strict" || draft.tierFallback === "clamp") {
-      setTierFallback(draft.tierFallback);
-    }
+    setModelSelection(draft.modelSelection);
     if (draft.repository) {
       setRepository(draft.repository);
       setRepositoryTouched(true);
@@ -6798,20 +6604,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       prevProviderProfileRef.current = draft.agentProfile.providerProfileRef;
       setProviderProfile(draft.agentProfile.providerProfileRef);
     }
-    if (draft.runtime?.model) {
-      setModel(draft.runtime.model);
-      setModelManualOverride(true);
-    }
-    if (draft.runtime?.effort) {
-      setEffort(draft.runtime.effort);
-      setEffortManualOverride(true);
-    }
-    if (draft.runtime?.modelTier != null) {
-      setModelTier(String(draft.runtime.modelTier));
-    }
-    if (draft.runtime?.tierFallback === "strict" || draft.runtime?.tierFallback === "clamp") {
-      setTierFallback(draft.runtime.tierFallback);
-    }
+    setModelSelection(readModelSelection(draft.runtime));
     if (draft.instructions) {
       setSteps([
         createStepStateEntry(1, {
@@ -7560,18 +7353,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     : activeProviderProfiles.find(
         (profile) => profile.profile_id === providerProfile,
       );
-  const selectedProfileSupportsModelControls =
-    runtime !== "omnigent" ||
-    Boolean(
-      selectedProviderProfileForPreview &&
-        ((selectedProviderProfileForPreview.model_tiers?.length || 0) > 0 ||
-          selectedProviderProfileForPreview.default_model ||
-          selectedProviderProfileForPreview.default_effort),
-    );
-  const workflowTierPreview = previewModelTier(
-    selectedProviderProfileForPreview,
-    modelTierPreviewsQuery.data?.previews.workflow,
-  );
+  const selectedProfileSupportsModelControls = runtime !== "jules";
   const workflowTierPreviewError = modelTierPreviewsQuery.data?.errors.workflow;
 
   // MM-936: the primary step always carries the publish-mode capability (gh)
@@ -7634,11 +7416,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       Array.from(
         new Set(
           [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
+            ...FALLBACK_TIER_EFFORT_OPTIONS.map((option) => option.value),
             String(defaultTaskEffortByRuntime[runtime] || ""),
             String(dashboardConfig.system?.defaultEffort || ""),
             String(dashboardConfig.system?.defaultTaskEffort || ""),
@@ -8253,26 +8031,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
   }
 
-  function stepRuntimePayload(step: StepState): Record<string, string | number> | null {
-    const mode = (step.runtimeMode || "").trim();
-    const modelValue = (step.runtimeModel || "").trim();
-    const effortValue = (step.runtimeEffort || "").trim();
-    const profileId = (step.runtimeProviderProfile || "").trim();
-    const modelTierValue = (step.runtimeModelTier || "").trim();
-    const modelTier = Number.parseInt(modelTierValue, 10);
-    const hasModelTier = Number.isInteger(modelTier) && modelTier >= 1;
-    const tierFallback = step.runtimeTierFallback === "strict" ? "strict" : "clamp";
-    if (!mode && !modelValue && !effortValue && !profileId && !hasModelTier && tierFallback !== "strict") {
-      return null;
-    }
-    return {
-      ...(mode ? { mode } : {}),
-      ...(modelValue ? { model: modelValue } : {}),
-      ...(effortValue ? { effort: effortValue } : {}),
-      ...(profileId ? { profileId } : {}),
-      ...(hasModelTier ? { modelTier } : {}),
-      ...(hasModelTier || tierFallback === "strict" ? { tierFallback } : {}),
-    };
+  function stepRuntimePayload(step: StepState): Record<string, unknown> | null {
+    const mode = step.runtimeMode.trim();
+    const profileId = step.runtimeProviderProfile.trim();
+    const runtime = { ...step.runtimeSelection, ...(mode ? { mode } : {}), ...(profileId ? { profileId } : {}) };
+    return Object.keys(runtime).length ? runtime : null;
   }
 
   function updateStepPresetInputValue(
@@ -8852,6 +8615,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         continue;
       }
       const blueprint: Record<string, unknown> = { instructions };
+      const runtime = stepRuntimePayload(step);
       const skillId = step.skillId.trim();
       // MM-936: explicit capabilities are authored through the always-visible
       // chip selector, so they persist into presets regardless of Advanced mode.
@@ -8878,7 +8642,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         skillId ||
         skillArgsRaw ||
         Object.keys(structuredSkillInputs.values).length > 0 ||
-        caps.length > 0
+        caps.length > 0 ||
+        runtime !== null
       ) {
         let skillArgs: Record<string, unknown> = {};
         if (skillArgsRaw) {
@@ -8909,17 +8674,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           inputs: skillArgs,
           ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
         };
-        blueprint.tool = normalizedTool;
-        const selectedSkillDetail =
-          skillsQuery.data?.detailsById[normalizedTool.name] || null;
-        blueprint.skill = skillPayloadWithInputs({
-          skillId: normalizedTool.name,
-          inputs: skillArgs,
-          savedInputContractDigest: selectedSkillDetail?.contractDigest,
-          currentInputContractDigest: selectedSkillDetail?.contractDigest,
-          requiredCapabilities: caps,
-          detail: selectedSkillDetail,
-        });
+        // Presets own step intent under skill.runtime. Do not save resolved
+        // previews or a competing tool payload for this Skill blueprint.
+        blueprint.type = "skill";
+        blueprint.skill = {
+          id: normalizedTool.name,
+          args: skillArgs,
+          ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
+          ...(runtime ? { runtime } : {}),
+        };
       }
       presetSteps.push(blueprint);
     }
@@ -9556,32 +9319,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       }
     }
-    const submittedModelTierValue = selectedProfileSupportsModelControls ? modelTier.trim() : "";
-    const submittedModelTier = Number.parseInt(submittedModelTierValue, 10);
-    const hasSubmittedModelTier = submittedModelTierValue !== "";
-    if (
-      hasSubmittedModelTier &&
-      (!Number.isInteger(submittedModelTier) || submittedModelTier < 1)
-    ) {
-      setSubmitMessage("Model tier must be a positive number.");
-      clearSubmitBusy();
-      return;
-    }
-    const invalidStepModelTier = submissionSteps.find((step) => {
-      const value = (step.runtimeModelTier || "").trim();
-      if (!value) {
-        return false;
-      }
-      const parsed = Number.parseInt(value, 10);
-      return !Number.isInteger(parsed) || parsed < 1;
-    });
-    if (invalidStepModelTier) {
-      const stepIndex = submissionSteps.indexOf(invalidStepModelTier) + 1;
-      setSubmitMessage(`Step ${stepIndex} model tier must be a positive number.`);
-      clearSubmitBusy();
-      return;
-    }
-
     const formPublishMode = normalizePublishModeForSubmit(publishMode);
     if (!["auto", "none", "branch", "pr"].includes(formPublishMode)) {
       setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
@@ -10579,9 +10316,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
-    const submittedModel = selectedProfileSupportsModelControls && modelManualOverride ? model.trim() : "";
-    const submittedEffort = selectedProfileSupportsModelControls && effortManualOverride ? effort.trim() : "";
-
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
       tool: resolvedTool,
@@ -10598,13 +10332,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         mode: normalizedRuntime,
         // Accepting the visible default has the same authority as choosing it.
         // Omitting `authored` makes the displayed mode explicit at admission.
-        ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
-        ...(selectedProfileSupportsModelControls &&
-        (hasSubmittedModelTier || tierFallback === "strict")
-          ? { tierFallback }
-          : {}),
-        ...(submittedModel ? { model: submittedModel } : {}),
-        ...(submittedEffort ? { effort: submittedEffort } : {}),
+        ...modelSelection,
         ...(providerProfile ? { profileId: providerProfile } : {}),
         ...(runtime === "omnigent" && selectedConfiguration && pageMode.mode === "create" && !remediationDraft
           ? { executionConfiguration: {
@@ -10843,8 +10571,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             String(rerunDraft.omnigentExecutionTargetRef || "").trim() ||
           omnigentLaunchPolicyRef.trim() !==
             String(rerunDraft.omnigentLaunchPolicyRef || "").trim() ||
-          model.trim() !== String(rerunDraft.model || "").trim() ||
-          effort.trim() !== String(rerunDraft.effort || "").trim() ||
+          JSON.stringify(modelSelection) !== JSON.stringify(rerunDraft.modelSelection) ||
           effectivePublishMode !== rerunDraftEffectivePublishMode ||
           currentPublishModeSelection !== rerunDraftPublishModeSelection ||
           produceReport !== Boolean(rerunDraft.reportOutputEnabled) ||
@@ -11780,10 +11507,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 : (providerProfilesQuery.data || []).find(
                     (profile) => profile.profile_id === stepPreviewProfileId,
                   );
-              const stepTierPreview = previewModelTier(
-                stepPreviewProfile,
-                modelTierPreviewsQuery.data?.previews[`step:${step.localId}`],
-              );
               const stepTierPreviewError =
                 modelTierPreviewsQuery.data?.errors[`step:${step.localId}`];
               const jiraTransitionState =
@@ -12581,93 +12304,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           }
                         />
                       </label>
-                      <label>
-                        {`Step ${index + 1} Model tier intent`}
-                        <input
-                          data-step-field="runtimeModelTier"
-                          data-step-index={String(index)}
-                          type="number"
-                          min="1"
-                          value={step.runtimeModelTier}
-                          placeholder={isPrimaryStep ? "inherit workflow tier" : "inherit"}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              runtimeModelTier: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        {`Step ${index + 1} Tier fallback`}
-                        <select
-                          data-step-field="runtimeTierFallback"
-                          data-step-index={String(index)}
-                          value={step.runtimeTierFallback}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              runtimeTierFallback:
-                                event.target.value === "strict" ? "strict" : "clamp",
-                            })
-                          }
-                        >
-                          <option value="clamp">Clamp to configured tiers</option>
-                          <option value="strict">Reject if unavailable</option>
-                        </select>
-                      </label>
-                      {stepTierPreview ? (
-                        <div
-                          className={`runtime-command-preview${stepTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
-                          aria-label={`Step ${index + 1} model tier preview`}
-                        >
-                          <span className="runtime-command-preview-label">
-                            {`Tier ${stepTierPreview.requestedTier} · ${stepTierPreview.label} · ${stepTierPreview.model} · ${stepTierPreview.effort}`}
-                          </span>
-                          {stepTierPreview.warning ? (
-                            <span className="runtime-command-preview-description">
-                              {stepTierPreview.warning}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {stepTierPreviewError ? (
-                        <div
-                          className="notice error small"
-                          role="alert"
-                          aria-label={`Step ${index + 1} model tier preview error`}
-                        >
-                          {stepTierPreviewError}
-                        </div>
-                      ) : null}
-                      <label>
-                        {`Step ${index + 1} Hard override model`}
-                        <input
-                          data-step-field="runtimeModel"
-                          data-step-index={String(index)}
-                          list={MODEL_OPTIONS_DATALIST_ID}
-                          value={step.runtimeModel}
-                          placeholder="runtime default"
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              runtimeModel: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        {`Step ${index + 1} Hard override effort`}
-                        <input
-                          data-step-field="runtimeEffort"
-                          data-step-index={String(index)}
-                          list={EFFORT_OPTIONS_DATALIST_ID}
-                          value={step.runtimeEffort}
-                          placeholder="runtime default"
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              runtimeEffort: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
+                      <ModelSelectionFields
+                        scope={`Step ${index + 1}`}
+                        value={step.runtimeSelection}
+                        inherited={modelSelection}
+                        profile={stepPreviewProfile}
+                        capabilities={modelSelectionCapabilitiesQuery.data?.[stepPreviewProfile?.profile_id || ""]?.capabilities}
+                        loading={providerProfilesQuery.isPending || providerProfilesQuery.isPlaceholderData}
+                        error={stepTierPreviewError || modelSelectionCapabilitiesQuery.data?.[stepPreviewProfile?.profile_id || ""]?.error || (providerProfilesQuery.isError ? "Profile tiers could not be loaded." : null)}
+                        preview={modelTierPreviewsQuery.data?.previews[`step:${step.localId}`]}
+                        modelList={MODEL_OPTIONS_DATALIST_ID}
+                        effortList={EFFORT_OPTIONS_DATALIST_ID}
+                        onChange={(runtimeSelection) => updateStep(step.localId, { runtimeSelection })}
+                      />
                     </div>
                   ) : null}
 
@@ -12995,88 +12644,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        {selectedProfileSupportsModelControls ? (
-        <><div className="grid-2" aria-label="Workflow model tier intent">
-          <label>
-            Model tier intent
-            <input
-              name="modelTier"
-              type="number"
-              min="1"
-              value={modelTier}
-              onChange={(event) => setModelTier(event.target.value)}
-            />
-          </label>
-          <label>
-            Tier fallback
-            <select
-              name="tierFallback"
-              value={tierFallback}
-              onChange={(event) =>
-                setTierFallback(event.target.value === "strict" ? "strict" : "clamp")
-              }
-            >
-              <option value="clamp">Clamp to configured tiers</option>
-              <option value="strict">Reject if unavailable</option>
-            </select>
-          </label>
-        </div>
-        {workflowTierPreview ? (
-          <div
-            className={`runtime-command-preview${workflowTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
-            aria-label="Workflow model tier preview"
-          >
-            <span className="runtime-command-preview-label">
-              {`Tier ${workflowTierPreview.requestedTier} · ${workflowTierPreview.label} · ${workflowTierPreview.model} · ${workflowTierPreview.effort}`}
-            </span>
-            {workflowTierPreview.warning ? (
-              <span className="runtime-command-preview-description">
-                {workflowTierPreview.warning}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-        {workflowTierPreviewError ? (
-          <div
-            className="notice error small"
-            role="alert"
-            aria-label="Workflow model tier preview error"
-          >
-            {workflowTierPreviewError}
-          </div>
-        ) : null}</>
-        ) : null}
-
-        {selectedProfileSupportsModelControls ? (<div className="grid-2">
-          <label>
-            Hard override model
-            <input
-              name="model"
-              list={MODEL_OPTIONS_DATALIST_ID}
-              value={model}
-              placeholder="runtime default"
-              onChange={(event) => {
-                const next = event.target.value;
-                setModel(next);
-                setModelManualOverride(next !== "");
-              }}
-            />
-          </label>
-          <label>
-            Hard override effort
-            <input
-              name="effort"
-              list={EFFORT_OPTIONS_DATALIST_ID}
-              value={effort}
-              placeholder="runtime default"
-              onChange={(event) => {
-                const next = event.target.value;
-                setEffort(next);
-                setEffortManualOverride(next !== "");
-              }}
-            />
-          </label>
-        </div>) : null}
+        {selectedProfileSupportsModelControls ? <ModelSelectionFields
+          scope="Workflow"
+          value={modelSelection}
+          profile={selectedProviderProfileForPreview}
+          capabilities={modelSelectionCapabilitiesQuery.data?.[providerProfile]?.capabilities}
+          loading={providerProfilesQuery.isPending || providerProfilesQuery.isPlaceholderData}
+          error={workflowTierPreviewError || modelSelectionCapabilitiesQuery.data?.[providerProfile]?.error || (providerProfilesQuery.isError ? "Profile tiers could not be loaded." : null)}
+          preview={modelTierPreviewsQuery.data?.previews.workflow}
+          modelList={MODEL_OPTIONS_DATALIST_ID}
+          effortList={EFFORT_OPTIONS_DATALIST_ID}
+          onChange={setModelSelection}
+        /> : null}
 
         </section>
 

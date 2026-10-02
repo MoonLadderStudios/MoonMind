@@ -10985,3 +10985,11 @@ button.workflow-workspace-sidebar-row:active {
     min-inline-size: 0;
   }
 }
+
+/* Shared workflow/step model selection (#4636). */
+.model-selection { min-width: 0; grid-column: 1 / -1; }
+.model-selection__fields { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 3fr) minmax(0, 1fr); gap: 1rem; }
+.model-selection__fields label { min-width: 0; }
+.model-selection__fields input, .model-selection__fields select { width: 100%; min-width: 0; box-sizing: border-box; }
+.model-selection p { overflow-wrap: anywhere; }
+@media (max-width: 640px) { .model-selection__fields { grid-template-columns: minmax(0, 1fr); } }

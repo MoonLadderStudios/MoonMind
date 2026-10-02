@@ -306,3 +306,11 @@ describe('isRemediationEligibleTarget', () => {
     expect(isRemediationEligibleTarget({ state: 'completed' })).toBe(false);
   });
 });
+
+
+describe('MoonLadderStudios/MoonMind#4636 remediation authored selection', () => {
+  it.each([{}, { modelTier: 2 }, { model: null, effort: null }, { modelTier: 2, effort: 'max', tierFallback: 'strict' }])('preserves raw selection %j without diagnostic companions', (selection) => {
+    const fields = buildRemediationRuntimeRequestFields({ targetRuntime: 'codex_cli', profileId: 'profile', resolvedModel: 'old-model', effort: 'old-effort', inputParameters: { workflow: { runtime: selection } } });
+    expect(fields.runtime).toEqual({ mode: 'codex_cli', profileId: 'profile', ...selection });
+  });
+});

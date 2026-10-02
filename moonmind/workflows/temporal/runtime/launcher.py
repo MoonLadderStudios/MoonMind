@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
@@ -1914,7 +1915,7 @@ class ManagedRuntimeLauncher:
         if strategy is None:
             from moonmind.workflows.temporal.runtime.strategies import get_strategy
             strategy = get_strategy(profile.runtime_id)
-            
+
         if strategy is not None:
             return strategy.build_command(profile, request)
 
@@ -1994,6 +1995,17 @@ class ManagedRuntimeLauncher:
         if not isinstance(parameters, dict):
             parameters = {}
             request.parameters = parameters
+        # The accepted authored runtime is separate from admission diagnostics.
+        authored_runtime = parameters.get("runtime")
+        if not isinstance(authored_runtime, Mapping):
+            authored_workflow = parameters.get("workflow") or parameters.get("task")
+            authored_runtime = (
+                authored_workflow.get("runtime")
+                if isinstance(authored_workflow, Mapping)
+                else None
+            )
+        if not isinstance(authored_runtime, Mapping):
+            authored_runtime = None
         requested_tier = parameters.get("modelTier")
         requested_model = parameters.get("requestedModel")
         if requested_model is None and requested_tier is None:
@@ -2013,6 +2025,17 @@ class ManagedRuntimeLauncher:
         resolved = resolve_model_effort(
             runtime_id=profile.runtime_id,
             profile=profile,
+            authored_runtime=(
+                authored_runtime
+                if authored_runtime is not None
+                else (
+                    {"model": parameters["model"], "effort": parameters["effort"]}
+                    if requested_tier is None
+                    and "model" in parameters
+                    and "effort" in parameters
+                    else None
+                )
+            ),
             requested_model_tier=requested_tier,
             requested_model=requested_model,
             requested_effort=requested_effort,
@@ -2035,13 +2058,43 @@ class ManagedRuntimeLauncher:
                 "resolved tier parameters must not contain raw credentials"
             ) from exc
 
-        # Tier values are defaults. Explicit step parameters retain authority.
+        # Re-resolution drops only defaults injected by the previous selection.
+        # Explicit parameters remain independent of the Tier/Custom interaction.
+        previous_metadata = parameters.get("metadata")
+        previous_moonmind = (
+            previous_metadata.get("moonmind")
+            if isinstance(previous_metadata, Mapping)
+            else None
+        )
+        previous_resolution = (
+            previous_moonmind.get("modelEffortResolution")
+            if isinstance(previous_moonmind, Mapping)
+            else None
+        )
+        previous_defaults = (
+            previous_resolution.get("tierParameterDefaults")
+            if isinstance(previous_resolution, Mapping)
+            else None
+        )
+        explicit_parameters = (
+            authored_runtime.get("parameters", {})
+            if isinstance(authored_runtime, Mapping)
+            else {}
+        )
+        if not isinstance(explicit_parameters, Mapping):
+            explicit_parameters = {}
+        if isinstance(previous_defaults, Mapping):
+            for key, value in previous_defaults.items():
+                if key not in explicit_parameters and parameters.get(key) == value:
+                    parameters.pop(key, None)
+        parameters.update(explicit_parameters)
+        applied_tier_defaults = {}
         for key, value in resolved.tier_parameters.items():
-            parameters.setdefault(key, value)
-        if resolved.model is not None:
-            parameters["model"] = resolved.model
-        if resolved.effort is not None:
-            parameters["effort"] = resolved.effort
+            if key not in parameters:
+                parameters[key] = deepcopy(value)
+                applied_tier_defaults[key] = deepcopy(value)
+        parameters["model"] = resolved.model
+        parameters["effort"] = resolved.effort
 
         application_status = (
             strategy.effort_application_status(resolved.effort)
@@ -2058,12 +2111,16 @@ class ManagedRuntimeLauncher:
             moonmind_metadata = {}
             metadata["moonmind"] = moonmind_metadata
         resolution_metadata = resolved.as_metadata()
+        if applied_tier_defaults:
+            resolution_metadata["tierParameterDefaults"] = applied_tier_defaults
         moonmind_metadata["modelEffortResolution"] = resolution_metadata
         if resolved.effective_model_tier is not None:
             parameters["modelTierResolution"] = {
                 **resolution_metadata,
                 "providerProfileId": profile.profile_id,
             }
+        else:
+            parameters.pop("modelTierResolution", None)
 
     @staticmethod
     def _assert_profile_launch_ready(
@@ -2314,7 +2371,7 @@ class ManagedRuntimeLauncher:
         # Phase 4 Materialization
         from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer
         from moonmind.workflows.adapters.secret_boundary import SecretResolverBoundary
-        
+
         # Resolve secrets async up-front so the async materializer can access them.
         from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
             assert_managed_secret_refs_active_for_launch,

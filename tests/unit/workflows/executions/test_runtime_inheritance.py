@@ -444,6 +444,11 @@ async def test_github_3453_child_inherits_complete_omnigent_selection() -> None:
         agent_profile_snapshot=expected_agent_profile,
         omnigent=selection,
     )
+    # #4636 distinguishes the authored pair from resolved default diagnostics.
+    parent.parameters["workflow"]["runtime"].update(
+        model="opencode/muse-spark-1.2-contributor-free",
+        effort="xhigh",
+    )
     service = _FakeService({"mm:parent": parent})
     principal = ExecutionPrincipal(
         user_id="user-1",

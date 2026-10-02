@@ -11,6 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
+from moonmind.runtime_intent import (
+    is_custom_selection,
+    merge_runtime_selection,
+    model_selection_fields,
+)
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 # Inheritance directive values accepted on the wire.
@@ -78,6 +83,7 @@ class InheritedRuntime:
     agent_profile: Optional[dict[str, Any]] = None
     omnigent: Optional[dict[str, Any]] = None
     source_workflow_id: Optional[str] = None
+    authored_selection: Optional[dict[str, Any]] = None
 
 
 def _coerce_str(value: Any) -> Optional[str]:
@@ -182,7 +188,11 @@ def has_explicit_child_runtime(
     if _coerce_str(payload.get("targetRuntime")):
         return True
 
-    runtime_node = task_payload.get("runtime") if isinstance(task_payload, Mapping) else None
+    runtime_node = (
+        task_payload.get("runtime") if isinstance(task_payload, Mapping) else None
+    )
+    if is_custom_selection(runtime_node):
+        return True
     if isinstance(runtime_node, Mapping):
         for key in (
             "mode",
@@ -308,6 +318,11 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
         agent_profile=agent_profile,
         omnigent=omnigent,
         source_workflow_id=workflow_id,
+        authored_selection=(
+            model_selection_fields(workflow_runtime)
+            if "runtime" in workflow_block
+            else None
+        ),
     )
 
 
@@ -489,9 +504,18 @@ def apply_inherited_runtime_to_payload(
     if inherited.target_runtime and not explicit_target_runtime:
         payload["targetRuntime"] = inherited.target_runtime
         runtime_block["mode"] = inherited.target_runtime
-    if inherited.model and not _coerce_str(runtime_block.get("model")):
+    if inherited.authored_selection is not None:
+        runtime_block = merge_runtime_selection(
+            inherited.authored_selection, runtime_block
+        )
+    selection_replaced = (
+        inherited.authored_selection is not None
+        or "modelTier" in runtime_block
+        or is_custom_selection(runtime_block)
+    )
+    if inherited.model and "model" not in runtime_block and not selection_replaced:
         runtime_block["model"] = inherited.model
-    if inherited.effort and not _coerce_str(runtime_block.get("effort")):
+    if inherited.effort and "effort" not in runtime_block and not selection_replaced:
         runtime_block["effort"] = inherited.effort
     if (
         inherited.execution_profile_ref

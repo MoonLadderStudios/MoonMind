@@ -600,8 +600,66 @@ async def test_send_message_forwards_clean_operator_message_with_scan(monkeypatc
     assert workflow_instance._recovery_requested is False
 
 
+def _assert_runtime_signal_consumed_by_child(signal, *, preserve_presence):
+    from copy import deepcopy
+
+    from moonmind.runtime_intent import model_selection_fields
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+
+    attempts = [{"model": "previous-attempt", "effort": "low"}]
+    request = AgentExecutionRequest(
+        agent_kind="managed",
+        agent_id="codex_cli",
+        correlation_id="forwarding",
+        idempotency_key="forwarding",
+        parameters={
+            "model": "previous-model",
+            "effort": "low",
+            "runtime": {"model": "previous-model", "effort": "low"},
+            "workflow": {
+                "runtime": {
+                    "mode": "codex_cli",
+                    "model": "previous-model",
+                    "effort": "low",
+                }
+            },
+            "attempts": deepcopy(attempts),
+        },
+    )
+    child = MoonMindAgentRun()
+    child._workflow_patch_enabled = lambda name: (
+        preserve_presence
+        if name == "agent-run-model-selection-presence-4636-v1"
+        else True
+    )
+    child.update_runtime_selection(signal)
+    assert child.runtime_selection_updated_event.is_set()
+    child._apply_runtime_selection_update(
+        request, child._pending_runtime_selection_update, refresh_derived_selection=True
+    )
+    child._synchronize_runtime_selection_authority(request)
+    assert request.agent_id == signal["targetRuntime"]
+    assert request.execution_profile_ref == (signal["executionProfileRef"] or None)
+    assert request.parameters.get("model") == signal.get("model")
+    assert request.parameters.get("effort") == signal.get("effort")
+    if preserve_presence:
+        assert model_selection_fields(
+            request.parameters["runtime"]
+        ) == model_selection_fields(signal["runtime"])
+    assert request.parameters["attempts"] == attempts
+
+
 @pytest.mark.asyncio
-async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(monkeypatch):
+@pytest.mark.parametrize("preserve_presence", [True, False], ids=["current", "legacy"])
+async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
+    monkeypatch, preserve_presence
+):
+    expected_runtime = {
+        "mode": "claude_code",
+        "model": "claude-opus-4-7",
+        "profileId": "claude_anthropic",
+    }
     workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "claude_code"
@@ -612,7 +670,15 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
         "get_external_workflow_handle",
         lambda workflow_id: mock_handle,
     )
-    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda name: (
+            preserve_presence
+            if name == "run-model-selection-presence-4636-v1"
+            else True
+        ),
+    )
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
 
@@ -635,6 +701,7 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
     mock_handle.signal.assert_awaited_once_with(
         "update_runtime_selection",
         {
+            **({"runtime": expected_runtime} if preserve_presence else {}),
             "model": "claude-opus-4-7",
             "executionProfileRef": "claude_anthropic",
             "targetRuntime": "claude_code",
@@ -652,12 +719,23 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
         },
     )
     assert result["forwardedRuntimeSelectionUpdate"] is True
+    _assert_runtime_signal_consumed_by_child(
+        mock_handle.signal.await_args.args[1], preserve_presence=preserve_presence
+    )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preserve_presence", [True, False], ids=["current", "legacy"])
 async def test_update_inputs_forwards_runtime_selection_from_canonical_workflow_patch(
     monkeypatch,
+    preserve_presence,
 ):
+    expected_runtime = {
+        "mode": "claude_code",
+        "model": "claude-opus-4-7",
+        "profileId": "claude_anthropic",
+        "effort": "high",
+    }
     workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "claude_code"
@@ -668,7 +746,15 @@ async def test_update_inputs_forwards_runtime_selection_from_canonical_workflow_
         "get_external_workflow_handle",
         lambda workflow_id: mock_handle,
     )
-    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda name: (
+            preserve_presence
+            if name == "run-model-selection-presence-4636-v1"
+            else True
+        ),
+    )
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
 
@@ -690,6 +776,7 @@ async def test_update_inputs_forwards_runtime_selection_from_canonical_workflow_
     mock_handle.signal.assert_awaited_once_with(
         "update_runtime_selection",
         {
+            **({"runtime": expected_runtime} if preserve_presence else {}),
             "model": "claude-opus-4-7",
             "executionProfileRef": "claude_anthropic",
             "effort": "high",
@@ -707,12 +794,18 @@ async def test_update_inputs_forwards_runtime_selection_from_canonical_workflow_
         },
     )
     assert result["forwardedRuntimeSelectionUpdate"] is True
+    _assert_runtime_signal_consumed_by_child(
+        mock_handle.signal.await_args.args[1], preserve_presence=preserve_presence
+    )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preserve_presence", [True, False], ids=["current", "legacy"])
 async def test_update_inputs_forwards_runtime_profile_clear_to_active_managed_child(
     monkeypatch,
+    preserve_presence,
 ):
+    expected_runtime = {"mode": "claude_code", "profileId": ""}
     workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "claude_code"
@@ -723,7 +816,15 @@ async def test_update_inputs_forwards_runtime_profile_clear_to_active_managed_ch
         "get_external_workflow_handle",
         lambda workflow_id: mock_handle,
     )
-    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda name: (
+            preserve_presence
+            if name == "run-model-selection-presence-4636-v1"
+            else True
+        ),
+    )
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
 
@@ -743,6 +844,7 @@ async def test_update_inputs_forwards_runtime_profile_clear_to_active_managed_ch
     mock_handle.signal.assert_awaited_once_with(
         "update_runtime_selection",
         {
+            **({"runtime": expected_runtime} if preserve_presence else {}),
             "targetRuntime": "claude_code",
             "executionProfileRef": "",
             "parametersPatch": {
@@ -756,6 +858,9 @@ async def test_update_inputs_forwards_runtime_profile_clear_to_active_managed_ch
         },
     )
     assert result["forwardedRuntimeSelectionUpdate"] is True
+    _assert_runtime_signal_consumed_by_child(
+        mock_handle.signal.await_args.args[1], preserve_presence=preserve_presence
+    )
 
 
 @pytest.mark.asyncio
@@ -815,6 +920,7 @@ async def test_update_inputs_refreshes_parent_runtime_visibility(monkeypatch):
         "update_runtime_selection",
         {
             "targetRuntime": "codex_cli",
+            "runtime": {"mode": "codex_cli"},
             "parametersPatch": {
                 "workflow": {
                     "runtime": {

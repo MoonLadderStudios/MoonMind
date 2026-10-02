@@ -1,3 +1,4 @@
+import { readModelSelection } from "./modelSelection";
 import { z } from 'zod';
 
 /**
@@ -375,6 +376,7 @@ function coalesceString(...values: unknown[]): string {
 }
 
 export type RemediationRuntimeInput = {
+  inputParameters?: Record<string, unknown> | null | undefined;
   targetRuntime?: string | null | undefined;
   profileId?: string | null | undefined;
   model?: string | null | undefined;
@@ -390,10 +392,16 @@ export function buildRemediationRuntimeRequestFields(
   const profileId = coalesceString(input?.profileId);
   const model = coalesceString(input?.model, input?.resolvedModel, input?.requestedModel);
   const effort = coalesceString(input?.effort);
-  const runtime: Record<string, string> = {};
+  const parameters = input?.inputParameters;
+  const workflow = parameters?.workflow ?? parameters?.task;
+  const authoredRuntime = workflow && typeof workflow === 'object' && 'runtime' in workflow
+    ? (workflow as Record<string, unknown>).runtime
+    : parameters?.runtime;
+  const hasAuthoredRuntime = authoredRuntime != null && typeof authoredRuntime === 'object';
+  const runtime: Record<string, unknown> = hasAuthoredRuntime ? readModelSelection(authoredRuntime) : {};
   if (mode) runtime.mode = mode;
-  if (model) runtime.model = model;
-  if (effort) runtime.effort = effort;
+  if (!hasAuthoredRuntime && model) runtime.model = model;
+  if (!hasAuthoredRuntime && effort) runtime.effort = effort;
   if (profileId) runtime.profileId = profileId;
 
   return {

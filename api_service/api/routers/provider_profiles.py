@@ -688,6 +688,8 @@ class ProviderProfileCreationPresetResponse(BaseModel):
 
 
 class ProviderProfileTierPreviewStep(BaseModel):
+    model: str | None = None
+    effort: str | None = None
     step_id: str = Field(..., alias="id")
     model_tier: Optional[int] = Field(default=None, ge=1, alias="modelTier")
     tier_fallback: Optional[str] = Field(
@@ -710,6 +712,8 @@ class ProviderProfileTierPreviewItem(BaseModel):
     model: Optional[str] = None
     effort: Optional[str] = None
     fallback_reason: Optional[str] = Field(default=None, alias="fallbackReason")
+    model_source: Optional[str] = Field(default=None, alias="modelSource")
+    effort_source: Optional[str] = Field(default=None, alias="effortSource")
 
     model_config = {"populate_by_name": True}
 
@@ -2286,6 +2290,7 @@ async def preview_model_tiers(
             resolved = resolve_model_effort(
                 runtime_id=profile.runtime_id,
                 profile=profile,
+                authored_runtime=step.model_dump(by_alias=True, exclude_unset=True),
                 requested_model_tier=step.model_tier,
                 tier_fallback=step.tier_fallback or "clamp",
                 require_launch_ready=False,
@@ -2310,6 +2315,8 @@ async def preview_model_tiers(
                 "model": resolved.model,
                 "effort": resolved.effort,
                 "fallbackReason": resolved.fallback_reason,
+                "modelSource": resolved.model_source,
+                "effortSource": resolved.effort_source,
             }
         )
 

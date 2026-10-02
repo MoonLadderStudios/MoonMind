@@ -834,10 +834,31 @@ class OmnigentExecutionPlanningService:
         explicit_effort = (
             omnigent.get("effort") if isinstance(omnigent, Mapping) else None
         )
+        # The accepted effective step runtime includes omission. Prior resolved
+        # strings and the workflow's parent selection cannot replace that intent.
+        authored_runtime = request.parameters.get("runtime")
+        if not isinstance(authored_runtime, Mapping) or (
+            authored_runtime
+            and not any(
+                key in authored_runtime
+                for key in ("modelTier", "model", "effort", "parameters")
+            )
+        ):
+            authored_workflow = request.parameters.get(
+                "workflow"
+            ) or request.parameters.get("task")
+            authored_runtime = (
+                authored_workflow.get("runtime")
+                if isinstance(authored_workflow, Mapping)
+                else None
+            )
         try:
             resolved = resolve_model_effort(
                 runtime_id=provider.runtime_id,
                 profile=provider,
+                authored_runtime=authored_runtime,
+                requested_model_tier=request.parameters.get("modelTier"),
+                tier_fallback=request.parameters.get("tierFallback", "clamp"),
                 requested_model=explicit_model or None,
                 requested_effort=(
                     str(explicit_effort).strip()

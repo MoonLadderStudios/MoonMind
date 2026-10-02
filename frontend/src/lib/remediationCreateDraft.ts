@@ -1,3 +1,4 @@
+import { readModelSelection } from "./modelSelection";
 import {
   buildRemediationRuntimeRequestFields,
   DEFAULT_REMEDIATION_ACTION_POLICY,
@@ -42,8 +43,8 @@ export type RemediationCreateDraft = {
   launchPolicyRef?: string;
   runtime?: {
     mode?: string;
-    model?: string;
-    effort?: string;
+    model?: string | null;
+    effort?: string | null;
     modelTier?: number;
     tierFallback?: 'clamp' | 'strict';
     profileId?: string;
@@ -309,8 +310,7 @@ export function buildRemediationCreateDraft(
     ...(launchPolicyRef ? { launchPolicyRef } : {}),
     runtime: {
       ...(cleanText(runtime.mode) ? { mode: cleanText(runtime.mode) } : {}),
-      ...(cleanText(runtime.model) ? { model: cleanText(runtime.model) } : {}),
-      ...(cleanText(runtime.effort) ? { effort: cleanText(runtime.effort) } : {}),
+      ...readModelSelection(runtime),
       ...(cleanText(runtime.profileId) ? { profileId: cleanText(runtime.profileId) } : {}),
     },
     ...(selectedAgentProfileId && selectedProviderProfileRef

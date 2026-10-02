@@ -540,3 +540,13 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     });
   });
 });
+
+
+describe('MoonLadderStudios/MoonMind#4636 nullable authored reconstruction', () => {
+  it.each(['workflow', 'task'])('retains %s raw omission/null/mixed intent', (container) => {
+    for (const selection of [{}, { modelTier: 2 }, { model: null, effort: null }, { modelTier: 2, effort: 'max', tierFallback: 'strict' }]) {
+      const draft = buildTemporalSubmissionDraftFromExecution({ workflowId: 'issue-4636', workflowType: 'MoonMind.UserWorkflow', inputParameters: { model: 'old-model', effort: 'old-effort', [container]: { instructions: 'Work', runtime: selection } } });
+      expect(draft.modelSelection).toEqual(selection);
+    }
+  });
+});

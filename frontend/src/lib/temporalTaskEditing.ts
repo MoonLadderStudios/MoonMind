@@ -1,3 +1,4 @@
+import { readModelSelection, type ModelSelection } from "./modelSelection";
 export type TaskSubmitPageMode = 'create' | 'edit' | 'rerun';
 const PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = 'pr_with_merge_automation';
 
@@ -113,6 +114,7 @@ export type TemporalSubmissionDraft = {
   } | null;
   omnigentExecutionTargetRef: string | null;
   omnigentLaunchPolicyRef: string | null;
+  modelSelection: ModelSelection;
   model: string | null;
   effort: string | null;
   modelTier: number | null;
@@ -602,8 +604,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
             ...(stringValue(runtime.mode, runtime.targetRuntime)
               ? { mode: stringValue(runtime.mode, runtime.targetRuntime) }
               : {}),
-            ...(stringValue(runtime.model) ? { model: stringValue(runtime.model) } : {}),
-            ...(stringValue(runtime.effort) ? { effort: stringValue(runtime.effort) } : {}),
+            ...readModelSelection(runtime),
             ...(positiveIntegerValue(runtime.modelTier) != null
               ? { modelTier: positiveIntegerValue(runtime.modelTier) }
               : {}),
@@ -760,7 +761,7 @@ function normalizeAppliedTemplates(
 }
 
 function workflowRecord(source: Record<string, unknown>): Record<string, unknown> {
-  return objectValue(source.workflow);
+  return objectValue(source.workflow ?? source.task);
 }
 
 function assertSnapshotAttachmentBindings(
@@ -806,7 +807,7 @@ function assertSnapshotAttachmentBindings(
 function snapshotDraftTask(
   snapshotDraft: Record<string, unknown>,
 ): Record<string, unknown> {
-  const nestedWorkflow = objectValue(snapshotDraft.workflow);
+  const nestedWorkflow = workflowRecord(snapshotDraft);
   if (Object.keys(nestedWorkflow).length > 0) {
     return nestedWorkflow;
   }
@@ -855,16 +856,16 @@ function snapshotDraftTask(
     };
   }
   const runtime = stringValue(snapshotDraft.runtime);
+  const selection = readModelSelection(snapshotDraft);
   const model = stringValue(snapshotDraft.model);
   const effort = stringValue(snapshotDraft.effort);
   const modelTier = positiveIntegerValue(snapshotDraft.modelTier);
   const tierFallback = tierFallbackValue(snapshotDraft.tierFallback);
   const providerProfile = stringValue(snapshotDraft.providerProfile);
-  if (runtime || model || effort || providerProfile || modelTier != null || tierFallback) {
+  if (runtime || Object.keys(selection).length > 0 || model || effort || providerProfile || modelTier != null || tierFallback) {
     task.runtime = {
       ...(runtime ? { mode: runtime } : {}),
-      ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
+      ...selection,
       ...(modelTier != null ? { modelTier } : {}),
       ...(tierFallback ? { tierFallback } : {}),
       ...(providerProfile ? { profileId: providerProfile } : {}),
@@ -1041,6 +1042,9 @@ export function buildTemporalSubmissionDraftFromExecution(
       snapshotDraft.omnigentLaunchPolicyRef,
       omnigent.launchPolicyRef,
       artifactOmnigent.launchPolicyRef,
+    ),
+    modelSelection: readModelSelection(
+      Object.keys(artifactTask).length > 0 ? artifactRuntime : Object.keys(task).length > 0 ? runtime : snapshotDraft,
     ),
     model: nullableStringValue(
       snapshotDraft.model,

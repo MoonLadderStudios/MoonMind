@@ -2240,6 +2240,8 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
                 "model": "gpt-5-mini",
                 "effort": "low",
                 "fallbackReason": None,
+                "modelSource": "requested_tier",
+                "effortSource": "requested_tier",
             },
             {
                 "stepId": "docs",
@@ -2248,6 +2250,8 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
                 "model": "gpt-5.5",
                 "effort": "xhigh",
                 "fallbackReason": "requested_tier_above_configured_range",
+                "modelSource": "requested_tier",
+                "effortSource": "requested_tier",
             },
         ],
     }
