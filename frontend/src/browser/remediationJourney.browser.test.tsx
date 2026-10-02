@@ -541,9 +541,9 @@ describe('routed remediation operator journey', () => {
     const discard = screen.getByRole('button', { name: 'Discard draft reference' });
     discard.focus();
     expect(document.activeElement).toBe(discard);
-    // Target the native key input so the provider restores frame focus if it
-    // changes between the DOM focus assertion and the keyboard command.
-    await userEvent.type(discard, '{Enter}');
+    // Native pointer activation targets the button's frame. DOM focus alone
+    // does not guarantee that Firefox routes page-level keyboard input there.
+    await userEvent.click(discard);
     await waitFor(() => expect(window.location.search).toBe(''));
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
   }, 20_000);
