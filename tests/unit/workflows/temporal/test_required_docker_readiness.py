@@ -147,9 +147,11 @@ async def test_plan_generate_replays_without_planner_docker_authority(
             assert node["tool"]["type"] == "agent_runtime"
             planned_runtime = node["inputs"]["runtime"]
             assert planned_runtime["mode"] == runtime
-            assert planned_runtime["model"] == parameters["model"]
-            assert planned_runtime["effort"] == parameters["effort"]
             assert planned_runtime["profileId"] == parameters["profileId"]
+            # The authored runtime omits model selection, so the flat resolved
+            # model and effort are admission diagnostics, not plan authority.
+            assert "model" not in planned_runtime
+            assert "effort" not in planned_runtime
     finally:
         await engine.dispose()
 
