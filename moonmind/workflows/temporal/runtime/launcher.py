@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
@@ -2090,8 +2091,8 @@ class ManagedRuntimeLauncher:
         applied_tier_defaults = {}
         for key, value in resolved.tier_parameters.items():
             if key not in parameters:
-                parameters[key] = value
-                applied_tier_defaults[key] = value
+                parameters[key] = deepcopy(value)
+                applied_tier_defaults[key] = deepcopy(value)
         parameters["model"] = resolved.model
         parameters["effort"] = resolved.effort
 

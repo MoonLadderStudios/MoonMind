@@ -20991,7 +20991,7 @@ def test_4636_input_artifact_cannot_introduce_new_strict_intent(
         "applied": "immediate",
         "message": "ok",
     }
-    test_client.app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
     artifact_service = SimpleNamespace(
         read=AsyncMock(
             return_value=(
@@ -21065,7 +21065,7 @@ def test_4636_saved_artifact_provenance_uses_current_authored_selection(
 ) -> None:
     test_client, service, _user = client
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    test_client.app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
     record = _build_execution_record(has_workflow_input_snapshot=False)
     record.parameters = {"workflow": {"instructions": "Work", "runtime": saved_inline}}
     record.input_ref = "art-saved-4636"
@@ -21117,3 +21117,59 @@ def test_4636_saved_artifact_provenance_uses_current_authored_selection(
         service.update_execution.assert_awaited_once()
     else:
         service.update_execution.assert_not_awaited()
+
+
+def test_4636_execution_update_replaces_unavailable_input_artifact(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {"workflow": {"instructions": "Saved work"}}
+    record.input_ref = "art-old-missing"
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {
+        "workflow_id": record.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+
+    async def read_artifact(*, artifact_id: str, **kwargs):
+        if artifact_id == "art-old-missing":
+            raise FileNotFoundError("old artifact is unavailable")
+        assert artifact_id == "art-new-replacement"
+        return (
+            SimpleNamespace(),
+            json.dumps(
+                {
+                    "workflow": {
+                        "instructions": "Replacement",
+                        "runtime": {"modelTier": 1},
+                    }
+                }
+            ).encode(),
+        )
+
+    artifact_service = SimpleNamespace(read=AsyncMock(side_effect=read_artifact))
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    response = test_client.post(
+        f"/api/executions/{record.workflow_id}/update",
+        json={"updateName": "UpdateInputs", "inputArtifactRef": "art-new-replacement"},
+    )
+    assert response.status_code == 200, response.json()
+    service.update_execution.assert_awaited_once()
+    assert (
+        service.update_execution.await_args.kwargs["input_artifact_ref"]
+        == "art-new-replacement"
+    )
+    artifact_service.read.assert_awaited_once()

@@ -741,3 +741,85 @@ async def test_4636_save_client_preset_cannot_introduce_strict(tmp_path):
             assert error.value.status_code == 422
             assert "new strict" in error.value.detail["message"]
             assert (await session.execute(select(Preset))).scalars().all() == []
+
+
+async def test_4636_schedule_replaces_missing_artifact_and_reloads_new_launch_intent(
+    tmp_path,
+):
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    store = LocalTemporalArtifactStore(tmp_path / "replacement-artifacts")
+    adapter = temporal_adapter()
+    replacement = {
+        "workflow": {
+            "instructions": "Replacement workflow",
+            "runtime": {"mode": "codex_cli", "modelTier": 1},
+            "steps": [
+                {
+                    "id": "work",
+                    "type": "skill",
+                    "instructions": "Work",
+                    "skill": {"id": "auto"},
+                }
+            ],
+        }
+    }
+    async with template_db(tmp_path) as sessions:
+        async with sessions() as session:
+            session.add(provider_profile())
+            artifacts = TemporalArtifactService(
+                TemporalArtifactRepository(session), store=store
+            )
+            artifact, _upload = await artifacts.create(
+                principal="system", content_type="application/json"
+            )
+            await artifacts.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system",
+                payload=json.dumps(replacement).encode(),
+                content_type="application/json",
+            )
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=adapter, artifact_service=artifacts
+            )
+            definition = await create_schedule(service, schedule_target({}))
+            definition.target = {
+                **definition.target,
+                "inputArtifactRef": "art-missing-old",
+            }
+            definition_id = definition.id
+            await session.commit()
+        async with sessions() as session:
+            definition = await session.get(RecurringWorkflowDefinition, definition_id)
+            artifacts = TemporalArtifactService(
+                TemporalArtifactRepository(session), store=store
+            )
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=adapter, artifact_service=artifacts
+            )
+            await service.update_definition(
+                definition,
+                target={**definition.target, "inputArtifactRef": artifact.artifact_id},
+            )
+            await session.commit()
+        async with sessions() as session:
+            definition = await session.get(RecurringWorkflowDefinition, definition_id)
+            assert definition.target["inputArtifactRef"] == artifact.artifact_id
+            artifacts = TemporalArtifactService(
+                TemporalArtifactRepository(session), store=store
+            )
+            _artifact, body = await artifacts.read(
+                artifact_id=definition.target["inputArtifactRef"],
+                principal="system",
+                allow_restricted_raw=True,
+            )
+            selected = await session.get(ManagedAgentProviderProfile, "issue-4636")
+            authored, request, command = launch_from_input(
+                json.loads(body)["workflow"], selected
+            )
+            assert model_selection_fields(authored) == {"modelTier": 1}
+            assert request.parameters["model"] == "tier-one"
+            assert command[command.index("-m") + 1] == "tier-one"
