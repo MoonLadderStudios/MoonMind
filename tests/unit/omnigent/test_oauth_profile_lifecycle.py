@@ -6014,6 +6014,64 @@ async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("primary_failure", ["raised", "returned", "none"])
+async def test_runtime_cleanup_reporting_preserves_primary_outcome(
+    monkeypatch, primary_failure
+):
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+    from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
+    from tests.unit.omnigent.test_generic_plane_n_way_concurrency import _zen_plan
+
+    class CleanupReportingFailureStore(InMemoryRuntimeBindingStore):
+        async def mark_cleanup_complete(self, *_args, **_kwargs):
+            raise HarnessPlatformError(
+                "runtime binding revision or fencing generation conflict",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+
+    store = CleanupReportingFailureStore()
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.DbRuntimeBindingStore",
+        lambda _factory: store,
+    )
+    monkeypatch.setattr(
+        OmnigentProfileBoundExecutionCoordinator,
+        "_require_recorded_plan_request",
+        lambda _self, _request: _zen_plan("workflow-1"),
+    )
+    original = _injected_launch_error("original_provider_error")
+    kwargs = {
+        "fail_at": "resource_harvest" if primary_failure == "raised" else "none",
+        "code": "original_provider_error",
+        "injected_error": original,
+    }
+    if primary_failure == "returned":
+        kwargs["injected_result"] = AgentRunResult(
+            summary="original provider result",
+            failureClass="integration_error",
+            providerErrorCode="original_provider_error",
+            diagnosticsRef="artifact://original",
+        )
+    events, actions, _calls = await _run_coordinator_failure_case(**kwargs)
+    cleanup = [data for stage, data in events if stage == "runtime_binding_cleanup"]
+    assert cleanup[-1]["status"] == "waiting"
+    assert cleanup[-1]["code"] == "OMNIGENT_RUNTIME_BINDING_CONFLICT"
+    assert cleanup[-1]["metadata"]["janitorRequired"] is True
+    terminal = [data for stage, data in events if stage == "terminal"][-1]
+    assert terminal["status"] == (
+        "completed" if primary_failure == "none" else "failed"
+    )
+    assert "provider_released" in actions
+    if primary_failure != "none":
+        assert any(
+            data.get("code") == "original_provider_error" for _stage, data in events
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("release_failures", "release_status", "janitor_required"),
     [(2, "completed", False), (3, "failed", True)],

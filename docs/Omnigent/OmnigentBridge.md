@@ -741,6 +741,7 @@ Minimum classes include:
 
 - `session.created`,
 - `session.started`,
+- `session.codex_approval_mode` (native Codex configuration observation),
 - `session.item.*`,
 - `session.input.*`,
 - `response.delta`,
@@ -755,6 +756,11 @@ Minimum classes include:
 - `host.capabilities`.
 
 Unsupported event types are captured in diagnostics. Execution-critical drift fails closed; optional resource drift may degrade explicitly.
+
+Credential redaction preserves protocol event names. Authentication-path
+redaction applies to path-shaped values, including relative and Windows paths;
+the `.codex` fragment in `session.codex_approval_mode` is not a credential path.
+Recognizing this observation grants no approval or mutation authority.
 
 ---
 

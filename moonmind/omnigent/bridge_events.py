@@ -88,6 +88,7 @@ _RECOGNIZED_EXACT_EVENT_TYPES = {
     "session.agent_changed",
     "session.changed_files.invalidated",
     "session.collaboration_mode",
+    "session.codex_approval_mode",
     "session.created",
     "session.final_snapshot",
     "session.heartbeat",

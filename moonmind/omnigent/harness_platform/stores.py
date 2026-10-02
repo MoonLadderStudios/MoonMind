@@ -364,6 +364,7 @@ class InMemoryRuntimeBindingStore:
         *,
         expected_revision: int,
         expected_fencing_generation: int,
+        idempotent_state: str | None = None,
     ) -> RuntimeBindingStoreState:
         current = self._state.get(runtime_binding_ref)
         if current is None or (
@@ -379,8 +380,12 @@ class InMemoryRuntimeBindingStore:
                 f"runtime binding {runtime_binding_ref} is stale or unavailable",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
+        revision_matches = current.revision == expected_revision or (
+            current.state == idempotent_state
+            and 1 <= expected_revision <= current.revision
+        )
         if (
-            current.revision != expected_revision
+            not revision_matches
             or current.fencing_generation != expected_fencing_generation
         ):
             raise HarnessPlatformError(
@@ -459,7 +464,10 @@ class InMemoryRuntimeBindingStore:
             runtime_binding_ref,
             expected_revision=expected_revision,
             expected_fencing_generation=expected_fencing_generation,
+            idempotent_state="cleanup_complete",
         )
+        if current.state == "cleanup_complete":
+            return current.binding
         return self._advance(current, current.binding, "cleanup_complete")
 
     async def update_with_host(
@@ -1016,6 +1024,7 @@ class DbRuntimeBindingStore:
         update: Any,
         state: str,
         advance_fencing_generation: bool = False,
+        idempotent: bool = False,
     ) -> OmnigentRuntimeBinding:
         from api_service.db.models import OmnigentRuntimeBindingRecord
         from sqlalchemy import select
@@ -1034,8 +1043,12 @@ class DbRuntimeBindingStore:
                     f"runtime binding {runtime_binding_ref} is stale or unavailable",
                     code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
                 )
+            already_applied = idempotent and record.state == state
+            revision_matches = int(record.revision) == expected_revision or (
+                already_applied and 1 <= expected_revision <= int(record.revision)
+            )
             if (
-                int(record.revision) != expected_revision
+                not revision_matches
                 or int(record.fencing_generation) != expected_fencing_generation
             ):
                 raise HarnessPlatformError(
@@ -1043,6 +1056,8 @@ class DbRuntimeBindingStore:
                     code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
                 )
             current = self._binding_from_record(record)
+            if already_applied:
+                return current
             updated = update(current)
             record.runtime_binding_ref = updated.runtimeBindingRef
             record.latest_snapshot_ref = updated.runtimeBindingRef
@@ -1150,6 +1165,7 @@ class DbRuntimeBindingStore:
             expected_fencing_generation=expected_fencing_generation,
             update=lambda current: current,
             state="cleanup_complete",
+            idempotent=True,
         )
 
     async def update_with_host(
