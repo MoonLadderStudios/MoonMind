@@ -421,6 +421,17 @@ Retries reuse or replace the same host only through current fencing authority. A
 
 ## 16. Exact-host readiness
 
+The on-demand compatibility launcher supplies the provider's trusted
+credential-materializer reference to the shared entrypoint alongside the
+runtime-pack choice. Codex and Claude use this same startup authority;
+on-demand startup does not depend on Compose supplying the materializer.
+
+When the bounded projection or workspace preflight retries exhaust, the failure
+retains the probe, exit code, and redacted command output. A bounded read of the
+host's startup logs also preserves the cause when the container has stopped.
+That diagnostic read has a five-second limit, and unavailable diagnostics never
+replace the original preflight failure.
+
 Before session or runner work begins, the exact host must prove:
 
 - configured image ref matches the Host Class
