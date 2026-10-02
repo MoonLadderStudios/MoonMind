@@ -197,13 +197,20 @@ async def test_external_callback_ingress_strips_candidates_before_fallback(
     assert updated.callback_policy["callbackCorrelationKey"] == "request-key"
 
 
+@pytest.mark.parametrize("bound_merge", [False, True])
 async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     monkeypatch: pytest.MonkeyPatch,
+    bound_merge: bool,
 ) -> None:
     run = MoonMindAgentRun()
     routed_calls: list[tuple[str, Any]] = []
 
     _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch: bound_merge or patch != "jules-merge-target-authority-v1",
+    )
 
     async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
         raise asyncio.TimeoutError()
@@ -233,22 +240,33 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
             return payload
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
 
-    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(
+        agent_run_module.workflow, "wait_condition", fake_wait_condition
+    )
     monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
 
     result = await run.run(
         _request(
-            workspaceSpec={"startingBranch": "feature-branch", "targetBranch": "main"},
+            workspaceSpec={
+                "repository": "org/repo",
+                "startingBranch": "feature-branch",
+                "targetBranch": "main",
+            },
             parameters={"publishMode": "branch", "targetBranch": "main"},
         )
     )
 
     assert any(name == "repo.merge_pr" for name, _ in routed_calls)
-    merge_payload = next(payload for name, payload in routed_calls if name == "repo.merge_pr")
-    assert merge_payload == {
+    merge_payload = next(
+        payload for name, payload in routed_calls if name == "repo.merge_pr"
+    )
+    expected = {
         "pr_url": "https://github.com/org/repo/pull/123",
         "target_branch": "main",
     }
+    if bound_merge:
+        expected["expected_repository"] = "org/repo"
+    assert merge_payload == expected
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "branch_publish_failed"
     assert result.metadata["publishOutcome"] == "publish_failed"
@@ -263,6 +281,7 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     assert result.metadata["headBranch"] == "feature-branch"
     assert result.metadata["baseBranch"] == "main"
     assert result.metadata["readinessState"] == "pending"
+
 
 async def test_agent_run_does_not_treat_generic_external_url_as_native_pr(
     monkeypatch: pytest.MonkeyPatch,
@@ -282,6 +301,59 @@ async def test_agent_run_does_not_treat_generic_external_url_as_native_pr(
     assert "providerNativePullRequest" not in result.metadata
     assert "pullRequestUrl" not in result.metadata
     assert result.metadata["externalUrl"] == "https://jules.example.test/tasks/task-123"
+
+
+@pytest.mark.parametrize("old_scheduled_call", [False, True])
+async def test_agent_run_jules_pins_head_and_recovers_old_authority(
+    monkeypatch: pytest.MonkeyPatch, old_scheduled_call: bool,
+) -> None:
+    run = MoonMindAgentRun()
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow, "patched",
+        lambda name: not (old_scheduled_call and name == "jules-merge-target-authority-v1"),
+    )
+    calls = []
+    url = "https://github.com/org/repo/pull/123"
+
+    async def wait(_condition, timeout):
+        raise asyncio.TimeoutError()
+
+    async def execute(name, payload, **kwargs):
+        if name == "integration.resolve_adapter_metadata":
+            return {"agent_id": payload, "execution_style": "polling"}
+        if name == "integration.jules.start":
+            return {"external_id": "session-1", "status": "queued"}
+        if name == "integration.jules.status":
+            return {"normalized_status": "completed"}
+        if name == "integration.jules.fetch_result":
+            return {"summary": "Done", "metadata": {"pullRequestUrl": url}}
+        if name == "repo.merge_pr":
+            calls.append(dict(payload))
+            if not payload.get("expected_repository"):
+                return {"merged": False, "reasonCode": "merge_authority_required"}
+            if not payload.get("expected_head_sha"):
+                return {"merged": False, "reasonCode": "merge_head_resolved", "expectedHeadSha": "a" * 40}
+            return {"merged": True, "mergeSha": "c" * 40}
+        if name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(name)
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait)
+    monkeypatch.setattr(run, "_execute_routed_activity", execute)
+    result = await run.run(_request(
+        workspaceSpec={"repository": "org/repo", "startingBranch": "release"},
+        parameters={"publishMode": "branch"},
+    ))
+
+    assert result.failure_class is None
+    assert result.metadata["publishOutcome"] == "branch_merged"
+    assert len(calls) == (3 if old_scheduled_call else 2)
+    assert calls[-1] == {
+        "pr_url": url, "expected_repository": "org/repo",
+        "target_branch": "release", "expected_head_sha": "a" * 40,
+    }
+
 
 async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     monkeypatch: pytest.MonkeyPatch,

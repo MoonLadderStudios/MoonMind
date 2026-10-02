@@ -5605,6 +5605,11 @@ async def _run_coordinator_failure_case(
         owner_mock.side_effect = fail_from_production_runtime
 
     async def run_cleanup_command(*args, **_kwargs):
+        if args == ("docker", "inspect", "--format", "{{json .Mounts}}", "container-1"):
+            return 0, json.dumps([{
+                "Type": "volume", "Name": "codex_auth_volume",
+                "Destination": "/home/app/.codex", "RW": True,
+            }]), ""
         command = tuple(args[:3])
         if command[:2] == ("docker", "stop"):
             owners.calls.append("host_remove")
@@ -7297,3 +7302,57 @@ async def test_static_attachment_identity_fails_when_container_is_absent(tmp_pat
             container_name=None,
         )
     assert excinfo.value.code == "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_id,provider,harness,volume_env,home", [
+    ("codex_cli", "openai", "codex-native", "CODEX_VOLUME_NAME", "/home/app/.codex"),
+    ("claude_code", "anthropic", "claude-native", "CLAUDE_VOLUME_NAME", "/home/app/.claude"),
+])
+async def test_static_compose_uses_selected_profile_oauth_volume(
+    tmp_path, monkeypatch, runtime_id, provider, harness, volume_env, home
+):
+    monkeypatch.setenv(volume_env, "other-profile-home")
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime._deployment_compose_command = lambda: ("docker", "compose")
+    binding = _binding()
+    binding = binding.model_copy(update={
+        "harness": harness,
+        "credential_mount_ref": binding.credential_mount_ref.model_copy(update={
+            "target_path": home,
+            "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(update={
+                "runtime_id": runtime_id,
+                "provider_id": provider,
+                "volume_ref": "selected-profile-home",
+            }),
+        }),
+    })
+    await runtime._compose_static_check(binding=binding, workspace_source=tmp_path)
+    assert runtime._run.await_args.kwargs["env"][volume_env] == "selected-profile-home"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mounts,allowed", [
+    ([{"Type": "volume", "Name": "codex_auth_volume", "Destination": "/home/app/.codex", "RW": True}], True),
+    ([{"Type": "volume", "Name": "another-profile", "Destination": "/home/app/.codex", "RW": True}], False),
+    ([{"Type": "bind", "Source": "/unrelated", "Destination": "/home/app/.codex", "RW": True}], False),
+    ([], False),
+    ([{"Type": "volume", "Name": "codex_auth_volume", "Destination": "/home/app/.codex", "RW": True},
+      {"Type": "bind", "Source": "/unrelated", "Destination": "/home/app/.codex/auth.json", "RW": True}], False),
+])
+async def test_static_host_probe_attests_actual_oauth_volume(mounts, allowed):
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(return_value=(0, json.dumps(mounts), ""))
+    runtime._deployment_compose_command = lambda: ("docker", "compose")
+    if allowed:
+        await runtime._compose_static_exec_check(binding=_binding(), container_name="observed-host")
+        assert runtime._run.await_args.args[-1] == "/opt/moonmind/check-runner-projections.sh"
+    else:
+        with pytest.raises(OmnigentOAuthHostError) as caught:
+            await runtime._compose_static_exec_check(binding=_binding(), container_name="observed-host")
+        assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
+        assert runtime._run.await_count == 1
+    assert runtime._run.await_args_list[0].args == (
+        "docker", "inspect", "--format", "{{json .Mounts}}", "observed-host"
+    )

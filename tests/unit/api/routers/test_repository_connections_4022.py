@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,7 +18,7 @@ def _client(monkeypatch) -> TestClient:
     app.include_router(router_module.router)
 
     async def _user():
-        return {"ref": "principal:alice"}
+        return SimpleNamespace(id="principal:alice")
 
     app.dependency_overrides[get_current_user()] = _user
     return TestClient(app)
@@ -28,11 +30,11 @@ def test_begin_returns_setup_url_and_state(monkeypatch) -> None:
         "/github-app/begin",
         json={
             "appSlug": "moonmind-test",
-            "expectedAppRef": "github-app:moonmind-test",
+            "expectedAppRef": "github-app:123456",
+            "appId": "123456",
+            "keySecretRef": "db://github-app-key",
             "requestId": "req:router-1",
             "connectionId": "repository-connection:app",
-            "principalRef": "principal:alice",
-            "principalScopeType": "system",
             "expectedAccount": "acme-org",
             "permittedRepositories": ["acme/repo"],
         },
@@ -64,10 +66,11 @@ def test_begin_rejects_anonymous_enrollment(monkeypatch) -> None:
         "/github-app/begin",
         json={
             "appSlug": "moonmind-test",
-            "expectedAppRef": "github-app:moonmind-test",
+            "expectedAppRef": "github-app:123456",
+            "appId": "123456",
+            "keySecretRef": "db://github-app-key",
             "requestId": "req:router-denied",
             "connectionId": "repository-connection:app",
-            "principalRef": "principal:alice",
         },
     )
     assert response.status_code == 401
@@ -81,7 +84,7 @@ def test_callback_rejects_forged_state_before_touching_writer(monkeypatch) -> No
     app.include_router(router_module.router)
 
     async def _user():
-        return {"ref": "principal:alice"}
+        return SimpleNamespace(id="principal:alice")
 
     from api_service.db.base import get_async_session
 
@@ -118,12 +121,7 @@ def test_callback_rejects_forged_state_before_touching_writer(monkeypatch) -> No
         json={
             "state": "forged-state",
             "installationId": "123",
-            "expectedAppRef": "github-app:moonmind-test",
-            "requestId": "req:router-forged",
             "connectionId": "repository-connection:app",
-            "appId": "123456",
-            "keySecretRef": "db://github-app-key",
-            "principalRef": "principal:alice",
         },
     )
     assert response.status_code in (400, 409, 422), response.text

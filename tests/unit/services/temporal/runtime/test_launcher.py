@@ -37,6 +37,17 @@ from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
     LoreCliReadinessAdapter,
 )
 
+
+@pytest.fixture
+def record_workspace_chown(monkeypatch):
+    """Keep existing launch assertions as ownership-intent spies.
+
+    Descriptor traversal itself is covered with real files in test_workspace_paths.
+    """
+    async def record(self, path):
+        await self._run_checked_command("chown", "-R", "app:app", str(path))
+    monkeypatch.setattr(ManagedRuntimeLauncher, "_chown_workspace_to_runtime_user", record)
+
 @pytest.fixture(autouse=True)
 def _no_recorded_repository_connections(monkeypatch):
     """Unit tests have no database: no connection or GitHub secret is recorded."""
@@ -2909,15 +2920,26 @@ async def test_launch_raises_when_workspace_clone_fails(tmp_path, monkeypatch):
         )
     assert store.load("workspace-run-fail") is None
 
-@pytest.mark.asyncio
-async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeypatch):
-    """Profile env_overrides should be layered on top of os.environ, not replace it.
 
-    Regression test for the env stripping bug: when profile.env_overrides is
-    set, the child process must still inherit essential ambient vars (PATH,
-    HOME, etc.) from the parent environment, with the profile-specific values
-    taking precedence for any keys that appear in both.
-    """
+@pytest.mark.asyncio
+async def test_launch_env_preserves_execution_context_without_worker_secrets(
+    tmp_path, monkeypatch
+):
+    """Profile settings layer over execution context, not worker authority."""
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    for key in (
+        "DATABASE_URL",
+        "JWT_SECRET_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "UNRELATED_DEPLOYMENT_SETTING",
+        "LD_PRELOAD",
+    ):
+        monkeypatch.setenv(key, "worker-only-value")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy.example:443")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/custom.pem")
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     # Ensure PATH is visible in os.environ so we can assert it propagates.
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/testuser")
@@ -2971,7 +2993,13 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
     assert captured_env["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert captured_env["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
 
-    # Ambient environment variables must NOT have been stripped.
+    assert "worker-only-value" not in captured_env.values()
+    assert captured_env["LANG"] == "en_US.UTF-8"
+    assert captured_env["HTTPS_PROXY"] == "https://proxy.example:443"
+    assert captured_env["SSL_CERT_FILE"] == "/etc/ssl/custom.pem"
+    assert captured_env["MOONMIND_URL"] == "http://api:8000"
+
+    # Essential execution context remains available.
     assert "PATH" in captured_env, "PATH was stripped from child env — env bug reintroduced"
     assert "HOME" in captured_env, "HOME was stripped from child env — env bug reintroduced"
     assert captured_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
@@ -2979,6 +3007,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
 
     # Keys specified in clear_env_keys must be stripped
     assert "OPENAI_API_KEY" not in captured_env, "clear_env_keys was ignored; ambient credential leaked"
+
 
 @pytest.mark.asyncio
 async def test_launch_filters_ambient_jira_credentials_from_child_env(
@@ -3787,11 +3816,12 @@ async def test_claude_one_shot_launch_disables_background_callbacks(
     assert "ScheduleWakeup" in observed["args"]
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("record_workspace_chown")
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:
     1. chown the full run workspace root to app:app so the app user can write
        both repo files and support artifacts
-    2. Use runuser -u app -- with an app login-shaped env block via env=
+    2. Drop privileges before exec, with an app login-shaped env block
     """
     captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
@@ -3870,7 +3900,7 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     profile = _make_profile(
         runtime_id="claude_code",
         command_template=["claude", "-p", "hello"],
-        env_overrides={"MY_CUSTOM_VAR": "test-value"},
+        env_overrides={"MY_CUSTOM_VAR": "test-value", "LD_PRELOAD": "./profile.so"},
         passthrough_env_keys=[],
     )
     request = _make_request()
@@ -3899,23 +3929,16 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert "hasTrustDialogAccepted" in config_call_str
     assert str(workspace_root.resolve()) in config_creation_calls[0]
 
-    # Verify runuser was used instead of direct subprocess exec
-    # Filter to find the final launch runuser (not the config creation one)
-    launch_runuser_calls = [
-        args for args, _ in captured_calls
-        if args[0] == "runuser" and "python3" not in args
-    ]
-    assert len(launch_runuser_calls) > 0, "runuser was not used for launching claude"
-    runuser_call = launch_runuser_calls[0]
-    assert runuser_call[1:4] == ("-u", "app", "--"), f"Unexpected runuser args: {runuser_call[1:4]}"
-
-    runuser_kwargs = next(
-        (kwargs for args, kwargs in captured_calls if args and args[0] == "runuser"),
-        None,
+    # The profile env must only reach exec after native privilege dropping.
+    launch_call, launch_kwargs = next(
+        (args, kwargs) for args, kwargs in captured_calls if args[0] == "claude"
     )
-    assert runuser_kwargs is not None, "runuser kwargs were not captured"
+    assert launch_kwargs["user"] == "app"
+    assert launch_kwargs["group"] == "app"
+    assert launch_kwargs["extra_groups"] == []
+    assert not any(args[0] == "runuser" for args, _ in captured_calls)
 
-    env_kwargs = runuser_kwargs.get("env")
+    env_kwargs = launch_kwargs.get("env")
     assert isinstance(env_kwargs, dict)
     assert env_kwargs["MY_CUSTOM_VAR"] == "test-value"
     assert env_kwargs["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
@@ -3923,13 +3946,14 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert env_kwargs["USER"] == "app"
     assert env_kwargs["LOGNAME"] == "app"
 
-    # Verify the original command follows the runuser prefix (model/effort added by build_command)
-    cmd_start_idx = runuser_call.index("claude")
-    actual_cmd = runuser_call[cmd_start_idx:]
+    assert env_kwargs["LD_PRELOAD"] == "./profile.so"
+    # Profile command and runtime policy remain intact.
+    actual_cmd = launch_call
     assert actual_cmd[0] == "claude"
     assert "-p" in actual_cmd or "--dangerously-skip-permissions" in actual_cmd
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("record_workspace_chown")
 async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code(
     tmp_path, monkeypatch
 ):
@@ -3966,7 +3990,7 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
     captured_launch_env: dict[str, str] = {}
 
     async def _fake_create_subprocess_exec(*args, **kwargs):
-        if args[:3] == ("runuser", "-u", "app"):
+        if kwargs.get("user") == "app":
             env = kwargs.get("env")
             if isinstance(env, dict):
                 captured_launch_env.update(env)
@@ -4056,6 +4080,7 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
     )
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("record_workspace_chown")
 async def test_launch_privilege_drop_chowns_repo_and_artifacts_for_external_workspace(tmp_path, monkeypatch):
     captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
@@ -5188,6 +5213,7 @@ def test_build_generic_managed_agent_env_falls_back_to_run_id_without_workspace(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("record_workspace_chown")
 async def test_ensure_repo_artifacts_writable_chowns_context_artifacts_when_root(
     tmp_path, monkeypatch
 ):
@@ -5214,7 +5240,7 @@ async def test_ensure_repo_artifacts_writable_chowns_context_artifacts_when_root
         resolved_workspace_path=str(workspace)
     )
 
-    assert chown_calls == [("chown", "-R", "-h", "app:app", str(artifacts_dir.resolve()))]
+    assert chown_calls == [("chown", "-R", "app:app", str(artifacts_dir.resolve()))]
 
 
 @pytest.mark.asyncio
@@ -5262,6 +5288,7 @@ def test_sanitize_artifacts_step_segment_blocks_traversal():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("record_workspace_chown")
 async def test_launch_chowns_external_artifacts_dir_on_privilege_drop(
     tmp_path, monkeypatch
 ):
@@ -5355,6 +5382,7 @@ async def test_launch_chowns_external_artifacts_dir_on_privilege_drop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("record_workspace_chown")
 async def test_launch_skips_redundant_artifacts_chown_for_internal_workspace(
     tmp_path, monkeypatch
 ):
@@ -5516,7 +5544,8 @@ def _capture_launch_env(monkeypatch) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_scratch_launch_receives_no_github_credential(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter_context", [False, True])
+async def test_scratch_launch_receives_no_github_credential(tmp_path, monkeypatch, adapter_context):
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
     monkeypatch.setenv("GH_TOKEN", "ambient-token-A")
@@ -5530,12 +5559,26 @@ async def test_scratch_launch_receives_no_github_credential(tmp_path, monkeypatc
         _unexpected_resolve,
     )
     launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    # This boundary test captures credential selection, not socket transport.
+    # Broker socket behavior has independent tests in test_github_auth_broker.
+    launcher._github_auth_brokers.start = AsyncMock()
     profile = _make_profile(
         runtime_id="claude_code",
         command_template=["claude", "-p", "hello"],
         passthrough_env_keys=[],
         secret_refs={},
     )
+
+    if adapter_context:
+        from moonmind.workflows.adapters.managed_agent_adapter import build_managed_profile_launch_context
+
+        context = build_managed_profile_launch_context(
+            profile={"profile_id": "claude-profile"},
+            runtime_for_profile="claude_code",
+            workflow_id="scratch-workflow",
+            default_credential_source="oauth_volume",
+        )
+        profile = profile.model_copy(update={"passthrough_env_keys": context.passthrough_env_keys})
 
     _record, process, _cleanup, _deferred = await launcher.launch(
         run_id="run-scratch-4023", request=_make_request(), profile=profile
@@ -5548,8 +5591,9 @@ async def test_scratch_launch_receives_no_github_credential(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_context", [False, True])
 async def test_recorded_default_connection_wins_over_ambient_launch_token(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, adapter_context
 ):
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
@@ -5571,12 +5615,26 @@ async def test_recorded_default_connection_wins_over_ambient_launch_token(
     source_repo = tmp_path / "source-repo"
     subprocess.run(["git", "init", str(source_repo)], check=True, capture_output=True)
     launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    # This boundary test captures credential selection, not socket transport.
+    # Broker socket behavior has independent tests in test_github_auth_broker.
+    launcher._github_auth_brokers.start = AsyncMock()
     profile = _make_profile(
         runtime_id="claude_code",
         command_template=["claude", "-p", "hello"],
         passthrough_env_keys=[],
         secret_refs={},
     )
+
+    if adapter_context:
+        from moonmind.workflows.adapters.managed_agent_adapter import build_managed_profile_launch_context
+
+        context = build_managed_profile_launch_context(
+            profile={"profile_id": "claude-profile"},
+            runtime_for_profile="claude_code",
+            workflow_id="repository-workflow",
+            default_credential_source="oauth_volume",
+        )
+        profile = profile.model_copy(update={"passthrough_env_keys": context.passthrough_env_keys})
 
     _record, process, _cleanup, _deferred = await launcher.launch(
         run_id="run-selected-4023",
@@ -5586,6 +5644,7 @@ async def test_recorded_default_connection_wins_over_ambient_launch_token(
     await process.wait()
 
     assert captured_env["GITHUB_TOKEN"] == "selected-token-B"
+    assert launcher._github_auth_brokers.start.await_args.kwargs["token"] == "selected-token-B"
     assert "GH_TOKEN" not in captured_env
 
 
@@ -5991,3 +6050,194 @@ async def test_launch_uses_one_read_of_the_selected_connection_and_credential(
     assert loaded == ["repository-connection:team-b"]
     assert reads == ["env://TEAM_B_PAT"]
     assert captured_env["GITHUB_TOKEN"] == "team-b-token-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("link_level", ["repo", "run", "workspaces"])
+async def test_prepare_workspace_rejects_symlinked_authority(tmp_path, link_level):
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    root = tmp_path / "workspaces"
+    run = root / "run-1"
+    repo = run / "repo"
+    repo.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if link_level == "repo":
+        repo.rmdir()
+        repo.symlink_to(outside, target_is_directory=True)
+    elif link_level == "run":
+        repo.rmdir()
+        run.rmdir()
+        run.symlink_to(outside, target_is_directory=True)
+    else:
+        repo.rmdir()
+        run.rmdir()
+        root.rmdir()
+        root.symlink_to(outside, target_is_directory=True)
+    launcher._run_checked_command = AsyncMock()
+    with pytest.raises((OSError, RuntimeError), match="symlink|directory"):
+        await launcher._prepare_workspace_path(
+            run_id="run-1",
+            request=_make_request(workspace_spec={"repository": "owner/repo"}),
+            workspace_path=None,
+        )
+    launcher._run_checked_command.assert_not_called()
+
+
+@pytest.mark.parametrize("link_level", ["artifacts", "step"])
+def test_generic_artifacts_directory_rejects_symlink(tmp_path, link_level):
+    repo = tmp_path / "run" / "repo"
+    repo.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    artifacts = repo.parent / "artifacts"
+    if link_level == "artifacts":
+        artifacts.symlink_to(outside, target_is_directory=True)
+    else:
+        artifacts.mkdir()
+        (artifacts / "run-1").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(OSError):
+        ManagedRuntimeLauncher._build_generic_managed_agent_env(
+            run_id="run-1", resolved_workspace_path=str(repo), request=_make_request()
+        )
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("link_level", ["file", "parent"])
+def test_launcher_script_writes_reject_links(tmp_path, link_level):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    protected = outside / "helper"
+    protected.write_text("protected")
+    bin_dir = tmp_path / "workspace" / "bin"
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "helper"
+    if link_level == "file":
+        script.symlink_to(protected)
+    else:
+        bin_dir.rmdir()
+        bin_dir.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(OSError):
+        ManagedRuntimeLauncher._write_executable_script(script, "attacker code")
+    assert protected.read_text() == "protected"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("link_level", ["repo", "run"])
+async def test_prepare_lore_workspace_rejects_symlinked_authority(tmp_path, link_level):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    root = tmp_path / "temporal_sandbox" / "run-1"
+    repo = root / "repo"
+    repo.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if link_level == "repo":
+        repo.rmdir()
+        repo.symlink_to(outside, target_is_directory=True)
+    else:
+        repo.rmdir()
+        root.rmdir()
+        (outside / "repo").mkdir()
+        root.symlink_to(outside, target_is_directory=True)
+    adapter = MagicMock()
+    adapter.load_prepared_workspace.return_value = SimpleNamespace(
+        repository="project", branch="main", revision_signature="revision",
+    )
+    adapter.bind_workspace.return_value = SimpleNamespace(runtime_visible_path=str(repo.resolve()))
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"), lore_repository_adapter=adapter,
+    )
+    with pytest.raises((OSError, RuntimeError)):
+        await launcher._prepare_workspace_path(
+            run_id="run-1", workspace_path=None,
+            request=_make_request(workspace_spec={
+                "provider": "lore", "repository": "project", "branch": "main", "revisionSignature": "revision",
+            }),
+        )
+    adapter.load_prepared_workspace.assert_not_called()
+
+
+def test_live_log_reset_preserves_file_outside_symlinked_workspace(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "live_streams.spool"
+    victim.write_text("retained")
+    workspace = tmp_path / "workspace"
+    workspace.symlink_to(outside, target_is_directory=True)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "store"))
+    launcher._reset_live_log_spool(str(workspace))
+    assert victim.read_text() == "retained"
+
+
+@pytest.mark.parametrize("parameters", [{"requiredCapabilities": ["gh"]}, {"repositoryToolCapabilities": ["gh"]}])
+def test_managed_launch_keeps_auth_for_declared_github_tools(parameters):
+    assert ManagedRuntimeLauncher._request_uses_github(_make_request(parameters=parameters))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy_source",
+    ["other/private", "http://internal/repo.git", "file:///private/repo"],
+)
+async def test_structured_target_controls_actual_clone_source(tmp_path, legacy_source):
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    launcher._run_checked_command = AsyncMock()
+    request = _make_request(
+        workspace_spec={
+            "repository": legacy_source,
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "owner/approved"},
+                "branch": {"name": "approved-main"},
+            },
+        }
+    )
+    await launcher._prepare_workspace_path(
+        run_id="run-authority", request=request, workspace_path=None
+    )
+    clone = launcher._run_checked_command.await_args_list[0].args
+    assert clone[:5] == ("git", "clone", "--branch", "approved-main", "--single-branch")
+    assert clone[-2] == "https://github.com/owner/approved.git"
+
+
+@pytest.mark.asyncio
+async def test_structured_lore_target_controls_actual_workspace_identity(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    prepared = SimpleNamespace()
+    adapter = SimpleNamespace(
+        prepare_workspace=Mock(return_value=prepared),
+        bind_workspace=Mock(
+            return_value=SimpleNamespace(runtime_visible_path="/runtime/repo")
+        ),
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"), lore_repository_adapter=adapter
+    )
+    request = _make_request(
+        workspace_spec={
+            "repository": "other-project",
+            "startingBranch": "other-branch",
+            "revisionSignature": "recorded-revision",
+            "repositoryTarget": {
+                "provider": "lore",
+                "connectionRef": "repository-connection:lore",
+                "repository": {"name": "approved-project"},
+                "branch": {"name": "approved-branch"},
+            },
+        }
+    )
+    assert (
+        await launcher._prepare_workspace_path(
+            run_id="run-authority", request=request, workspace_path=None
+        )
+        == "/runtime/repo"
+    )
+    assert (
+        adapter.prepare_workspace.call_args.kwargs["repository"] == "approved-project"
+    )
+    assert adapter.prepare_workspace.call_args.kwargs["branch"] == "approved-branch"

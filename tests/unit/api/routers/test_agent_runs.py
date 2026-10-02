@@ -3215,7 +3215,17 @@ def test_session_resource_content_requires_artifact_in_session_projection() -> N
     assert response.json()["detail"]["code"] == "session_resource_not_found"
     artifact_service.read_path.assert_not_called()
 
-def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_path) -> None:
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("media_type,disposition", [
+    ("application/json", "inline"),
+    ("text/plain", "inline"),
+    ("image/png", "inline"),
+    ("text/html", "attachment"),
+    ("image/svg+xml", "attachment"),
+    ("application/xhtml+xml", "attachment"),
+    ("application/octet-stream", "attachment"),
+])
+def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_path, streamed, media_type, disposition) -> None:
     user_id = uuid4()
     user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
     artifact_service = AsyncMock()
@@ -3232,10 +3242,22 @@ def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_p
     async def _read_path(*, artifact_id: str, principal: str):
         assert artifact_id == "art_summary"
         assert principal == str(user_id)
-        return _build_artifact(artifact_id, "session.summary", label=artifact_id)[0], artifact_path
+        if streamed:
+            raise agent_runs_router.TemporalArtifactValidationError("not a local artifact")
+        artifact = _build_artifact(artifact_id, "session.summary", label=artifact_id)[0]
+        artifact.content_type = media_type
+        return artifact, artifact_path
+
+    async def _read_chunks(*, artifact_id: str, principal: str):
+        assert artifact_id == "art_summary"
+        assert principal == str(user_id)
+        artifact = _build_artifact(artifact_id, "session.summary", label=artifact_id)[0]
+        artifact.content_type = media_type
+        return artifact, iter([b'{"summary":"done"}'])
 
     artifact_service.get_metadata.side_effect = _get_metadata
     artifact_service.read_path.side_effect = _read_path
+    artifact_service.read_chunks.side_effect = _read_chunks
 
     with TestClient(app) as test_client:
         with patch(
@@ -3252,7 +3274,10 @@ def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_p
 
     assert response.status_code == 200
     assert response.json() == {"summary": "done"}
-    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.headers["content-disposition"].startswith(disposition + ";")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "sandbox" in response.headers["content-security-policy"]
+    assert "default-src 'none'" in response.headers["content-security-policy"]
     artifact_service.read_path.assert_awaited_once()
 
 

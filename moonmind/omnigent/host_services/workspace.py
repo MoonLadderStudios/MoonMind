@@ -574,6 +574,7 @@ class OmnigentWorkspaceMaterializer:
                 target_workflow_id=target_workflow_id,
                 target_step_execution_id=target_step_execution_id,
                 record_owner_workflow_id=record.workflow_id,
+                record_owner_step_execution_id=record.step_execution_id,
             )
         except WorkspaceSourceError as exc:
             raise HarnessPlatformError(

@@ -103,7 +103,11 @@ Reuse the current registry loader, supplying schemas, and focused behavior tests
 
 ### 5.2 Discovery model (v1: static)
 
-The existing static snapshot records selected definitions. Preserve its digest and original bytes where required for plan interpretation. Shipping a definition does not prove an appropriate handler is registered, available, or authorized. Discovery and temporary capacity are different facts.
+The existing static snapshot records selected definitions. Before new execution dispatch, recompute its content digest and verify its executor binding and capability requirements against the server-owned tool definition. A self-consistent artifact digest does not authorize a new Activity or worker fleet. Pinned schemas and execution budgets remain available to retained plans; validation does not require whole-definition or deployment-version equality. The legacy `mm.skill.execute` spelling remains the same trusted dispatcher as `mm.tool.execute`.
+
+Workflow-scoped child creation records the verified machine principal and its granted scopes independently of authored plans and input artifacts. Deployment-control and Docker-admin tools require those capabilities on that admitted principal. Child-create/runtime-inheritance permission alone does not grant them. Operator submissions keep the single-user admission model.
+
+Shipping a definition does not prove an appropriate handler is registered, available, or authorized. Discovery and temporary capacity are different facts.
 
 ### 5.3 Worker capability model
 

@@ -385,3 +385,22 @@ class _RecordingArtifactService:
     ):
         del principal, allow_restricted_raw
         return SimpleNamespace(artifact_id=artifact_id), self.payloads[artifact_id]
+
+
+async def test_resolve_skills_preserves_arbitrary_temporal_identity_as_safe_snapshot(monkeypatch):
+    from moonmind.workflows.agent_skills import agent_skills_activities as module
+
+    info = SimpleNamespace(workflow_id="workflows/team/review", activity_id="step/resolve")
+    monkeypatch.setattr(module.activity, "info", lambda: info)
+
+    async def resolve(_self, _selector, context):
+        return ResolvedSkillSet(snapshot_id=context.snapshot_id, resolved_at=datetime.now(UTC))
+
+    monkeypatch.setattr(module.AgentSkillResolver, "resolve", resolve)
+    result = await AgentSkillsActivities().resolve_skills(SkillSelector())
+    retry = await AgentSkillsActivities().resolve_skills(SkillSelector())
+    assert result.snapshot_id == retry.snapshot_id
+    assert "/" not in result.snapshot_id and "\\" not in result.snapshot_id
+    info.workflow_id = "workflows_team/review"
+    other = await AgentSkillsActivities().resolve_skills(SkillSelector())
+    assert result.snapshot_id != other.snapshot_id

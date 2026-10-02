@@ -821,7 +821,7 @@ async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> N
         def __exit__(self, *args: object) -> None:
             return None
 
-        def starttls(self) -> None:
+        def starttls(self, *, context=None) -> None:
             calls.append({"action": "starttls"})
 
         def login(self, username: str, password: str) -> None:
@@ -7609,8 +7609,8 @@ async def test_terminal_evidence_activity_surfaces_batch_fanout_cause(
                 "created": 0,
                 "queued": [],
                 "skipped": [],
-                "errors": [{"code": "BATCH_FANOUT_FAILED", "error": message}],
-                "failure": {"code": "BATCH_FANOUT_FAILED", "message": message},
+                "errors": [{"code": "BATCH_FANOUT_FAILED", "error": message + " token=private-fanout-token"}],
+                "failure": {"code": "BATCH_FANOUT_FAILED", "message": "no child workflows were queued"},
             }
         ),
         encoding="utf-8",
@@ -7633,9 +7633,11 @@ async def test_terminal_evidence_activity_surfaces_batch_fanout_cause(
 
     assert result.provider_error_code == "BATCH_FANOUT_FAILED"
     assert result.failure_class == expected_class
-    assert result.summary == message
+    assert message in result.summary
+    assert "private-fanout-token" not in result.summary
+    assert "[REDACTED" in result.summary
     assert "valid terminal evidence" not in result.summary
-    assert result.metadata["terminalFailureMessage"] == message
+    assert result.metadata["terminalFailureMessage"] == result.summary
 
 
 @pytest.mark.asyncio

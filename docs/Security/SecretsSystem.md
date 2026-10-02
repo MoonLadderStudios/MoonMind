@@ -49,6 +49,21 @@ Secret values are resolved only at controlled execution boundaries and materiali
 
 This document builds on [`ProviderProfiles.md`](./ProviderProfiles.md). Provider Profiles own provider selection and secret references. The Secrets System defines what those references mean and how they are safely resolved.
 
+### Deployment signing material
+
+`JWT_SECRET_KEY` signs scoped machine capabilities, separate from the API-only
+MoonMind browser-session key. An omitted or blank value initializes and reuses
+private, atomic deployment-owned material at `var/secrets/machine_signing_key`,
+shared by API and workers through the existing secrets volume. Explicit keys
+must have at least 32 bytes and cannot be known placeholders. Security settings
+read the project `.env` as well as process environment overrides.
+
+The public historical test key is no longer accepted. Upgrading a deployment
+that used that default invalidates its old machine capabilities; running
+sessions must obtain newly scoped capabilities through their normal authorized
+launch/recovery path. Explicit strong existing keys are preserved. Browser
+session keys and encrypted managed secrets are not rotated by this change.
+
 ## 1.1 High Security Outbound Scans
 
 MoonMind runtime code exposes a high-security mode for outbound side-effect boundaries. The mode is controlled by `MOONMIND_HIGH_SECURITY_MODE` by default, and runtime callers may pass an explicit mode when a workflow or activity payload needs to bind the decision for one operation.

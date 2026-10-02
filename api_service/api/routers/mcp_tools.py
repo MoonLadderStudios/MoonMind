@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -18,6 +19,14 @@ from api_service.services.container_jobs import ContainerJobService
 from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
 from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.config.settings import settings
+from moonmind.security.auth_modes_4120 import (
+    is_disabled_local_mode,
+    public_base_url_is_loopback,
+)
+from moonmind.security.operator_admission import (
+    OperatorAdmissionError,
+    validate_browser_host_and_origin,
+)
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.mcp.container_job_tool_registry import (
@@ -30,13 +39,10 @@ from moonmind.schemas.container_job_models import (
     ContainerJobSubmitRequest,
     OwnerIdentity,
 )
-from moonmind.schemas.workspace_locator_models import (
-    ManagedWorkspaceLocator,
-    SandboxWorkspaceLocator,
-)
 from moonmind.security.container_job_capabilities import (
     ContainerJobCapabilityError,
     ContainerJobSessionCapability,
+    container_job_matches_capability,
     verify_container_job_session_capability,
 )
 from moonmind.mcp.jira_tool_registry import (
@@ -70,7 +76,61 @@ from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientErr
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/mcp", tags=["mcp-tools"])
+
+def _validate_mcp_post_request(request: Request) -> None:
+    """Keep all MCP invocation transports behind one browser boundary."""
+    if request.method != "POST":
+        return
+    base_url = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+    request_base_url = str(request.base_url)
+    browser_origin = request.headers.get("origin") or request.headers.get("referer")
+    trusted_ingress = os.environ.get("MOONMIND_TRUSTED_INGRESS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if browser_origin:
+        try:
+            validate_browser_host_and_origin(
+                method=request.method,
+                host_header=request.headers.get("host"),
+                origin=request.headers.get("origin"),
+                referer=request.headers.get("referer"),
+                base_url=base_url or request_base_url,
+            )
+            # A same-origin request is not proof of a trusted browser host: DNS
+            # rebinding preserves the attacker's matching Host and Origin. The
+            # default disabled deployment is loopback-only; its browser authority
+            # must be loopback too. Approved ingress retains its existing contract,
+            # and origin-less machine clients can still address Compose's API DNS.
+            if (
+                not base_url
+                and is_disabled_local_mode()
+                and not trusted_ingress
+                and not public_base_url_is_loopback(request_base_url)
+            ):
+                raise OperatorAdmissionError(
+                    "host_forbidden", "Local browser requests require a loopback Host."
+                )
+        except OperatorAdmissionError as exc:
+            raise HTTPException(
+                status_code=exc.http_status, detail={"code": exc.code}
+            ) from exc
+    # request.json() does not enforce a media type. Reject browser-simple
+    # bodies before parsing so CORS cannot be bypassed to invoke local tools.
+    content_type = request.headers.get("content-type", "").split(";", 1)[0]
+    if content_type.strip().lower() != "application/json":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"code": "mcp_json_content_type_required"},
+        )
+
+
+router = APIRouter(
+    prefix="/mcp",
+    tags=["mcp-tools"],
+    dependencies=[Depends(_validate_mcp_post_request)],
+)
 MCP_PROTOCOL_VERSION = "2025-03-26"
 SUPPORTED_MCP_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2025-06-18"}
 MCP_SERVER_INFO = {"name": "moonmind", "version": "0.1.0"}
@@ -198,6 +258,8 @@ async def _dispatch_container_job_tool(
     payload: ToolCallRequest,
     owner: OwnerIdentity,
     session: AsyncSession,
+    *,
+    capability: ContainerJobSessionCapability | None = None,
 ) -> Any:
     if not container_jobs_ready():
         raise HTTPException(
@@ -209,7 +271,8 @@ async def _dispatch_container_job_tool(
         )
     context = ContainerJobToolContext(
         service=ContainerJobService(
-            session, artifacts=get_temporal_artifact_service(session)
+            session, artifacts=get_temporal_artifact_service(session),
+            capability=capability,
         ),
         owner=owner,
         transport="mcp",
@@ -683,56 +746,16 @@ def _enforce_container_capability_scope(
                 "message": "Container-job request validation failed.",
             },
         ) from exc
-    workspace = submission.spec.workspace_ref
-    if capability.workspace_kind == "managed_runtime":
-        workspace_matches = bool(
-            isinstance(workspace, ManagedWorkspaceLocator)
-            and workspace.agent_run_id == capability.agent_run_id
-            and workspace.runtime_id == capability.runtime_id
-            and workspace.relative_path == capability.workspace_relative_path
-        )
-    else:
-        workspace_matches = bool(
-            isinstance(workspace, SandboxWorkspaceLocator)
-            and workspace.workspace_id == capability.workspace_id
-            and workspace.relative_path == capability.workspace_relative_path
-        )
-    if not workspace_matches:
+    # Apply the signed read-only restriction before checking the same scope
+    # predicate used for persisted job lookups.
+    if capability.workspace_read_only:
+        submission.spec.workspace_read_only = True
+    if not container_job_matches_capability(submission, capability):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "container_capability_scope_mismatch",
-                "message": (
-                    "Container workspace exceeds the session capability."
-                ),
-            },
-        )
-    source = submission.source
-    source_matches = bool(
-        source.agent_run_id == capability.agent_run_id
-        and source.workflow_id == capability.workflow_id
-        and source.step_id == capability.step_id
-    )
-    if capability.source_kind == "managed_session":
-        source_matches = bool(
-            source_matches
-            and source.source == "managed_session"
-            and source.managed_session_id == capability.session_id
-        )
-    else:
-        source_matches = bool(
-            source_matches
-            and source.source == "omnigent"
-            and source.omnigent_conversation_id == capability.session_id
-        )
-    if not source_matches:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "container_capability_scope_mismatch",
-                "message": (
-                    "Container correlation exceeds the managed-session capability."
-                ),
+                "message": "Container request exceeds the session capability.",
             },
         )
     if capability.workspace_read_only:
@@ -775,5 +798,7 @@ async def call_managed_session_container_tool(
             },
         ) from exc
     _enforce_container_capability_scope(payload, capability)
-    result = await _dispatch_container_job_tool(payload, capability.owner, session)
+    result = await _dispatch_container_job_tool(
+        payload, capability.owner, session, capability=capability
+    )
     return ToolCallResponse(result=result)

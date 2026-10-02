@@ -4,6 +4,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+
+def validate_skill_path_component(value: str) -> str:
+    """Keep artifact-supplied skill identities within one filesystem child."""
+
+    if not value or value in {".", ".."} or any(c in value for c in ("/", "\\", "\x00")):
+        raise ValueError("skill identity must be a single path component")
+    return value
+
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""
 
@@ -101,6 +109,8 @@ class ResolvedSkillEntry(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
+    _validate_skill_name = field_validator("skill_name")(validate_skill_path_component)
+
 class ResolvedSkillSet(BaseModel):
     """The immutable, exact set of agent skills selected for a specific run or step."""
 
@@ -114,6 +124,8 @@ class ResolvedSkillSet(BaseModel):
     policy_summary: dict[str, Any] = Field(default_factory=dict)
     
     model_config = ConfigDict(extra="forbid")
+
+    _validate_snapshot_id = field_validator("snapshot_id")(validate_skill_path_component)
 
 class RuntimeSkillMaterialization(BaseModel):
     """The runtime-facing rendering of a resolved skill snapshot."""

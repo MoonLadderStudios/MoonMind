@@ -154,19 +154,20 @@ get_feature_paths() {
     # Use prefix-based lookup to support multiple branches per spec
     local feature_dir=$(find_feature_dir_by_prefix "$repo_root" "$current_branch")
 
-    cat <<EOF
-REPO_ROOT='$repo_root'
-CURRENT_BRANCH='$current_branch'
-HAS_GIT='$has_git_repo'
-FEATURE_DIR='$feature_dir'
-FEATURE_SPEC='$feature_dir/spec.md'
-IMPL_PLAN='$feature_dir/plan.md'
-TASKS='$feature_dir/tasks.md'
-RESEARCH='$feature_dir/research.md'
-DATA_MODEL='$feature_dir/data-model.md'
-QUICKSTART='$feature_dir/quickstart.md'
-CONTRACTS_DIR='$feature_dir/contracts'
-EOF
+    # Values are data even when callers evaluate this assignment output.
+    # Bash %q round-trips spaces, quotes, newlines and metacharacters.
+    printf '%s=%q\n' \
+        REPO_ROOT "$repo_root" \
+        CURRENT_BRANCH "$current_branch" \
+        HAS_GIT "$has_git_repo" \
+        FEATURE_DIR "$feature_dir" \
+        FEATURE_SPEC "$feature_dir/spec.md" \
+        IMPL_PLAN "$feature_dir/plan.md" \
+        TASKS "$feature_dir/tasks.md" \
+        RESEARCH "$feature_dir/research.md" \
+        DATA_MODEL "$feature_dir/data-model.md" \
+        QUICKSTART "$feature_dir/quickstart.md" \
+        CONTRACTS_DIR "$feature_dir/contracts"
 }
 
 check_file() { [[ -f "$1" ]] && echo "  ✓ $2" || echo "  ✗ $2"; }

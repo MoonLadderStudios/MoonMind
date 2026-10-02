@@ -1890,7 +1890,6 @@ class TemporalExecutionService:
             },
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
-            principal="service:remediation-approval",
         )
         link.approval_state = {
             **dict(link.approval_state),

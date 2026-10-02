@@ -309,6 +309,8 @@ Preserve source/result pins, accepted progress, current candidate/report, operat
 
 Reuse current context, plan, action request/result, verification, summary, decision-log, and approval artifacts. Their existing schemas own exact labels and filenames. Keep required evidence durable without requiring every possible report channel for a diagnosis-only result. Optional preview failure cannot erase committed work. [Artifact Presentation](../Artifacts/ArtifactPresentationContract.md) governs safe access.
 
+Lifecycle retry reuse is owned by the existing lifecycle publisher. It writes with its fixed service identity and records the producing namespace, workflow, and run in immutable artifact metadata. A matching caller-supplied link, activity label, or filename is not evidence authority. Only complete publisher-owned JSON evidence with the matching artifact contract and producing execution is reused; retry preserves that original result and repairs missing projections. Historical artifacts without verifiable producer identity remain retained and readable, but do not satisfy a new publication by matching a label alone. Actor identity remains in the action/audit payload, separate from the artifact producer.
+
 ### 14.2 Target-side artifacts
 
 Link authoritative subsystem evidence instead of copying it into a second lifecycle store. Target annotations preserve the original outcome.

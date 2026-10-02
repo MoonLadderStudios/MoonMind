@@ -6,6 +6,7 @@ import asyncio
 import codecs
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -15,6 +16,7 @@ from moonmind.codex_conformance.canary import (
     DEFAULT_MARKER_PATH,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.utils.workspace_paths import open_regular_file, read_regular_file
 
 from .log_streamer import RuntimeLogStreamer
 from .managed_session_store import ManagedSessionStore
@@ -133,23 +135,20 @@ class ManagedSessionSupervisor:
             ("stderr", self._stderr_path(record)),
         ):
             try:
-                if not path.exists():
-                    stream_offsets.setdefault(stream_name, 0)
-                    continue
-                current_size = path.stat().st_size
-                previous_offset = stream_offsets.get(stream_name, 0)
-                if current_size < previous_offset:
-                    previous_offset = 0
-                    stream_decoders.pop(stream_name, None)
-                if current_size <= previous_offset:
-                    stream_offsets[stream_name] = current_size
-                    continue
-                decoder = stream_decoders.setdefault(
-                    stream_name,
-                    codecs.getincrementaldecoder("utf-8")(errors="replace"),
-                )
-                committed_offset = previous_offset
-                with path.open("rb") as handle:
+                with open_regular_file(path) as handle:
+                    current_size = os.fstat(handle.fileno()).st_size
+                    previous_offset = stream_offsets.get(stream_name, 0)
+                    if current_size < previous_offset:
+                        previous_offset = 0
+                        stream_decoders.pop(stream_name, None)
+                    if current_size <= previous_offset:
+                        stream_offsets[stream_name] = current_size
+                        continue
+                    decoder = stream_decoders.setdefault(
+                        stream_name,
+                        codecs.getincrementaldecoder("utf-8")(errors="replace"),
+                    )
+                    committed_offset = previous_offset
                     handle.seek(previous_offset)
                     remaining = current_size - previous_offset
                     while remaining > 0:
@@ -170,9 +169,9 @@ class ManagedSessionSupervisor:
                         )
                         committed_offset = decoded_offset
                         emitted = True
-                if decoder.getstate()[0]:
-                    decoder.reset()
-                stream_offsets[stream_name] = committed_offset
+                    if decoder.getstate()[0]:
+                        decoder.reset()
+                    stream_offsets[stream_name] = committed_offset
             except OSError:
                 continue
         return emitted
@@ -183,8 +182,8 @@ class ManagedSessionSupervisor:
     ) -> str | None:
         state_path = ManagedSessionSupervisor._session_state_path(record)
         try:
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(read_regular_file(state_path, limit=1024 * 1024))
+        except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         if not isinstance(payload, dict):
             return None
@@ -326,10 +325,14 @@ class ManagedSessionSupervisor:
         stderr_bytes = b""
         stdout_path = ManagedSessionSupervisor._stdout_path(record)
         stderr_path = ManagedSessionSupervisor._stderr_path(record)
-        if stdout_path.exists():
-            stdout_bytes = stdout_path.read_bytes()
-        if stderr_path.exists():
-            stderr_bytes = stderr_path.read_bytes()
+        try:
+            stdout_bytes = read_regular_file(stdout_path, limit=64 * 1024 * 1024)
+        except OSError:
+            pass
+        try:
+            stderr_bytes = read_regular_file(stderr_path, limit=64 * 1024 * 1024)
+        except OSError:
+            pass
         return stdout_bytes, stderr_bytes
 
     def _write_json_artifact(
@@ -567,17 +570,13 @@ class ManagedSessionSupervisor:
     ) -> dict[str, Any] | None:
         marker_path = Path(record.workspace_path) / DEFAULT_MARKER_PATH
         try:
-            marker = json.loads(marker_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            marker = json.loads(read_regular_file(marker_path, limit=64 * 1024))
+        except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         if not isinstance(marker, dict):
             return None
 
-        marker_ref = self._write_json_artifact(
-            job_id=record.session_id,
-            artifact_name=_CANARY_MARKER_ARTIFACT_NAME,
-            payload=marker,
-        )
+        marker_ref = f"{record.session_id}/{_CANARY_MARKER_ARTIFACT_NAME}"
         cleanup_timestamp = datetime.now(tz=UTC).isoformat()
         evidence_ref = f"{record.session_id}/{_CANARY_EVIDENCE_ARTIFACT_NAME}"
         observation = self._build_codex_canary_observation(
@@ -591,6 +590,11 @@ class ManagedSessionSupervisor:
         )
         if observation is None:
             return None
+        observation["markerArtifactRef"] = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name=_CANARY_MARKER_ARTIFACT_NAME,
+            payload=marker,
+        )
         observation["marker"] = marker
         evidence_payload = {
             "codexConformanceCanary": observation,

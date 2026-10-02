@@ -770,3 +770,59 @@ async def test_agent_runtime_launch_cleans_deferred_support_when_supervisor_fail
 
     mock_launcher.cleanup_run_support.assert_awaited_once_with("run-cleanup-2")
     mock_supervisor.cleanup_deferred_run_files.assert_called_once_with("run-cleanup-2")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["file_swap", "parent_swap", "artifact_root_link", "oversize"])
+async def test_story_publication_never_reads_outside_workspace(tmp_path, monkeypatch, mutation):
+    from pathlib import Path
+
+    workspace = tmp_path / "job" / "repo"
+    workspace.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "stories.json"
+    secret.write_bytes(b"outside-private-marker")
+    story = workspace / "artifacts" / "stories.json"
+    story.parent.mkdir()
+    story.write_bytes(b'{"stories":[]}')
+    if mutation == "artifact_root_link":
+        (workspace.parent / "artifacts").symlink_to(outside, target_is_directory=True)
+        story.unlink()
+    elif mutation == "oversize":
+        from moonmind.config.settings import settings
+        monkeypatch.setattr(settings.workflow, "agent_job_artifact_max_bytes", 4)
+    else:
+        original_is_file = Path.is_file
+        swapped = False
+        def swap_after_validation(path):
+            nonlocal swapped
+            exists = original_is_file(path)
+            if path == story and exists and not swapped:
+                swapped = True
+                if mutation == "file_swap":
+                    story.unlink()
+                    story.symlink_to(secret)
+                else:
+                    story.parent.rename(workspace / "saved-artifacts")
+                    story.parent.symlink_to(outside, target_is_directory=True)
+            return exists
+        monkeypatch.setattr(Path, "is_file", swap_after_validation)
+
+    class RunStore:
+        def load(self, _run_id):
+            return SimpleNamespace(workspace_path=str(workspace))
+    service = MagicMock()
+    service.create = AsyncMock(return_value=(SimpleNamespace(artifact_id="story-output"), None))
+    service.write_complete = AsyncMock(return_value=SimpleNamespace(artifact_id="story-output"))
+    activities = TemporalAgentRuntimeActivities(artifact_service=service, run_store=RunStore())
+    result = AgentRunResult(summary="work preserved", metadata={"agentRunId": "run-1", "storyBreakdownPath": "artifacts/stories.json"})
+    with (
+        patch("moonmind.workflows.temporal.activity_runtime._write_json_artifact", new=AsyncMock(return_value=SimpleNamespace(artifact_id="summary"))),
+        patch("temporalio.activity.info", return_value=SimpleNamespace(namespace="default", workflow_id="wf-1", workflow_run_id="run-1")),
+    ):
+        published = await activities.agent_runtime_publish_artifacts(result)
+    assert published.summary == "work preserved"
+    assert all(b"outside-private-marker" not in call.kwargs.get("payload", b"") for call in service.write_complete.await_args_list)
+    assert "storyBreakdownArtifactRef" not in published.metadata
+    assert secret.read_bytes() == b"outside-private-marker"

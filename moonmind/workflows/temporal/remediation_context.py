@@ -29,6 +29,7 @@ from moonmind.utils.logging import redact_sensitive_text
 REMEDIATION_CONTEXT_LINK_TYPE = "remediation.context"
 REMEDIATION_CONTEXT_ARTIFACT_NAME = "reports/remediation_context.json"
 REMEDIATION_CONTEXT_SCHEMA_VERSION = "v1"
+_REMEDIATION_LIFECYCLE_PRINCIPAL = "service:remediation-lifecycle"
 REMEDIATION_ARTIFACT_TYPES = frozenset(
     {
         "remediation.context",
@@ -743,7 +744,6 @@ class RemediationLifecyclePublisher:
         target_workflow_id: str | None = None,
         target_run_id: str | None = None,
         extra_metadata: Mapping[str, Any] | None = None,
-        principal: str = "service:remediation-lifecycle",
     ) -> db_models.TemporalArtifact:
         workflow_id = _required_string(
             remediation_workflow_id, "remediation_workflow_id"
@@ -783,6 +783,9 @@ class RemediationLifecyclePublisher:
             "artifact_type": artifact_type,
             "name": name,
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
+            "namespace": remediation_record.namespace,
+            "workflowId": remediation_record.workflow_id,
+            "runId": remediation_record.run_id,
         }
         if target_workflow_id := _string_or_none(target_workflow_id):
             metadata_json["targetWorkflowId"] = target_workflow_id
@@ -796,7 +799,7 @@ class RemediationLifecyclePublisher:
                 metadata_json.setdefault(str(key), value)
 
         artifact, _upload = await self._artifact_service.create(
-            principal=principal,
+            principal=_REMEDIATION_LIFECYCLE_PRINCIPAL,
             content_type="application/json",
             size_bytes=len(payload_bytes),
             link=ExecutionRef(
@@ -812,7 +815,7 @@ class RemediationLifecyclePublisher:
         )
         artifact = await self._artifact_service.write_complete(
             artifact_id=artifact.artifact_id,
-            principal=principal,
+            principal=_REMEDIATION_LIFECYCLE_PRINCIPAL,
             payload=payload_bytes,
             content_type="application/json",
         )
@@ -833,7 +836,6 @@ class RemediationLifecyclePublisher:
         target_run_id: str,
         name: str,
         payload: Mapping[str, Any],
-        principal: str = "service:remediation-lifecycle",
     ) -> db_models.TemporalArtifact:
         """Publish a supplemental remediation annotation linked to the target."""
 
@@ -844,7 +846,6 @@ class RemediationLifecyclePublisher:
             payload=payload,
             target_workflow_id=target_workflow_id,
             target_run_id=target_run_id,
-            principal=principal,
         )
         target_record = await self._execution_record_for_update(
             _required_string(target_workflow_id, "target_workflow_id")
@@ -915,6 +916,14 @@ class RemediationLifecyclePublisher:
                 db_models.TemporalArtifactLink.label == label,
                 db_models.TemporalArtifact.status
                 == db_models.TemporalArtifactStatus.COMPLETE,
+                db_models.TemporalArtifact.created_by_principal
+                == _REMEDIATION_LIFECYCLE_PRINCIPAL,
+                db_models.TemporalArtifact.content_type == "application/json",
+                db_models.TemporalArtifact.metadata_json["artifact_type"].as_string()
+                == link_type,
+                db_models.TemporalArtifact.metadata_json["name"].as_string() == label,
+                db_models.TemporalArtifact.metadata_json["schemaVersion"].as_string()
+                == REMEDIATION_CONTEXT_SCHEMA_VERSION,
             )
             .order_by(db_models.TemporalArtifact.created_at.asc())
             .limit(1)
@@ -922,6 +931,23 @@ class RemediationLifecyclePublisher:
         if artifact_id is not None:
             statement = statement.where(
                 db_models.TemporalArtifactLink.artifact_id == artifact_id
+            )
+        else:
+            # The lifecycle producer owns both the artifact and its immutable
+            # execution identity. Public links/activity labels are only
+            # associations; relinking another run's genuine output grants no
+            # publication authority. An exact artifact id above is used only
+            # after publish_json_artifact validated the source, when checking
+            # its supplemental target annotation link.
+            statement = statement.where(
+                db_models.TemporalArtifactLink.created_by_activity_type
+                == "remediation.lifecycle.publish",
+                db_models.TemporalArtifact.metadata_json["namespace"].as_string()
+                == namespace,
+                db_models.TemporalArtifact.metadata_json["workflowId"].as_string()
+                == workflow_id,
+                db_models.TemporalArtifact.metadata_json["runId"].as_string()
+                == run_id,
             )
         return (await self._session.execute(statement)).scalar_one_or_none()
 

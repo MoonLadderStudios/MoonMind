@@ -128,6 +128,12 @@ authState: connected
 
 The Omnigent Agent Profile declares compatible Provider Profile runtime, provider, authentication model, materializer, Host Class, and launch policy requirements. Authoring surfaces show only compatible profiles. The backend revalidates compatibility before plan persistence.
 
+For static Compose hosts, the selected binding supplies the Codex or Claude
+volume name. Before running the projection/readiness probe, the runtime inspects
+the observed container and verifies that its writable OAuth-home volume matches
+that binding, with no nested credential mount. A mismatch stops this launch
+through the existing cleanup path; a staged generation alone is not mount proof.
+
 Provider Profile readiness remains authoritative. A host image, Host Class, or existing container cannot make a disconnected or incompatible profile launchable.
 
 ## 5. Why OAuth concurrency is fixed at one

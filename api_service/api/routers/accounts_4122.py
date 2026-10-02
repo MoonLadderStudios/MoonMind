@@ -44,7 +44,7 @@ import asyncio
 import logging
 import os
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -139,21 +139,20 @@ class _AccountsRateLimiter:
     """Simple in-process limiter for login/setup/invite/reset surfaces."""
 
     def __init__(self) -> None:
-        self._buckets: dict[str, _AccountsRateBucket] = {}
+        self._buckets: OrderedDict[str, _AccountsRateBucket] = OrderedDict()
 
     def allow(self, *, key: str, limit: int, window_seconds: int) -> bool:
         now = time.monotonic()
         bucket = self._buckets.get(key)
         if bucket is None:
+            if len(self._buckets) >= 4096:
+                self._buckets.popitem(last=False)
             bucket = _AccountsRateBucket(timestamps=deque())
             self._buckets[key] = bucket
+        self._buckets.move_to_end(key)
         floor = now - window_seconds
         while bucket.timestamps and bucket.timestamps[0] < floor:
             bucket.timestamps.popleft()
-        if not bucket.timestamps and len(self._buckets) > 4096:
-            self._buckets.pop(key, None)
-            bucket = _AccountsRateBucket(timestamps=deque())
-            self._buckets[key] = bucket
         if len(bucket.timestamps) >= limit:
             return False
         bucket.timestamps.append(now)
@@ -188,8 +187,8 @@ def _check_rate_limit(request: Request, endpoint: str, login: str = "") -> JSONR
     # unauthenticated caller rotating login strings cannot bypass the bound
     # and sustain CPU-intensive hashing. Either bucket exhausting denies.
     for key in (
-        _rate_limit_key(request, endpoint, login),
         _rate_limit_ip_key(request, endpoint),
+        _rate_limit_key(request, endpoint, login),
     ):
         if not _accounts_rate_limiter.allow(
             key=key,
