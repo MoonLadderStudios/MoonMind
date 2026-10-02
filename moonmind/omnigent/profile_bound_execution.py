@@ -64,6 +64,7 @@ from moonmind.omnigent.execution_profiles import (
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
+    bind_omnigent_model_selection,
 )
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -694,6 +695,12 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         recorded_plan = self._require_recorded_plan_request(request)
+        if recorded_plan is not None:
+            request = bind_omnigent_model_selection(
+                request,
+                model=recorded_plan.payload.modelConfig.qualifiedId,
+                effort=recorded_plan.payload.modelConfig.effort,
+            )
         budget_rejection = max_budget_enforcement_rejection(request)
         if budget_rejection is not None:
             return budget_rejection

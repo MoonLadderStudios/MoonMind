@@ -22,6 +22,7 @@ from typing import Any
 
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
+    bind_omnigent_model_selection,
     execution_support_identity,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -56,8 +57,41 @@ class CodexProfileBoundRealizer:
         Codex remediation attempt claims under ``TurnSource.REMEDIATION``.
         """
 
+        from moonmind.omnigent.harness_platform.failures import (
+            HarnessPlatformError,
+            HarnessPlatformFailure,
+        )
         from moonmind.omnigent.realizers.turn_delivery import (
             deliver_canonical_turn,
+        )
+
+        # The normal Activity carries a typed admitted binding. Retained
+        # callers may carry the flat ref; an explicitly supplied flat ref must
+        # still agree. Check before the canonical claim or provider lifecycle.
+        binding = request.omnigent_execution_plan
+        flat_ref = (request.parameters or {}).get("executionPlanRef")
+        request_plan_ref = str(flat_ref).strip() if flat_ref is not None else ""
+        expected_digest = "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+        if (
+            (binding is None and request_plan_ref != plan.planRef)
+            or (
+                binding is not None
+                and (
+                    binding.plan_ref != plan.planRef
+                    or binding.plan_digest != expected_digest
+                )
+            )
+            or (request_plan_ref and request_plan_ref != plan.planRef)
+        ):
+            raise HarnessPlatformError(
+                "Codex request does not name the admitted execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+
+        request = bind_omnigent_model_selection(
+            request,
+            model=plan.payload.modelConfig.qualifiedId,
+            effort=plan.payload.modelConfig.effort,
         )
 
         return await deliver_canonical_turn(
@@ -128,7 +162,6 @@ class CodexProfileBoundRealizer:
             )
             result = await coordinator.execute(request)
             return await self._bind_result_authority(
-                request=request,
                 plan=plan,
                 result=result,
             )
@@ -164,7 +197,6 @@ class CodexProfileBoundRealizer:
             )
             result = await coordinator.execute(request)
             return await self._bind_result_authority(
-                request=request,
                 plan=plan,
                 result=result,
             )
@@ -172,25 +204,11 @@ class CodexProfileBoundRealizer:
     async def _bind_result_authority(
         self,
         *,
-        request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
         result: AgentRunResult,
     ) -> AgentRunResult:
         """Project plan identity without replacing Codex lifecycle authority."""
 
-        request_plan_ref = str(
-            (request.parameters or {}).get("executionPlanRef") or ""
-        ).strip()
-        if request_plan_ref != plan.planRef:
-            from moonmind.omnigent.harness_platform.failures import (
-                HarnessPlatformError,
-                HarnessPlatformFailure,
-            )
-
-            raise HarnessPlatformError(
-                "Codex request does not name the admitted execution plan",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-            )
         metadata = dict(result.metadata or {})
         metadata["executionPlanRef"] = plan.planRef
         metadata["supportCombinationIdentity"] = execution_support_identity(plan)

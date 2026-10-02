@@ -24,6 +24,7 @@ from moonmind.omnigent.credential_materializers import (
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
+    bind_omnigent_model_selection,
     execution_support_identity,
 )
 from moonmind.omnigent.harness_platform.failures import (
@@ -197,6 +198,13 @@ class GenericOmnigentHostRealizer:
                 f"plan realizer {plan.payload.executionRealizerRef} != {self.ref}",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
             )
+        # A contradictory model cannot enter the canonical command journal or
+        # consume credential/host capacity. Native creation uses this same pair.
+        request = bind_omnigent_model_selection(
+            request,
+            model=plan.payload.modelConfig.qualifiedId,
+            effort=plan.payload.modelConfig.effort,
+        )
         completed = await self._runtime_bindings.get(
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
@@ -1555,6 +1563,11 @@ class GenericOmnigentHostRealizer:
         host_context: dict[str, Any],
         binding: StableRuntimeBinding,
     ) -> AgentExecutionRequest:
+        request = bind_omnigent_model_selection(
+            request,
+            model=plan.payload.modelConfig.qualifiedId,
+            effort=plan.payload.modelConfig.effort,
+        )
         host_id = str(host_context.get("omnigentHostId") or "").strip()
         if not host_id:
             raise HarnessPlatformError(
@@ -1585,8 +1598,6 @@ class GenericOmnigentHostRealizer:
                 "workspace": str(
                     host_context.get("workspacePath") or "/workspaces/run"
                 ),
-                "modelOverride": plan.payload.modelConfig.qualifiedId,
-                "reasoningEffort": plan.payload.modelConfig.effort,
                 "labels": {
                     **dict(session.get("labels") or {}),
                     "moonmind.runtime_binding_id": binding.bindingId,
