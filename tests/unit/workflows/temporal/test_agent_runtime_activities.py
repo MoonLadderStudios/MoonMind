@@ -5308,6 +5308,12 @@ async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skil
     assert active_skill.read_text(encoding="utf-8") == "resolved active body\n"
     assert str(active_skill) in result
     assert "repo-authored source" in result
+    assert "Repository Skill sources may be read and edited when required by the task" in result
+    assert "Keep the active snapshot unchanged" in result
+    assert "must not be modified" not in result
+    # Authoring source for a later bundle must not change the running bundle.
+    (visible_skills / "pr-resolver" / "SKILL.md").write_text("requested source fix\n")
+    assert active_skill.read_text(encoding="utf-8") == "resolved active body\n"
 
 
 @pytest.mark.asyncio

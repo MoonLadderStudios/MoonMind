@@ -427,7 +427,7 @@ class PublishService:
                     raise RuntimeError(
                         "selected publication branch is not a fast-forward of the remote head"
                     )
-        push_command = [self._git_binary, "push", "-u"]
+        push_command = [self._git_binary, "push", "--recurse-submodules=check", "-u"]
         if verify_remote:
             # The ancestry check protects shared history; the exact-tip lease
             # also rejects deletion or replacement between inspection and push.
