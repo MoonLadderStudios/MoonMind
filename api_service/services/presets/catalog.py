@@ -25,6 +25,7 @@ from jinja2 import StrictUndefined, TemplateError, UndefinedError
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -3254,9 +3255,12 @@ class PresetCatalogService:
         auto_commit: bool = True,
     ) -> None:
         dialect_name = self._session.bind.dialect.name if self._session.bind else ""
-        if dialect_name == "postgresql":
+        recent_insert = {"postgresql": pg_insert, "sqlite": sqlite_insert}.get(
+            dialect_name
+        )
+        if recent_insert is not None:
             await self._session.execute(
-                pg_insert(PresetRecent)
+                recent_insert(PresetRecent)
                 .values(
                     user_id=user_id,
                     template_id=template_id,

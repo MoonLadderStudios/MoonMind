@@ -19,6 +19,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
+        merge_runtime_selection,
         model_selection_fields,
     )
     from pydantic import ValidationError
@@ -6145,7 +6146,7 @@ class MoonMindAgentRun:
                 ):
                     authored_selection = block["runtime"]
         if preserve_model_selection and not isinstance(authored_selection, Mapping):
-            # A profile-only update retains an explicit saved selection.
+            # Saved selection supplies untouched fields, not an explicit edit.
             candidates = [params.get("runtime")]
             candidates.extend(
                 block.get("runtime")
@@ -6160,6 +6161,19 @@ class MoonMindAgentRun:
                 ),
                 None,
             )
+            if self._workflow_patch_enabled(
+                "agent-run-model-selection-flat-edit-4636-v1"
+            ):
+                # The signal normalizes supported aliases, while parametersPatch
+                # retains explicit nulls. Nested selection/reset above remains
+                # authoritative; only flat edits need the saved companion.
+                flat_selection = model_selection_fields(payload)
+                if isinstance(parameters_patch, Mapping):
+                    flat_selection.update(model_selection_fields(parameters_patch))
+                if flat_selection:
+                    authored_selection = merge_runtime_selection(
+                        authored_selection or {}, flat_selection
+                    )
 
         task_payload = self._mapping_copy(params.get("task"))
         task_runtime = self._mapping_copy(task_payload.get("runtime"))

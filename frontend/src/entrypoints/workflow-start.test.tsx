@@ -12,6 +12,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { MemoryRouter } from "react-router-dom";
 
 import profileFirstFixture from "../runtime/fixtures/profile-first-authoring.json";
+import presetSelectionFixtures from "../runtime/fixtures/model-selection-preset-save.json";
 import type { BootPayload } from "../boot/parseBootPayload";
 import type { components } from "../generated/openapi";
 import { navigateTo } from "../lib/navigation";
@@ -17635,15 +17636,12 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(saveCall).toBeTruthy();
       const body = JSON.parse(String(saveCall?.[1]?.body || "{}")) as {
         steps: Array<{
-          skill?: { inputs?: Record<string, unknown> };
+          skill?: { args?: Record<string, unknown> };
           tool?: { inputs?: Record<string, unknown> };
         }>;
       };
-      expect(body.steps[0]?.tool?.inputs).toMatchObject({
-        repository: "MoonLadderStudios/SavedSchemaRepo",
-        branch: "feature/saved-schema",
-      });
-      expect(body.steps[0]?.skill?.inputs).toMatchObject({
+      expect(body.steps[0]).not.toHaveProperty("tool");
+      expect(body.steps[0]?.skill?.args).toMatchObject({
         repository: "MoonLadderStudios/SavedSchemaRepo",
         branch: "feature/saved-schema",
       });
@@ -19679,6 +19677,105 @@ describe("Task Create runtime switch layout stability", () => {
     expect(task.runtime).toMatchObject({ model: null, effort: "high" });
     expect(task.runtime).not.toHaveProperty("modelTier");
     expect(task.steps[0].runtime).toEqual({ modelTier: 1 });
+  });
+
+  it.each(presetSelectionFixtures)("#4636 restores expanded $name selection before saving a preset", async (scenario) => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    const runtime = { ...scenario.selection, ...(Object.keys(scenario.parameters).length ? { parameters: scenario.parameters } : {}) };
+    const detail = { slug: "saved-selection", scope: "global", title: "Saved selection", description: "Saved model intent", inputs: [] };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?")) return Promise.resolve({ ok: true, json: async () => ({ items: [detail] }) } as Response);
+      if (url.startsWith("/api/presets/saved-selection:expand")) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          steps: [{ id: "saved-work", type: "skill", instructions: "Restored selection", skill: { id: "auto", args: {}, runtime }, ...(Object.keys(runtime).length ? { runtime } : {}) }],
+          appliedTemplate: { slug: detail.slug, stepIds: ["saved-work"] }, capabilities: [], warnings: [],
+        }) } as Response);
+      }
+      if (url.startsWith("/api/presets/saved-selection?")) return Promise.resolve({ ok: true, json: async () => detail } as Response);
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Tier"), { target: { value: "1" } });
+    const step = screen.getByText("Step 1").closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const preset = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(preset.options).some((option) => option.value === "global::::saved-selection")).toBe(true));
+    fireEvent.change(preset, { target: { value: "global::::saved-selection" } });
+    await waitFor(() => expect((within(step).getByRole("button", { name: "Expand" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe("Restored selection"));
+    const advancedMode = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+    if (!advancedMode.checked) fireEvent.click(advancedMode);
+    const expectedTier = scenario.name === "omitted" ? "1" : scenario.event === "saved" ? "saved" : scenario.name === "tier" ? "2" : "custom";
+    expect((screen.getByLabelText("Step 1 Tier") as HTMLSelectElement).value).toBe(expectedTier);
+    fireEvent.click(within(screen.getByLabelText("Preset Management")).getByRole("button", { name: "Save preset" }));
+    const dialog = await screen.findByRole("dialog", { name: "Save preset" });
+    fireEvent.change(within(dialog).getByLabelText("Preset Name"), { target: { value: scenario.request.title } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm save preset" }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/presets/save-from-workflow")).toBe(true));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/presets/save-from-workflow");
+    const savedRuntime = JSON.parse(String(call?.[1]?.body)).steps[0].skill?.runtime;
+    expect(savedRuntime).toEqual(Object.keys(runtime).length ? runtime : undefined);
+  });
+
+  it.each(presetSelectionFixtures)("#4636 saves presets with $name authored step intent", async (scenario) => {
+    const savedStep = scenario.request.steps[0]!;
+    if (scenario.event === "saved") {
+      const fallback = fetchSpy.getMockImplementation()!;
+      fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith("/api/executions/mm%3Apreset-selection")) {
+          return Promise.resolve({ ok: true, json: async () => ({
+            workflowId: "mm:preset-selection",
+            workflowType: "MoonMind.UserWorkflow",
+            state: "executing",
+            targetRuntime: "codex_cli",
+            inputParameters: {
+              targetRuntime: "codex_cli",
+              task: {
+                instructions: savedStep.instructions,
+                runtime: { mode: "codex_cli", profileId: "profile:codex-default" },
+                steps: [{
+                  id: "saved-step",
+                  instructions: savedStep.instructions,
+                  runtime: { ...scenario.selection, parameters: scenario.parameters },
+                }],
+              },
+            },
+            actions: { canUpdateInputs: true },
+          }) } as Response);
+        }
+        return fallback(input, init);
+      });
+      window.history.pushState({}, "Edit", "/workflows/new?editExecutionId=mm%3Apreset-selection");
+    }
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const instructions = await screen.findByLabelText("Instructions") as HTMLTextAreaElement;
+    if (scenario.event === "saved") {
+      await waitFor(() => expect(instructions.value).toBe(savedStep.instructions));
+    } else {
+      await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+      fireEvent.click(screen.getByLabelText("Advanced mode"));
+      if (scenario.event === "tier") {
+        fireEvent.change(screen.getByLabelText("Step 1 Tier"), { target: { value: "2" } });
+      } else if (scenario.event.startsWith("clear-")) {
+        fireEvent.change(screen.getByLabelText("Step 1 Model"), { target: { value: "" } });
+        if (scenario.event === "clear-both") {
+          fireEvent.change(screen.getByLabelText("Step 1 Effort"), { target: { value: "" } });
+        }
+      }
+    }
+    fireEvent.change(instructions, { target: { value: savedStep.instructions } });
+    fireEvent.click(within(screen.getByLabelText("Preset Management")).getByRole("button", { name: "Save preset" }));
+    const dialog = await screen.findByRole("dialog", { name: "Save preset" });
+    fireEvent.change(within(dialog).getByLabelText("Preset Name"), { target: { value: scenario.request.title } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm save preset" }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/presets/save-from-workflow")).toBe(true));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/presets/save-from-workflow");
+    // The backend integration test consumes exactly this production-emitted
+    // contract, including explicit nulls and the absence of preview values.
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual(scenario.request);
   });
 
   it("#4636 clears model into Custom and preserves effort through profile changes and submission", async () => {

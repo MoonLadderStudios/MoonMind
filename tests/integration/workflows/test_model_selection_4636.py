@@ -6,6 +6,7 @@ expansion, input artifacts, planning, resolution and command construction are re
 
 import json
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -607,3 +608,136 @@ async def test_4636_saved_artifact_step_reset_reaches_snapshot_preview_and_launc
             "runtime"
         ]
     ) == {"modelTier": 3, "tierFallback": "strict"}
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    json.loads(
+        (
+            Path(__file__).resolve().parents[3]
+            / "frontend/src/runtime/fixtures/model-selection-preset-save.json"
+        ).read_text()
+    ),
+    ids=lambda scenario: scenario["name"],
+)
+async def test_4636_save_emitted_client_preset_through_reload_preview_and_launch(
+    tmp_path, monkeypatch, scenario
+):
+    from api_service.api.routers.presets import save_from_workflow
+    from api_service.api.schemas import PresetSaveFromWorkflowRequestSchema
+    from api_service.auth_providers import _transient_disabled_operator
+    from api_service.services.presets.save import PresetSaveService
+
+    monkeypatch.setenv("MOONMIND_CODEX_MODEL", "runtime-model")
+    monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
+    operator = _transient_disabled_operator()
+    # workflow-start.test.tsx proves the page emits this exact request for the
+    # named user interaction. Exercise its actual API schema and save owner.
+    payload = PresetSaveFromWorkflowRequestSchema.model_validate(scenario["request"])
+    async with template_db(tmp_path) as sessions:
+        async with sessions() as session:
+            session.add(provider_profile())
+            saved = await save_from_workflow(
+                payload=payload, service=PresetSaveService(session), user=operator
+            )
+            await session.commit()
+        async with sessions() as session:
+            stored = (await session.execute(select(Preset))).scalar_one()
+            stored_runtime = (stored.steps[0].get("skill") or {}).get("runtime", {})
+            assert model_selection_fields(stored_runtime) == scenario["selection"]
+            assert stored_runtime.get("parameters", {}) == scenario["parameters"]
+            profile = await session.get(ManagedAgentProviderProfile, "issue-4636")
+            profile.default_model_tier = 1
+            await session.commit()
+            expanded = await PresetCatalogService(session).expand_template(
+                slug=saved.slug,
+                scope="personal",
+                scope_ref=str(operator.id),
+                inputs={},
+                context={},
+                options=ExpandOptions(),
+                user_id=operator.id,
+            )
+            runtime = expanded["steps"][0].get("runtime", {})
+            assert model_selection_fields(runtime) == scenario["selection"]
+            view = build_canonical_workflow_view(
+                job_type="task",
+                payload={
+                    "workflow": {
+                        "instructions": "Save preset round trip",
+                        "runtime": {"mode": "codex_cli"},
+                        "steps": expanded["steps"],
+                    }
+                },
+            )
+            from api_service.api.routers.executions import (
+                _build_original_workflow_input_snapshot_payload,
+                _snapshot_workflow_from_artifact_payload,
+            )
+
+            snapshot = _build_original_workflow_input_snapshot_payload(
+                source_kind="create",
+                payload={"targetRuntime": "codex_cli"},
+                task_payload=view["workflow"],
+            )
+            store = LocalTemporalArtifactStore(tmp_path / "saved-input")
+            store.write_bytes(
+                "input.json",
+                json.dumps(snapshot).encode(),
+                content_type="application/json",
+            )
+            _, restored = _snapshot_workflow_from_artifact_payload(
+                json.loads(store.read_bytes("input.json"))
+            )
+            authored, request, command = launch_from_input(restored, profile)
+            assert model_selection_fields(authored) == scenario["selection"]
+            preview = resolve_model_effort(
+                runtime_id="codex_cli", profile=profile, authored_runtime=runtime
+            )
+            assert request.parameters["model"] == preview.model
+            assert request.parameters["effort"] == preview.effort
+            assert command[command.index("-m") + 1] == preview.model
+            for key, value in scenario["parameters"].items():
+                assert authored["parameters"][key] == value
+                assert request.parameters[key] == value
+            if scenario["name"] == "omitted":
+                assert preview.effective_model_tier == 1
+
+
+async def test_4636_save_client_preset_cannot_introduce_strict(tmp_path):
+    from fastapi import HTTPException
+
+    from api_service.api.routers.presets import save_from_workflow
+    from api_service.api.schemas import PresetSaveFromWorkflowRequestSchema
+    from api_service.auth_providers import _transient_disabled_operator
+    from api_service.services.presets.save import PresetSaveService
+
+    payload = PresetSaveFromWorkflowRequestSchema.model_validate(
+        {
+            "title": "Strict copy",
+            "description": "Client copied a legacy selection",
+            "steps": [
+                {
+                    "instructions": "Work",
+                    "skill": {
+                        "id": "auto",
+                        "runtime": {
+                            "modelTier": 2,
+                            "tierFallback": "strict",
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    async with template_db(tmp_path) as sessions:
+        async with sessions() as session:
+            with pytest.raises(HTTPException) as error:
+                await save_from_workflow(
+                    payload=payload,
+                    service=PresetSaveService(session),
+                    user=_transient_disabled_operator(),
+                )
+            assert error.value.status_code == 422
+            assert "new strict" in error.value.detail["message"]
+            assert (await session.execute(select(Preset))).scalars().all() == []
