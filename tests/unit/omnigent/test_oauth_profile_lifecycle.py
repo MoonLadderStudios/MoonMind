@@ -1965,6 +1965,36 @@ async def test_daemon_workspace_root_skips_inspection_for_local_daemon(
     runtime._run.assert_not_awaited()
 
 
+def _assert_shared_entrypoint_accepts_launch_credentials(command, tmp_path):
+    scripts = Path(__file__).resolve().parents[3] / "services/omnigent/scripts"
+    wrapper = scripts / Path(command[-1]).name
+    projected_wrapper = tmp_path / "start-host.sh"
+    projected_wrapper.write_text(
+        wrapper.read_text().replace(
+            "exec /opt/moonmind/start-omnigent-host.sh",
+            f'exec "{scripts / "start-omnigent-host.sh"}"',
+        )
+    )
+    env = {"PATH": "/usr/bin:/bin"}
+    for index, argument in enumerate(command[:-1]):
+        if argument == "--env" and "=" in command[index + 1]:
+            key, value = command[index + 1].split("=", 1)
+            env[key] = value
+    # Stop after the real entrypoint accepts the producer's trusted pair,
+    # before any credential-home reads, writes, or external CLI calls.
+    env.pop("CODEX_CREDENTIAL_GENERATION", None)
+    env.pop("CLAUDE_CREDENTIAL_GENERATION", None)
+    result = subprocess.run(
+        ["/bin/sh", str(projected_wrapper)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 64
+    assert result.stderr.strip() == "credential generation is required"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cpu_millis", [2000, 0])
 async def test_on_demand_host_initializes_state_before_unprivileged_launch(
@@ -2038,6 +2068,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     await runtime._launch_on_demand(**launch_kwargs)
 
     commands = [call.args for call in runtime._run.await_args_list]
+    _assert_shared_entrypoint_accepts_launch_credentials(commands[2], tmp_path)
     assert commands[2][commands[2].index("--cpus") + 1] == "2.0"
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert "/opt/moonmind/init-oauth-host.sh" in commands[1]
@@ -2317,6 +2348,7 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
     init_command, launch_command = [
         call.args for call in runtime._run.await_args_list
     ][1:]
+    _assert_shared_entrypoint_accepts_launch_credentials(launch_command, tmp_path)
     assert (
         "type=volume,src=claude_auth_volume,dst=/home/app/.claude"
         in init_command
@@ -2818,6 +2850,58 @@ async def test_host_preflight_waits_for_container_exec_readiness(
 
     assert runtime._run.await_count == 4
     assert sleep.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_probe", ["projections", "workspace"])
+@pytest.mark.parametrize("logs_available", [True, False])
+async def test_host_preflight_preserves_failure_and_bounded_startup_diagnostics(
+    tmp_path, monkeypatch, failed_probe, logs_available
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path
+    )
+    secret = "ghp_" + "x" * 36
+
+    async def command(*args, **kwargs):
+        if args[1] == "logs":
+            if not logs_available:
+                raise RuntimeError("diagnostic transport unavailable")
+            return (
+                0,
+                "unsupported runtime pack/materializer combination: "
+                "codex-native-pack@1/<unset> " + secret,
+                "",
+            )
+        if args[-1] == "/opt/moonmind/check-runner-projections.sh":
+            return (
+                (1, "", "container is not running")
+                if failed_probe == "projections"
+                else (0, "", "")
+            )
+        return (128, "", "fatal: detected dubious ownership in repository")
+
+    runtime._run = command
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._HOST_EXEC_PREFLIGHT_ATTEMPTS", 2
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.asyncio.sleep", AsyncMock()
+    )
+    with pytest.raises(OmnigentOAuthHostError) as failure:
+        await runtime._exec_check("owned-host")
+    message = str(failure.value)
+    assert failed_probe in message
+    assert (
+        "container is not running"
+        if failed_probe == "projections"
+        else "dubious ownership"
+    ) in message
+    if logs_available:
+        assert "unsupported runtime pack/materializer combination" in message
+    assert "diagnostic transport unavailable" not in message
+    assert secret not in message
+    assert len(message) <= 512
 
 
 def test_github_write_probe_uses_publish_or_skill_side_effect() -> None:
