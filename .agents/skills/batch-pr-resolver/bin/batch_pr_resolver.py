@@ -933,6 +933,25 @@ async def main() -> int:
     queue_requests, skipped = _build_request_records(repo, open_prs, args, runtime)
     created, errors = await _submit_jobs(queue_requests)
 
+    failure_code: str | None = None
+    failure_message = ""
+    if errors:
+        failure_code = (
+            "BATCH_FANOUT_PARTIAL_FAILURE" if created else "BATCH_FANOUT_FAILED"
+        )
+        first_error = ""
+        if isinstance(errors[0], dict):
+            for key in ("error", "message"):
+                candidate = str(errors[0].get(key) or "").strip()
+                if candidate:
+                    first_error = candidate
+                    break
+        parts = []
+        if first_error:
+            parts.append(first_error[:1024])
+        parts.append(f"{len(errors)} child submission(s) failed")
+        failure_message = "; ".join(parts)[:1024]
+
     payload = {
         **contract,
         "status": (
@@ -955,6 +974,8 @@ async def main() -> int:
         "queued": created,
         "skipped": skipped,
         "errors": errors,
+        "failureCode": failure_code,
+        "failureMessage": failure_message,
     }
     if payload["created"] == 0:
         payload["message"] = "No matching PRs were queued."
