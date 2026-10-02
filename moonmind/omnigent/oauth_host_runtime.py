@@ -271,6 +271,7 @@ _RUNTIME_ADAPTERS = {
         "generation_env": "CODEX_CREDENTIAL_GENERATION",
         "login_command": ("codex", "login", "status"),
         "env": (
+            "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF=codex-oauth-home@1",
             "CODEX_HOME=/home/app/.codex",
             "CODEX_CONFIG_HOME=/home/app/.codex",
             "CODEX_CONFIG_PATH=/home/app/.codex/config.toml",
@@ -287,6 +288,7 @@ _RUNTIME_ADAPTERS = {
         "generation_env": "CLAUDE_CREDENTIAL_GENERATION",
         "login_command": ("claude", "auth", "status"),
         "env": (
+            "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF=claude-oauth-home@1",
             "CLAUDE_HOME=/home/app/.claude",
             "CLAUDE_CONFIG_DIR=/home/app/.claude",
             "CLAUDE_VOLUME_PATH=/home/app/.claude",
@@ -4072,6 +4074,8 @@ class OmnigentOAuthHostRuntime:
         # accept ``docker exec``. Keep this readiness check local to the live
         # container so a short startup race does not tear down an otherwise
         # valid host and consume the activity-level retry budget.
+        failed_probe = "projections"
+        failure = (1, "", "")
         for attempt in range(_HOST_EXEC_PREFLIGHT_ATTEMPTS):
             projections = await self._run(
                 "docker",
@@ -4080,6 +4084,7 @@ class OmnigentOAuthHostRuntime:
                 "/opt/moonmind/check-runner-projections.sh",
                 check=False,
             )
+            failed_probe, failure = "projections", projections
             if projections[0] == 0:
                 workspace = await self._run(
                     "docker",
@@ -4094,10 +4099,29 @@ class OmnigentOAuthHostRuntime:
                 )
                 if workspace[0] == 0:
                     return
+                failed_probe, failure = "workspace", workspace
             if attempt + 1 < _HOST_EXEC_PREFLIGHT_ATTEMPTS:
                 await asyncio.sleep(_HOST_EXEC_PREFLIGHT_INTERVAL_SECONDS)
+        detail = (failure[2] or failure[1]).strip()[:220]
+        message = f"OAuth host preflight failed ({failed_probe} exit {failure[0]})"
+        if detail:
+            message += f": {detail}"
+        try:
+            logs = await asyncio.wait_for(
+                self._run(
+                    "docker", "logs", "--tail", "20", container_name, check=False
+                ),
+                timeout=5,
+            )
+            startup = (logs[1] + "\n" + logs[2]).strip()
+            if logs[0] == 0 and startup:
+                message += f"; host startup: {startup}"
+        except Exception:
+            # Diagnostics are best effort and must preserve the original gate
+            # failure when the stopped host or Docker transport is unavailable.
+            pass
         raise OmnigentOAuthHostError(
-            "OAuth host runtime command failed",
+            message,
             code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
         )
 
