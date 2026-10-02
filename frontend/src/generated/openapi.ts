@@ -11431,6 +11431,10 @@ export interface components {
             effort?: string | null;
             /** Fallbackreason */
             fallbackReason?: string | null;
+            /** Modelsource */
+            modelSource?: string | null;
+            /** Effortsource */
+            effortSource?: string | null;
         };
         /** ProviderProfileTierPreviewRequest */
         ProviderProfileTierPreviewRequest: {
@@ -11453,6 +11457,10 @@ export interface components {
         };
         /** ProviderProfileTierPreviewStep */
         ProviderProfileTierPreviewStep: {
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
             /** Id */
             id: string;
             /** Modeltier */

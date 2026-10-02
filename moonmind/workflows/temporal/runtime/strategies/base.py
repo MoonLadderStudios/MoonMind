@@ -339,12 +339,27 @@ class ManagedRuntimeStrategy(ABC):
                 advisory_preview=parameters.get("tierPreview"),
             ).model
 
-        profile_default = str(getattr(profile, "default_model", None) or "").strip() or None
+        from moonmind.runtime_intent import is_custom_selection
+
+        if is_custom_selection(parameters):
+            from moonmind.workflows.executions.model_resolver import (
+                resolve_model_effort,
+            )
+
+            return resolve_model_effort(
+                runtime_id=self.runtime_id, profile=profile, authored_runtime=parameters
+            ).model
+        profile_default = (
+            str(getattr(profile, "default_model", None) or "").strip() or None
+        )
         if profile_default:
             return profile_default
 
         # Runtime-default fallback so launch adapters never silently drop the model.
-        from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
+        from moonmind.workflows.executions.runtime_defaults import (
+            resolve_runtime_defaults,
+        )
+
         runtime_model, _ = resolve_runtime_defaults(self.runtime_id)
         return runtime_model
 
@@ -362,6 +377,16 @@ class ManagedRuntimeStrategy(ABC):
                 requested_model_tier=parameters.get("modelTier"),
                 tier_fallback=parameters.get("tierFallback"),
                 advisory_preview=parameters.get("tierPreview"),
+            ).effort
+        from moonmind.runtime_intent import is_custom_selection
+
+        if is_custom_selection(parameters):
+            from moonmind.workflows.executions.model_resolver import (
+                resolve_model_effort,
+            )
+
+            return resolve_model_effort(
+                runtime_id=self.runtime_id, profile=profile, authored_runtime=parameters
             ).effort
         return getattr(profile, "default_effort", None)
 

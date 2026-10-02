@@ -14,6 +14,12 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.runtime_intent import (
+        MODEL_SELECTION_KEYS,
+        SELECTION_DERIVED_KEYS,
+        merge_runtime_selection,
+        model_selection_fields,
+    )
     from moonmind.workflows.temporal.run_failure_diagnostics import RunFailureDiagnostics
     from pydantic import ValidationError
     from collections.abc import Mapping as WorkflowMapping
@@ -316,12 +322,6 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
-
-
-
-
-
-
 
 
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
@@ -21391,6 +21391,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        # Histories accepted before the selector cutoff retain their original
+        # Activity payload. New histories carry the nullable authored runtime.
+        if self._workflow_patch_enabled("run-model-selection-presence-4636-v1"):
+            parent_workflow = (workflow_parameters or {}).get("workflow") or (
+                workflow_parameters or {}
+            ).get("task")
+            parent_runtime = (
+                parent_workflow.get("runtime", {})
+                if isinstance(parent_workflow, Mapping)
+                else (workflow_parameters or {})
+            )
+            effective_runtime = merge_runtime_selection(parent_runtime, runtime_block)
+            selection = model_selection_fields(effective_runtime)
+            for selection_key in (*MODEL_SELECTION_KEYS, *SELECTION_DERIVED_KEYS):
+                parameters.pop(selection_key, None)
+            parameters.update(selection)
+            parameters["runtime"] = dict(selection)
+            explicit_parameters = effective_runtime.get("parameters")
+            if isinstance(explicit_parameters, Mapping):
+                parameters["runtime"]["parameters"] = dict(explicit_parameters)
+                parameters.update(explicit_parameters)
         remediation_context_enabled = self._workflow_patch_enabled(
             RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH
         )
@@ -25893,6 +25914,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     profile_clear_requested = True
                 selection.update(self._runtime_selection_from_source(authored_runtime))
 
+        if self._workflow_patch_enabled("run-model-selection-presence-4636-v1"):
+            sources = [parameters_patch.get("runtime")]
+            sources.extend(
+                block.get("runtime")
+                for key in (
+                    "task",
+                    "workflow",
+                    "authoredTaskInput",
+                    "authoredWorkflowInput",
+                )
+                if isinstance(block := parameters_patch.get(key), Mapping)
+            )
+            for source in sources:
+                if isinstance(source, Mapping):
+                    for key in (*MODEL_SELECTION_KEYS, "requestedModel"):
+                        selection.pop(key, None)
+                    selection.update(model_selection_fields(source))
+                    selection["runtime"] = dict(source)
         if profile_clear_requested:
             selection["executionProfileRef"] = ""
         if not selection:

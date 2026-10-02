@@ -561,7 +561,7 @@ class TestResolveModelEffortTiers:
                 env={},
             )
 
-    def test_legacy_profile_and_runtime_defaults_remain_after_tiers(self):
+    def test_null_tier_fields_use_runtime_defaults_without_legacy_scalars(self):
         resolved = resolve_model_effort(
             runtime_id="codex_cli",
             profile=self._profile(
@@ -570,13 +570,16 @@ class TestResolveModelEffortTiers:
                 default_effort="legacy-effort",
             ),
             requested_model_tier=1,
-            env={},
+            env={
+                "MOONMIND_CODEX_MODEL": "runtime-model",
+                "MOONMIND_CODEX_EFFORT": "medium",
+            },
         )
 
-        assert resolved.model == "legacy-model"
-        assert resolved.effort == "legacy-effort"
-        assert resolved.model_source == "provider_profile_default"
-        assert resolved.effort_source == "provider_profile_default"
+        assert resolved.model == "runtime-model"
+        assert resolved.effort == "medium"
+        assert resolved.model_source == "runtime_default"
+        assert resolved.effort_source == "runtime_default"
 
 
 # ---------------------------------------------------------------------------

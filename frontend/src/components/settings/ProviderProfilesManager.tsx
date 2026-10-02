@@ -5,6 +5,9 @@ import type { components } from '../../generated/openapi';
 import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
 import {
   buildProviderProfileTierPayload,
+  FALLBACK_TIER_EFFORT_OPTIONS,
+  isTierEffortOptionAvailable,
+  type ProviderProfileTierCapabilities,
   computeTierRenumberingImpact,
   duplicateTierDraft,
   normalizeProviderProfileTiers,
@@ -96,48 +99,6 @@ function asAuthenticationMethod(value: string | null | undefined): Authenticatio
     ? (value as AuthenticationMethod)
     : '';
 }
-
-interface ProviderProfileTierCapabilities {
-  version: string;
-  profile_id: string | null;
-  runtime_id: string;
-  provider_id: string;
-  evidence: {
-    source: string;
-    credential_generation: number | null;
-    image_ref: string | null;
-    observed_at: string | null;
-    stale: boolean;
-  };
-  tier_constraints: { min_count: number; max_count: number | null };
-  model: {
-    runtime_default: string | null;
-    allow_custom: boolean;
-    options: Array<{ value: string; label: string; description: string | null; status: string; recommended?: boolean }>;
-  };
-  effort: {
-    supported: boolean;
-    runtime_default: string | null;
-    allow_custom: boolean;
-    application: string;
-    options: Array<{ value: string; label: string; description: string | null; status: string; compatible_models: string[] | null }>;
-  };
-  diagnostics: Array<{ code: string; level: string; message: string }>;
-}
-
-type ProviderProfileTierEffortOption = ProviderProfileTierCapabilities['effort']['options'][number];
-
-function isTierEffortOptionAvailable(option: ProviderProfileTierEffortOption, model: string | null): boolean {
-  return option.status !== 'unavailable' && (
-    !option.compatible_models || option.compatible_models.includes(model ?? '')
-  );
-}
-
-// Offered only while backend capabilities are unavailable, ordered by
-// increasing effort; the backend catalog owns the list once it loads.
-const FALLBACK_TIER_EFFORT_OPTIONS: ProviderProfileTierEffortOption[] = ['low', 'medium', 'high', 'xhigh', 'max'].map(
-  (value) => ({ value, label: value, description: null, status: 'available', compatible_models: null }),
-);
 
 export interface ProviderModelEffortTier {
   label?: string | null;

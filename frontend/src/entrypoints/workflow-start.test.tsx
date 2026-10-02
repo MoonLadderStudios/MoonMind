@@ -33,7 +33,6 @@ import {
   buildEditParametersPatch,
   omnigentReadinessRefetchInterval,
   preferredTemplate,
-  previewModelTier,
   deriveExplicitWorkflowTitle,
   resolveDefaultProviderProfileId,
   resolveLoadedProviderProfileId,
@@ -108,38 +107,6 @@ describe("deriveExplicitWorkflowTitle", () => {
   });
 });
 
-describe("previewModelTier", () => {
-  it("MoonLadderStudios/MoonMind#3797 formats backend-resolved preview values", () => {
-    const preview = previewModelTier(
-      {
-        profile_id: "codex_openai_api",
-        model_tiers: [
-          { label: "Plan", model: "gpt-5.5", effort: "medium" },
-          { label: "Implement", model: "gpt-5.5", effort: "xhigh" },
-        ],
-      },
-      {
-        stepId: "workflow",
-        requestedTier: 3,
-        effectiveTier: 2,
-        model: "gpt-backend-preview",
-        effort: "high",
-        fallbackReason: "requested_tier_above_configured_range",
-      },
-    );
-
-    expect(preview).toMatchObject({
-      requestedTier: 3,
-      effectiveTier: 2,
-      label: "Implement",
-      model: "gpt-backend-preview",
-      effort: "high",
-      fallbackReason: "requested_tier_above_configured_range",
-      warning: "Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.",
-    });
-  });
-});
-
 function renderWorkflowStartPage(payload: BootPayload) {
   return renderWithClient(
     <MemoryRouter initialEntries={[`${window.location.pathname}${window.location.search}`]}>
@@ -149,6 +116,14 @@ function renderWorkflowStartPage(payload: BootPayload) {
 }
 
 describe("buildEditParametersPatch", () => {
+  it('#4636 keeps unchanged strict selection diagnostics separate from authored runtime', () => {
+    const runtime = { mode: 'codex_cli', modelTier: 2, tierFallback: 'strict' };
+    const patch = buildEditParametersPatch({ submittedPayload: { task: { instructions: 'Unrelated edit', runtime } }, submittedWorkflow: { instructions: 'Unrelated edit', runtime }, execution: { workflowId: 'issue-4636', workflowType: 'MoonMind.UserWorkflow', inputParameters: { workflow: { instructions: 'Work', runtime }, modelTier: 2, tierFallback: 'strict', model: 'tier-model', effort: 'high', requestedModel: null } } });
+    expect(patch.model).toBe('tier-model');
+    expect(patch.effort).toBe('high');
+    expect(patch.workflow).toMatchObject({ runtime });
+  });
+
   it("uses submitted runtime fields as authoritative when canonical edit metadata is cleared", () => {
     const patch = buildEditParametersPatch({
       execution: {
@@ -1158,7 +1133,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(screen.queryByText(/does not support queued waiting/)).toBeNull();
     expect(screen.queryByText(/Omnigent cannot be submitted/)).toBeNull();
     expect(screen.queryByLabelText("Workflow model tier intent")).toBeNull();
-    expect(screen.queryByLabelText("Hard override model")).toBeNull();
+    expect(screen.getByLabelText("Workflow Model")).toBeTruthy();
     expect(document.querySelector('[name="hostId"], [name*="volume"], [name*="token"]')).toBeNull();
     const startButton = screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement;
     expect(startButton.disabled).toBe(false);
@@ -17284,7 +17259,7 @@ describe("Task Create schema-driven capability inputs", () => {
     ).toBeNull();
     expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
     expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
-    expect((within(step).getByLabelText("Effort") as HTMLInputElement).type).toBe("number");
+    expect((within(step).getByRole("spinbutton", { name: "Effort" }) as HTMLInputElement).type).toBe("number");
     const enabledInput = within(step).getByLabelText("Enabled") as HTMLInputElement;
     expect(enabledInput.type).toBe("checkbox");
     expect(enabledInput.checked).toBe(true);
@@ -17731,7 +17706,7 @@ describe("Task Create schema-driven capability inputs", () => {
     });
     fireEvent.click(screen.getByLabelText("Advanced mode"));
 
-    const effortInput = (await within(step).findByLabelText("Effort")) as HTMLInputElement;
+    const effortInput = (await within(step).findByRole("spinbutton", { name: "Effort" })) as HTMLInputElement;
     expect(effortInput.value).toBe("2");
     fireEvent.change(effortInput, { target: { value: "" } });
     expect(effortInput.value).toBe("");
@@ -19567,7 +19542,7 @@ describe("Task Create runtime switch layout stability", () => {
     const fallback = fetchSpy.getMockImplementation()!;
     let inventoryVersion = 0;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).startsWith("/api/v1/provider-profiles")) {
+      if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
         inventoryVersion += 1;
         return Promise.resolve({ ok: true, json: async () => [
           { profile_id: "runtime-profile", account_label: `Profile ${inventoryVersion}`, runtime_id: "codex_cli", is_default: true,
@@ -19649,216 +19624,99 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
   });
 
-  it("MoonLadderStudios/MoonMind#3797 previews backend truth and submits tier intent", async () => {
+  it("#4636 previews default Tier 2 while leaving selection omitted on submit", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    await waitFor(() => {
-      expect(
-        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
-      ).toBe("profile:codex-default");
-    });
-
-    fireEvent.change(screen.getByLabelText("Model tier intent"), {
-      target: { value: "3" },
-    });
-
-    expect(
-      await screen.findByText(
-        "Tier 3 · Default · gpt-backend-preview · xhigh",
-      ),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.",
-      ),
-    ).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText("Advanced mode"));
-    const primaryStep = screen.getByText("Step 1").closest(
-      "section",
-    ) as HTMLElement;
-    fireEvent.change(
-      within(primaryStep).getByLabelText("Step 1 Model tier intent"),
-      { target: { value: "1" } },
-    );
-    expect(
-      await within(primaryStep).findByText(
-        "Tier 1 · Plan · gpt-step-backend-preview · medium",
-      ),
-    ).toBeTruthy();
-
-    const previewCall = fetchSpy.mock.calls
-      .filter(
-        ([url]) =>
-          String(url) ===
-          "/api/v1/provider-profiles/profile%3Acodex-default/model-tiers:preview",
-      )
-      .at(-1);
-    expect(previewCall).toBeTruthy();
-    expect(JSON.parse(String(previewCall?.[1]?.body || "{}"))).toMatchObject({
-      steps: [
-        { id: "workflow", modelTier: 3, tierFallback: "clamp" },
-        expect.objectContaining({
-          id: expect.stringMatching(/^step:/),
-          modelTier: 1,
-          tierFallback: "clamp",
-        }),
-      ],
-    });
-
-    fireEvent.change(await screen.findByLabelText("Instructions"), {
-      target: { value: "Launch with backend-previewed tier intent." },
-    });
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe("gpt-profile-default");
+    expect(screen.queryByLabelText("Tier fallback")).toBeNull();
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Keep the profile default dynamic." } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/executions",
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
-    const executionCall = fetchSpy.mock.calls
-      .filter(([url]) => String(url) === "/api/executions")
-      .at(-1);
-    const request = JSON.parse(String(executionCall?.[1]?.body));
-
-    expect(request.payload.task.runtime).toMatchObject({
-      mode: "codex_cli",
-      profileId: "profile:codex-default",
-      modelTier: 3,
-      tierFallback: "clamp",
-    });
-    expect(request.payload.task.runtime).not.toHaveProperty("model");
-    expect(request.payload.task.runtime).not.toHaveProperty("effort");
-    expect(request.payload.task.steps[0].runtime).toMatchObject({
-      modelTier: 1,
-      tierFallback: "clamp",
-    });
-    expect(request.payload.task.steps[0].runtime).not.toHaveProperty("model");
-    expect(request.payload.task.steps[0].runtime).not.toHaveProperty("effort");
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(true));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const runtime = JSON.parse(String(call?.[1]?.body)).payload.task.runtime;
+    expect(runtime).not.toHaveProperty("modelTier");
+    expect(runtime).not.toHaveProperty("model");
+    expect(runtime).not.toHaveProperty("effort");
   });
 
-  it("surfaces strict-tier preview errors without discarding successful previews", async () => {
+  it("#4636 submits configured tiers without fallback or concrete overrides", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    await waitFor(() => {
-      expect(
-        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
-      ).toBe("profile:codex-default");
-    });
-
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Tier"), { target: { value: "1" } });
+    expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe("gpt-plan");
     fireEvent.click(screen.getByLabelText("Advanced mode"));
-    const primaryStep = screen.getByText("Step 1").closest(
-      "section",
-    ) as HTMLElement;
-    fireEvent.change(
-      within(primaryStep).getByLabelText("Step 1 Model tier intent"),
-      { target: { value: "1" } },
-    );
-    fireEvent.change(screen.getByLabelText("Model tier intent"), {
-      target: { value: "3" },
-    });
-    fireEvent.change(screen.getByLabelText("Tier fallback"), {
-      target: { value: "strict" },
-    });
-
-    const strictPreviewError = await screen.findByRole("alert", {
-      name: "Workflow model tier preview error",
-    });
-    expect(strictPreviewError.textContent).toContain(
-      "Requested model tier 3 is unavailable; the selected profile defines 2 tiers.",
-    );
-    expect(
-      await within(primaryStep).findByText(
-        "Tier 1 · Plan · gpt-step-backend-preview · medium",
-      ),
-    ).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("Model tier intent"), {
-      target: { value: "1" },
-    });
-    fireEvent.change(screen.getByLabelText("Tier fallback"), {
-      target: { value: "clamp" },
-    });
-    fireEvent.change(
-      within(primaryStep).getByLabelText("Step 1 Model tier intent"),
-      { target: { value: "3" } },
-    );
-    fireEvent.change(
-      within(primaryStep).getByLabelText("Step 1 Tier fallback"),
-      { target: { value: "strict" } },
-    );
-
-    const stepStrictPreviewError = await within(primaryStep).findByRole(
-      "alert",
-      { name: "Step 1 model tier preview error" },
-    );
-    expect(stepStrictPreviewError.textContent).toContain(
-      "Requested model tier 3 is unavailable; the selected profile defines 2 tiers.",
-    );
-    expect(
-      await screen.findByText(
-        "Tier 1 · Plan · gpt-backend-preview · xhigh",
-      ),
-    ).toBeTruthy();
-
-    const previewRequests = fetchSpy.mock.calls
-      .filter(
-        ([url]) =>
-          String(url) ===
-          "/api/v1/provider-profiles/profile%3Acodex-default/model-tiers:preview",
-      )
-      .map(([, init]) =>
-        JSON.parse(String(init?.body || "{}")) as {
-          steps?: Array<{ id: string; tierFallback: string }>;
-        },
-      );
-    expect(previewRequests).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          steps: [
-            expect.objectContaining({ id: "workflow", tierFallback: "strict" }),
-          ],
-        }),
-        expect.objectContaining({
-          steps: [
-            expect.objectContaining({
-              id: expect.stringMatching(/^step:/),
-              tierFallback: "clamp",
-            }),
-          ],
-        }),
-        expect.objectContaining({
-          steps: [
-            expect.objectContaining({
-              id: expect.stringMatching(/^step:/),
-              tierFallback: "strict",
-            }),
-          ],
-        }),
-      ]),
-    );
+    fireEvent.change(screen.getByLabelText("Step 1 Tier"), { target: { value: "2" } });
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Keep numbered policy." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(true));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const task = JSON.parse(String(call?.[1]?.body)).payload.task;
+    expect(task.runtime).toMatchObject({modelTier: 1});
+    for (const key of ["model", "effort", "tierFallback"]) expect(task.runtime).not.toHaveProperty(key);
+    expect(task.steps[0].runtime).toEqual({ modelTier: 2 });
+    expect(screen.queryByLabelText("Tier fallback")).toBeNull();
+    expect(screen.queryByLabelText("Step 1 Tier fallback")).toBeNull();
   });
 
-  it("defaults hard overrides from the selected profile until manually changed", async () => {
+  it("#4636 replaces inherited Custom at the step and resets without pinning the preview", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Model"), { target: { value: "" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect((screen.getByLabelText("Step 1 Tier") as HTMLSelectElement).value).toBe("custom");
+    fireEvent.change(screen.getByLabelText("Step 1 Effort"), { target: { value: "" } });
+    expect((screen.getByLabelText("Step 1 Model") as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Use workflow settings" }));
+    expect(screen.queryByRole("button", { name: "Use workflow settings" })).toBeNull();
+    expect((screen.getByLabelText("Step 1 Effort") as HTMLInputElement).value).toBe("high");
+    fireEvent.change(screen.getByLabelText("Step 1 Tier"), { target: { value: "1" } });
+    expect((screen.getByLabelText("Step 1 Model") as HTMLInputElement).value).toBe("gpt-plan");
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Preserve workflow Custom and explicit step policy." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(true));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const task = JSON.parse(String(call?.[1]?.body)).payload.task;
+    expect(task.runtime).toMatchObject({ model: null, effort: "high" });
+    expect(task.runtime).not.toHaveProperty("modelTier");
+    expect(task.steps[0].runtime).toEqual({ modelTier: 1 });
+  });
+
+  it("#4636 clears model into Custom and preserves effort through profile changes and submission", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Model"), { target: { value: "" } });
+    expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("custom");
+    expect((screen.getByLabelText("Workflow Effort") as HTMLInputElement).value).toBe("high");
+    fireEvent.change(screen.getByLabelText("Profile"), { target: { value: "profile:codex-secondary" } });
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Keep Custom defaults." } });
+    expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(true));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const task = JSON.parse(String(call?.[1]?.body)).payload.task;
+    expect(task.runtime).toMatchObject({ model: null, effort: "high", profileId: "profile:codex-secondary" });
+    expect(task.runtime).not.toHaveProperty("modelTier");
+  });
+
+  it("preserves the displayed profile pair until explicitly edited", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe(
         "profile:codex-default",
       );
-      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+      expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe(
         "gpt-profile-default",
       );
-      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+      expect((screen.getByLabelText("Workflow Effort") as HTMLInputElement).value).toBe(
         "high",
       );
     });
 
-    fireEvent.change(screen.getByLabelText("Hard override model"), {
+    fireEvent.change(screen.getByLabelText("Workflow Model"), {
       target: { value: "gpt-manual" },
     });
-    fireEvent.change(screen.getByLabelText("Hard override effort"), {
+    fireEvent.change(screen.getByLabelText("Workflow Effort"), {
       target: { value: "xhigh" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -19866,10 +19724,10 @@ describe("Task Create runtime switch layout stability", () => {
     });
 
     await waitFor(() => {
-      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+      expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe(
         "gpt-manual",
       );
-      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+      expect((screen.getByLabelText("Workflow Effort") as HTMLInputElement).value).toBe(
         "xhigh",
       );
     });

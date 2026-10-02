@@ -17,6 +17,19 @@ describe('remediationCreateDraft', () => {
     window.history.pushState({}, '', '/workflows');
   });
 
+  it.each(['workflow', 'task'])('#4636 persists %s selection without historical preview overrides', (container) => {
+    for (const selection of [{}, { modelTier: 2 }, { model: null, effort: null }, { model: 'saved-model' }, { modelTier: 2, effort: null, tierFallback: 'strict' }]) {
+      const draft = buildRemediationCreateDraft({
+        workflowId: 'issue-4636', runId: 'run-4636', targetRuntime: 'codex_cli',
+        model: 'historical-preview', effort: 'historical-effort',
+        inputParameters: { [container]: { runtime: selection } },
+      });
+      expect(draft.runtime).toEqual({ mode: 'codex_cli', ...selection });
+      const draftId = storeRemediationCreateDraft(draft);
+      expect(readRemediationCreateDraft(draftId)?.runtime).toEqual(draft.runtime);
+    }
+  });
+
   it('builds a Create-page remediation draft from execution detail', () => {
     const draft = buildRemediationCreateDraft({
       workflowId: 'mm:target',
