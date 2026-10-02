@@ -272,6 +272,8 @@ GH_NO_EXTENSION_UPDATE_NOTIFIER=1
 
 The trusted host entrypoint receives the narrowly scoped credential only long enough to write `gh/hosts.yml` with owner-only permissions under the lease-owned cache volume. It writes `gh/config.yml` declaring the configuration schema version that projection already satisfies. GitHub CLI migrates an unversioned configuration on every invocation and reads the account name from `api.github.com` to do it, so without that marker one blocked, throttled, or transiently failing provider call makes every `gh` command in the host exit non-zero — including `gh --version`. The projection is complete as written and must never depend on a provider round trip to become usable. It removes the raw credential before Omnigent starts, while the non-secret `XDG_CONFIG_HOME` selector reaches the runner and native Codex app-server. The cache volume is outside the repository workspace and is removed with the host lease, so it is neither shared between sessions nor eligible for workspace capture. A reusable static host is not eligible for credential-bearing GitHub runs because its host-wide configuration could expose credentials to unrelated runners. Such a deployment must route the run to an on-demand or run-dedicated host.
 
+The profile-bound entrypoint also configures Git's GitHub HTTPS credential helper in `git/config` under that same private `XDG_CONFIG_HOME`. The helper calls the image-owned `gh auth git-credential` against the projected account; Git config contains no token. Setup runs for both a fresh credential and a preserved restart, replaces only the GitHub helper list, and needs no provider request or agent-issued setup command. The cache remains writable while the host root filesystem is read-only.
+
 The tool bundle never contains token values. MoonMind resolves the credential at the trusted launch boundary and must keep it out of workflow payloads, Temporal history, logs, artifacts, and durable host metadata.
 
 ### 7.3 Runner environment
@@ -314,6 +316,8 @@ Mounting `gh` into the host does not authenticate a repository clone that MoonMi
 When MoonMind prepares a private repository workspace outside the Omnigent container, that clone must use MoonMind's canonical GitHub credential resolver and the existing in-memory Git credential-helper environment. Repository URLs remain token-free.
 
 The pre-host clone and the in-host Git/`gh` commands may use the same resolved credential, but they are distinct execution boundaries and must each receive their required authentication.
+
+Both generic and profile-bound Git workspace preparation use `moonmind/omnigent/git_identity.py` to apply the deployment's configured `WORKFLOW_GIT_USER_NAME` and `WORKFLOW_GIT_USER_EMAIL`, or the documented defaults `MoonMind Worker` and `moonmind-worker@users.noreply.github.com`. The profile-bound path reapplies this repository-local identity after checkpoint restoration and on workspace reuse, before launch ownership alignment. Retries preserve staged edits and saved work while restoring the prerequisites for commits and base-branch merges. Skills consume that configured identity without inventing their own fallback.
 
 ### 7.5 Relationship to resolved Skills
 
