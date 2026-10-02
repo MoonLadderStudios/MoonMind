@@ -479,6 +479,8 @@ class OmnigentOAuthHostRepository:
             providerLeaseId=record.provider_lease_id,
             bindingRef=record.binding_ref,
             credentialGeneration=record.credential_generation,
+            holderWorkflowId=record.holder_workflow_id,
+            leasePurpose=record.lease_purpose,
             containerId=record.container_id,
             containerName=record.container_name,
             omnigentHostId=record.omnigent_host_id,
