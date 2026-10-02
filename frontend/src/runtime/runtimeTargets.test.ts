@@ -98,6 +98,20 @@ describe('resolveDefaultRuntimeId', () => {
 });
 
 describe('runtimeOptionGroups', () => {
+  it('keeps the supported legacy Jules identity available for restored drafts', () => {
+    const groups = runtimeOptionGroups(['jules_api']);
+    expect(groups.recommended).toEqual([
+      {
+        runtimeId: 'jules_api',
+        label: 'Jules',
+        compatibilityPath: false,
+        available: true,
+      },
+    ]);
+    expect(runtimeUnavailableReason('jules_api')).toBeNull();
+    expect(formatRuntimeLabel('jules_api')).toBe('Jules');
+  });
+
   it('labels direct paths as compatibility options rather than equal defaults', () => {
     const groups = runtimeOptionGroups(
       ['omnigent', 'codex_cli', 'claude_code'],

@@ -400,7 +400,10 @@ or cross-deployment coordinator.
 New queued/indirect requests fail as unsupported before launch, including saved
 schedule inputs and plan nodes. Reset/rerun/resume is new executable admission,
 so removed targets require explicit replacement while original attempts and
-capability snapshots remain unchanged. Workflow patch markers preserve recorded
+capability snapshots remain unchanged. A closed historical execution can start a
+fresh rerun with an explicitly selected supported target; its original integration
+monitoring metadata stays with the source attempt and is not the new binding.
+Workflow patch markers preserve recorded
 command sequences; they do not authorize replaying an old history into a new
 Cloud activity. Affected histories needing execution stay with the installed
 release until the bounded transition is complete. Repository acceptance uses

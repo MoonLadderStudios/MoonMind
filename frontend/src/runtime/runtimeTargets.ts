@@ -62,6 +62,7 @@ const RUNTIME_ID_LABELS: Record<string, string> = {
   codex_cli: 'Codex CLI',
   codex: 'Codex CLI',
   jules: 'Jules',
+  jules_api: 'Jules',
   openclaw: 'OpenClaw',
   universal: 'Universal',
   omnigent: 'Omnigent',

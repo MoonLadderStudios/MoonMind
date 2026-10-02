@@ -90,7 +90,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     is_default: false,
   };
 
-  const payloadWithRuntimes: BootPayload = {
+  const payloadWithRuntimes = {
     page: 'settings-providers-secrets',
     apiBase: '/api',
     initialData: {
@@ -107,7 +107,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
         },
       },
     },
-  } as unknown as BootPayload;
+  } satisfies BootPayload;
 
   let fetchSpy: MockInstance;
 
@@ -267,7 +267,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
   });
   it('does not offer a removed runtime from a stale boot catalog (#4644)', async () => {
     const stale = structuredClone(payloadWithRuntimes);
-    (stale.initialData as any).runtimeConfig.system.supportedRuntimes.push('codex_cloud');
+    stale.initialData.runtimeConfig.system.supportedRuntimes.push('codex_cloud');
     renderProvidersPage(stale);
     await screen.findByRole('heading', { name: 'Profiles' });
     expect(Array.from(runtimeFilterControl().options).map((option) => option.value)).not.toContain('codex_cloud');
