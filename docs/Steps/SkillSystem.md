@@ -1013,7 +1013,14 @@ Hard rules:
 - keep full skill bodies on disk; do not duplicate them in responses
 ```
 
-The activation summary is not a duplicate full-body Skill bundle.
+The activation summary is not a duplicate full-body Skill bundle. It protects the
+immutable active snapshot and its helper selection, not repository source from
+requested authoring. Agents may read and edit checked-in Skill source when the
+task requires it, following the repository's source and projection ownership.
+Materialization must preserve those sources, and source edits do not replace the
+snapshot used by the current run. Externally owned bundles still require their
+own publication authority; a consumer PR must not reference an unpublished
+submodule commit.
 
 ### 14.6 Active Manifest
 

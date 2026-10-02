@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.workflow import ChildWorkflowCancellationType
 
 from moonmind.workflows.temporal.workflows import merge_automation as merge_automation_module
@@ -2359,3 +2359,89 @@ async def test_merge_automation_propagates_unexpected_wait_condition_error(
 
     with pytest.raises(RuntimeError, match="unexpected workflow wait failure"):
         await workflow.run(_payload())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preserve_failure", [False, True])
+async def test_merge_automation_preserves_resolver_dependency_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    preserve_failure: bool,
+) -> None:
+    instance = MoonMindMergeAutomationWorkflow()
+    resolver_calls = 0
+    artifacts: list[dict[str, Any]] = []
+
+    async def activity(activity_type, payload, **_kwargs):
+        if activity_type == "merge_automation.evaluate_readiness":
+            return {
+                "headSha": "abc123",
+                "ready": True,
+                "pullRequestOpen": True,
+                "policyAllowed": True,
+                "checksComplete": True,
+                "checksPassing": True,
+                "automatedReviewComplete": True,
+                "jiraStatusAllowed": True,
+            }
+        artifacts.append(payload)
+        return {}
+
+    async def child(_workflow_type, _payload, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        cause = ApplicationError(
+            "pr-resolver reported status 'blocked'; dependency_commit_unavailable; "
+            "diagnosticsRef: art-dependency; api_key=fixture-private-key-value "
+            + "x" * 5000,
+            type="AgentRuntimeError",
+        )
+        raise RuntimeError("Child workflow execution failed") from cause
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow, "execute_activity", activity
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow, "execute_child_workflow", child
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow, "upsert_memo", lambda _memo: None
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda patch: (
+            preserve_failure
+            if patch == "merge-automation-resolver-failure-summary-v1"
+            else patch
+            != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+        ),
+    )
+    result = await instance.run(_payload())
+    assert result["status"] == "failed"
+    assert resolver_calls == 1
+    assert len(result["resolverChildWorkflowIds"]) == 1
+    if preserve_failure:
+        assert "dependency_commit_unavailable" in result["summary"]
+        assert "art-dependency" in result["summary"]
+        assert "fixture-private-key-value" not in str(result)
+        assert len(result["summary"]) <= 2048
+        assert (
+            "dependency_commit_unavailable" in result["blockers"][0]["summary"]
+        )
+        assert "art-dependency" in result["blockers"][0]["summary"]
+        assert len(result["blockers"][0]["summary"]) <= 512
+    else:
+        assert (
+            result["summary"]
+            == "pr-resolver child workflow failed before returning a result."
+        )

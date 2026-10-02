@@ -468,3 +468,16 @@ The production compiler, schema forms, preset expansion, child API, runtime adap
 - Historical reconstruction, mixed API/worker versions, stale defaults, and changed definition digests cannot silently change authority.
 
 Source review and documentation coverage are not runtime, browser, or deployed conformance evidence. Required regressions belong in the existing selected test suites; protected live-provider qualification remains separately identified.
+
+## Dependency publication
+
+Managed, immediate, and saved-candidate Git publication use
+`--recurse-submodules=check`. Git checks changed initialized submodules before
+pushing the parent; it does not publish dependencies on the consumer's behalf.
+A local dependency commit must already have a remote reference before it can be
+included in a published consumer candidate. Retain the candidate and dependency
+work when that check fails. Managed and saved-candidate publication record
+`dependency_commit_unavailable` as a prerequisite failure, rather than repeatedly
+retrying an unchanged push. Resume the same candidate once its owning
+repository has published the dependency under the authorized scope. Do not
+replace the intended bundle with an unrelated published revision to pass CI.
