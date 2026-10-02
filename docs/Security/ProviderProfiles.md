@@ -1411,9 +1411,12 @@ the resource it actually describes:
   is `none` materializes no credential, so it has nothing for credential work to
   wait on.
 - **Upstream provider capacity.** Shared-scope fullness and cooldown gate only
-  purposes that spend the upstream resource. Credential repair and revocation do
-  not, so a saturated or cooling-down scope must never be what stops a broken
-  credential from being fixed or revoked.
+  purposes that spend the upstream resource. Credential repair, revocation, and
+  interactive OAuth login (`oauth_connect`, `oauth_reconnect`) do not, so a
+  saturated or cooling-down scope must never be what stops a broken credential
+  from being fixed or revoked, or keeps the operator from signing in. A held
+  lease for one of these purposes does not fill the scope either. Login still
+  drains the profile's credential consumers before it starts.
 
 The wait predicate is the same expression as the grant condition, evaluated
 against the profile resolved by ID on every pass. A waiter therefore cannot wake
@@ -1641,7 +1644,11 @@ themselves:
 - the narrowed drain set that exempts a credentialless profile, so a pre-marker
   manager still drains every lease;
 - the per-purpose scope exemption, so a pre-marker manager still gates credential
-  repair and revocation on shared-scope availability;
+  repair and revocation on shared-scope availability (the later OAuth login
+  exemption has its own marker,
+  `provider-profile-manager-oauth-login-scope-exempt-v1`, read once per manager
+  run, so a manager started before it keeps gating login on the scope until
+  its next Continue-As-New);
 - withdrawing a pending request when its owner releases.
 
 The durable lease transition contract above has its own workflow marker,
