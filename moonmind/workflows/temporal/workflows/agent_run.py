@@ -16,6 +16,12 @@ from temporalio.workflow import (
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.runtime_intent import (
+        MODEL_SELECTION_KEYS,
+        SELECTION_DERIVED_KEYS,
+        merge_runtime_selection,
+        model_selection_fields,
+    )
     from pydantic import ValidationError
     from moonmind.omnigent.runtime_bindings import stable_binding_id
 
@@ -6093,15 +6099,18 @@ class MoonMindAgentRun:
     ) -> None:
         previous_runtime_id = self._managed_runtime_id(request.agent_id)
         params = dict(request.parameters or {})
+        preserve_model_selection = self._workflow_patch_enabled(
+            "agent-run-model-selection-presence-4636-v1"
+        )
         parameters_patch = payload.get("parametersPatch")
         editable_runtime_payload_keys = {"task", "authoredTaskInput"}
         if refresh_derived_selection:
             editable_runtime_payload_keys.add("authoredWorkflowInput")
+            if preserve_model_selection:
+                editable_runtime_payload_keys.add("workflow")
         if isinstance(parameters_patch, Mapping):
             for key, value in parameters_patch.items():
-                if key in editable_runtime_payload_keys and isinstance(
-                    value, Mapping
-                ):
+                if key in editable_runtime_payload_keys and isinstance(value, Mapping):
                     existing_payload = self._mapping_copy(params.get(key))
                     runtime_patch = value.get("runtime")
                     if isinstance(runtime_patch, Mapping):
@@ -6116,6 +6125,55 @@ class MoonMindAgentRun:
                     params[key] = existing_payload
                 else:
                     params[key] = value
+
+        authored_selection = (
+            payload.get("runtime") if preserve_model_selection else None
+        )
+        if (
+            preserve_model_selection
+            and not isinstance(authored_selection, Mapping)
+            and isinstance(parameters_patch, Mapping)
+        ):
+            for key in (
+                "task",
+                "workflow",
+                "authoredTaskInput",
+                "authoredWorkflowInput",
+            ):
+                block = parameters_patch.get(key)
+                if isinstance(block, Mapping) and isinstance(
+                    block.get("runtime"), Mapping
+                ):
+                    authored_selection = block["runtime"]
+        if preserve_model_selection and not isinstance(authored_selection, Mapping):
+            # Saved selection supplies untouched fields, not an explicit edit.
+            candidates = [params.get("runtime")]
+            candidates.extend(
+                block.get("runtime")
+                for key in ("task", "workflow", "authoredTaskInput")
+                if isinstance(block := params.get(key), Mapping)
+            )
+            authored_selection = next(
+                (
+                    source
+                    for source in candidates
+                    if isinstance(source, Mapping) and model_selection_fields(source)
+                ),
+                None,
+            )
+            if self._workflow_patch_enabled(
+                "agent-run-model-selection-flat-edit-4636-v1"
+            ):
+                # The signal normalizes supported aliases, while parametersPatch
+                # retains explicit nulls. Nested selection/reset above remains
+                # authoritative; only flat edits need the saved companion.
+                flat_selection = model_selection_fields(payload)
+                if isinstance(parameters_patch, Mapping):
+                    flat_selection.update(model_selection_fields(parameters_patch))
+                if flat_selection:
+                    authored_selection = merge_runtime_selection(
+                        authored_selection or {}, flat_selection
+                    )
 
         task_payload = self._mapping_copy(params.get("task"))
         task_runtime = self._mapping_copy(task_payload.get("runtime"))
@@ -6339,6 +6397,36 @@ class MoonMindAgentRun:
                 ):
                     self._drop_runtime_effort_fields(runtime_payload)
 
+        if isinstance(authored_selection, Mapping):
+            selection = model_selection_fields(authored_selection)
+            for runtime_payload in (
+                params,
+                task_runtime,
+                authored_runtime,
+                authored_workflow_runtime,
+                workflow_runtime,
+            ):
+                for key in (
+                    *MODEL_SELECTION_KEYS,
+                    *SELECTION_DERIVED_KEYS,
+                    "requestedModel",
+                    "resolvedModel",
+                    "resolvedEffort",
+                ):
+                    runtime_payload.pop(key, None)
+                runtime_payload.update(selection)
+            raw_runtime = self._mapping_copy(params.get("runtime"))
+            for key in (*MODEL_SELECTION_KEYS, *SELECTION_DERIVED_KEYS):
+                raw_runtime.pop(key, None)
+            raw_runtime.update(selection)
+            params["runtime"] = raw_runtime
+            if request.step_execution is not None:
+                previous = dict(request.step_execution.runtime_selection or {})
+                for key in MODEL_SELECTION_KEYS:
+                    previous.pop(key, None)
+                previous.update(selection)
+                request.step_execution.runtime_selection = previous
+
         if task_runtime or "runtime" in task_payload:
             task_payload["runtime"] = task_runtime
             params["task"] = task_payload
@@ -6366,11 +6454,15 @@ class MoonMindAgentRun:
                 runtime_selection.pop("executionProfileRef", None)
             if model:
                 runtime_selection["model"] = model
-            elif runtime_or_profile_changed:
+            elif runtime_or_profile_changed and not isinstance(
+                authored_selection, Mapping
+            ):
                 runtime_selection.pop("model", None)
             if effort:
                 runtime_selection["effort"] = effort
-            elif runtime_or_profile_changed:
+            elif runtime_or_profile_changed and not isinstance(
+                authored_selection, Mapping
+            ):
                 runtime_selection.pop("effort", None)
             request.step_execution.runtime_selection = runtime_selection
 

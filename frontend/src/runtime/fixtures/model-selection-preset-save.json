@@ -1,0 +1,176 @@
+[
+  {
+    "name": "tier",
+    "selection": {
+      "modelTier": 2
+    },
+    "event": "tier",
+    "parameters": {},
+    "request": {
+      "scope": "personal",
+      "title": "Model selection tier",
+      "description": "Model selection tier",
+      "steps": [
+        {
+          "instructions": "Preserve tier.",
+          "type": "skill",
+          "skill": {
+            "id": "auto",
+            "args": {},
+            "runtime": {
+              "modelTier": 2
+            }
+          }
+        }
+      ],
+      "suggestedInputs": [],
+      "tags": []
+    }
+  },
+  {
+    "name": "custom-model-default",
+    "selection": {
+      "model": null,
+      "effort": "high"
+    },
+    "event": "clear-model",
+    "parameters": {},
+    "request": {
+      "scope": "personal",
+      "title": "Model selection custom-model-default",
+      "description": "Model selection custom-model-default",
+      "steps": [
+        {
+          "instructions": "Preserve custom-model-default.",
+          "type": "skill",
+          "skill": {
+            "id": "auto",
+            "args": {},
+            "runtime": {
+              "model": null,
+              "effort": "high"
+            }
+          }
+        }
+      ],
+      "suggestedInputs": [],
+      "tags": []
+    }
+  },
+  {
+    "name": "custom-defaults",
+    "selection": {
+      "model": null,
+      "effort": null
+    },
+    "event": "clear-both",
+    "parameters": {},
+    "request": {
+      "scope": "personal",
+      "title": "Model selection custom-defaults",
+      "description": "Model selection custom-defaults",
+      "steps": [
+        {
+          "instructions": "Preserve custom-defaults.",
+          "type": "skill",
+          "skill": {
+            "id": "auto",
+            "args": {},
+            "runtime": {
+              "model": null,
+              "effort": null
+            }
+          }
+        }
+      ],
+      "suggestedInputs": [],
+      "tags": []
+    }
+  },
+  {
+    "name": "saved-mixed",
+    "selection": {
+      "modelTier": 2,
+      "effort": null
+    },
+    "event": "saved",
+    "parameters": {
+      "seed": 7
+    },
+    "request": {
+      "scope": "personal",
+      "title": "Model selection saved-mixed",
+      "description": "Model selection saved-mixed",
+      "steps": [
+        {
+          "instructions": "Preserve saved-mixed.",
+          "type": "skill",
+          "skill": {
+            "id": "auto",
+            "args": {},
+            "runtime": {
+              "modelTier": 2,
+              "effort": null,
+              "parameters": {
+                "seed": 7
+              }
+            }
+          }
+        }
+      ],
+      "suggestedInputs": [],
+      "tags": []
+    }
+  },
+  {
+    "name": "saved-partial",
+    "selection": {
+      "model": null
+    },
+    "event": "saved",
+    "parameters": {
+      "temperature": 0
+    },
+    "request": {
+      "scope": "personal",
+      "title": "Model selection saved-partial",
+      "description": "Model selection saved-partial",
+      "steps": [
+        {
+          "instructions": "Preserve saved-partial.",
+          "type": "skill",
+          "skill": {
+            "id": "auto",
+            "args": {},
+            "runtime": {
+              "model": null,
+              "parameters": {
+                "temperature": 0
+              }
+            }
+          }
+        }
+      ],
+      "suggestedInputs": [],
+      "tags": []
+    }
+  },
+  {
+    "name": "omitted",
+    "selection": {},
+    "event": "untouched",
+    "parameters": {},
+    "request": {
+      "scope": "personal",
+      "title": "Model selection omitted",
+      "description": "Model selection omitted",
+      "steps": [
+        {
+          "instructions": "Preserve omitted."
+        }
+      ],
+      "suggestedInputs": [],
+      "tags": []
+    }
+  }
+]

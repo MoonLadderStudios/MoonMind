@@ -48,10 +48,15 @@ from moonmind.config.container_backend_settings import (
 )
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
-from moonmind.utils.logging import redact_sensitive_text
 from moonmind.omnigent.legacy_retirement import (
     enforce_obsolete_configuration_at_startup,
 )
+from moonmind.runtime_intent import (
+    MODEL_SELECTION_KEYS,
+    SELECTION_DERIVED_KEYS,
+    merge_runtime_selection,
+)
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.agent_skills.agent_skills_activities import (
     AgentSkillsActivities,
 )
@@ -1492,10 +1497,17 @@ def _build_runtime_planner():
         task_payload = _coerce_mapping(
             input_payload.get("workflow") or input_payload.get("task")
         )
-        if not task_payload:
-            task_payload = _coerce_mapping(
-                parameter_payload.get("workflow") or parameter_payload.get("task")
+        parameter_task = _coerce_mapping(
+            parameter_payload.get("workflow") or parameter_payload.get("task")
+        )
+        if task_payload and parameter_task:
+            from moonmind.workflows.executions.execution_contract import (
+                merge_workflow_input,
             )
+
+            task_payload = merge_workflow_input(task_payload, parameter_task)
+        elif not task_payload:
+            task_payload = parameter_task
         _enforce_required_capability_readiness(
             parameters=parameter_payload,
             task_payload=task_payload,
@@ -1598,13 +1610,14 @@ def _build_runtime_planner():
         )
         runtime_node: dict[str, Any] = {"mode": runtime_mode}
 
-        model = runtime_payload.get("model") or parameter_payload.get("model")
-        if isinstance(model, str) and model.strip():
-            runtime_node["model"] = model.strip()
-
-        effort = runtime_payload.get("effort") or parameter_payload.get("effort")
-        if isinstance(effort, str) and effort.strip():
-            runtime_node["effort"] = effort.strip()
+        # Admission diagnostics are not authored selection. Presence, including
+        # null, is retained in activity results and therefore in durable plans.
+        selection_source = (
+            runtime_payload if "runtime" in task_payload else parameter_payload
+        )
+        for key in (*MODEL_SELECTION_KEYS, *SELECTION_DERIVED_KEYS, "parameters"):
+            if key in selection_source:
+                runtime_node[key] = selection_source[key]
 
         profile_id = (
             runtime_payload.get("profileId")
@@ -2078,10 +2091,9 @@ def _build_runtime_planner():
                         _drop_inherited_skill_context(step_node_inputs)
                     step_node_inputs.update(step_metadata_inputs)
                     if base_runtime_payload or step_runtime_payload:
-                        step_node_inputs["runtime"] = {
-                            **base_runtime_payload,
-                            **step_runtime_payload,
-                        }
+                        step_node_inputs["runtime"] = merge_runtime_selection(
+                            base_runtime_payload, step_runtime_payload
+                        )
                     base_story_output = _coerce_mapping(node_inputs.get("storyOutput"))
                     step_story_output = _coerce_mapping(
                         step_entry.get("storyOutput") or step_entry.get("story_output")

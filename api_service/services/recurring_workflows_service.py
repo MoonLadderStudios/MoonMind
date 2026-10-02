@@ -40,6 +40,11 @@ from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
     resolve_launch_target_profile_selection,
 )
+from moonmind.runtime_intent import (
+    RuntimeIntentValidationError,
+    model_selection_fields,
+    validate_model_selection_submission,
+)
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
@@ -1095,6 +1100,46 @@ class RecurringWorkflowsService:
             )
         return refreshed
 
+    async def _validate_model_selection_submission(
+        self,
+        target: Mapping[str, Any],
+        *,
+        principal: str,
+        saved_target: Mapping[str, Any] | None = None,
+    ) -> None:
+        async def read_input_artifact(ref: str) -> Any:
+            from moonmind.workflows.temporal.artifacts import (
+                TemporalArtifactRepository,
+                TemporalArtifactService,
+            )
+
+            service = self._artifact_service or TemporalArtifactService(
+                TemporalArtifactRepository(self._session)
+            )
+            try:
+                _artifact, body = await service.read(
+                    artifact_id=ref.removeprefix("artifact://").removeprefix("input/"),
+                    principal=principal,
+                    allow_restricted_raw=True,
+                )
+                import json
+
+                return json.loads(body.decode("utf-8"))
+            except Exception as exc:
+                raise RecurringWorkflowValidationError(
+                    f"Cannot validate model selection in input artifact {ref}: {exc}"
+                ) from exc
+
+        try:
+            await validate_model_selection_submission(
+                target,
+                saved_payload=saved_target,
+                read_input_artifact=read_input_artifact,
+                field_name="target",
+            )
+        except RuntimeIntentValidationError as exc:
+            raise RecurringWorkflowValidationError(str(exc)) from exc
+
     async def create_definition(
         self,
         *,
@@ -1117,6 +1162,10 @@ class RecurringWorkflowsService:
         parse_cron_expression(cron_normalized)
         timezone_name = validate_timezone_name(timezone)
         name_text = _clean_text(name, field_name="name", required=True) or ""
+        await self._validate_model_selection_submission(
+            target,
+            principal=str(getattr(actor, "id", None) or owner_user_id or "system"),
+        )
         target_payload = _normalize_target(_json_object(target, field_name="target"))
         # The stored target's initialParameters are what a later schedule action
         # launches, so the runtime/Provider Profile pair is validated here,
@@ -1228,17 +1277,41 @@ class RecurringWorkflowsService:
                 )
 
                 authored_parameters = definition.target.get("initialParameters") or {}
-                task_intent = authored_parameters.get("workflow") or authored_parameters.get("task") or {}
+                task_intent = (
+                    authored_parameters.get("workflow")
+                    or authored_parameters.get("task")
+                    or {}
+                )
                 runtime_intent = task_intent.get("runtime") or {}
                 resolved = resolve_model_effort(
-                    runtime_id=provider_profile.runtime_id, profile=provider_profile,
-                    requested_model=runtime_intent.get("model", authored_parameters.get("model")),
-                    requested_effort=runtime_intent.get("effort", authored_parameters.get("effort")),
-                    requested_model_tier=runtime_intent.get("modelTier", authored_parameters.get("modelTier")),
-                    tier_fallback=runtime_intent.get("tierFallback", authored_parameters.get("tierFallback", "clamp")),
+                    runtime_id=provider_profile.runtime_id,
+                    profile=provider_profile,
+                    # Raw schedule fields may still author a legacy flat pair.
+                    # Only a nested selection supersedes that saved intent.
+                    authored_runtime=(
+                        runtime_intent
+                        if model_selection_fields(runtime_intent)
+                        else None
+                    ),
+                    requested_model=runtime_intent.get(
+                        "model", authored_parameters.get("model")
+                    ),
+                    requested_effort=runtime_intent.get(
+                        "effort", authored_parameters.get("effort")
+                    ),
+                    requested_model_tier=runtime_intent.get(
+                        "modelTier", authored_parameters.get("modelTier")
+                    ),
+                    tier_fallback=runtime_intent.get(
+                        "tierFallback", authored_parameters.get("tierFallback", "clamp")
+                    ),
                     require_launch_ready=False,
                 )
-                initial_parameters.update(model=resolved.model, effort=resolved.effort, modelSource=resolved.model_source)
+                initial_parameters.update(
+                    model=resolved.model,
+                    effort=resolved.effort,
+                    modelSource=resolved.model_source,
+                )
             principal = str(getattr(actor, "id", "") or "system")
             artifact_service = self._artifact_service or TemporalArtifactService(
                 TemporalArtifactRepository(self._session)
@@ -1369,6 +1442,7 @@ class RecurringWorkflowsService:
         policy: Mapping[str, Any] | None = None,
         scope_ref: str | None = None,
         expected_version: int | None = None,
+        actor: User | None = None,
     ) -> RecurringWorkflowDefinition:
         definition = await self._lock_definition_for_update(definition.id)
         if expected_version is not None and int(definition.version or 0) != int(
@@ -1383,6 +1457,13 @@ class RecurringWorkflowsService:
         # target untouched.
         normalized_target: dict[str, Any] | None = None
         if target is not None:
+            await self._validate_model_selection_submission(
+                target,
+                principal=str(
+                    getattr(actor, "id", None) or definition.owner_user_id or "system"
+                ),
+                saved_target=definition.target,
+            )
             normalized_target = _normalize_target(
                 _json_object(target, field_name="target")
             )

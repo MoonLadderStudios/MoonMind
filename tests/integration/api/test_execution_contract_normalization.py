@@ -386,5 +386,5 @@ def test_mm1173_flat_steps_preserve_model_tier_intent() -> None:
     assert runtime["providerProfile"] == "codex_openai_api"
     assert runtime["modelTier"] == 3
     assert runtime["tierFallback"] == "strict"
-    assert runtime["model"] is None
-    assert runtime["effort"] is None
+    assert "model" not in runtime
+    assert "effort" not in runtime

@@ -25,6 +25,7 @@ from jinja2 import StrictUndefined, TemplateError, UndefinedError
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -41,13 +42,14 @@ from moonmind.capabilities.input_contracts import (
     normalize_capability_input_contract,
 )
 from moonmind.config.settings import settings
+from moonmind.runtime_intent import (
+    RuntimeIntentValidationError,
+    validate_model_selection_authoring,
+    validate_runtime_tier_intent,
+)
 from moonmind.workflows.checkpoint_branches import (
     CheckpointBranchGitBindingError,
     _validate_work_branch,
-)
-from moonmind.runtime_intent import (
-    RuntimeIntentValidationError,
-    validate_runtime_tier_intent,
 )
 from moonmind.workflows.executions.preset_readiness import SavedPresetCapabilitiesInput
 from moonmind.workflows.temporal.remediation_loop import (
@@ -2229,6 +2231,10 @@ class PresetCatalogService:
             raise PresetValidationError("description is required")
 
         validated_inputs = self._validate_inputs_schema(inputs_schema)
+        try:
+            validate_model_selection_authoring(steps, field_name="steps")
+        except RuntimeIntentValidationError as exc:
+            raise PresetValidationError(str(exc)) from exc
         validated_steps = self._validate_template_steps(steps)
         derived_capabilities = _normalize_capabilities(
             (required_capabilities or [])
@@ -3249,9 +3255,12 @@ class PresetCatalogService:
         auto_commit: bool = True,
     ) -> None:
         dialect_name = self._session.bind.dialect.name if self._session.bind else ""
-        if dialect_name == "postgresql":
+        recent_insert = {"postgresql": pg_insert, "sqlite": sqlite_insert}.get(
+            dialect_name
+        )
+        if recent_insert is not None:
             await self._session.execute(
-                pg_insert(PresetRecent)
+                recent_insert(PresetRecent)
                 .values(
                     user_id=user_id,
                     template_id=template_id,
@@ -3513,6 +3522,13 @@ class PresetCatalogService:
                 )
                 result.created += 1
                 continue
+
+            try:
+                validate_model_selection_authoring(
+                    validated_steps, saved_payload=template.steps, field_name="steps"
+                )
+            except RuntimeIntentValidationError as exc:
+                raise PresetValidationError(str(exc)) from exc
 
             updated = False
             normalized_tags = _normalize_tag_list(item.get("tags") or [])

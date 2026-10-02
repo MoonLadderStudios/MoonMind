@@ -142,7 +142,6 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
                                 "providerProfileRef": "codex-openai",
                                 "profileSelector": {"providerId": "openai"},
                                 "modelTier": 2,
-                                "tierFallback": "strict",
                             },
                         },
                     }
@@ -151,6 +150,18 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
                 required_capabilities=[],
                 created_by=user_id,
             )
+
+            # #4636 rejects new strict authoring. Exercise the retained reader
+            # with a previously accepted server record, as after restart.
+            stored = (
+                await session.execute(
+                    select(Preset).where(Preset.slug == "tiered-workflow")
+                )
+            ).scalar_one()
+            stored_steps = deepcopy(stored.steps)
+            stored_steps[0]["skill"]["runtime"]["tierFallback"] = "strict"
+            stored.steps = stored_steps
+            await session.commit()
 
             expanded = await service.expand_template(
                 slug="tiered-workflow",
@@ -240,7 +251,6 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                                 "id": "auto",
                                 "runtime": {
                                     "modelTier": 2,
-                                    "tierFallback": "strict",
                                 },
                             },
                         }
@@ -260,7 +270,6 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                 authored_runtime = expanded["steps"][0]["skill"]["runtime"]
                 assert authored_runtime == {
                     "modelTier": 2,
-                    "tierFallback": "strict",
                 }
                 assert expanded["steps"][0]["runtime"] == authored_runtime
                 assert "model" not in authored_runtime
@@ -300,17 +309,15 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                             principal_context={},
                         )
                     )
-                    launch_runtime = created.input_parameters["workflow"]["steps"][
-                        0
-                    ]["runtime"]
+                    launch_runtime = created.input_parameters["workflow"]["steps"][0][
+                        "runtime"
+                    ]
                     outcomes.append(
                         (
                             launch_runtime["profileId"],
-                            launch_runtime["model"],
-                            launch_runtime["effort"],
-                            launch_runtime["modelTierResolution"][
-                                "providerProfileId"
-                            ],
+                            launch_runtime["resolvedModel"],
+                            launch_runtime["resolvedEffort"],
+                            launch_runtime["modelTierResolution"]["providerProfileId"],
                         )
                     )
 

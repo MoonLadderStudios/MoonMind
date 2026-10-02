@@ -132,8 +132,10 @@ async def test_create_definition_creates_temporal_schedule(
 
 
 @pytest.mark.parametrize("explicit_configuration", [False, True])
+@pytest.mark.parametrize("flat_selection", [False, True])
 async def test_create_definition_compiles_agent_profile_snapshot_separately(
     explicit_configuration,
+    flat_selection,
     tmp_path: Path,
     mock_temporal_adapter,
     monkeypatch: pytest.MonkeyPatch,
@@ -223,21 +225,33 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
                 "workflowType": "MoonMind.UserWorkflow",
                 "initialParameters": {
                     "targetRuntime": "omnigent",
+                    **(
+                        {"model": "saved-flat-model", "effort": "max"}
+                        if flat_selection
+                        else {}
+                    ),
                     "omnigent": {
                         "executionTargetRef": "omnigent-codex@1",
                         "launchPolicyRef": "codex-on-demand@1",
                     },
                     "workflow": {
                         "instructions": "Run the selected profile.",
-                        "runtime": {"mode": "omnigent", "profileId": "codex-openai-oauth"},
+                        "runtime": {
+                            "mode": "omnigent",
+                            "profileId": "codex-openai-oauth",
+                        },
                     },
                 },
             },
             policy=None,
-            agent_profile_selection={
-                "profileId": "omnigent-bootstrap-default",
-                "providerProfileRef": "codex-openai-oauth",
-            } if explicit_configuration else None,
+            agent_profile_selection=(
+                {
+                    "profileId": "omnigent-bootstrap-default",
+                    "providerProfileRef": "codex-openai-oauth",
+                }
+                if explicit_configuration
+                else None
+            ),
             actor=SimpleNamespace(id=uuid4()),
         )
 
@@ -255,9 +269,14 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
     if not explicit_configuration:
         assert default_resolver.await_args.kwargs["provider_profile_ref"] == "codex-openai-oauth"
         resolver.assert_not_awaited()
-        assert initial_parameters["model"] == provider_model
-        assert initial_parameters["effort"] == provider_effort
-        assert compile_plan.await_args.kwargs["initial_parameters"]["model"] == provider_model
+        expected_model = "saved-flat-model" if flat_selection else provider_model
+        expected_effort = "max" if flat_selection else provider_effort
+        assert initial_parameters["model"] == expected_model
+        assert initial_parameters["effort"] == expected_effort
+        assert (
+            compile_plan.await_args.kwargs["initial_parameters"]["model"]
+            == expected_model
+        )
     scheduled_parameters = mock_temporal_adapter.create_schedule.await_args.kwargs[
         "workflow_input"
     ]["initial_parameters"]
@@ -283,7 +302,11 @@ async def test_create_definition_normalizes_snake_case_target_aliases(
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = RecurringWorkflowsService(
-                session, temporal_client_adapter=mock_temporal_adapter
+                session,
+                temporal_client_adapter=mock_temporal_adapter,
+                artifact_service=SimpleNamespace(
+                    read=AsyncMock(return_value=(SimpleNamespace(), b"{}"))
+                ),
             )
             definition = await service.create_definition(
                 name="Daily Demo",

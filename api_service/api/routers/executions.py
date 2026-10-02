@@ -335,6 +335,7 @@ from moonmind.workflows.executions.execution_contract import (
     resolve_publish_mode_for_skill,
     strip_absent_vector_fields,
     validate_publish_mode_repository_authority,
+    merge_workflow_input,
 )
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
@@ -8162,6 +8163,7 @@ def _resolve_runtime_model_effort(
             resolved = resolve_model_effort(
                 runtime_id=runtime_id,
                 profile=profile,
+                authored_runtime=runtime_payload,
                 requested_model_tier=requested_tier,
                 requested_model=requested_model,
                 requested_effort=requested_effort,
@@ -8191,6 +8193,7 @@ def _resolve_runtime_model_effort(
     resolved = resolve_model_effort(
         runtime_id=runtime_id,
         profile=profile,
+        authored_runtime=runtime_payload,
         requested_model=requested_model,
         requested_effort=requested_effort,
         require_launch_ready=False,
@@ -8739,6 +8742,12 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ("execution_profile_ref", "executionProfileRef"),
             ):
                 value = validated_runtime.get(source_key)
+                if (
+                    source_key in ("model", "effort")
+                    and source_key in validated_runtime
+                    and value is None
+                ):
+                    normalized_runtime[target_key] = None
                 if value is not None and not isinstance(value, (Mapping, list)):
                     normalized_value = str(value).strip()
                     if not normalized_value:
@@ -8762,7 +8771,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             tier_preview = validated_runtime.get("tierPreview")
             if isinstance(tier_preview, Mapping):
                 normalized_runtime["tierPreview"] = dict(tier_preview)
-            for key in ("profileSelector", "hardOverrideAudit"):
+            for key in ("profileSelector", "hardOverrideAudit", "parameters"):
                 value = validated_runtime.get(key)
                 if isinstance(value, Mapping):
                     normalized_runtime[key] = dict(value)
@@ -9144,6 +9153,11 @@ async def _resolve_step_runtime_selections(
         if not runtime_payload:
             continue
 
+        from moonmind.runtime_intent import merge_runtime_selection
+
+        effective_runtime_payload = merge_runtime_selection(
+            task_runtime, runtime_payload
+        )
         raw_step_runtime = runtime_payload.get("mode") or task_target_runtime
         canonical_step_runtime: str | None = None
         if raw_step_runtime:
@@ -9232,7 +9246,7 @@ async def _resolve_step_runtime_selections(
         ) = _resolve_runtime_model_effort(
             runtime_id=canonical_step_runtime,
             profile=provider_profile,
-            runtime_payload=runtime_payload,
+            runtime_payload=effective_runtime_payload,
             requested_model=raw_requested_model,
             compare_advisory_preview=not (
                 effective_profile_id is None
@@ -9244,9 +9258,9 @@ async def _resolve_step_runtime_selections(
         if canonical_step_runtime:
             resolved_runtime["mode"] = canonical_step_runtime
         if resolved_model:
-            resolved_runtime["model"] = resolved_model
+            resolved_runtime["resolvedModel"] = resolved_model
         if resolved_effort:
-            resolved_runtime["effort"] = resolved_effort
+            resolved_runtime["resolvedEffort"] = resolved_effort
         if raw_requested_model is not None:
             resolved_runtime["requestedModel"] = raw_requested_model
         resolved_runtime["modelSource"] = model_source
@@ -9262,10 +9276,6 @@ async def _resolve_step_runtime_selections(
             resolved_runtime["profileId"] = default_profile_id
             resolved_runtime["providerProfile"] = default_profile_id
             resolved_runtime["providerProfileRef"] = default_profile_id
-        if "effort" not in resolved_runtime and isinstance(
-            task_runtime.get("effort"), str
-        ):
-            resolved_runtime["effort"] = task_runtime["effort"]
         step["runtime"] = resolved_runtime
 
 
@@ -9908,8 +9918,6 @@ def _tool_payload_name(payload: Mapping[str, Any] | None) -> str:
     return str(payload.get("name") or payload.get("id") or "").strip()
 
 
-
-
 def _normalize_user_role_name(value: Any) -> str:
     if isinstance(value, Mapping):
         value = value.get("name") or value.get("role") or value.get("id")
@@ -10364,6 +10372,38 @@ def _artifact_id_from_ref(value: Any) -> str | None:
     return ref.strip() or None
 
 
+async def _validate_model_selection_submission(
+    payload: Mapping[str, Any],
+    *,
+    session: AsyncSession,
+    user: User,
+    saved_payload: Mapping[str, Any] | None = None,
+) -> None:
+    from moonmind.runtime_intent import validate_model_selection_submission
+
+    async def read_input_artifact(ref: str) -> Any:
+        try:
+            _artifact, body = await get_temporal_artifact_service(session).read(
+                artifact_id=_artifact_id_from_ref(ref),
+                principal=str(getattr(user, "id", "") or "system"),
+                allow_restricted_raw=True,
+            )
+            return json.loads(body.decode("utf-8"))
+        except Exception as exc:
+            raise _invalid_workflow_request(
+                f"Cannot validate model selection in input artifact {ref}: {exc}"
+            ) from exc
+
+    try:
+        await validate_model_selection_submission(
+            payload,
+            saved_payload=saved_payload,
+            read_input_artifact=read_input_artifact,
+        )
+    except RuntimeIntentValidationError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
+
 async def _hydrate_recovery_checkpoint_payload(
     *,
     session: AsyncSession,
@@ -10738,44 +10778,6 @@ async def _exact_rerun_parameters_from_snapshot(
     return parameters
 
 
-def _merge_workflow_preserving_artifact_instructions(
-    artifact_task: Mapping[str, Any],
-    parameter_task: Mapping[str, Any],
-) -> dict[str, Any]:
-    merged = {**dict(artifact_task), **dict(parameter_task)}
-    artifact_instructions = str(artifact_task.get("instructions") or "").strip()
-    parameter_instructions = str(parameter_task.get("instructions") or "").strip()
-    if artifact_instructions and not parameter_instructions:
-        merged["instructions"] = artifact_task.get("instructions")
-
-    artifact_steps = artifact_task.get("steps")
-    parameter_steps = parameter_task.get("steps")
-    if isinstance(artifact_steps, list) and isinstance(parameter_steps, list):
-        merged_steps: list[Any] = []
-        for index, parameter_step in enumerate(parameter_steps):
-            if not isinstance(parameter_step, Mapping):
-                merged_steps.append(parameter_step)
-                continue
-            artifact_step = (
-                artifact_steps[index]
-                if index < len(artifact_steps)
-                and isinstance(artifact_steps[index], Mapping)
-                else {}
-            )
-            step = {**dict(artifact_step), **dict(parameter_step)}
-            artifact_step_instructions = str(
-                artifact_step.get("instructions") or ""
-            ).strip()
-            parameter_step_instructions = str(
-                parameter_step.get("instructions") or ""
-            ).strip()
-            if artifact_step_instructions and not parameter_step_instructions:
-                step["instructions"] = artifact_step.get("instructions")
-            merged_steps.append(step)
-        merged["steps"] = merged_steps
-    return merged
-
-
 async def _snapshot_source_payload_from_parameters_and_artifact(
     *,
     session: AsyncSession,
@@ -10823,7 +10825,7 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         },
     }
     if artifact_task and parameter_task:
-        return payload, _merge_workflow_preserving_artifact_instructions(
+        return payload, merge_workflow_input(
             artifact_task,
             parameter_task,
         )
@@ -12911,13 +12913,11 @@ def _stamp_recurring_runtime_metadata(
     if runtime_metadata.get("targetRuntime"):
         runtime_payload["mode"] = runtime_metadata["targetRuntime"]
     if runtime_metadata.get("model"):
-        runtime_payload["model"] = runtime_metadata["model"]
+        runtime_payload["resolvedModel"] = runtime_metadata["model"]
     if runtime_metadata.get("modelTierResolution") is not None:
-        runtime_payload["modelTierResolution"] = runtime_metadata[
-            "modelTierResolution"
-        ]
+        runtime_payload["modelTierResolution"] = runtime_metadata["modelTierResolution"]
     if "effort" in runtime_metadata:
-        runtime_payload["effort"] = runtime_metadata.get("effort")
+        runtime_payload["resolvedEffort"] = runtime_metadata.get("effort")
     if runtime_metadata.get("profileId"):
         profile_id = runtime_metadata["profileId"]
         runtime_payload["profileId"] = profile_id
@@ -13232,6 +13232,13 @@ async def create_remediation_execution(
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
 ) -> ExecutionModel | ScheduleCreatedResponse:
     body = payload if isinstance(payload, dict) else {}
+    from moonmind.runtime_intent import validate_model_selection_authoring
+
+    try:
+        validate_model_selection_authoring(body)
+    except RuntimeIntentValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _validate_model_selection_submission(body, session=session, user=user)
     task_payload = (
         dict(body.get("workflow")) if isinstance(body.get("workflow"), Mapping) else {}
     )
@@ -14780,6 +14787,13 @@ async def create_execution(
     authorization: str | None = Header(None, alias="Authorization"),
     execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
 ) -> ExecutionModel | ScheduleCreatedResponse:
+    from moonmind.runtime_intent import validate_model_selection_authoring
+
+    try:
+        validate_model_selection_authoring(payload.get("payload", payload))
+    except RuntimeIntentValidationError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
     from moonmind.config.settings import settings
 
     if not settings.temporal_dashboard.submit_enabled:
@@ -14813,6 +14827,10 @@ async def create_execution(
             **principal_context,
             "verified_principal": authority.principal,
         }
+
+    await _validate_model_selection_submission(
+        payload.get("payload", payload), session=session, user=user
+    )
 
     try:
         if "type" in payload and "payload" in payload:
@@ -19235,6 +19253,24 @@ async def update_execution(
                 "has_parameters_patch": bool(payload.parameters_patch),
             },
         )
+
+    submitted_selection = dict(payload.parameters_patch or {})
+    if payload.input_artifact_ref is not None:
+        submitted_selection["inputArtifactRef"] = payload.input_artifact_ref
+    saved_selection = dict(record.parameters or {})
+    # The latest server-saved authored snapshot records explicit omission too.
+    # An older input artifact must not revive a strict requirement after reset.
+    saved_source_ref = _workflow_input_snapshot_ref_from_memo(
+        dict(getattr(record, "memo", None) or {})
+    ) or getattr(record, "input_ref", None)
+    if saved_source_ref:
+        saved_selection["inputArtifactRef"] = saved_source_ref
+    await _validate_model_selection_submission(
+        submitted_selection,
+        session=session,
+        user=user,
+        saved_payload=saved_selection,
+    )
 
     effective_parameters_patch = payload.parameters_patch
     if exact_plan_rerun:
