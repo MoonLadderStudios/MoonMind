@@ -1441,6 +1441,7 @@ def test_build_command_per_runtime():
 
 @pytest.mark.asyncio
 async def test_launch_spawns_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
@@ -1460,7 +1461,8 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
     assert loaded.pid == process.pid
 
 @pytest.mark.asyncio
-async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
+async def test_launch_keeps_workflow_id_none_as_null(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
@@ -2486,6 +2488,7 @@ def test_persist_gh_config_writes_git_identity_to_global_config(tmp_path):
 
 @pytest.mark.asyncio
 async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
@@ -3013,6 +3016,7 @@ async def test_launch_env_preserves_execution_context_without_worker_secrets(
 async def test_launch_filters_ambient_jira_credentials_from_child_env(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/testuser")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -3068,6 +3072,7 @@ async def test_launch_filters_ambient_jira_credentials_from_child_env(
 
 @pytest.mark.asyncio
 async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
 
     store = ManagedRunStore(tmp_path)
@@ -3135,6 +3140,7 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
 async def test_launch_materializes_claude_anthropic_secret_ref_profile(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-anthropic-key")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ambient-auth-token")
@@ -5546,6 +5552,7 @@ def _capture_launch_env(monkeypatch) -> dict[str, str]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("adapter_context", [False, True])
 async def test_scratch_launch_receives_no_github_credential(tmp_path, monkeypatch, adapter_context):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
     monkeypatch.setenv("GH_TOKEN", "ambient-token-A")

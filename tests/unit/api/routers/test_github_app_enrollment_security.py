@@ -19,7 +19,10 @@ def enrollment(monkeypatch):
     app = FastAPI()
     app.include_router(routes.router)
     app.dependency_overrides[get_current_user()] = lambda: current
-    app.dependency_overrides[get_async_session] = lambda: object()
+    def session_stub():
+        return object()
+
+    app.dependency_overrides[get_async_session] = session_stub
     calls = []
 
     async def resolve(ref):

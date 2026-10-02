@@ -228,6 +228,7 @@ async def test_spool_reader_retains_partial_append_across_polls_and_restart(tmp_
         async for result in reader.follow():
             reader.stop()
             return result
+        raise AssertionError("Spool reader stopped before yielding the appended chunk")
 
     consuming = asyncio.create_task(consume())
     await asyncio.sleep(0.06)

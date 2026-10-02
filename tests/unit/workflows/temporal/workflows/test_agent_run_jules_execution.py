@@ -198,9 +198,24 @@ async def test_external_callback_ingress_strips_candidates_before_fallback(
 
 
 @pytest.mark.parametrize("bound_merge", [False, True])
+@pytest.mark.parametrize(
+    "repository_spec",
+    [
+        {"repository": "org/repo"},
+        {"repo": "org/repo"},
+        {"repositoryTarget": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "org/repo"},
+            "branch": {"name": "feature-branch"},
+        }},
+    ],
+    ids=["legacy-repository", "legacy-repo", "canonical-target"],
+)
 async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     monkeypatch: pytest.MonkeyPatch,
     bound_merge: bool,
+    repository_spec: dict[str, Any],
 ) -> None:
     run = MoonMindAgentRun()
     routed_calls: list[tuple[str, Any]] = []
@@ -248,7 +263,7 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     result = await run.run(
         _request(
             workspaceSpec={
-                "repository": "org/repo",
+                **repository_spec,
                 "startingBranch": "feature-branch",
                 "targetBranch": "main",
             },
@@ -304,8 +319,23 @@ async def test_agent_run_does_not_treat_generic_external_url_as_native_pr(
 
 
 @pytest.mark.parametrize("old_scheduled_call", [False, True])
+@pytest.mark.parametrize(
+    "workspace_spec",
+    [
+        {"repository": "org/repo", "startingBranch": "release"},
+        {"repo": "org/repo", "startingBranch": "release"},
+        {"repositoryTarget": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "org/repo"},
+            "branch": {"name": "release"},
+        }},
+    ],
+    ids=["legacy-repository", "legacy-repo", "canonical-target-only"],
+)
 async def test_agent_run_jules_pins_head_and_recovers_old_authority(
     monkeypatch: pytest.MonkeyPatch, old_scheduled_call: bool,
+    workspace_spec: dict[str, Any],
 ) -> None:
     run = MoonMindAgentRun()
     _configure_workflow_runtime(monkeypatch)
@@ -342,7 +372,7 @@ async def test_agent_run_jules_pins_head_and_recovers_old_authority(
     monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait)
     monkeypatch.setattr(run, "_execute_routed_activity", execute)
     result = await run.run(_request(
-        workspaceSpec={"repository": "org/repo", "startingBranch": "release"},
+        workspaceSpec=workspace_spec,
         parameters={"publishMode": "branch"},
     ))
 

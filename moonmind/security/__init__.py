@@ -1,6 +1,32 @@
 """Shared security contracts, imported lazily to keep settings initialization safe."""
 
 from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from moonmind.security.egress_conformance_evidence import (
+        EGRESS_EVIDENCE_DIGEST_KEY,
+        EgressEvidenceDigestError,
+        EgressEvidenceSecretError,
+        attach_evidence_digest,
+        evidence_content_digest,
+        parse_and_verify_conformance_evidence,
+        publish_conformance_evidence,
+        secret_scan_evidence,
+        serialize_conformance_evidence,
+        verify_evidence_digest,
+    )
+    from moonmind.security.outbound_scan import (
+        OUTBOUND_SCAN_POLICY_REF,
+        OutboundBundleItem,
+        OutboundFinding,
+        OutboundScanDecision,
+        OutboundScanResult,
+        canonical_outbound_digest,
+        resolve_high_security_mode,
+        scan_outbound_bundle,
+        scan_outbound_text,
+    )
 
 _EGRESS_EXPORTS = {
     "EGRESS_EVIDENCE_DIGEST_KEY",
