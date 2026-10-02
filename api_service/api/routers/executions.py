@@ -9462,7 +9462,6 @@ async def _expand_goal_preset_for_workflow_submission(
         "inputs": template_inputs,
         "context": context,
         "options": ExpandOptions(should_enforce_step_limit=True),
-        "user_id": getattr(user, "id", None),
     }
     try:
         expanded = await catalog.expand_template(**expand_kwargs)

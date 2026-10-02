@@ -480,6 +480,28 @@ def _agent_run_id_from_env() -> str | None:
     return None
 
 
+def _resolve_child_instructions(args: argparse.Namespace) -> str | None:
+    explicit = getattr(args, "child_instructions", None)
+    if explicit is not None:
+        return _runtime_text(explicit)
+    for candidate in _repo_context_candidates(args.task_context_path):
+        try:
+            context = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(context, dict):
+            continue
+        skill = context.get("skill")
+        inputs = skill.get("args") if isinstance(skill, dict) else None
+        if not isinstance(inputs, dict):
+            inputs = context.get("inputs")
+        if isinstance(inputs, dict):
+            instructions = _runtime_text(inputs.get("childInstructions"))
+            if instructions:
+                return instructions
+    return None
+
+
 def _build_queue_request(
     repo: str,
     pr_number: int | str,
@@ -492,6 +514,7 @@ def _build_queue_request(
     max_attempts: int,
     batch_scope: str | None = None,
     inherit_runtime_from_caller: bool = False,
+    child_instructions: str | None = None,
 ) -> dict[str, Any]:
     runtime_payload: dict[str, Any] = {}
     if runtime.mode:
@@ -523,6 +546,8 @@ def _build_queue_request(
             },
         },
     }
+    if child_instructions:
+        payload_dict["task"]["instructions"] += "\n\n" + child_instructions
     idempotency_key = _child_idempotency_key(
         batch_scope=batch_scope,
         repo=repo,
@@ -554,6 +579,7 @@ def _build_queue_request(
 
     return request
 
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Submit pr-resolver tasks for every open PR in a repository."
@@ -577,6 +603,11 @@ def _parse_args() -> argparse.Namespace:
             "Optional path to parent task_context.json for runtime inheritance "
             "(default: auto-detect ../artifacts/task_context.json)."
         ),
+    )
+    parser.add_argument(
+        "--child-instructions",
+        default=None,
+        help="Additional resolver requirements (default: inherit childInstructions from task context).",
     )
     parser.add_argument(
         "--runtime-mode",
@@ -797,6 +828,7 @@ def _build_request_records(
     open_prs_sorted = sorted(open_prs, key=_get_pr_number)
     batch_scope = _parent_run_scope(args.task_context_path)
     inherit_from_caller = _task_workflow_id_from_env() is not None
+    child_instructions = _resolve_child_instructions(args)
 
     for pr in open_prs_sorted:
         number = pr.get("number")
@@ -816,6 +848,7 @@ def _build_request_records(
             max_attempts=args.max_attempts,
             batch_scope=batch_scope,
             inherit_runtime_from_caller=inherit_from_caller,
+            child_instructions=child_instructions,
         )
         queue_requests.append(
             JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
@@ -900,6 +933,25 @@ async def main() -> int:
     queue_requests, skipped = _build_request_records(repo, open_prs, args, runtime)
     created, errors = await _submit_jobs(queue_requests)
 
+    failure_code: str | None = None
+    failure_message = ""
+    if errors:
+        failure_code = (
+            "BATCH_FANOUT_PARTIAL_FAILURE" if created else "BATCH_FANOUT_FAILED"
+        )
+        first_error = ""
+        if isinstance(errors[0], dict):
+            for key in ("error", "message"):
+                candidate = str(errors[0].get(key) or "").strip()
+                if candidate:
+                    first_error = candidate
+                    break
+        parts = []
+        if first_error:
+            parts.append(first_error[:1024])
+        parts.append(f"{len(errors)} child submission(s) failed")
+        failure_message = "; ".join(parts)[:1024]
+
     payload = {
         **contract,
         "status": (
@@ -922,6 +974,8 @@ async def main() -> int:
         "queued": created,
         "skipped": skipped,
         "errors": errors,
+        "failureCode": failure_code,
+        "failureMessage": failure_message,
     }
     if payload["created"] == 0:
         payload["message"] = "No matching PRs were queued."

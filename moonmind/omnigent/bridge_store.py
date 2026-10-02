@@ -1854,6 +1854,7 @@ class OmnigentBridgeSessionStore:
                         "cleanupCompleted",
                         "leaseReleased",
                         "janitorRequired",
+                        "retryAttempts",
                         "credentialMountPath",
                         "sessionInterrupted",
                         "hostCleanupMode",

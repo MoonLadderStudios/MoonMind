@@ -124,6 +124,7 @@ from moonmind.workflows.temporal.agent_result_payloads import (
     compact_moonspec_verify_metadata,
     compact_published_agent_run_result_payload,
 )
+from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
@@ -13540,6 +13541,49 @@ class TemporalAgentRuntimeActivities:
                     or "Batch fan-out input validation failed.",
                     "failure_class": "user_error",
                     "provider_error_code": terminal_failure_code,
+                    "metadata": metadata,
+                }
+            )
+        if evaluation.failure_code in {
+            "BATCH_FANOUT_FAILED",
+            "BATCH_FANOUT_PARTIAL_FAILURE",
+            "CHILD_WORKFLOW_QUEUE_FAILED",
+        }:
+            # A batch fan-out wrote valid terminal evidence that reports its
+            # own failure. Reporting "valid terminal evidence" hides the
+            # cause; surface the Skill's failure message instead so the
+            # operator can act without re-reading artifacts. An earlier
+            # runtime failure keeps its own summary; the fan-out cause
+            # remains readable in metadata.
+            if result.failure_class is not None:
+                return _validated_result(
+                    {
+                        "provider_error_code": result.provider_error_code
+                        or evaluation.failure_code
+                        or "missing_terminal_evidence",
+                        "metadata": metadata,
+                    }
+                )
+            summary = terminal_failure_message or (
+                f"Batch fan-out {evaluation.failure_code.lower().replace('_', ' ')}"
+                f" ({missing})" if missing != "valid terminal evidence" else
+                "Batch fan-out failed; see terminal evidence errors."
+            )
+            failure_class = "execution_error"
+            try:
+                classification = classify_provider_failure(terminal_failure_message)
+            except Exception:
+                classification = None
+            if classification is not None and classification.failure_class == "user_error":
+                # Auth/scope failures (401/403) are operator action, not a
+                # transient to retry behind the same unreachable path.
+                failure_class = "user_error"
+            return _validated_result(
+                {
+                    "summary": summary,
+                    "failure_class": failure_class,
+                    "provider_error_code": evaluation.failure_code
+                    or "missing_terminal_evidence",
                     "metadata": metadata,
                 }
             )

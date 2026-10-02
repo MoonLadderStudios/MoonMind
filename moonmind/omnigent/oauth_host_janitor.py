@@ -79,6 +79,28 @@ class OmnigentOAuthHostJanitor:
                 else None
             )
             if current is not None:
+                runtime = current.binding
+                if (
+                    current.state in {"credentials_acquired", "cleanup_complete"}
+                    and not any(
+                        (
+                            runtime.hostBindingRef,
+                            runtime.hostLeaseRef,
+                            runtime.omnigentHostId,
+                            runtime.omnigentSessionId,
+                        )
+                    )
+                    and any(
+                        acquired.providerLeaseRef == lease.provider_lease_id
+                        and acquired.providerProfileRef == lease.provider_profile_id
+                        and acquired.credentialGeneration == lease.credential_generation
+                        for acquired in runtime.providerLeases.values()
+                    )
+                ):
+                    # Admission can stop after credential binding but before
+                    # host authority is attached. Its exact scoped lease still
+                    # owns that binding; completion retains the current fence.
+                    return current
                 raise ValueError(
                     "janitor host lease is fenced by replacement runtime authority"
                 )
@@ -386,7 +408,9 @@ class OmnigentOAuthHostJanitor:
             "count": len(actions),
         }
 
-    async def _cleanup_authority(self, lease: Any) -> dict[str, Any] | None:
+    async def _cleanup_authority(
+        self, lease: Any, *, binding: Any
+    ) -> dict[str, Any] | None:
         authority = None
         if self._run_store is not None and hasattr(
             self._run_store, "get_egress_cleanup_authority"
@@ -417,6 +441,26 @@ class OmnigentOAuthHostJanitor:
             # exist and strand Provider Profile capacity forever after a crash.
             return None
         if authority is None and requires_authority and authority_required:
+            container_name = str(getattr(lease, "container_name", None) or "").strip()
+            if (
+                getattr(binding, "host_launch_profile_ref", None)
+                and container_name
+                and not any(
+                    getattr(lease, field, None)
+                    for field in (
+                        "container_id",
+                        "omnigent_host_id",
+                        "omnigent_session_id",
+                        "bridge_session_id",
+                    )
+                )
+                and not await self._runtime.container_present(container_name)
+            ):
+                # Admission can fail before an attachment (and its launch
+                # evidence) exists. The fenced stop owner still verifies
+                # absence/removal before releasing capacity; this does not
+                # establish launch or egress conformance.
+                return None
             raise ValueError(
                 "restricted-egress host cleanup authority is unavailable"
             )
@@ -434,7 +478,7 @@ class OmnigentOAuthHostJanitor:
     async def _stop_host_with_authority(
         self, *, binding: Any, lease: Any
     ) -> dict[str, Any]:
-        authority = await self._cleanup_authority(lease)
+        authority = await self._cleanup_authority(lease, binding=binding)
         if authority is None:
             result = await self._runtime.stop_host(
                 binding=binding, host_lease=lease
@@ -442,11 +486,14 @@ class OmnigentOAuthHostJanitor:
             cleanup = dict(result or {})
             launch = getattr(lease, "effective_launch_snapshot", None)
             if isinstance(launch, dict) and launch.get("enforcedEgress") is True:
-                # Leases written before the cleanup-authority marker cannot have
-                # the bridge metadata introduced with it. Stop and objectively
-                # reconcile the credential-bearing host without claiming egress
-                # conformance evidence, then let release-last ordering proceed.
-                cleanup["cleanupAuthorityDisposition"] = "pre_upgrade_cutover"
+                # Historical leases and admissions with no attachment cannot
+                # supply launch evidence. The stop owner reconciles absence
+                # without claiming egress conformance before release proceeds.
+                cleanup["cleanupAuthorityDisposition"] = (
+                    "attachment_absent_before_cleanup"
+                    if launch.get("egressCleanupAuthorityRequired") is True
+                    else "pre_upgrade_cutover"
+                )
             return cleanup
         if self._artifact_gateway is None:
             raise ValueError(

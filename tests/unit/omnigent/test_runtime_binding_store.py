@@ -467,3 +467,76 @@ async def test_runtime_binding_projection_is_safe_and_monotonic(monkeypatch, ses
     await _project_runtime_binding_to_execution(workflow_id=workflow_id, state=newer_state)
     with pytest.raises(ValueError, match="ahead of authority"):
         await _project_runtime_binding_to_execution(workflow_id=workflow_id, state=state)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["database", "memory"])
+async def test_cleanup_completion_converges_for_same_authority_and_preserves_fences(
+    session_factory,
+    backend,
+):
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from tests.unit.omnigent.test_generic_plane_n_way_concurrency import _zen_plan
+
+    plan = await DbExecutionPlanStore(session_factory).persist(
+        _zen_plan("cleanup-race")
+    )
+    store = (
+        DbRuntimeBindingStore(session_factory)
+        if backend == "database"
+        else InMemoryRuntimeBindingStore()
+    )
+    binding = await store.create_initial(
+        execution_plan_ref=plan.planRef,
+        execution_scope_ref="cleanup-race",
+        provider_leases={},
+    )
+    observed = await store.get_state(binding.runtimeBindingRef)
+    assert observed is not None
+
+    # The coordinator and janitor both observed the same authority before one
+    # completed cleanup. Retrying that identical terminal effect must converge.
+    for _ in range(3):
+        settled = await store.mark_cleanup_complete(
+            binding.runtimeBindingRef,
+            expected_revision=observed.revision,
+            expected_fencing_generation=observed.fencing_generation,
+        )
+        assert settled == binding
+    completed = await store.get_state(binding.runtimeBindingRef)
+    assert completed.state == "cleanup_complete"
+    assert completed.revision == observed.revision + 1
+
+    for revision, fence in (
+        (completed.revision, completed.fencing_generation + 1),
+        (completed.revision + 1, completed.fencing_generation),
+    ):
+        with pytest.raises(HarnessPlatformError, match="conflict"):
+            await store.mark_cleanup_complete(
+                binding.runtimeBindingRef,
+                expected_revision=revision,
+                expected_fencing_generation=fence,
+            )
+
+    replacement = await store.reconcile_provider_leases(
+        binding.runtimeBindingRef,
+        expected_revision=completed.revision,
+        expected_fencing_generation=completed.fencing_generation,
+        provider_leases={
+            "primary-model": {
+                "providerProfileRef": "profile-1",
+                "providerLeaseRef": "replacement",
+                "credentialGeneration": 2,
+                "credentialRuntimeRef": "credential:replacement",
+            }
+        },
+    )
+    with pytest.raises(HarnessPlatformError, match="stale|unavailable"):
+        await store.mark_cleanup_complete(
+            binding.runtimeBindingRef,
+            expected_revision=observed.revision,
+            expected_fencing_generation=observed.fencing_generation,
+        )
+    replacement_state = await store.get_state(replacement.runtimeBindingRef)
+    assert replacement_state.state == "credentials_acquired"
+    assert replacement_state.fencing_generation == completed.fencing_generation + 1
