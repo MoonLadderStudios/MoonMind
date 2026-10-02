@@ -184,6 +184,7 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
         max_iterations=7,
         priority=0,
         max_attempts=3,
+        child_instructions="ALL Tactics CI workflows must use self-hosted runners.",
     )
     task = request["payload"]["task"]
     assert task["taskTemplate"] == {"slug": "pr-review-resolve"}
@@ -201,6 +202,7 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
             "publishMode": "none",
             "targetRuntime": "codex_cli",
             payload_key: {
+                "instructions": task["instructions"],
                 "publish": expanded["publish"],
                 "runtime": request["payload"]["task"]["runtime"],
             },
@@ -229,6 +231,9 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
     assert runtime["executionProfileRef"] == "chosen-profile"
     assert runtime["model"] == "chosen-model"
     assert runtime["effort"] == "high"
+    assert child["initial_parameters"]["task"]["instructions"].endswith(
+        "\n\n" + task["instructions"]
+    )
 
 
 async def test_operator_overrides_flow_into_the_review_loop(tmp_path) -> None:

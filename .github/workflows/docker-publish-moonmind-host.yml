@@ -235,9 +235,9 @@ jobs:
           docker run --rm --network none --user 1000:1000 "${image}" moonmind --help
           # Ordinary and login shells resolve the image-owned executables.
           docker run --rm --network none --user 1000:1000 "${image}" \
-            sh -c 'command -v gh && command -v moonmind'
+            sh -c 'command -v gh && command -v moonmind && python3 -c "import httpx"'
           docker run --rm --network none --user 1000:1000 "${image}" \
-            bash -lc 'command -v gh && command -v moonmind'
+            bash -lc 'command -v gh && command -v moonmind && python3 -c "import httpx"'
           # Runtime user cannot rewrite image-owned tools.
           docker run --rm --network none --user 1000:1000 "${image}" \
             sh -c 'test ! -w /opt/moonmind-tools/bin/gh && test ! -w /opt/moonmind-tools/bin/moonmind'

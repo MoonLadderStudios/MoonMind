@@ -19,6 +19,10 @@ import pytest
 
 
 @pytest.mark.parametrize(
+    "child_instructions_override",
+    [None, "Keep all Tactics CI on self-hosted runners, including new workflows."],
+)
+@pytest.mark.parametrize(
     "runtime,profile_runtime",
     [
         ("codex_cli", "codex_cli"),
@@ -32,6 +36,7 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
     tmp_path: Path,
     runtime: str,
     profile_runtime: str,
+    child_instructions_override: str | None,
 ) -> None:
     """Run the shipped CLI across process/HTTP/artifact boundaries without the API package."""
     repo_root = Path(__file__).resolve().parents[2]
@@ -63,10 +68,15 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
     gh.write_text(f"#!{sys.executable}\nprint({json.dumps(discovery)!r})\n")
     gh.chmod(0o755)
     context = tmp_path / "task_context.json"
-    runtime_config = {"mode": runtime, "model": "test-model-exact", "effort": "xhigh"}
+    runtime_config = {"mode": runtime, "model": "gpt-6.1-sol", "effort": "max"}
+    child_instructions = "ALL Tactics CI workflows must use self-hosted runners."
     context.write_text(
         json.dumps(
-            {"repository": incident["repository"], "runtimeConfig": runtime_config}
+            {
+                "repository": incident["repository"],
+                "runtimeConfig": runtime_config,
+                "skill": {"args": {"childInstructions": child_instructions}},
+            }
         )
     )
     capability_file = tmp_path / "fanout-capability"
@@ -136,7 +146,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         "MOONMIND_URL": f"http://127.0.0.1:{server.server_port}",
         "MOONMIND_TASK_WORKFLOW_ID": incident["incidentWorkflowId"],
         "MOONMIND_EXECUTION_PROFILE_RUNTIME": profile_runtime,
-        "MOONMIND_EXECUTION_PROFILE_REF": "test-profile-exact",
+        "MOONMIND_EXECUTION_PROFILE_REF": "codex_openai_oauth",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": str(capability_file),
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH": str(spool),
         "MOONMIND_STEP_EXECUTION_ID": "batch:run:node-1:execution:1",
@@ -152,6 +162,11 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                     str(helper),
                     "--task-context-path",
                     str(context),
+                    *(
+                        ["--child-instructions", child_instructions_override]
+                        if child_instructions_override is not None
+                        else []
+                    ),
                 ],
                 cwd=tmp_path,
                 env=env,
@@ -188,10 +203,14 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             assert payload["task"]["runtime"] == {
                 "mode": runtime,
                 "model": runtime_config["model"],
-                "effort": "xhigh",
-                "executionProfileRef": "test-profile-exact",
+                "effort": "max",
+                "executionProfileRef": "codex_openai_oauth",
             }
             assert payload["task"]["taskTemplate"]["slug"] == "pr-review-resolve"
+            expected = child_instructions_override or child_instructions
+            assert payload["task"]["instructions"].endswith("\n\n" + expected)
+            if child_instructions_override is not None:
+                assert child_instructions not in payload["task"]["instructions"]
     finally:
         server.shutdown()
         thread.join(timeout=5)

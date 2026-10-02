@@ -532,6 +532,49 @@ def test_merge_gate_returns_external_waits_without_an_explicit_repair_budget(
         assert "maxIterations" not in args
 
 
+@pytest.mark.parametrize("new_history", [True, False])
+@pytest.mark.parametrize("payload_key", ["task", "workflow"])
+def test_merge_gate_preserves_resolver_instructions_with_replay_patch(
+    new_history,
+    payload_key,
+) -> None:
+    from moonmind.workflows.temporal.workflows.merge_gate import (
+        build_resolver_run_request,
+    )
+
+    parent = MoonMindRunWorkflow()
+    parent._repo = "MoonLadderStudios/Tactics"
+    parent._workflow_patch_enabled = lambda patch: (
+        new_history
+        if patch == "run-merge-automation-resolver-instructions-v1"
+        else True
+    )
+    instructions = "ALL Tactics CI workflows must use self-hosted runners."
+    payload = parent._build_merge_gate_start_payload(
+        parameters={
+            "mergeAutomation": {"enabled": True},
+            payload_key: {"instructions": instructions},
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/Tactics/pull/2770",
+        head_sha="abcdef1",
+        parent_workflow_id="parent",
+        parent_run_id="run-1",
+    )
+    child = build_resolver_run_request(
+        parent_workflow_id="gate",
+        pull_request=payload["pullRequest"],
+        jira_issue_key=None,
+        merge_method="squash",
+        resolver_template=payload["resolverTemplate"],
+    )
+    child_instructions = child["initial_parameters"]["task"]["instructions"]
+    if new_history:
+        assert child_instructions.endswith("\n\n" + instructions)
+    else:
+        assert "instructions" not in payload["resolverTemplate"]
+        assert instructions not in child_instructions
+
+
 def test_build_merge_gate_start_payload_carries_inferred_jira_orchestrate_key() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/Tactics"
