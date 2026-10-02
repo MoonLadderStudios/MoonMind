@@ -42,11 +42,16 @@ class CredentialLeasePurpose(str, Enum):
         actually spends it. Credential repair and revocation are local
         credential-state operations; blocking them behind a saturated or
         cooling-down scope would leave a broken credential unrepairable exactly
-        when the scope is under the most pressure.
+        when the scope is under the most pressure. Interactive OAuth login is
+        the same: it signs in against the provider's auth service, not the
+        rate-limited inference route, and a 429 cooldown is exactly when the
+        operator needs to reconnect or switch accounts.
         """
 
         return self not in {
             CredentialLeasePurpose.CREDENTIAL_REPAIR,
+            CredentialLeasePurpose.OAUTH_CONNECT,
+            CredentialLeasePurpose.OAUTH_RECONNECT,
             CredentialLeasePurpose.OAUTH_DISCONNECT,
         }
 
