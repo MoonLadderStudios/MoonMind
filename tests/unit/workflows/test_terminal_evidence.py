@@ -297,6 +297,48 @@ def test_batch_terminal_accepts_preflight_failure_without_target_list(
     )
 
 
+def test_batch_terminal_falls_back_to_first_error_message(tmp_path: Path) -> None:
+    """A failed fan-out without a failure message must keep its error cause."""
+
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    message = "HTTP Error 403: Forbidden: execution fanout capability required"
+    targets_path = workspace / "artifacts" / "batch-workflows-targets.json"
+    targets_path.parent.mkdir(parents=True, exist_ok=True)
+    targets_path.write_text("[]", encoding="utf-8")
+    targets_digest = hashlib.sha256(b"[]").hexdigest()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step:1",
+                "targetsSha256": targets_digest,
+                "status": "failed",
+                "requested": 1,
+                "created": 0,
+                "queued": [],
+                "skipped": [],
+                "errors": [{"code": "BATCH_FANOUT_FAILED", "error": message}],
+                "failure": {"code": "BATCH_FANOUT_FAILED"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_terminal_evidence(
+        _contract(),
+        workspace_path=str(workspace),
+        artifact_spool_path=str(spool),
+    )
+
+    assert result.satisfied is False
+    assert result.failure_code == "BATCH_FANOUT_FAILED"
+    assert result.metadata["terminalFailureMessage"] == message
+
+
 def _dependabot_contract(execution_ref: str = "step:dependabot") -> dict[str, str]:
     return {
         "contractId": "batch_dependabot_resolver_fanout.v1",

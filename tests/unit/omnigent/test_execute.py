@@ -3213,8 +3213,10 @@ async def test_post_timeout_with_remote_accept_withholds_fresh_retry(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_location", ["session", "execution"])
 async def test_run_omnigent_execution_uses_nested_session_parameters(
     monkeypatch,
+    model_location,
 ) -> None:
     captured_session_payloads: list[dict[str, object]] = []
 
@@ -3225,9 +3227,7 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
         async def list_agents(self) -> dict[str, object]:
             raise AssertionError("agentId should avoid list_agents lookup")
 
-        async def create_session(
-            self, payload: dict[str, object]
-        ) -> dict[str, object]:
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
             captured_session_payloads.append(payload)
             return {"id": "session-1"}
 
@@ -3253,6 +3253,11 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
+    model_parameters = {"modelOverride": "gpt-6.1-sol", "reasoningEffort": "max"}
+    execution_parameters = {}
+    if model_location == "execution":
+        execution_parameters = {"model": "gpt-6.1-sol", "effort": "max"}
+        model_parameters = {}
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -3260,14 +3265,14 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
             correlationId="corr-1",
             idempotencyKey="idem-1",
             parameters={
+                **execution_parameters,
                 "omnigent": {
                     "agent": {"agentId": "agent-1"},
                     "session": {
                         "hostType": "external",
                         "hostId": "host-1",
                         "workspace": "/workspace/repo",
-                        "modelOverride": "codex-special",
-                        "reasoningEffort": "high",
+                        **model_parameters,
                     },
                 },
             },
@@ -3287,8 +3292,8 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
             "host_type": "external",
             "workspace": "/workspace/repo",
             "host_id": "host-1",
-            "model_override": "codex-special",
-            "reasoning_effort": "high",
+            "model_override": "gpt-6.1-sol",
+            "reasoning_effort": "max",
             "terminal_launch_args": [],
         }
     ]

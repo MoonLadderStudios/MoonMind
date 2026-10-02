@@ -492,6 +492,35 @@ Run cleanup may not remove:
 
 A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release remains last even when cleanup requires retries.
 
+Automatically captured Activity lease ownership uses the Activity's workflow ID
+and run ID together. A parent workflow ID must never be paired with a child run
+ID: that nonexistent pair would make a live consumer appear absent to Temporal.
+An explicitly supplied owner workflow/run pair remains authoritative.
+
+An on-demand lease with no attached container, host, session, or bridge identity
+can complete cleanup without launch-egress evidence only after the runtime
+confirms that its deterministic container is absent. The normal stop owner still
+reconciles and verifies removal before capacity releases. This proves consumer
+absence, not successful launch or egress conformance; an existing attachment or
+recorded attachment identity still requires its durable cleanup authority.
+The persisted workflow owner and lease purpose survive host-model projection.
+A binding saved before host attachment can be completed only when the current
+execution scope has the same provider lease, profile, and credential generation
+and no bound host or session authority. Completion still checks its revision and
+fencing generation; a replacement binding remains protected.
+
+Runtime-binding cleanup completion is idempotent for the same current binding
+and fencing generation. A coordinator and janitor that observed the same
+authority converge on the already-completed state without advancing its revision
+again. A stale binding, replacement generation, or future revision remains fenced.
+Cleanup-reporting failures retain a separate lifecycle diagnostic and must not
+replace the primary provider result or error, or erase confirmed host cleanup and
+Provider Profile release. The coordinator retries transient database failures up
+to three times, re-reading current fenced authority each time, including before
+any host lease exists. Exhausted recovery records a bounded redacted summary and
+available diagnostics reference; it does not claim a host-janitor handoff for a
+binding-only reporting failure. Stale authority is not retried or bypassed.
+
 ## 19. Credential-redacted evidence
 
 Durable evidence may contain:

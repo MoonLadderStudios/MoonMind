@@ -156,7 +156,7 @@ USER 1000:1000
 WORKDIR /home/app
 
 ENV HOME="/home/app" \
-    PATH="/opt/moonmind-tools/bin:/usr/local/bin:${PATH}"
+    PATH="/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:${PATH}"
 
 # Sanity check as non-root
 RUN command -v codex && codex --version \
@@ -165,6 +165,12 @@ RUN command -v codex && codex --version \
     && command -v gh && gh --version \
     && command -v moonmind && moonmind --help \
     && bash -lc 'command -v gh && command -v moonmind'
+
+# Portable fan-out Skills use ordinary python3 and require the queue client's
+# HTTP dependency. Use the existing image environment in both shell forms;
+# a system Python without its packages must never reach workflow launch.
+RUN --network=none python3 -c 'import httpx' \
+    && bash -lc "python3 -c 'import httpx'"
 
 # A binary and MoonMind's supported range alone do not prove the installed
 # Omnigent native harness can use it. Check that owner's actual readiness

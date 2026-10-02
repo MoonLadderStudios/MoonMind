@@ -7564,6 +7564,81 @@ async def test_terminal_evidence_activity_does_not_trust_rejected_failure_metada
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "expected_class"),
+    [
+        (
+            "HTTP Error 403: Forbidden: execution fanout capability required",
+            "user_error",
+        ),
+        (
+            "submit failed: connection reset by peer",
+            "execution_error",
+        ),
+    ],
+)
+async def test_terminal_evidence_activity_surfaces_batch_fanout_cause(
+    tmp_path: Path, message: str, expected_class: str
+) -> None:
+    """A failed fan-out must report its cause, not generic missing evidence.
+
+    Regression for mm:031c2a9c-8d55-44c7-98e5-3f1dff66ac0c: the agent wrote
+    valid terminal evidence reporting BATCH_FANOUT_FAILED, but the operator
+    saw only "Agent completed without required terminal evidence: valid
+    terminal evidence". Auth/scope causes (401/403) are user action and must
+    not retry behind the same unreachable path.
+    """
+
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    targets_path = workspace / "artifacts" / "batch-workflows-targets.json"
+    targets_path.parent.mkdir(parents=True, exist_ok=True)
+    targets_path.write_text("[]", encoding="utf-8")
+    targets_digest = hashlib.sha256(b"[]").hexdigest()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step-fanout-failed",
+                "targetsSha256": targets_digest,
+                "status": "failed",
+                "requested": 1,
+                "created": 0,
+                "queued": [],
+                "skipped": [],
+                "errors": [{"code": "BATCH_FANOUT_FAILED", "error": message}],
+                "failure": {"code": "BATCH_FANOUT_FAILED", "message": message},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-fanout-failed",
+            },
+            "result": {"summary": "Omnigent session completed"},
+        }
+    )
+
+    assert result.provider_error_code == "BATCH_FANOUT_FAILED"
+    assert result.failure_class == expected_class
+    assert result.summary == message
+    assert "valid terminal evidence" not in result.summary
+    assert result.metadata["terminalFailureMessage"] == message
+
+
+@pytest.mark.asyncio
 async def test_terminal_evidence_keeps_merge_gate_human_approval_non_failing(
     tmp_path: Path,
 ) -> None:

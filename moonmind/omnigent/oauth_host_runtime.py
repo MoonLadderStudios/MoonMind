@@ -2083,7 +2083,7 @@ class OmnigentOAuthHostRuntime:
                 or deterministic_host_container_name(host_lease.lease_id)
             )
             attachment_identity = attachment_identity or container_name
-            if await self.container_exists(container_name):
+            if await self.container_present(container_name):
                 await self.assert_container_owned(
                     container_name=container_name, lease_id=host_lease.lease_id
                 )
@@ -2218,6 +2218,11 @@ class OmnigentOAuthHostRuntime:
 
     async def container_exists(self, container_name: str) -> bool:
         return await self._containers.container_exists(container_name)
+
+    async def container_present(self, container_name: str) -> bool:
+        """Observe container presence independently of its running state."""
+
+        return await self._container_present(container_name)
 
     async def _container_present(self, container_name: str) -> bool:
         return await self._containers.container_present(container_name)

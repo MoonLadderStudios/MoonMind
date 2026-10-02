@@ -314,6 +314,49 @@ def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_startup_event_reaches_journal_without_corrupting_type() -> None:
+    wire = (
+        'data: {"type":"session.codex_approval_mode","approval_mode":"never",'
+        '"credential_path":"/home/app/.codex/auth.json"}\n\n'
+        'data: {"type":"response.completed"}\n\n'
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=wire)
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="codex-startup",
+        idempotencyKey="codex-startup",
+    )
+    journal = []
+    received = []
+    async with aclosing(client.stream_events("sess-startup")) as events:
+        async for payload in events:
+            received.append(payload)
+            journal.append(
+                build_omnigent_bridge_event(
+                    payload=payload,
+                    sequence=len(journal) + 1,
+                    request=request,
+                    omnigent_session_id="sess-startup",
+                ).event
+            )
+
+    assert [event["type"] for event in journal] == [
+        "session.codex_approval_mode",
+        "response.completed",
+    ]
+    assert [event["normalizedStatus"] for event in journal] == ["running", "completed"]
+    assert received[0]["approval_mode"] == "never"
+    assert "/home/app/.codex/auth.json" not in json.dumps(received)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("payload", "error_type", "message"),
     [

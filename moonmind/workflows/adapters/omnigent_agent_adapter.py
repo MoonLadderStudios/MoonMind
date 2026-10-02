@@ -21,6 +21,10 @@ from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
 )
+from moonmind.omnigent.harness_platform.execution_plan import (
+    bind_omnigent_model_selection,
+)
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.repository_sources import (
     RepositorySourceError,
     normalize_repository_source,
@@ -163,6 +167,21 @@ def build_omnigent_selection(
 
     agent = _parse_agent(raw_payload.get("agent"))
     session = _parse_session(raw_payload.get("session"))
+    try:
+        bound_request = bind_omnigent_model_selection(
+            request,
+            model=_clean(parameters.get("model")) or session.model_override,
+            effort=_clean(parameters.get("effort")) or session.reasoning_effort,
+        )
+    except HarnessPlatformError as exc:
+        raise OmnigentAdapterError(
+            str(exc), failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS
+        ) from exc
+    session = replace(
+        session,
+        model_override=bound_request.parameters["model"],
+        reasoning_effort=bound_request.parameters["effort"],
+    )
     session = _normalize_session_workspace(
         request=request,
         parameters=parameters,

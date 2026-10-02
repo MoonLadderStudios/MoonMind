@@ -33,6 +33,7 @@ on child publishing; do not infer one from the coordinator's local mode.
 - `priority` (number, optional): Queue job priority. Default `0`.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
 - `maxIterations` (number, optional): `pr-resolver` loop cap. Default `5`.
+- `childInstructions` (string, optional): Additional requirements appended to every queued resolver's instructions. The helper inherits this field from the parent task context when its CLI override is omitted.
 - `runtimeMode` (string, optional): Runtime to stamp onto each queued `pr-resolver` task. When omitted, the helper falls back to inherited task context or deployment defaults.
 - `runtimeModel` (string, optional): Explicit model override to stamp onto each queued `pr-resolver` task.
 - `runtimeEffort` (string, optional): Explicit effort override to stamp onto each queued `pr-resolver` task.
@@ -84,12 +85,18 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
    - `priority` -> `--priority`
    - `mergeMethod` -> `--merge-method`
    - `maxIterations` -> `--max-iterations`
+   - `childInstructions` -> `--child-instructions`
    - `runtimeMode` -> `--runtime-mode`
    - `runtimeModel` -> `--runtime-model`
    - `runtimeEffort` -> `--runtime-effort`
    - `runtimeProviderProfile` -> `--runtime-provider-profile`
 
    Always forward the parent task's explicit runtime selection fields when they are present so the queued `pr-resolver` tasks reuse the same runtime, model, effort, and provider profile instead of falling back to the deployment default runtime.
+
+   Carry user constraints into every child through `childInstructions`; pass
+   `--child-instructions` explicitly when no task context is materialized.
+   The adopting PR coordinator carries these instructions through its durable
+   gate into each repair and final resolver pass.
 
 3. For each open PR in the target repo:
    - Skip PRs identified as cross-repository (`isCrossRepository=true`) or whose head is not on `owner/repo`.

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from moonmind.config.settings import settings
 from moonmind.workflows.executions.preset_goal_scheduler import (
@@ -167,8 +168,16 @@ async def expand_preset_for_child_run(
         "context": template_context,
         "options": ExpandOptions(should_enforce_step_limit=True),
     }
+    # Recent catalog choices retain UUID attribution during the account-free
+    # transition. Execution principals such as "system" carry machine authority
+    # and must never be coerced into an account for this optional UI metadata.
     if user_id is not None:
-        expand_kwargs["user_id"] = user_id
+        try:
+            catalog_subject = UUID(str(user_id))
+        except ValueError:
+            catalog_subject = None
+        if catalog_subject is not None:
+            expand_kwargs["user_id"] = catalog_subject
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
     except PresetNotFoundError:

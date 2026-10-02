@@ -1204,7 +1204,10 @@ def _mm639_authored_task_payload() -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
+@pytest.mark.parametrize("owner_id", ["system", uuid4()])
+async def test_goal_preset_submission_expands_before_planner(
+    tmp_path, owner_id
+) -> None:
     db_url = f"sqlite+aiosqlite:///{tmp_path}/goal_preset_submission.db"
     engine = create_async_engine(db_url, future=True)
     session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -1224,7 +1227,7 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
                     "targetRuntime": "codex_cli",
                 },
                 session=session,
-                user=SimpleNamespace(id=uuid4(), is_superuser=False),
+                user=SimpleNamespace(id=owner_id, is_superuser=False),
             )
     finally:
         await engine.dispose()
@@ -1242,7 +1245,10 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -> None:
+@pytest.mark.parametrize("owner_id", ["system", uuid4()])
+async def test_explicit_github_issue_template_expands_before_planner(
+    tmp_path, owner_id
+) -> None:
     db_url = f"sqlite+aiosqlite:///{tmp_path}/explicit_github_preset.db"
     engine = create_async_engine(db_url, future=True)
     session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -1275,7 +1281,7 @@ async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -
                     "targetRuntime": "codex_cli",
                 },
                 session=session,
-                user=SimpleNamespace(id=uuid4(), is_superuser=False),
+                user=SimpleNamespace(id=owner_id, is_superuser=False),
             )
     finally:
         await engine.dispose()

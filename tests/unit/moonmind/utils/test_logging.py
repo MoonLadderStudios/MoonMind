@@ -174,6 +174,30 @@ def test_redact_sensitive_text_redacts_auth_paths_without_regex_backtracking():
 
     assert result == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
 
+
+def test_redact_sensitive_text_preserves_codex_event_name_but_scrubs_auth_paths():
+    text = "session.codex_approval_mode /home/app/.codex/auth.json C:\\Users\\app\\.claude\\credentials.json .codex/auth.json"
+    assert redact_sensitive_text(text) == (
+        "session.codex_approval_mode [REDACTED_AUTH_PATH] "
+        "[REDACTED_AUTH_PATH] [REDACTED_AUTH_PATH]"
+    )
+
+
+@pytest.mark.parametrize(
+    "basename",
+    [
+        ".codex-auth",
+        "codex-auth.json",
+        ".claude-auth",
+        "claude-auth.json",
+        "runtime-codex-auth-home",
+        "auth-volume-generation-1",
+    ],
+)
+def test_redact_sensitive_text_scrubs_relative_auth_basenames(basename):
+    assert redact_sensitive_text(basename) == "[REDACTED_AUTH_PATH]"
+
+
 def test_redact_sensitive_text_redacts_quoted_secret_assignments():
     result = redact_sensitive_text('api_key="raw-secret" password: \'other-secret\'')
 

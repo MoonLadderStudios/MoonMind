@@ -1115,6 +1115,273 @@ def _durable_skill_snapshot_request(plan):
     )
 
 
+def _codex_authority_dispatch_request(plan, *, authority="typed"):
+    from moonmind.schemas.agent_runtime_models import AgentRuntimeStepExecutionLaunch
+
+    request = _durable_skill_snapshot_request(plan)
+    binding = request.omnigent_execution_plan if authority != "legacy_flat" else None
+    parameters = {
+        "repository": "MoonLadderStudios/Tactics",
+        "startingBranch": "main",
+        "publishMode": "none",
+    }
+    if authority != "typed":
+        parameters["executionPlanRef"] = plan.planRef
+    return request.model_copy(
+        update={
+            "parameters": parameters,
+            "omnigent_execution_plan": binding,
+            "execution_profile_ref": plan.payload.credentialBindings[
+                "primary-model"
+            ].providerProfileRef,
+            "resolved_skillset_ref": plan.payload.resolvedSkills["resolvedSkillSetRef"],
+            "step_execution": AgentRuntimeStepExecutionLaunch(
+                workflowId=request.correlation_id,
+                runId="run-admitted-codex",
+                logicalStepId="node-1",
+                executionOrdinal=1,
+                stepExecutionId=(
+                    f"{request.correlation_id}:run-admitted-codex:node-1:execution:1"
+                ),
+                runtimeContextPolicy="fresh_agent_run",
+                omnigentExecutionPlan=binding,
+            ),
+        }
+    )
+
+
+def _codex_authority_realizer(session_factory):
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnCommandService,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    delivered_requests = []
+
+    class RecordingCoordinator:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def execute(self, request):
+            delivered_requests.append(request)
+            return AgentRunResult(
+                summary="Codex session completed",
+                metadata={
+                    "omnigentSessionId": "provider-session-admitted-codex",
+                    "runtimeBindingRef": "binding-recorded",
+                    "retainedEvidenceRef": "art_prior_evidence",
+                    "omnigentCheckpointCapture": {
+                        "runtimeBindingRef": "binding-recorded",
+                        "checkpointRefs": ["art_checkpoint"],
+                        "executionScopeRef": request.step_execution.step_execution_id,
+                    },
+                },
+            )
+
+    store = OmnigentControlPlaneStore(session_factory)
+    realizer = CodexProfileBoundRealizer(
+        session_factory=session_factory,
+        coordinator_factory=RecordingCoordinator,
+        turn_command_service=CanonicalTurnCommandService(store),
+    )
+    return realizer, delivered_requests, store
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authority", ["typed", "typed_and_flat", "legacy_flat"])
+async def test_codex_dispatch_preserves_admitted_plan_and_checkpoint_authority(
+    durable_artifact_storage, authority
+):
+    """The Activity's typed plan binding survives the real Codex turn boundary."""
+
+    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
+    from moonmind.workflows.temporal.activities.omnigent_activities import (
+        _try_generic_realizer_dispatch,
+    )
+
+    inputs = _codex_plan_inputs()
+    inputs.update(model_qualified_id="gpt-6.1-sol", model_effort="max")
+    plan = compile_execution_plan(**inputs)
+    request = _codex_authority_dispatch_request(plan, authority=authority)
+    plans = InMemoryExecutionPlanStore()
+    await plans.persist(plan)
+    realizer, delivered, store = _codex_authority_realizer(durable_artifact_storage)
+    registry = OmnigentExecutionRealizerRegistry()
+    registry.register(realizer)
+
+    result = await _try_generic_realizer_dispatch(
+        request, plan_store=plans, realizer_registry=registry
+    )
+
+    assert result.failure_class is None
+    assert result.summary == "Codex session completed"
+    assert len(delivered) == 1
+    assert delivered[0].execution_profile_ref == request.execution_profile_ref
+    assert delivered[0].step_execution == request.step_execution
+    assert delivered[0].omnigent_execution_plan == request.omnigent_execution_plan
+    assert delivered[0].parameters.get("executionPlanRef") == request.parameters.get(
+        "executionPlanRef"
+    )
+    assert delivered[0].parameters["model"] == "gpt-6.1-sol"
+    assert delivered[0].parameters["effort"] == "max"
+    assert delivered[0].parameters["omnigent"]["session"] == {
+        "modelOverride": "gpt-6.1-sol",
+        "reasoningEffort": "max",
+    }
+    assert "model" not in request.parameters
+    assert "omnigent" not in request.parameters
+    assert request.parameters.get("executionPlanRef") == (
+        None if authority == "typed" else plan.planRef
+    )
+    assert result.metadata["executionPlanRef"] == plan.planRef
+    assert result.metadata["runtimeBindingRef"] == "binding-recorded"
+    assert result.metadata["retainedEvidenceRef"] == "art_prior_evidence"
+    assert result.metadata["omnigentCheckpointCapture"] == {
+        "runtimeBindingRef": "binding-recorded",
+        "checkpointRefs": ["art_checkpoint"],
+        "executionScopeRef": request.step_execution.step_execution_id,
+        "executionPlanRef": plan.planRef,
+    }
+    session_id = canonical_omnigent_session_id(
+        workflow_id=request.step_execution.workflow_id,
+        step_execution_id=request.step_execution.step_execution_id,
+        agent_run_id=request.correlation_id,
+    )
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(session_id)
+        turns = await repos.turn_attempts.list_for_session(session_id)
+        commands = await repos.commands.list_for_session(session_id)
+    assert session.provider_session_ref == "provider-session-admitted-codex"
+    assert len(turns) == len(commands) == 1
+    assert commands[0].payload_digest == plan.planRef
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "conflict", ["typed_plan", "typed_digest", "flat_plan", "legacy_flat", "missing"]
+)
+async def test_codex_plan_conflict_precedes_turn_and_provider_effects(
+    durable_artifact_storage, conflict
+):
+    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    plan = compile_execution_plan(**_codex_plan_inputs())
+    request = _codex_authority_dispatch_request(plan, authority="typed_and_flat")
+    wrong_ref = "omnigent-execution-plan:sha256:" + "f" * 64
+    if conflict in {"typed_plan", "typed_digest"}:
+        updates = {"plan_digest": "sha256:" + "f" * 64}
+        if conflict == "typed_plan":
+            updates["plan_ref"] = wrong_ref
+        binding = request.omnigent_execution_plan.model_copy(update=updates)
+        request = request.model_copy(update={"omnigent_execution_plan": binding})
+    elif conflict in {"flat_plan", "legacy_flat"}:
+        request = request.model_copy(
+            update={
+                "parameters": {**request.parameters, "executionPlanRef": wrong_ref},
+                "omnigent_execution_plan": (
+                    None
+                    if conflict == "legacy_flat"
+                    else request.omnigent_execution_plan
+                ),
+            }
+        )
+    else:
+        request = request.model_copy(
+            update={"parameters": {}, "omnigent_execution_plan": None}
+        )
+    realizer, delivered, store = _codex_authority_realizer(durable_artifact_storage)
+
+    with pytest.raises(HarnessPlatformError) as error:
+        await realizer.execute(request, plan)
+
+    assert error.value.code == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
+    assert delivered == []
+    session_id = canonical_omnigent_session_id(
+        workflow_id=request.step_execution.workflow_id,
+        step_execution_id=request.step_execution.step_execution_id,
+        agent_run_id=request.correlation_id,
+    )
+    async with store.transaction() as repos:
+        assert await repos.sessions.get(session_id) is None
+        assert await repos.turn_attempts.list_for_session(session_id) == []
+        assert await repos.commands.list_for_session(session_id) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("location", "field", "value"),
+    [
+        ("root", "model", "gpt-5.6"),
+        ("root", "effort", "low"),
+        ("session", "modelOverride", "gpt-5.6"),
+        ("session", "reasoningEffort", "low"),
+    ],
+)
+async def test_codex_model_conflict_precedes_turn_and_provider_effects(
+    durable_artifact_storage, location, field, value
+):
+    """A coordinator rejection must not journal an undelivered provider turn."""
+
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnCommandService,
+    )
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    inputs = _codex_plan_inputs()
+    inputs.update(model_qualified_id="gpt-6.1-sol", model_effort="max")
+    plan = compile_execution_plan(**inputs)
+    request = _codex_authority_dispatch_request(plan)
+    parameters = dict(request.parameters)
+    if location == "root":
+        parameters[field] = value
+    else:
+        parameters["omnigent"] = {"session": {field: value}}
+    request = request.model_copy(update={"parameters": parameters})
+    effects = []
+
+    class UndeliveredBridgeStore:
+        async def get_or_create(self, **_kwargs):
+            effects.append("bridge_created")
+            raise AssertionError("conflicting selection reached provider lifecycle")
+
+    def coordinator_factory(**_kwargs):
+        coordinator = _codex_coordinator(plan)
+        coordinator._run_store = UndeliveredBridgeStore()
+        return coordinator
+
+    store = OmnigentControlPlaneStore(durable_artifact_storage)
+    realizer = CodexProfileBoundRealizer(
+        session_factory=durable_artifact_storage,
+        coordinator_factory=coordinator_factory,
+        turn_command_service=CanonicalTurnCommandService(store),
+    )
+
+    with pytest.raises(HarnessPlatformError) as error:
+        await realizer.execute(request, plan)
+
+    assert error.value.code == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
+    assert effects == []
+    session_id = canonical_omnigent_session_id(
+        workflow_id=request.step_execution.workflow_id,
+        step_execution_id=request.step_execution.step_execution_id,
+        agent_run_id=request.correlation_id,
+    )
+    async with store.transaction() as repos:
+        assert await repos.sessions.get(session_id) is None
+        assert await repos.turn_attempts.list_for_session(session_id) == []
+        assert await repos.commands.list_for_session(session_id) == []
+
+
 async def _write_durable_skill_snapshot(
     session_factory, workflow_id: str, run_id: str
 ) -> str:

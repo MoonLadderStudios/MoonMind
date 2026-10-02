@@ -227,6 +227,30 @@ def resolve_terminal_evidence_source(
     )
 
 
+def _first_batch_error_message(
+    payload: Mapping[str, Any], *, max_chars: int = 1024
+) -> str:
+    """Return the first per-target error text from a batch fan-out payload.
+
+    Batch helpers always record per-target ``errors`` with an ``error`` field
+    (for example an HTTP 403 from POST /api/executions). The terminal
+    contract must keep that cause observable instead of reporting only a
+    generic code.
+    """
+
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return ""
+    for item in errors:
+        if not isinstance(item, Mapping):
+            continue
+        for key in ("error", "message"):
+            candidate = str(item.get(key) or "").strip()
+            if candidate:
+                return candidate[:max_chars]
+    return ""
+
+
 def _evaluate_batch_pr_fanout_evidence(
     payload: Mapping[str, Any],
     *,
@@ -273,6 +297,18 @@ def _evaluate_batch_pr_fanout_evidence(
         return _failure("INVALID_TERMINAL_EVIDENCE", metadata=metadata)
 
     failure_code = str(payload.get("failureCode") or "").strip()
+    failure_message = str(payload.get("failureMessage") or "").strip()
+    if not failure_message:
+        failure_obj = payload.get("failure")
+        if isinstance(failure_obj, Mapping):
+            failure_message = str(failure_obj.get("message") or "").strip()
+    failure_message = failure_message[:1024]
+    if not failure_message:
+        failure_message = _first_batch_error_message(payload)
+    if failure_code:
+        metadata["terminalFailureCode"] = failure_code
+    if failure_message:
+        metadata["terminalFailureMessage"] = failure_message
     if status == "partial_failure":
         return _failure(
             failure_code or "BATCH_FANOUT_PARTIAL_FAILURE", metadata=metadata
@@ -631,6 +667,8 @@ def evaluate_terminal_evidence(
     failure_payload = dict(failure) if isinstance(failure, Mapping) else {}
     failure_code = str(failure_payload.get("code") or "").strip()
     failure_message = str(failure_payload.get("message") or "").strip()
+    if not failure_message:
+        failure_message = _first_batch_error_message(payload)
     metadata = {
         "terminalContractId": contract_id,
         "terminalContractEvidencePath": relative,

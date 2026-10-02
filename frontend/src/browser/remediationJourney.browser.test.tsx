@@ -539,11 +539,11 @@ describe('routed remediation operator journey', () => {
     ).toBeGreaterThan(0);
     expect(screen.queryByText('Remediation Draft')).toBeNull();
     const discard = screen.getByRole('button', { name: 'Discard draft reference' });
-    // Restore the test frame's focus before native keyboard input in Firefox.
-    window.focus();
     discard.focus();
     expect(document.activeElement).toBe(discard);
-    await userEvent.keyboard('{Enter}');
+    // Native pointer activation targets the button's frame. DOM focus alone
+    // does not guarantee that Firefox routes page-level keyboard input there.
+    await userEvent.click(discard);
     await waitFor(() => expect(window.location.search).toBe(''));
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
   }, 20_000);

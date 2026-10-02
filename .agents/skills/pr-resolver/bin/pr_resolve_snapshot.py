@@ -180,7 +180,10 @@ def run_command(
             )
             sys.exit(1)
 
-def run_command_optional_with_error(cmd) -> tuple[dict | list | None, str | None]:
+
+def run_command_optional_with_error(
+    cmd, *, paginated=False, records_key=None
+) -> tuple[dict | list | None, str | None]:
     resolved_cmd = _resolve_command(cmd)
     try:
         completed = subprocess.run(
@@ -200,19 +203,29 @@ def run_command_optional_with_error(cmd) -> tuple[dict | list | None, str | None
             + (f"\n{details}" if details else ""),
         )
     output = completed.stdout
-    if output.strip() == "":
+    if output.strip() == "" and not paginated:
         return {}, None
     try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
+        payload = (
+            _decode_paginated_records(output, records_key=records_key)
+            if paginated
+            else json.loads(output)
+        )
+    except ValueError:
         return None, f"invalid JSON from command: {' '.join(resolved_cmd)}"
     if isinstance(payload, (dict, list)):
         return payload, None
     return None, f"unsupported JSON payload type from command: {' '.join(resolved_cmd)}"
 
-def run_command_optional(cmd) -> dict | list | None:
-    payload, _ = run_command_optional_with_error(cmd)
+
+def run_command_optional(
+    cmd, *, paginated=False, records_key=None
+) -> dict | list | None:
+    payload, _ = run_command_optional_with_error(
+        cmd, paginated=paginated, records_key=records_key
+    )
     return payload
+
 
 def _current_branch_name() -> str | None:
     resolved_cmd = _resolve_command(["git", "branch", "--show-current"])
@@ -1263,11 +1276,12 @@ def summarize_ci_infrastructure(
     }
 
 
-def _decode_paginated_records(output: str) -> list[dict]:
-    """Flatten ``gh api --paginate`` output, which is consecutive JSON arrays.
+def _decode_paginated_records(output: str, *, records_key=None) -> list[dict]:
+    """Flatten consecutive ``gh api --paginate`` response documents.
 
     The distribution-provided CLI predates ``--slurp``, so pages are decoded
-    one after another rather than requiring a single document.
+    one after another rather than requiring a single document. Array endpoints
+    supply records directly; object endpoints name their required records key.
     """
 
     decoder = json.JSONDecoder()
@@ -1277,6 +1291,10 @@ def _decode_paginated_records(output: str) -> list[dict]:
         raise ValueError("empty paginated response")
     while remaining:
         page, end = decoder.raw_decode(remaining)
+        if records_key is not None:
+            if not isinstance(page, dict):
+                raise ValueError("expected an object on every page")
+            page = page.get(records_key)
         if not isinstance(page, list) or any(
             not isinstance(item, dict) for item in page
         ):
@@ -1380,6 +1398,7 @@ def _fetch_previous_commit_sha(
                 return shas[index - 1]
     return shas[-2]
 
+
 def _fetch_commit_check_runs(
     *, pr_repo: str | None, commit_sha: str | None
 ) -> list[dict] | None:
@@ -1392,19 +1411,12 @@ def _fetch_commit_check_runs(
             "gh",
             "api",
             "--paginate",
-            "--slurp",
             f"repos/{repo}/commits/{sha}/check-runs?filter=latest&per_page=100",
-        ]
+        ],
+        paginated=True,
+        records_key="check_runs",
     )
-    pages = [payload] if isinstance(payload, dict) else payload
-    if not isinstance(pages, list):
-        return None
-    result: list[dict] = []
-    for page in pages:
-        if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
-            return None
-        result.extend(entry for entry in page["check_runs"] if isinstance(entry, dict))
-    return result
+    return payload if isinstance(payload, list) else None
 
 
 def _fetch_commit_statuses(
@@ -1417,21 +1429,17 @@ def _fetch_commit_statuses(
             "gh",
             "api",
             "--paginate",
-            "--slurp",
             f"repos/{pr_repo}/commits/{commit_sha}/statuses?per_page=100",
-        ]
+        ],
+        paginated=True,
     )
     if not isinstance(payload, list):
         return None
-    pages = payload if payload and isinstance(payload[0], list) else [payload]
     latest: dict[str, dict] = {}
-    for page in pages:
-        if not isinstance(page, list):
-            return None
-        for status in page:
-            if isinstance(status, dict) and str(status.get("context") or "").strip():
-                # The provider orders statuses newest first across pages.
-                latest.setdefault(str(status["context"]).strip(), dict(status))
+    for status in payload:
+        if isinstance(status, dict) and str(status.get("context") or "").strip():
+            # The provider orders statuses newest first across pages.
+            latest.setdefault(str(status["context"]).strip(), dict(status))
     return list(latest.values())
 
 
@@ -1763,6 +1771,7 @@ def main():
         },
     }
     print(json.dumps(summary, indent=2))
+
 
 if __name__ == "__main__":
     main()

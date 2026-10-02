@@ -2587,6 +2587,97 @@ async def test_host_preparation_materializes_missing_owner_record(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("present", [True, False])
+async def test_host_inventory_distinguishes_stopped_container_from_absence(
+    tmp_path,
+    present,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path
+    )
+
+    async def run(*argv, **_kwargs):
+        assert argv[:3] == ("docker", "inspect", "--format")
+        if argv[3] == "{{.State.Running}}":
+            return (0, "false\n", "") if present else (1, "", "not found")
+        assert argv[3] == "{{.Id}}"
+        return (0, "stopped-container-id\n", "") if present else (1, "", "not found")
+
+    runtime._run = run
+    assert await runtime.container_exists("mm-host-lease-1") is False
+    assert await runtime.container_present("mm-host-lease-1") is present
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("container_owner", ["host-lease-1", "foreign-lease"])
+async def test_stop_host_checks_stopped_container_ownership_before_removal(
+    tmp_path,
+    container_owner,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path
+    )
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    _, runtime_scripts = runtime._runtime_scripts_target(lease.lease_id)
+    runtime_scripts.mkdir(parents=True)
+    saved_control = runtime_scripts / "execution-fanout"
+    saved_control.write_text("expired-test-capability\n", encoding="utf-8")
+    commands = []
+    container_present = True
+
+    async def run(*argv, **_kwargs):
+        nonlocal container_present
+        commands.append(argv)
+        if argv[:2] == ("docker", "inspect"):
+            if not container_present:
+                return (1, "", "not found")
+            if argv[3] == "{{.State.Running}}":
+                return (0, "false\n", "")
+            if argv[3] == "{{.Id}}":
+                return (0, "stopped-container-id\n", "")
+            assert argv[3] == '{{index .Config.Labels "moonmind.host_lease_id"}}'
+            return (0, container_owner + "\n", "")
+        if argv[:3] == ("docker", "rm", "-f"):
+            container_present = False
+        if argv[:3] == ("docker", "volume", "inspect"):
+            return (1, "", "not found")
+        return (0, "", "")
+
+    runtime._run = run
+    if container_owner != lease.lease_id:
+        with pytest.raises(OmnigentOAuthHostError) as failure:
+            await runtime.stop_host(binding=binding, host_lease=lease)
+        assert failure.value.code == "OMNIGENT_HOST_OWNERSHIP_MISMATCH"
+        assert container_present is True
+        assert saved_control.is_file()
+        assert all(command[:2] != ("docker", "stop") for command in commands)
+        assert all(command[:2] != ("docker", "rm") for command in commands)
+        assert all(command[:3] != ("docker", "volume", "rm") for command in commands)
+    else:
+        result = await runtime.stop_host(binding=binding, host_lease=lease)
+        assert result["cleanupResult"] == "succeeded"
+        assert container_present is False
+        assert not runtime_scripts.exists()
+        ownership_check = (
+            "docker",
+            "inspect",
+            "--format",
+            '{{index .Config.Labels "moonmind.host_lease_id"}}',
+            lease.container_name,
+        )
+        assert commands.index(ownership_check) < commands.index(
+            ("docker", "rm", "-f", lease.container_name)
+        )
+        assert all(
+            binding.credential_mount_ref.auth_volume_ref.volume_ref not in command
+            for command in commands
+        )
+
+
+@pytest.mark.asyncio
 async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> None:
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
     runtime._run = AsyncMock(return_value=(1, "", "not found"))
@@ -6011,6 +6102,131 @@ async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_
         "egressLaunchEvidenceRef": "artifact://launch-egress",
         "egressEvidenceRef": "artifact://terminal-egress-failure",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_failure", ["raised", "returned", "none"])
+async def test_runtime_cleanup_reporting_preserves_primary_outcome(
+    monkeypatch, primary_failure
+):
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+    from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
+    from tests.unit.omnigent.test_generic_plane_n_way_concurrency import _zen_plan
+
+    class CleanupReportingFailureStore(InMemoryRuntimeBindingStore):
+        async def mark_cleanup_complete(self, *_args, **_kwargs):
+            raise HarnessPlatformError(
+                "runtime binding revision or fencing generation conflict",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+
+    store = CleanupReportingFailureStore()
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.DbRuntimeBindingStore",
+        lambda _factory: store,
+    )
+    monkeypatch.setattr(
+        OmnigentProfileBoundExecutionCoordinator,
+        "_require_recorded_plan_request",
+        lambda _self, _request: _zen_plan("workflow-1"),
+    )
+    original = _injected_launch_error("original_provider_error")
+    kwargs = {
+        "fail_at": "resource_harvest" if primary_failure == "raised" else "none",
+        "code": "original_provider_error",
+        "injected_error": original,
+    }
+    if primary_failure == "returned":
+        kwargs["injected_result"] = AgentRunResult(
+            summary="original provider result",
+            failureClass="integration_error",
+            providerErrorCode="original_provider_error",
+            diagnosticsRef="artifact://original",
+        )
+    events, actions, _calls = await _run_coordinator_failure_case(**kwargs)
+    cleanup = [data for stage, data in events if stage == "runtime_binding_cleanup"]
+    assert cleanup[-1]["status"] == "failed"
+    assert cleanup[-1]["code"] == "OMNIGENT_RUNTIME_BINDING_CONFLICT"
+    assert cleanup[-1]["metadata"]["janitorRequired"] is False
+    assert (
+        cleanup[-1]["summary"]
+        == "runtime binding revision or fencing generation conflict"
+    )
+    terminal = [data for stage, data in events if stage == "terminal"][-1]
+    assert terminal["status"] == (
+        "completed" if primary_failure == "none" else "failed"
+    )
+    assert "provider_released" in actions
+    if primary_failure != "none":
+        assert any(
+            data.get("code") == "original_provider_error" for _stage, data in events
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_recovers", [True, False])
+async def test_pre_host_cleanup_reporting_retries_and_preserves_diagnostics(
+    monkeypatch, cleanup_recovers
+):
+    from sqlalchemy.exc import OperationalError
+    from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
+    from tests.unit.omnigent.test_generic_plane_n_way_concurrency import _zen_plan
+
+    class TransientCleanupStore(InMemoryRuntimeBindingStore):
+        attempts = 0
+
+        async def mark_cleanup_complete(self, *args, **kwargs):
+            self.attempts += 1
+            if not cleanup_recovers or self.attempts < 3:
+                raise OperationalError(
+                    None,
+                    None,
+                    RuntimeError(
+                        "database connection unavailable token=private-test-token "
+                        + "x" * 1000
+                    ),
+                )
+            return await super().mark_cleanup_complete(*args, **kwargs)
+
+    store = TransientCleanupStore()
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.DbRuntimeBindingStore",
+        lambda _factory: store,
+    )
+    plan = _zen_plan("workflow-1")
+    monkeypatch.setattr(
+        OmnigentProfileBoundExecutionCoordinator,
+        "_require_recorded_plan_request",
+        lambda _self, _request: plan,
+    )
+    original = _injected_launch_error("host_lease_failed")
+    events, actions, _calls = await _run_coordinator_failure_case(
+        fail_at="host_lease",
+        code="host_lease_failed",
+        injected_error=original,
+    )
+    assert store.attempts == 3
+    assert "provider_released" in actions
+    state = await store.get_current_state(plan.planRef, "workflow-1")
+    assert state.state == (
+        "cleanup_complete" if cleanup_recovers else "credentials_acquired"
+    )
+    reports = [data for stage, data in events if stage == "runtime_binding_cleanup"]
+    assert reports[-1]["status"] == ("completed" if cleanup_recovers else "failed")
+    assert reports[-1]["metadata"]["retryAttempts"] == 3
+    if not cleanup_recovers:
+        assert reports[-1]["code"] == "OperationalError"
+        assert "database connection unavailable" in reports[-1]["summary"]
+        assert "private-test-token" not in reports[-1]["summary"]
+        assert len(reports[-1]["summary"]) <= 512
+        assert reports[-1]["metadata"]["janitorRequired"] is False
+    terminal = [data for stage, data in events if stage == "terminal"][-1]
+    assert terminal["status"] == "failed"
+    assert terminal["metadata"]["janitorRequired"] is False
+    assert any(data.get("code") == "host_lease_failed" for _stage, data in events)
 
 
 @pytest.mark.asyncio
