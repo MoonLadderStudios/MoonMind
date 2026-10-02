@@ -4996,7 +4996,11 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     )
 
     assert response.status_code == 422
-    assert "Unsupported targetRuntime" in response.json()["detail"]["message"]
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_execution_request"
+    assert "payload.targetRuntime" in detail["message"]
+    assert "must be one of" in detail["message"]
+    execute.assert_not_awaited()
     service.create_execution.assert_not_awaited()
 
 
