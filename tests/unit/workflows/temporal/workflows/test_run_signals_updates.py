@@ -920,6 +920,7 @@ async def test_update_inputs_refreshes_parent_runtime_visibility(monkeypatch):
         "update_runtime_selection",
         {
             "targetRuntime": "codex_cli",
+            "runtime": {"mode": "codex_cli"},
             "parametersPatch": {
                 "workflow": {
                     "runtime": {
