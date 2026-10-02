@@ -592,7 +592,6 @@ Purpose: external provider interaction and delegated agent execution.
 ### Current implemented provider families
 
 - `integration.jules.*`
-- `integration.codex_cloud.*`
 - `integration.openclaw.execute`
 - `integration.omnigent.execute`
 
@@ -602,7 +601,7 @@ families by themselves. For example, Jira is available as the
 merge-automation activities, but there is no `integration.jira.start` /
 `integration.jira.status` external monitor family.
 
-### Jules and Codex Cloud contract pattern
+### Jules contract pattern
 
 Current canonical pattern:
 
@@ -611,7 +610,6 @@ Current canonical pattern:
 - `integration.jules.fetch_result(...) -> AgentRunResult`
 - `integration.jules.cancel(...) -> AgentRunStatus`
 
-and likewise for `integration.codex_cloud.*`
 
 ### Streaming-gateway contract pattern
 

@@ -14,7 +14,7 @@ Related:
 
 Define one canonical architecture for MoonMind external-agent integrations.
 
-The goal is to stop describing each provider as its own mini-architecture and instead treat providers such as Jules, Codex Cloud, and future BYOA integrations as implementations of one shared external-agent system with:
+The goal is to stop describing each provider as its own mini-architecture and instead treat providers such as Jules and future BYOA integrations as implementations of one shared external-agent system with:
 
 - one generic orchestration lifecycle
 - one canonical `AgentAdapter` contract
@@ -82,7 +82,6 @@ Examples:
 - provider schema modules
 - provider client code such as:
   - `jules_client.py`
-  - `codex_cloud_client.py`
 
 This layer does **not** own MoonMind lifecycle or canonical workflow contracts.
 
@@ -114,7 +113,6 @@ In the current codebase, this boundary is represented by:
 - `moonmind/workflows/adapters/base_external_agent_adapter.py`
 - provider adapters such as:
   - `jules_agent_adapter.py`
-  - `codex_cloud_agent_adapter.py`
 
 ### Canonical contract rule
 
@@ -285,7 +283,7 @@ Pattern:
 4. fetch final result
 5. cancel if needed
 
-This is the standard model for providers such as Jules and Codex Cloud.
+This is the standard model for providers such as Jules.
 
 ## 7.2 Streaming gateway
 
@@ -363,7 +361,7 @@ Not:
 
 > Jules defines its own separate execution architecture.
 
-The same framing applies to Codex Cloud and future providers.
+The same framing applies to future providers.
 
 ---
 
@@ -395,7 +393,6 @@ Poll-based providers:
 Examples:
 
 - Jules
-- Codex Cloud
 
 ## 10.3 Streaming providers
 
@@ -467,4 +464,4 @@ The key boundary is the adapter/activity contract boundary:
 - provider-native payloads are allowed below it
 - only canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` are allowed above it
 
-Jules remains the primary reference poll-based provider, while Codex Cloud, OpenClaw, and future providers follow the same core architecture rather than inventing separate execution models.
+Jules remains the primary reference poll-based provider, while OpenClaw and future providers follow the same core architecture rather than inventing separate execution models.

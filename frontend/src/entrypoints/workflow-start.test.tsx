@@ -2316,7 +2316,7 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
           supportedAgentRuntimes: [
             "codex_cli",
             "claude_code",
-            "codex_cloud",
+            "jules",
           ],
           runtimeCommandPreview: {
             hintCatalogVersion: "2026-05-13",
@@ -2331,7 +2331,7 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
                 renderMode: "prompt_prefix",
                 commandHintsRef: "claude_code",
               },
-              codex_cloud: {
+              jules: {
                 slashCommandPassthrough: false,
                 renderMode: "plain_prompt",
               },
@@ -19140,7 +19140,7 @@ describe("Task Create runtime command previews", () => {
       target: { value: "/review\nKeep this exact text." },
     });
     fireEvent.change(screen.getByLabelText("Runtime"), {
-      target: { value: "codex_cloud" },
+      target: { value: "jules" },
     });
 
     expect((instructions as HTMLTextAreaElement).value).toBe(
@@ -20027,5 +20027,48 @@ describe("Task Create MM-937 step hover containment", () => {
     expect(dashboardCss).toMatch(
       /#queue-dependency-list\s+\.queue-step-icon-button\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*align-self:\s*center;[^}]*justify-self:\s*end;/s,
     );
+  });
+});
+
+
+describe('removed target drafts (#4644)', () => {
+  let fetchSpy: MockInstance;
+  let savedExecution: Parameters<typeof buildTemporalSubmissionDraftFromExecution>[0];
+  beforeEach(() => {
+    window.history.pushState({}, 'Edit', '/workflows/new?editExecutionId=mm%3Aold-cloud');
+    fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.startsWith('/api/executions/mm%3Aold-cloud') ? {
+        workflowId: 'mm:old-cloud', workflowType: 'MoonMind.UserWorkflow', state: 'executing', actions: { canUpdateInputs: true },
+        inputParameters: { workflow: {
+          instructions: 'Preserve the original task',
+          runtime: { mode: 'codex_cloud', model: 'saved-model', effort: 'high' },
+          publish: { mode: 'none' },
+          steps: [{ id: 'cloud-step', type: 'skill', instructions: 'Preserve the Cloud step', skill: { id: 'auto', args: {} }, runtime: { mode: 'codex_cloud' } }, { id: 'retained-step', type: 'skill', instructions: 'Keep the supported step', skill: { id: 'auto', args: {} }, runtime: { mode: 'codex_cli' } }],
+        } },
+      } : url.startsWith('/api/v1/provider-profiles') ? [] : url.startsWith('/api/skills') ? { items: { worker: [] } } : { items: [] };
+      if (url.startsWith('/api/executions/mm%3Aold-cloud')) savedExecution = data as typeof savedExecution;
+      return Promise.resolve({ ok: true, json: async () => data } as Response);
+    });
+  });
+  afterEach(() => { fetchSpy.mockRestore(); cleanup(); });
+  it('preserves a restored task and requires explicit replacement without recreating a choice', async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step'));
+    expect(buildTemporalSubmissionDraftFromExecution(savedExecution, {}).taskInstructions).toContain('Preserve the original task');
+    expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('saved-model');
+    expect((screen.getByLabelText('Workflow Effort') as HTMLInputElement).value).toBe('high');
+    const runtime = screen.getByLabelText('Runtime') as HTMLSelectElement;
+    expect(Array.from(runtime.options).map((option) => option.value)).not.toContain('codex_cloud');
+    expect(runtime.value).toBe('');
+    expect(screen.getAllByText(/unsupported runtime codex_cloud/i).length).toBeGreaterThan(0);
+    expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step');
+    expect((screen.getAllByLabelText('Instructions')[1] as HTMLTextAreaElement).value).toBe('Keep the supported step');
+    fireEvent.submit(document.querySelector('#queue-submit-form')!);
+    expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST' || init?.method === 'PATCH')).toBe(false);
+    fireEvent.change(runtime, { target: { value: 'codex_cli' } });
+    expect(runtime.value).toBe('codex_cli');
+    expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step');
+    expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST' || init?.method === 'PATCH')).toBe(false);
   });
 });

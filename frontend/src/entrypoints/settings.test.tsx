@@ -103,7 +103,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
         system: {
           // `omnigent` is a facade, never a Provider Profile owner, so it must
           // not become a runtime filter option.
-          supportedRuntimes: ['omnigent', 'codex_cli', 'claude_code', 'codex_cloud'],
+          supportedRuntimes: ['omnigent', 'codex_cli', 'claude_code', 'jules'],
         },
       },
     },
@@ -187,7 +187,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
       { value: 'all', label: 'All runtimes' },
       { value: 'codex_cli', label: 'Codex CLI' },
       { value: 'claude_code', label: 'Claude Code' },
-      { value: 'codex_cloud', label: 'Codex Cloud' },
+      { value: 'jules', label: 'Jules' },
     ]);
     expect(options.map((option) => option.value)).not.toContain('omnigent');
   });
@@ -245,10 +245,10 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     await screen.findByRole('heading', { name: 'Profiles' });
     expect(screen.queryByText('No provider profiles configured yet.')).toBeNull();
 
-    selectRuntimeFilter('codex_cloud');
+    selectRuntimeFilter('jules');
 
     expect(
-      screen.getByText('No provider profiles are configured for Codex Cloud.'),
+      screen.getByText('No provider profiles are configured for Jules.'),
     ).toBeTruthy();
     expect(screen.queryByText('No provider profiles configured yet.')).toBeNull();
   });
@@ -265,4 +265,12 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     expect(runtimeIdInput.value).toBe('claude_code');
     expect(runtimeIdInput.disabled).toBe(true);
   });
+  it('does not offer a removed runtime from a stale boot catalog (#4644)', async () => {
+    const stale = structuredClone(payloadWithRuntimes);
+    (stale.initialData as any).runtimeConfig.system.supportedRuntimes.push('codex_cloud');
+    renderProvidersPage(stale);
+    await screen.findByRole('heading', { name: 'Profiles' });
+    expect(Array.from(runtimeFilterControl().options).map((option) => option.value)).not.toContain('codex_cloud');
+  });
+
 });

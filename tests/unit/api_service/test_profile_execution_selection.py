@@ -455,3 +455,54 @@ def test_extra_execution_configuration_selector_field_is_rejected() -> None:
     with pytest.raises(HTTPException) as error:
         validate_execution_configuration_expectation(mutated, resolved)
     assert error.value.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "schema",
+    ["moonmind.omnigent-agent-profile.v1", "moonmind.omnigent-agent-profile.v2"],
+)
+def test_stale_cloud_profile_cannot_resolve_through_codex_native(schema):
+    """MoonLadderStudios/MoonMind#4644: no Cloud-to-Codex replacement route."""
+    profile = provider(runtime_id="codex_cloud")
+    candidate = configuration()
+    candidate[1].document["schemaVersion"] = schema
+    candidate[1].document["harness"] = "codex-native"
+    candidate[1].document["providerRequirements"]["runtimeId"] = "codex_cloud"
+    assert not configuration_accepts_profile(candidate[1].document, profile)
+    with pytest.raises(HTTPException):
+        select_execution_configuration(profile, [candidate])
+
+
+@pytest.mark.parametrize("runtime", ["codex", "codex_cli"])
+def test_normal_codex_profile_keeps_native_harness_and_auth_authority(runtime):
+    profile = provider(
+        runtime_id=runtime,
+        provider_id="openai",
+        credential_source="oauth",
+        runtime_materialization_mode="auth_mount",
+    )
+    candidate = configuration()
+    candidate[1].document["harness"] = "codex-native"
+    candidate[1].document["providerRequirements"].update(
+        runtimeId=runtime,
+        credentialSource="oauth",
+        materializationMode="auth_mount",
+        providerIds=["openai"],
+    )
+    assert configuration_accepts_profile(candidate[1].document, profile)
+    selected = select_execution_configuration(profile, [candidate])
+    assert selected["harnessId"] == "codex-native"
+    assert selected["providerProfileRef"] == profile.profile_id
+
+
+@pytest.mark.parametrize("runtime_id", ["jules", "openclaw"])
+def test_cloud_removal_preserves_retained_profile_requirements(runtime_id):
+    """#4644: legacy retained Profiles do not need a native harness mapping."""
+    retained = provider(runtime_id=runtime_id, provider_id=runtime_id)
+    row, version = configuration(providers=[runtime_id])
+    version.document["providerRequirements"]["runtimeId"] = runtime_id
+    assert configuration_accepts_profile(version.document, retained)
+    assert (
+        select_execution_configuration(retained, [(row, version)])["providerProfileRef"]
+        == retained.profile_id
+    )

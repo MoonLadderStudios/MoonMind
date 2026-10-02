@@ -722,3 +722,60 @@ async def test_active_rollback_reaches_every_production_submission_surface(
     dashboard_config = build_runtime_config("/workflows/new")
     assert dashboard_config["system"]["defaultRuntime"] == expected
     assert os.environ.get("MOONMIND_WORKER_RUNTIME") is None
+
+
+def test_removed_runtime_policy_cannot_advertise_a_cloud_target():
+    """#4644: a saved direct policy is not a Cloud reactivation hook."""
+    policy = _policy({_CODEX_GATE: "true"})
+    direct = next(
+        rule
+        for rule in policy.rules
+        if rule.path_class is RuntimeProviderPathClass.direct_compatibility
+    )
+    old_rule = direct.model_copy(
+        update={
+            "target_id": "old-cloud",
+            "selector": {**direct.selector, "provider_runtime_id": "codex_cloud"},
+        }
+    )
+    stale = policy.model_copy(update={"rules": (*policy.rules, old_rule)})
+    assert "codex_cloud" not in {
+        row.runtime_id for row in resolve_runtime_target_catalog(policy=stale)
+    }
+    rejected = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime="codex_cloud",
+        requested_target_id="codex.generic-omnigent",
+        policy=stale,
+    )
+    assert rejected.runtime_id == "codex_cloud"
+    assert rejected.available is False
+    assert rejected.replacement_required is True
+
+
+@pytest.mark.parametrize("runtime_id", ["jules", "openclaw"])
+def test_cloud_removal_preserves_retained_external_policy_targets(runtime_id):
+    """#4644: product contract enums do not retire other registered integrations."""
+    policy = _policy()
+    direct = next(
+        rule
+        for rule in policy.rules
+        if rule.path_class is RuntimeProviderPathClass.direct_compatibility
+    )
+    retained = direct.model_copy(
+        update={
+            "target_id": f"retained-{runtime_id}",
+            "selector": {**direct.selector, "provider_runtime_id": runtime_id},
+        }
+    )
+    updated = policy.model_copy(update={"rules": (*policy.rules, retained)})
+    assert runtime_id in {
+        row.runtime_id for row in resolve_runtime_target_catalog(policy=updated)
+    }
+    selection = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime=runtime_id,
+        policy=updated,
+    )
+    assert selection.runtime_id == runtime_id
+    assert selection.available

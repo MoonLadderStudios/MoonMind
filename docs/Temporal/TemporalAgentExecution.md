@@ -265,7 +265,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 | **Planning stage** (`plan.generate`) | ✅ Implemented | Activity + planner callback |
 | **Execution stage** (`_run_execution_stage`) | ✅ Implemented | Reads plan artifact, dispatches `agent_runtime` nodes as `MoonMind.AgentRun` child workflows, non-agent nodes as activities |
 | **`MoonMind.AgentRun` child workflow** | ✅ Implemented | Unified agent execution lifecycle for managed and external agents |
-| **`AgentAdapter` protocol** | ✅ Implemented | `ManagedAgentAdapter` + `JulesAgentAdapter` + `CodexCloudAgentAdapter` |
+| **`AgentAdapter` protocol** | ✅ Implemented | `ManagedAgentAdapter` + `JulesAgentAdapter` + `OmnigentExternalAdapter` |
 | **`SkillInvocation` contract** | ✅ Implemented | Validated dataclass in `skill_plan_contracts.py` |
 | **Activity catalog** | ✅ Implemented | 18 activities, 5 fleets, correct routing |
 | **Worker runtime bindings** | ✅ Implemented | `build_activity_bindings` wires handlers to catalog |

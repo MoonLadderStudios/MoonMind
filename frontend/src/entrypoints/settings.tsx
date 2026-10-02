@@ -1,3 +1,4 @@
+import { runtimeUnavailableReason } from "../runtime/runtimeTargets";
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
@@ -202,6 +203,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
       const canonical = String(runtimeId ?? '').trim();
       if (
         canonical &&
+        !runtimeUnavailableReason(canonical) &&
         !NON_PROFILE_OWNING_RUNTIMES.has(canonical) &&
         !runtimeIds.includes(canonical)
       ) {

@@ -38,7 +38,6 @@ def _expected_harness_for_runtime(runtime_id: Any) -> str | None:
         "opencode": "opencode-native",
         "codex": "codex-native",
         "codex_cli": "codex-native",
-        "codex_cloud": "codex-native",
         "claude": "claude-native",
         "claude_code": "claude-native",
         "omnigent": "pi-native",
@@ -46,7 +45,24 @@ def _expected_harness_for_runtime(runtime_id: Any) -> str | None:
     return mapping.get(str(runtime_id or ""))
 
 
+def profile_runtime_supported(runtime_id: Any) -> bool:
+    """Use existing native harness and external capability owners for admission."""
+    from moonmind.workflows.executions.runtime_capabilities import (
+        RUNTIME_EXECUTION_CAPABILITIES,
+    )
+
+    normalized = str(runtime_id or "")
+    return (
+        _expected_harness_for_runtime(normalized) is not None
+        or normalized in RUNTIME_EXECUTION_CAPABILITIES.runtime_ids
+    )
+
+
 def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) -> bool:
+    # #4644: unsupported saved Profiles remain readable, never executable.
+    if not profile_runtime_supported(getattr(provider, "runtime_id", None)):
+        return False
+
     from api_service.services.omnigent_agent_profile_selection import (
         _accepted_provider_ids,
         _provider_materializer_error,

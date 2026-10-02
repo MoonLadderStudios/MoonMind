@@ -83,14 +83,21 @@ class TestBuildDefaultRegistry:
         assert "jules" in registry
         assert "jules_api" in registry
 
-    def test_codex_cloud_registered_when_enabled(self):
+    @pytest.mark.parametrize("enabled", [None, "false", "true"])
+    def test_obsolete_cloud_environment_never_registers_adapter(self, enabled):
         env = {
             "CODEX_CLOUD_ENABLED": "true",
             "CODEX_CLOUD_API_URL": "https://codex.test",
             "CODEX_CLOUD_API_KEY": "test-key-456",
         }
+        if enabled is None:
+            env = {}
+        else:
+            env["CODEX_CLOUD_ENABLED"] = enabled
         registry = build_default_registry(env=env)
-        assert "codex_cloud" in registry
+        assert "codex_cloud" not in registry
+        with pytest.raises(ValueError, match="No external adapter registered"):
+            registry.create("codex_cloud")
 
     def test_omnigent_registered_when_enabled(self):
         env = {
@@ -121,7 +128,7 @@ class TestBuildDefaultRegistry:
         with pytest.raises(ValueError, match="No external adapter registered"):
             rolled_back_registry.create("omnigent")
 
-    def test_both_registered_when_both_enabled(self):
+    def test_retained_provider_ignores_obsolete_cloud_configuration(self):
         env = {
             "JULES_ENABLED": "true",
             "JULES_API_URL": "https://jules.test",
@@ -132,7 +139,7 @@ class TestBuildDefaultRegistry:
         }
         registry = build_default_registry(env=env)
         assert "jules" in registry
-        assert "codex_cloud" in registry
+        assert "codex_cloud" not in registry
 
     def test_disabled_provider_not_registered(self):
         env = {

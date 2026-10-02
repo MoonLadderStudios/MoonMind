@@ -70,11 +70,9 @@ const RUNTIME_FILTER_OPTIONS = [
   'codex_cli',
   'claude_code',
   'jules',
-  'codex_cloud',
 ] as const;
 const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
   codex_cli: 'codex_cli',
-  codex_cloud: 'codex_cloud',
   claude_code: 'claude_code',
   jules: 'jules',
 };
