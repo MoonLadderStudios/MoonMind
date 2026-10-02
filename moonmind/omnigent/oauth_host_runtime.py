@@ -20,6 +20,7 @@ from typing import Any, NoReturn
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
+from moonmind.omnigent.git_identity import ensure_workspace_git_identity
 from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.mounted_tool_preflight import (
@@ -2909,7 +2910,8 @@ class OmnigentOAuthHostRuntime:
             )
         # 5. Materialize the authored repository/branch and restore inputs exactly
         #    once, then record durable completion. Retries observe the completed
-        #    workspace and skip all git and archive mutation.
+        #    workspace and skip cloning, checkout, and archive restoration.
+        #    Commit identity is reapplied below without discarding agent work.
         self._last_workspace_denial_evidence = {}
         materialization: dict[str, Any] = {"action": "reused_pre_materialized"}
         if not materialization_complete:
@@ -2974,6 +2976,16 @@ class OmnigentOAuthHostRuntime:
             expected_workflow_id=current_workflow_id,
             expected_step_execution_id=current_step_execution_id,
             must_exist=True,
+        )
+        # Fresh clones, checkpoint imports, and reused workspaces all need the
+        # deployment's commit identity before the agent can repair a PR. Apply
+        # it after restores on every preparation, preserving staged/saved work.
+        # The launch boundary aligns ownership of the whole tree afterwards.
+        await asyncio.to_thread(
+            ensure_workspace_git_identity,
+            workspace,
+            runtime_uid=None,
+            runtime_gid=None,
         )
         self._last_workspace_evidence = self._workspace_resolution_evidence(
             locator=locator,
