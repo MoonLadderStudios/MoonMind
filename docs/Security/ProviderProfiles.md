@@ -1350,6 +1350,21 @@ If no compatible launch-ready profile is available, the run waits durably in `aw
 
 A profile whose slots are all in use is busy, not unavailable. New work for it queues in the manager whatever the profile's `rate_limit_policy` is, because that field governs provider 429 handling (§11.7), not slot capacity. Launch surfaces such as the Omnigent readiness catalog mark the profile busy and keep it selectable.
 
+New plan-bound Codex and generic-host Omnigent runs acquire Provider Profile
+capacity in the workflow before scheduling the long execution Activity. A
+queued child projects `awaiting_slot` to its parent, so the workflows list
+reflects the capacity wait. Queue time consumes neither an execution worker
+slot nor the execution timeout. Codex retains its existing OAuth host lifecycle;
+the generic host reservation applies only to the generic realizer.
+
+The execution Activity consumes the admitted lease by inspecting its recorded
+plan, request, step, and credential authority. The workflow releases that lease
+after the Codex coordinator confirms host cleanup. Failed or interrupted cleanup
+keeps capacity spent for reconciliation and verified janitor teardown. A Temporal
+patch marker preserves the Activity-owned acquisition of Codex runs already
+scheduled before this change; those retained runs can still display `executing`
+while waiting internally until they finish.
+
 The UI and parent workflow should clearly indicate:
 
 - runtime family
