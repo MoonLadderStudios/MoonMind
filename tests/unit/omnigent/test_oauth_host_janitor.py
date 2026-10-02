@@ -88,6 +88,9 @@ class _Runtime:
     async def container_exists(self, _name):
         return True
 
+    async def container_present(self, _name):
+        return True
+
     async def stop_host(self, **kwargs):
         self.order.append("host_stopped")
         self.stopped += 1
@@ -281,6 +284,103 @@ async def test_janitor_rejects_host_fenced_by_replacement_binding() -> None:
     assert repository.cleanup_claims == []
     assert lease.status == "ready"
     assert runtime.stopped == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", [None, "profile", "lease", "generation"])
+async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
+    mismatch,
+) -> None:
+    lease = _lease(heartbeat_age=121)
+    lease.holder_workflow_id = "workflow-pre-host"
+    lease.status = "starting"
+    lease.credential_generation = 1
+    lease.omnigent_session_id = None
+    lease.omnigent_host_id = None
+    lease.effective_launch_snapshot = {
+        "enforcedEgress": True,
+        "egressCleanupAuthorityRequired": True,
+    }
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+
+    async def absent(_name):
+        return False
+
+    runtime.container_exists = absent
+    runtime.container_present = absent
+    original_validate = repository.validate_binding
+
+    async def validate_binding(ref):
+        binding = await original_validate(ref)
+        binding.host_launch_profile_ref = "shared-host"
+        return binding
+
+    repository.validate_binding = validate_binding
+    binding_store = InMemoryRuntimeBindingStore()
+    initial = await binding_store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "7" * 64,
+        execution_scope_ref=lease.holder_workflow_id,
+        provider_leases={
+            "primary-model": {
+                "providerProfileRef": (
+                    "replacement-profile" if mismatch == "profile" else "profile-1"
+                ),
+                "providerLeaseRef": (
+                    "replacement-lease" if mismatch == "lease" else "provider-lease-1"
+                ),
+                "credentialGeneration": 2 if mismatch == "generation" else 1,
+                "credentialRuntimeRef": "credential-runtime:profile-1:1",
+            }
+        },
+    )
+    lease_client = _LeaseClient(repository.order)
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        runtime_binding_store=binding_store,
+        lease_client=lease_client,
+    )
+    if mismatch:
+        with pytest.raises(ValueError, match="fenced by replacement"):
+            await janitor.run_action(
+                action_kind="host.stop",
+                profile_id="profile-1",
+                host_lease_ref="lease-1",
+                expected_host_state="starting",
+                request_id="pre-host-cleanup",
+            )
+        assert repository.cleanup_claims == []
+        assert runtime.stopped == 0
+        assert lease_client.released == []
+        return
+
+    result = await janitor.run_action(
+        action_kind="host.stop",
+        profile_id="profile-1",
+        host_lease_ref="lease-1",
+        expected_host_state="starting",
+        request_id="pre-host-cleanup",
+    )
+    assert result["after"]["status"] == "stopped"
+    assert repository.order == [
+        "cleanup_claimed",
+        "host_stopped",
+        "lease_released",
+        "provider_released",
+    ]
+    state = await binding_store.get_state(initial.runtimeBindingRef)
+    assert state.state == "cleanup_complete"
+    # A retry after the terminal write retains the same acquired authority.
+    await janitor.run_action(
+        action_kind="host.stop",
+        profile_id="profile-1",
+        host_lease_ref="lease-1",
+        expected_host_state="stopped",
+        request_id="pre-host-cleanup-retry",
+    )
+    assert (await binding_store.get_state(initial.runtimeBindingRef)) == state
 
 
 @pytest.mark.asyncio
@@ -728,6 +828,131 @@ async def test_current_restricted_lease_without_cleanup_authority_fails_closed()
 
     assert runtime.stopped == 0
     assert repository.stopped == []
+
+
+@pytest.mark.asyncio
+async def test_unlaunched_restricted_host_releases_capacity_after_verified_absence() -> (
+    None
+):
+    lease = _lease(heartbeat_age=121)
+    lease.status = "allocating"
+    lease.omnigent_session_id = None
+    lease.effective_launch_snapshot = {
+        "enforcedEgress": True,
+        "egressCleanupAuthorityRequired": True,
+    }
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+    checked = []
+
+    async def container_exists(name):
+        checked.append(name)
+        return False
+
+    runtime.container_exists = container_exists
+    runtime.container_present = container_exists
+    original_validate = repository.validate_binding
+
+    async def validate_binding(ref):
+        binding = await original_validate(ref)
+        binding.host_launch_profile_ref = "shared-host"
+        return binding
+
+    repository.validate_binding = validate_binding
+    lease_client = _LeaseClient(repository.order)
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    ).run()
+    assert result["status"] == "completed"
+    assert checked.count("host-1") >= 2
+    assert repository.order == [
+        "cleanup_claimed",
+        "host_stopped",
+        "lease_released",
+        "provider_released",
+    ]
+    assert len(lease_client.released) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identity", ["container_id", "omnigent_host_id", "bridge_session_id"]
+)
+async def test_absent_container_does_not_waive_attached_host_cleanup_authority(
+    identity,
+) -> None:
+    lease = _lease(heartbeat_age=121)
+    lease.omnigent_session_id = None
+    setattr(lease, identity, "attached-identity")
+    lease.effective_launch_snapshot = {
+        "enforcedEgress": True,
+        "egressCleanupAuthorityRequired": True,
+    }
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+
+    async def container_exists(_name):
+        return False
+
+    runtime.container_exists = container_exists
+    original_validate = repository.validate_binding
+
+    async def validate_binding(ref):
+        binding = await original_validate(ref)
+        binding.host_launch_profile_ref = "shared-host"
+        return binding
+
+    repository.validate_binding = validate_binding
+    lease_client = _LeaseClient(repository.order)
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    ).run()
+    assert result["status"] == "degraded"
+    assert runtime.stopped == 0
+    assert lease_client.released == []
+
+
+@pytest.mark.asyncio
+async def test_stopped_restricted_attachment_still_requires_cleanup_authority() -> None:
+    lease = _lease(heartbeat_age=121)
+    lease.status = "starting"
+    lease.omnigent_session_id = None
+    lease.effective_launch_snapshot = {
+        "enforcedEgress": True,
+        "egressCleanupAuthorityRequired": True,
+    }
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+
+    async def not_running(_name):
+        return False
+
+    runtime.container_exists = not_running
+    original_validate = repository.validate_binding
+
+    async def validate_binding(ref):
+        binding = await original_validate(ref)
+        binding.host_launch_profile_ref = "shared-host"
+        return binding
+
+    repository.validate_binding = validate_binding
+    lease_client = _LeaseClient(repository.order)
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    ).run()
+    assert result["status"] == "degraded"
+    assert runtime.stopped == 0
+    assert repository.stopped == []
+    assert lease_client.released == []
 
 
 @pytest.mark.asyncio

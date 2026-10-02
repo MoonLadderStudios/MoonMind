@@ -189,6 +189,88 @@ async def _settle() -> None:
         await asyncio.sleep(0)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared_workflow", [None, "mm:parent"])
+async def test_activity_owned_lease_pairs_its_actual_workflow_and_run(
+    monkeypatch,
+    declared_workflow,
+) -> None:
+    manager, adapter, client = _wire(1, credential_source="oauth_volume")
+    monkeypatch.setattr(
+        "temporalio.activity.info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:parent:agent:node-1", workflow_run_id="child-run"
+        ),
+    )
+    lease = await client.acquire_execution_lease(
+        runtime_id=RUNTIME_ID,
+        profile_id=PROFILE_ID,
+        owner_id="profile-lease:attempt",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        metadata={"workflowId": declared_workflow} if declared_workflow else {},
+    )
+    hints = manager._lease_holder_run_hints()
+    assert hints == {"mm:parent:agent:node-1": "child-run"}
+
+    async def verify_holders(name, payload, **_kwargs):
+        assert name == "provider_profile.verify_lease_holders"
+        return {
+            workflow_id: {
+                "running": (workflow_id, payload["run_ids"].get(workflow_id))
+                == ("mm:parent:agent:node-1", "child-run"),
+                "status": "RUNNING" if workflow_id.endswith(":node-1") else "NOT_FOUND",
+            }
+            for workflow_id in payload["workflow_ids"]
+        }
+
+    adapter.stubs.execute_activity = verify_holders
+    with mock_patch(MANAGER_MODULE, adapter.stubs):
+        statuses = await manager._verify_workflow_statuses(
+            manager._lease_holder_workflow_ids(include_activity_owned=True), hints
+        )
+    assert (
+        manager._terminal_lease_candidates(statuses, include_activity_owned=True) == []
+    )
+    assert manager._profiles[PROFILE_ID].current_leases == [lease.lease_id]
+    assert adapter.updates[-1][2]["metadata"]["workflowId"] == "mm:parent:agent:node-1"
+
+
+@pytest.mark.asyncio
+async def test_activity_lease_preserves_an_explicit_owner_pair(monkeypatch) -> None:
+    manager, _adapter, client = _wire(1)
+    monkeypatch.setattr(
+        "temporalio.activity.info",
+        lambda: SimpleNamespace(workflow_id="child", workflow_run_id="child-run"),
+    )
+    await client.acquire_execution_lease(
+        runtime_id=RUNTIME_ID,
+        profile_id=PROFILE_ID,
+        owner_id="attempt",
+        metadata={"workflowId": "parent", "runId": "parent-run"},
+    )
+    assert manager._lease_holder_run_hints() == {"parent": "parent-run"}
+
+
+@pytest.mark.asyncio
+async def test_delegated_workflow_lease_does_not_borrow_the_activity_run(
+    monkeypatch,
+) -> None:
+    manager, adapter, client = _wire(1)
+    monkeypatch.setattr(
+        "temporalio.activity.info",
+        lambda: SimpleNamespace(workflow_id="child", workflow_run_id="child-run"),
+    )
+    await client.acquire_execution_lease(
+        runtime_id=RUNTIME_ID,
+        profile_id=PROFILE_ID,
+        owner_id="parent",
+        owner_is_workflow=True,
+        metadata={"workflowId": "parent"},
+    )
+    assert adapter.updates[-1][2]["metadata"]["workflowId"] == "parent"
+    assert manager._lease_holder_run_hints() == {}
+
+
 @pytest.mark.parametrize("capacity", CAPACITIES)
 @pytest.mark.asyncio
 async def test_the_client_acquires_execution_capacity_through_the_manager(

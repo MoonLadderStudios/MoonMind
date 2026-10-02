@@ -321,13 +321,27 @@ class ProviderProfileLeaseClient:
                 from temporalio import activity as _temporal_activity
 
                 _info = _temporal_activity.info()
+                _activity_workflow_id = str(
+                    getattr(_info, "workflow_id", "") or ""
+                ).strip()
                 _run_id = str(
                     getattr(_info, "workflow_run_id", "") or ""
                 ).strip()
             except Exception:
+                _activity_workflow_id = ""
                 _run_id = ""
-            if _run_id:
-                safe_metadata["runId"] = _run_id
+            if _activity_workflow_id and _run_id:
+                if not owner_is_workflow:
+                    # The Activity may carry its logical parent's ID. Liveness
+                    # belongs to the executing child: copying just its run ID
+                    # would create a nonexistent parent/child identity pair.
+                    safe_metadata["workflowId"] = _activity_workflow_id
+                    safe_metadata["runId"] = _run_id
+                elif (
+                    str(safe_metadata.get("workflowId") or owner_id).strip()
+                    == _activity_workflow_id
+                ):
+                    safe_metadata["runId"] = _run_id
         result = await self._update_manager(
             runtime_id,
             (
