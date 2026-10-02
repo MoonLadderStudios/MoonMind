@@ -473,6 +473,30 @@ def _realizer(turn_commands, session_factory):
     return realizer, lifecycles
 
 
+def _assert_admitted_model_projection(delivered, original_payload, plan):
+    """Only the admitted model pair changes at the provider request boundary."""
+
+    delivered_payload = delivered.model_dump(mode="json")
+    delivered_parameters = delivered_payload.pop("parameters")
+    authored_payload = dict(original_payload)
+    authored_parameters = authored_payload.pop("parameters")
+    # Keep all scope, branch, workspace, profile, and lineage authority intact.
+    assert delivered_payload == authored_payload
+    omnigent = dict(authored_parameters.get("omnigent") or {})
+    session = dict(omnigent.get("session") or {})
+    session.update(
+        modelOverride=plan.payload.modelConfig.qualifiedId,
+        reasoningEffort=plan.payload.modelConfig.effort,
+    )
+    omnigent["session"] = session
+    assert delivered_parameters == {
+        **authored_parameters,
+        "model": plan.payload.modelConfig.qualifiedId,
+        "effort": plan.payload.modelConfig.effort,
+        "omnigent": omnigent,
+    }
+
+
 def _session_id(correlation_id: str) -> str:
     """The canonical session identity a request with no Step Execution gets."""
 
@@ -758,9 +782,12 @@ async def test_escaped_second_attempt_continues_the_head_its_predecessor_publish
         return
 
     assert workspace["startingBranch"] == "main"
+    original_payload = second.model_dump(mode="json")
     result = await realizer.execute(second, plan)
     assert result.failure_class is None
-    assert len(lifecycles) == 3 and lifecycles[2].requests == [second]
+    assert len(lifecycles) == 3 and len(lifecycles[2].requests) == 1
+    _assert_admitted_model_projection(lifecycles[2].requests[0], original_payload, plan)
+    assert second.model_dump(mode="json") == original_payload
     turns, commands, _ = await _turn_journal(session_factory, _session_id_for(second))
     assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
     assert len(commands) == 1
@@ -785,10 +812,13 @@ async def test_remediation_dispatched_through_the_realizer_journals_remediation(
         _remediation_node(ordinal=1, publish_mode="none"),
         plan_ref=plan.planRef,
     )
+    original_payload = request.model_dump(mode="json")
     result = await realizer.execute(request, plan)
 
     assert result.failure_class is None
-    assert len(lifecycles) == 2 and lifecycles[1].requests == [request]
+    assert len(lifecycles) == 2 and len(lifecycles[1].requests) == 1
+    _assert_admitted_model_projection(lifecycles[1].requests[0], original_payload, plan)
+    assert request.model_dump(mode="json") == original_payload
 
     base_session_id = _session_id_for(base)
     session_id = _session_id_for(request)

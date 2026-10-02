@@ -34,6 +34,8 @@ The system preserves these properties:
 
 Presets do not replace Skills, require per-preset React forms, grant execution rights, or create a second publishing engine. Their expanded steps pass the normal policy, runtime, repository, and publication boundaries.
 
+Workflow-scoped expansion does not require a human account. Machine execution principals remain execution authority and are not written into UUID catalog attribution. Existing valid UUID recent-choice attribution is preserved while its historical catalog consumers remain; this transition ends when those UUID fields are retired.
+
 Trusted issue loaders persist the complete GitHub or Jira brief as a linked JSON
 artifact before returning to the workflow. The existing `briefArtifactRef` carries
 that source into attachment-capable assessment, implementation, remediation,

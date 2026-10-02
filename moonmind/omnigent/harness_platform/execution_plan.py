@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import (
@@ -36,6 +37,7 @@ from moonmind.omnigent.harness_platform.support import (
     SupportKeyPayload,
     compute_support_combination_key,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 _MAX_PLAN_PAYLOAD_BYTES = 256 * 1024
@@ -640,6 +642,64 @@ def verify_execution_plan_envelope(
     # Verify without mutation: canonicalize only payload and compare
     parsed = OmnigentExecutionPlanEnvelope.model_validate(envelope)
     return parsed
+
+
+def bind_omnigent_model_selection(
+    request: AgentExecutionRequest,
+    *,
+    model: str | None,
+    effort: str | None,
+) -> AgentExecutionRequest:
+    """Carry the admitted pair into the session request without new resolution.
+
+    Planning owns model resolution. Every realizer carries that same decision
+    across the shared session boundary and rejects contradictory authored inputs
+    before consuming capacity or claiming delivery. The authored request is never
+    mutated.
+    """
+
+    def selection_mapping(raw: object, *, field_name: str) -> dict[str, Any]:
+        if raw is None:
+            return {}
+        if not isinstance(raw, Mapping):
+            raise HarnessPlatformError(
+                f"{field_name} must be an object",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        return dict(raw)
+
+    def selection_value(raw: object) -> str | None:
+        return str(raw or "").strip() or None
+
+    parameters = dict(request.parameters or {})
+    omnigent = selection_mapping(
+        parameters.get("omnigent"), field_name="parameters.omnigent"
+    )
+    session = selection_mapping(
+        omnigent.get("session"), field_name="parameters.omnigent.session"
+    )
+    for root_field, session_field, planned in (
+        ("model", "modelOverride", selection_value(model)),
+        ("effort", "reasoningEffort", selection_value(effort)),
+    ):
+        authored = selection_value(parameters.get(root_field))
+        if authored is not None and authored != planned:
+            raise HarnessPlatformError(
+                f"authored {root_field} conflicts with persisted execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        authored_session = selection_value(session.get(session_field))
+        if authored_session is not None and authored_session != planned:
+            raise HarnessPlatformError(
+                f"authored Omnigent session {session_field} conflicts with "
+                "persisted execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        parameters[root_field] = planned
+        session[session_field] = planned
+    omnigent["session"] = session
+    parameters["omnigent"] = omnigent
+    return request.model_copy(update={"parameters": parameters})
 
 
 def execution_support_identity(
