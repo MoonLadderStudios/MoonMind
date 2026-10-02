@@ -507,6 +507,9 @@ RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
 RUN_MERGE_AUTOMATION_RESOLVER_SELECTION_PATCH = (
     "run-merge-automation-resolver-selection-v1"
 )
+RUN_MERGE_AUTOMATION_RESOLVER_INSTRUCTIONS_PATCH = (
+    "run-merge-automation-resolver-instructions-v1"
+)
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -20109,6 +20112,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         }
         if inherit_resolver_selection:
             resolver_template["inputs"] = {"returnToGate": True}
+        if inherit_resolver_selection and self._workflow_patch_enabled(
+            RUN_MERGE_AUTOMATION_RESOLVER_INSTRUCTIONS_PATCH
+        ):
+            instructions = task_payload.get("instructions") or parameters.get(
+                "instructions"
+            )
+            if isinstance(instructions, str) and instructions.strip():
+                resolver_template["instructions"] = instructions.strip()
         if inherit_resolver_selection and request.get("maxIterations") is not None:
             iterations = request["maxIterations"]
             if (

@@ -89,6 +89,39 @@ async def test_active_host_protocol_modes_reports_ownership_and_unknown(store) -
     assert await store.active_host_protocol_modes() == {"proxy": 1, "unknown": 1}
 
 
+@pytest.mark.asyncio
+async def test_cleanup_reporting_diagnostics_retain_retry_budget_without_terminalizing(
+    store,
+):
+    row = await store.get_or_create(
+        request=_request("cleanup-diagnostics"),
+        endpoint_ref="endpoint",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    updated = await store.record_lifecycle_event(
+        "cleanup-diagnostics",
+        event_type="runtime_binding_cleanup",
+        status="failed",
+        code="OperationalError",
+        summary="database unavailable token=private-test-token",
+        diagnostics_ref="artifact:cleanup-error",
+        metadata={"retryAttempts": 3, "leaseReleased": True, "janitorRequired": False},
+    )
+    assert updated.status == row.status
+    event = updated.metadata_[BRIDGE_EVENT_JOURNAL_KEY][-1]
+    assert event["metadata"]["retryAttempts"] == 3
+    assert event["metadata"]["leaseReleased"] is True
+    assert event["metadata"]["janitorRequired"] is False
+    assert event["code"] == "OperationalError"
+    assert "database unavailable" in event["summary"]
+    assert "private-test-token" not in event["summary"]
+    indexed = (await store.list_events(row.bridge_session_id))[-1]
+    assert indexed.metadata_["metadata"] == event["metadata"]
+    assert indexed.artifact_ref == "artifact:cleanup-error"
+
+
 def _request(idempotency_key: str = "idem-1", *, with_step: bool = False):
     step = None
     if with_step:
