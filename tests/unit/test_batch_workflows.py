@@ -1537,6 +1537,7 @@ def test_issue_fanout_rerun_does_not_report_existing_failed_child_as_queued(
     ]
     assert evidence["status"] == "failed"
     assert evidence["failure"]["code"] == "BATCH_FANOUT_FAILED"
+    assert str(evidence["failure"].get("message") or "").strip() != ""
     assert return_code == 1
 
 
