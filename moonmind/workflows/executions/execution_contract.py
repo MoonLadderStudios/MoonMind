@@ -18,7 +18,12 @@ from pydantic import (
 )
 
 from moonmind.config.settings import settings
-from moonmind.runtime_intent import RuntimeTierPreview
+from moonmind.runtime_intent import (
+    MODEL_SELECTION_KEYS,
+    SELECTION_DERIVED_KEYS,
+    RuntimeTierPreview,
+    merge_runtime_selection,
+)
 from moonmind.services.skill_resolution import (
     extract_publish_metadata_from_skill_markdown,
     extract_required_capabilities_from_skill_markdown,
@@ -2804,6 +2809,30 @@ def build_canonical_workflow_view(
     if not isinstance(runtime_node, dict):
         runtime_node = {}
         workflow_node["runtime"] = runtime_node
+    # Optional model defaults must not fabricate authored nulls at any level.
+    source_workflow = source.get("workflow") or source.get("task") or {}
+    source_runtime = source_workflow.get("runtime") or {}
+    runtime_sources = [(runtime_node, source_runtime)]
+    for normalized_step, raw_step in zip(
+        workflow_node.get("steps") or [], source_workflow.get("steps") or []
+    ):
+        if isinstance(normalized_step, Mapping) and isinstance(raw_step, Mapping):
+            raw_runtime = raw_step.get("runtime")
+            if not isinstance(raw_runtime, Mapping):
+                raw_skill = raw_step.get("skill") or {}
+                raw_runtime = (
+                    raw_skill.get("runtime") or {}
+                    if isinstance(raw_skill, Mapping)
+                    else {}
+                )
+            runtime_sources.append((normalized_step.get("runtime"), raw_runtime))
+    for normalized_runtime, authored_runtime in runtime_sources:
+        if isinstance(normalized_runtime, dict) and isinstance(
+            authored_runtime, Mapping
+        ):
+            for selection_key in (*MODEL_SELECTION_KEYS, *SELECTION_DERIVED_KEYS):
+                if selection_key not in authored_runtime:
+                    normalized_runtime.pop(selection_key, None)
     runtime_node["mode"] = target_runtime
     canonical["targetRuntime"] = target_runtime
 
@@ -3329,3 +3358,76 @@ __all__ = [
     "reject_workflow_capability_identity_versions",
     "strip_workflow_capability_identity_versions",
 ]
+
+
+def merge_workflow_input(
+    artifact_task: Mapping[str, Any],
+    parameter_task: Mapping[str, Any],
+    *,
+    runtime_selection_is_complete: bool = True,
+) -> dict[str, Any]:
+    """Merge edited authored intent with artifact input without losing instructions.
+
+    Selection replaces as a unit, while explicit non-model parameters merge.
+    Artifact diagnostics never supply a missing authored model/effort field.
+    A supplied complete runtime may omit selection to restore inheritance.
+    Server-loaded legacy records can supply a sparse runtime when reconstructing
+    their already accepted source; that reader retains their original selection.
+    """
+
+    def merge_runtime(
+        original: Mapping[str, Any], edited: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if runtime_selection_is_complete:
+            original = {
+                key: value
+                for key, value in original.items()
+                if key not in (*MODEL_SELECTION_KEYS, *SELECTION_DERIVED_KEYS)
+            }
+        return merge_runtime_selection(original, edited)
+
+    merged = {**dict(artifact_task), **dict(parameter_task)}
+    artifact_runtime = artifact_task.get("runtime")
+    parameter_runtime = parameter_task.get("runtime")
+    if isinstance(artifact_runtime, Mapping) and isinstance(parameter_runtime, Mapping):
+        merged["runtime"] = merge_runtime(artifact_runtime, parameter_runtime)
+    artifact_instructions = str(artifact_task.get("instructions") or "").strip()
+    parameter_instructions = str(parameter_task.get("instructions") or "").strip()
+    if artifact_instructions and not parameter_instructions:
+        merged["instructions"] = artifact_task.get("instructions")
+
+    artifact_steps = artifact_task.get("steps")
+    parameter_steps = parameter_task.get("steps")
+    if isinstance(artifact_steps, list) and isinstance(parameter_steps, list):
+        merged_steps: list[Any] = []
+        for index, parameter_step in enumerate(parameter_steps):
+            if not isinstance(parameter_step, Mapping):
+                merged_steps.append(parameter_step)
+                continue
+            artifact_step = (
+                artifact_steps[index]
+                if index < len(artifact_steps)
+                and isinstance(artifact_steps[index], Mapping)
+                else {}
+            )
+            step = {**dict(artifact_step), **dict(parameter_step)}
+            artifact_runtime = artifact_step.get("runtime")
+            parameter_runtime = parameter_step.get("runtime")
+            if isinstance(artifact_runtime, Mapping) and (
+                runtime_selection_is_complete or isinstance(parameter_runtime, Mapping)
+            ):
+                step["runtime"] = merge_runtime(
+                    artifact_runtime,
+                    parameter_runtime if isinstance(parameter_runtime, Mapping) else {},
+                )
+            artifact_step_instructions = str(
+                artifact_step.get("instructions") or ""
+            ).strip()
+            parameter_step_instructions = str(
+                parameter_step.get("instructions") or ""
+            ).strip()
+            if artifact_step_instructions and not parameter_step_instructions:
+                step["instructions"] = artifact_step.get("instructions")
+            merged_steps.append(step)
+        merged["steps"] = merged_steps
+    return merged

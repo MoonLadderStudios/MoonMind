@@ -26,6 +26,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Mapping
 
+from moonmind.runtime_intent import is_custom_selection
 from moonmind.workflows.executions.runtime_defaults import (
     normalize_runtime_id,
     resolve_runtime_defaults,
@@ -224,6 +225,7 @@ def resolve_model_effort(
     *,
     runtime_id: str | None,
     profile: Any | None,
+    authored_runtime: Mapping[str, Any] | None = None,
     requested_model_tier: int | None = None,
     requested_model: str | None = None,
     requested_effort: str | None = None,
@@ -241,6 +243,42 @@ def resolve_model_effort(
     """
     if require_launch_ready:
         _ensure_launch_ready_profile(profile)
+    if authored_runtime is not None:
+        requested_model_tier = authored_runtime.get("modelTier")
+        requested_model = authored_runtime.get("model")
+        requested_effort = authored_runtime.get("effort")
+        tier_fallback = authored_runtime.get("tierFallback", _FALLBACK_CLAMP)
+    if is_custom_selection(authored_runtime):
+        runtime_model, runtime_effort = _runtime_defaults(
+            runtime_id, workflow_settings=workflow_settings, env=env
+        )
+        model, model_source = _first_value(
+            (_clean(requested_model), _MODEL_SOURCE_TASK_OVERRIDE),
+            (
+                _compatible_runtime_model(runtime_model, profile),
+                _MODEL_SOURCE_RUNTIME_DEFAULT,
+            ),
+        )
+        effort, effort_source = _first_value(
+            (_clean(requested_effort), _MODEL_SOURCE_TASK_OVERRIDE),
+            (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
+        )
+        return _with_preview_mismatch(
+            ResolvedModelEffort(
+                model=model,
+                effort=resolve_opencode_effort(model, effort),
+                requested_model_tier=None,
+                effective_model_tier=None,
+                tier_label=None,
+                model_source=model_source,
+                effort_source=effort_source,
+                fallback_reason=None,
+                effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+                tier_parameters={},
+            ),
+            advisory_preview,
+            profile=profile,
+        )
     requested_tier = _normalize_requested_tier(requested_model_tier)
     fallback_policy = _normalize_tier_fallback(tier_fallback)
 
@@ -301,7 +339,6 @@ def resolve_model_effort(
         )
         model, model_source = _first_value(
             (tier_model, tier_source),
-            (_legacy_profile_value(profile, "default_model"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (
                 _compatible_runtime_model(runtime_model, profile),
                 _MODEL_SOURCE_RUNTIME_DEFAULT,
@@ -310,7 +347,6 @@ def resolve_model_effort(
         effort, effort_source = _first_value(
             (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
             (tier_effort, tier_source),
-            (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
         tier_parameters = tier.get("parameters") or {}

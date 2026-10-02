@@ -283,7 +283,11 @@ async def test_create_definition_normalizes_snake_case_target_aliases(
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = RecurringWorkflowsService(
-                session, temporal_client_adapter=mock_temporal_adapter
+                session,
+                temporal_client_adapter=mock_temporal_adapter,
+                artifact_service=SimpleNamespace(
+                    read=AsyncMock(return_value=(SimpleNamespace(), b"{}"))
+                ),
             )
             definition = await service.create_definition(
                 name="Daily Demo",

@@ -2,9 +2,9 @@
 
 **Related design documents:** [ProviderProfiles.md](./ProviderProfiles.md), [SecretsSystem.md](./SecretsSystem.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [SettingsPage.md](../UI/SettingsPage.md), [Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md), [Workflow Model Selection](../UI/WorkflowModelSelection.md)
 
-Status: **Desired-state design. The tier-or-custom authoring changes below require implementation.**
+Status: **Implemented Tier/Custom authoring and resolution contract; profile scalar-data retirement remains transition work.**
 Owners: MoonMind Engineering
-Last Updated: 2026-10-01
+Last Updated: 2026-10-02
 
 > [!NOTE]
 > A tier is a profile-local policy entry that maps a small integer such as `1`, `2`, or `3` to a runtime-specific model and optional effort level. Presets and workflow steps retain tier references. The backend resolves the final model and effort at submit or launch time.
@@ -452,7 +452,7 @@ Resolve selection before resolving individual values:
 
 `default_model` and `default_effort` are not a second desired-state source. Their retirement and data migration must agree with the tier-only persistence contract in the Settings design. Do not claim that a blank means Runtime default while allowing an old compatibility field to supply it instead.
 
-The current implementation at the time of this design still distinguishes model-only and effort-only overrides and can read legacy scalar defaults. New canonical authoring must close those gaps. Untouched saved partial/mixed inputs retain their documented legacy meaning under §7.2 rather than being silently rewritten into the new shapes.
+The resolver distinguishes canonical full-pair Custom from saved partial/mixed inputs using authored field presence. Canonical Custom and null tier fields bypass legacy scalar defaults. Saved model-only or pre-tier profile inputs retain their legacy resolution where still supported; unrelated saves preserve their shape under §7.2. Retiring those data sources remains separate from truthful runtime defaults on the canonical path.
 
 ### 9.3 Tier fallback
 
@@ -711,16 +711,13 @@ Recheck selected profile existence, required launch readiness, valid tier policy
 
 ## 16. Implementation and Transition
 
-This section describes remaining outcomes, not a new multi-phase rollout framework. The documentation PR does not implement them.
+Workflow and step forms share `ModelSelectionFields` and the pure transitions in `modelSelection.ts`. The form preserves raw saved intent and only authors a numbered tier or complete nullable pair after an explicit selection edit. Backend normalization, inheritance, preset expansion, recurring targets, preview, Omnigent planning, and launch carry the same field presence. Effective model/effort diagnostics are separate from the authored runtime fields.
 
-1. Extend the existing selector state and payload owners to represent tier, full-pair Custom, and existing inheritance unambiguously. Start with failing executable behavior tests.
-2. Replace workflow and step numeric/fallback/hard-override controls with one shared Tier/Model/Effort interaction. Preserve keyboard focus, mobile layout, explicit choices, and late-response safety.
-3. Complete the runtime-intent path across preset expansion, workflow submit, edit/rerun, schedules, inheritance, preview, and launch. Reuse the canonical backend resolver.
-4. Make runtime-default labels truthful by removing conflicting legacy-default resolution on the new path and coordinating with existing tier-only persistence work. Do not rebuild completed Settings work.
-5. Enforce the strict-authoring cutoff at the API and every producer while preserving trusted saved strict requests, unchanged edits, recurring/recovery/replay paths, and the visible replacement behavior in §9.4. Identify remaining consumers and the removal condition without making global strict retirement a prerequisite.
-6. Remove obsolete UI state, payload generation, tests, and guidance together. Keep coverage for surviving behavior and migration. Do not move removed controls to Advanced mode.
+The public submission validator rejects new strict intent in inline payloads and newly supplied input artifacts. Preset and recurring-definition updates compare against server-loaded saved intent; unchanged accepted artifact references retain their provenance. Trusted recurrence, recovery, exact reruns, and history readers continue to honor accepted strict requests. The remaining consumers are saved presets, definitions, and durable execution inputs; retire their strict reader only after they drain or a separately authorized migration preserves their requirements.
 
-Do not rewrite retained Temporal histories or active attempts. Test replay-sensitive changes or use the existing controlled compatibility boundary. Broader verification belongs in GitHub Actions under `AGENTS.md`; no mandatory human visual signoff or documentation unit tests are introduced.
+The canonical resolver bypasses scalar defaults for full-pair Custom and null tier fields. Complete profile scalar-data retirement and migration remain owned by the Settings persistence transition in §12; this change does not redesign the tier editor or erase saved legacy inputs. Effort suggestions reuse the existing capability owner, including `max`, and launch records the strategy's actual `not_supported` or `metadata_only` result where appropriate.
+
+The Run and AgentRun workflows use the `run-model-selection-presence-4636-v1` and `agent-run-model-selection-presence-4636-v1` patches for nullable request and update behavior. Histories recorded before those boundaries retain the previous behavior. Historical attempts are not rewritten. Credential-free integration tests exercise persistence, reconstruction, preview, and command construction; production-component browser tests cover focus/caret and narrow layout. Broader verification belongs in GitHub Actions under `AGENTS.md`.
 
 ---
 

@@ -774,6 +774,7 @@ async def update_recurring_workflow(
             target=payload.target,
             policy=payload.policy,
             expected_version=payload.version,
+            actor=user,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(

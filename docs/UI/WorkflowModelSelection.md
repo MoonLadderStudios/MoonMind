@@ -1,10 +1,10 @@
 # Workflow Model Selection
 
-Status: **Desired-state UI and implementation contract. Not implemented by the documentation PR.**
+Status: **Implemented workflow and step authoring contract.**
 
 Owners: MoonMind Engineering
 
-Last updated: 2026-10-01
+Last updated: 2026-10-02
 
 Canonical for: model selection while creating or editing workflows and their steps, including preset, rerun, and schedule round trips.
 
@@ -28,11 +28,13 @@ Tier selection chooses reusable profile policy. Custom selects explicit model/ef
 
 ## 2. Current Implementation Boundary
 
-At the inspected `main` revision `e2efc49a0ce8fc6a137a8bcf88698975289e1a24`, `frontend/src/entrypoints/workflow-start.tsx` contains separate workflow and advanced-step tier/fallback/override controls. The canonical backend model resolver is `moonmind/workflows/executions/model_resolver.py`, and authored tier validation is in `moonmind/runtime_intent.py`.
+`frontend/src/components/workflows/ModelSelectionFields.tsx` owns the shared workflow and advanced-step interaction. `frontend/src/lib/modelSelection.ts` owns presence-preserving transitions, and `workflow-start.tsx` keeps authored selection separate from profile/default previews. Draft editing, reruns, presets, and remediation imports reconstruct the raw saved fields rather than resolved attempt diagnostics.
 
-The current backend treats concrete-model overrides differently from effort-only overrides and can fall through legacy profile scalar defaults. Replacing labels alone is therefore insufficient. The new interaction needs an end-to-end authored-selection contract, including Custom with blank fields.
+`moonmind/runtime_intent.py` validates authored presence and replaces tier/Custom selection atomically during inheritance. The canonical resolver in `moonmind/workflows/executions/model_resolver.py` receives that raw intent: complete nullable Custom pairs and null tier fields use compatible runtime defaults without legacy profile scalar fallback. Saved partial/mixed selections retain their existing semantics until explicitly replaced. Advisory previews include per-field sources so a legacy companion is displayed only when its current meaning is known.
 
-Recheck current code and existing implementation work before changing these owners. This document defines required behavior, not proof that it is already implemented.
+Public execution, remediation, preset, and recurring-definition mutations reject newly authored strict policy. Unchanged saved strict fields and accepted input-artifact references retain server-verified provenance; newly supplied input artifacts are inspected before execution or schedule mutation. Trusted recurrence, recovery, exact rerun, and replay continue to use accepted durable input. Runtime launch records effective values separately from authored fields and preserves explicit non-model parameters.
+
+Temporal request construction and pending launch edits use the `run-model-selection-presence-4636-v1` and `agent-run-model-selection-presence-4636-v1` patch boundaries. Histories recorded before those patches keep their previous command behavior. Historical and active attempt records remain attempt evidence.
 
 ## 3. Interaction Contract
 

@@ -34,7 +34,7 @@ from api_service.api.routers.executions import (
     _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
     _hydrate_related_run_metadata,
-    _merge_workflow_preserving_artifact_instructions,
+    merge_workflow_input,
     _canonical_recovery_manifest_ref,
     _recovery_evidence_disabled_reason,
     _recovery_manifest_ref_from_record,
@@ -1023,6 +1023,8 @@ async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
         "model": "gemini-step-model",
         "effort": "low",
         "requestedModel": "gemini-step-model",
+        "resolvedModel": "gemini-step-model",
+        "resolvedEffort": "low",
         "modelSource": "task_override",
     }
 
@@ -1083,7 +1085,8 @@ async def test_step_runtime_inherits_task_profile_default_model() -> None:
     assert steps[0]["runtime"] == {
         "effort": "low",
         "mode": "codex_cli",
-        "model": "codex-profile-default",
+        "resolvedModel": "codex-profile-default",
+        "resolvedEffort": "low",
         "modelSource": "provider_profile_default",
         "inheritedProfileId": "profile-codex",
     }
@@ -7797,7 +7800,10 @@ def test_create_task_shaped_execution_defers_selector_preview_comparison() -> No
     app.dependency_overrides.clear()
 
 
-def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() -> None:
+@pytest.mark.parametrize("requested_tier", [2, 3])
+def test_4636_create_execution_rejects_new_strict_selection(
+    requested_tier: int,
+) -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -7834,7 +7840,7 @@ def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() ->
                         "runtime": {
                             "mode": "codex",
                             "providerProfile": "codex-provider-profile",
-                            "modelTier": 3,
+                            "modelTier": requested_tier,
                             "tierFallback": "strict",
                         },
                     },
@@ -7843,15 +7849,10 @@ def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() ->
         )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == {
-        "code": "requested_model_tier_unavailable",
-        "message": (
-            "Requested model tier 3 is unavailable; "
-            "the selected profile defines 2 tiers."
-        ),
-        "requestedModelTier": 3,
-        "configuredTierCount": 2,
-    }
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_execution_request"
+    assert "new strict selections are no longer supported" in detail["message"]
+    assert "Choose a configured tier or Custom" in detail["message"]
     mock_service.create_execution.assert_not_awaited()
     app.dependency_overrides.clear()
 
@@ -8434,7 +8435,6 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
                         "providerProfileRef": "codex-openai",
                         "profileSelector": {"providerId": "openai"},
                         "modelTier": 2,
-                        "tierFallback": "clamp",
                         "tierPreview": {
                             "profileId": "codex-openai",
                             "profileVersion": 17,
@@ -8450,7 +8450,6 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
                                 "providerProfileRef": "codex-openai",
                                 "profileSelector": {"providerId": "openai"},
                                 "modelTier": 3,
-                                "tierFallback": "strict",
                                 "tierPreview": {
                                     "profileId": "codex-openai",
                                     "profileVersion": 17,
@@ -8475,7 +8474,7 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
     assert workflow_runtime["providerProfileRef"] == "codex-openai"
     assert workflow_runtime["profileSelector"] == {"providerId": "openai"}
     assert workflow_runtime["modelTier"] == 2
-    assert workflow_runtime["tierFallback"] == "clamp"
+    assert "tierFallback" not in workflow_runtime
     assert workflow_runtime["tierPreview"] == {
         "profileId": "codex-openai",
         "profileVersion": 17,
@@ -8490,7 +8489,7 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
     assert step_runtime["providerProfileRef"] == "codex-openai"
     assert step_runtime["profileSelector"] == {"providerId": "openai"}
     assert step_runtime["modelTier"] == 3
-    assert step_runtime["tierFallback"] == "strict"
+    assert "tierFallback" not in step_runtime
     assert step_runtime["tierPreview"] == {
         "profileId": "codex-openai",
         "profileVersion": 17,
@@ -9339,8 +9338,6 @@ def test_create_task_shaped_execution_keeps_meaningful_title_after_synthesis(
     assert called_kwargs["title"] == "Verify auth redirect fix"
     initial_parameters = called_kwargs["initial_parameters"]
     assert initial_parameters["workflow"]["title"] == "Verify auth redirect fix"
-
-
 
 
 def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
@@ -11557,6 +11554,34 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
         settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
+
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art-full-input"),
+                json.dumps(
+                    {
+                        "workflow": {
+                            "steps": [
+                                {
+                                    "id": "step-1",
+                                    "instructions": "Primary inline instructions.",
+                                },
+                                {
+                                    "id": "step-2",
+                                    "instructions": "Full artifact instructions.",
+                                },
+                            ]
+                        }
+                    }
+                ).encode(),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
     )
 
     captured: dict[str, object] = {}
@@ -15443,10 +15468,15 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
         )
 
     assert response.status_code == 200
-    artifact_service.read.assert_awaited_once_with(
-        artifact_id="art-full-input",
-        principal=str(user.id),
-        allow_restricted_raw=True,
+    artifact_service.read.assert_awaited()
+    assert all(
+        read.kwargs
+        == {
+            "artifact_id": "art-full-input",
+            "principal": str(user.id),
+            "allow_restricted_raw": True,
+        }
+        for read in artifact_service.read.await_args_list
     )
     persist_mock.assert_awaited_once()
     assert captured_workflow_payload["instructions"] == "Top-level rerun instructions."
@@ -15901,7 +15931,7 @@ def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() ->
 
 
 def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
-    merged = _merge_workflow_preserving_artifact_instructions(
+    merged = merge_workflow_input(
         {
             "steps": [
                 {"id": "step-1", "title": "First", "instructions": "Original first"},
@@ -20873,3 +20903,217 @@ def test_create_execution_rejects_recurring_read_only_plan_with_branch_publish(
 
     assert response.status_code == 422
     assert "repositoryOperation" in response.json()["detail"]["message"]
+
+
+@pytest.mark.parametrize(
+    "saved_strict, changed_selection, expected_status",
+    [
+        (True, False, 200),
+        (True, True, 422),
+        (False, False, 422),
+    ],
+)
+def test_4636_update_strict_requires_unchanged_server_saved_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    saved_strict: bool,
+    changed_selection: bool,
+    expected_status: int,
+) -> None:
+    from copy import deepcopy
+
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+    runtime = {"modelTier": 3, "tierFallback": "strict"}
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {
+        "workflow": {
+            "instructions": "Original instructions",
+            "runtime": dict(runtime) if saved_strict else {"modelTier": 3},
+        }
+    }
+    before = deepcopy(record.parameters)
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {
+        "workflow_id": record.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+    if changed_selection:
+        # Explicit null changes authored presence even with the same ordinal.
+        runtime["effort"] = None
+    response = test_client.post(
+        f"/api/executions/{record.workflow_id}/update",
+        json={
+            "updateName": "UpdateInputs",
+            "parametersPatch": {
+                "workflow": {
+                    "instructions": "Unrelated instruction edit for MoonMind#4636",
+                    "runtime": runtime,
+                    "legacy": True,
+                }
+            },
+        },
+    )
+    assert response.status_code == expected_status, response.json()
+    assert record.parameters == before
+    if expected_status == 200:
+        service.update_execution.assert_awaited_once()
+        assert (
+            service.update_execution.await_args.kwargs["parameters_patch"]["workflow"][
+                "runtime"
+            ]
+            == runtime
+        )
+    else:
+        service.update_execution.assert_not_awaited()
+        assert "new strict selections" in response.json()["detail"]["message"]
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+def test_4636_input_artifact_cannot_introduce_new_strict_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {"workflow": {"instructions": "Work"}}
+    record.input_ref = None
+    service.create_execution.return_value = record
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {
+        "workflow_id": record.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+    test_client.app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art-new-4636"),
+                json.dumps(
+                    {
+                        "workflow": {
+                            "instructions": "Work",
+                            "runtime": {
+                                "modelTier": 2,
+                                "tierFallback": "strict",
+                            },
+                        },
+                        "legacy": True,
+                    }
+                ).encode(),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    if operation == "create":
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "workflowType": "MoonMind.UserWorkflow",
+                "inputArtifactRef": "art-new-4636",
+                "initialParameters": record.parameters,
+            },
+        )
+    else:
+        response = test_client.post(
+            f"/api/executions/{record.workflow_id}/update",
+            json={
+                "updateName": "UpdateInputs",
+                "inputArtifactRef": "art-new-4636",
+            },
+        )
+    assert response.status_code == 422, response.json()
+    assert "new strict selections" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+    service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "saved_inline, submitted_runtime, current_snapshot_runtime, expected_status",
+    [
+        ({"mode": "codex_cli"}, {"modelTier": 2, "tierFallback": "strict"}, None, 200),
+        ({"model": None, "effort": None}, None, None, 422),
+        (
+            {"mode": "codex_cli"},
+            {"modelTier": 2, "tierFallback": "strict"},
+            {"mode": "codex_cli"},
+            422,
+        ),
+    ],
+)
+def test_4636_saved_artifact_provenance_uses_current_authored_selection(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    saved_inline: dict,
+    submitted_runtime: dict | None,
+    current_snapshot_runtime: dict | None,
+    expected_status: int,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    test_client.app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {"workflow": {"instructions": "Work", "runtime": saved_inline}}
+    record.input_ref = "art-saved-4636"
+    if current_snapshot_runtime is not None:
+        record.memo = {"task_input_snapshot_ref": "art-current-4636"}
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {
+        "workflow_id": record.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+
+    async def read_artifact(*, artifact_id: str, **kwargs):
+        runtime = (
+            current_snapshot_runtime
+            if artifact_id == "art-current-4636"
+            else {"modelTier": 2, "tierFallback": "strict"}
+        )
+        return (
+            SimpleNamespace(),
+            json.dumps(
+                {"workflow": {"instructions": "Saved #4636", "runtime": runtime}}
+            ).encode(),
+        )
+
+    artifact_service = SimpleNamespace(read=AsyncMock(side_effect=read_artifact))
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    payload = {"updateName": "UpdateInputs"}
+    if submitted_runtime is not None:
+        payload["parametersPatch"] = {
+            "workflow": {"instructions": "Unrelated edit", "runtime": submitted_runtime}
+        }
+    else:
+        # A newly supplied copy cannot revive superseded strict artifact intent.
+        payload["inputArtifactRef"] = "art-new-4636"
+    response = test_client.post(
+        f"/api/executions/{record.workflow_id}/update", json=payload
+    )
+    assert response.status_code == expected_status, response.json()
+    if expected_status == 200:
+        service.update_execution.assert_awaited_once()
+    else:
+        service.update_execution.assert_not_awaited()
