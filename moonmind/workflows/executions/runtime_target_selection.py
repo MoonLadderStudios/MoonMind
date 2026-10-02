@@ -206,15 +206,31 @@ def _rule_view(
     )
 
 
+def _is_supported_runtime(runtime_id: str) -> bool:
+    # Authoring sentinels and executable integrations have existing owners.
+    # The workflow contract's modes alone do not describe external adapters.
+    from .execution_contract import SUPPORTED_RUNTIME_MODES
+    from .runtime_capabilities import RUNTIME_EXECUTION_CAPABILITIES
+
+    return (
+        runtime_id in SUPPORTED_RUNTIME_MODES
+        or runtime_id in RUNTIME_EXECUTION_CAPABILITIES.runtime_ids
+    )
+
+
 def resolve_runtime_target_catalog(
     *,
     policy: RuntimeProviderRolloutPolicy | None = None,
     env: Mapping[str, Any] | None = None,
 ) -> tuple[RuntimeTargetView, ...]:
-    """Return every registered target identity, most promoted first."""
+    """Return supported registered target identities, most promoted first."""
 
     active = policy or load_runtime_provider_rollout_policy(env=env)
-    views = [_rule_view(rule, active) for rule in active.rules]
+    views = [
+        _rule_view(rule, active)
+        for rule in active.rules
+        if _is_supported_runtime(_rule_runtime_id(rule))
+    ]
     views.sort(
         key=lambda view: (-rollout_state_rank(view.rollout_state), view.target_id)
     )
@@ -309,6 +325,10 @@ def resolve_runtime_target_selection(
         replacement_required: bool = False,
         reason: RolloutReason | None = None,
     ) -> RuntimeTargetSelection:
+        if not _is_supported_runtime(runtime_id):
+            available = False
+            replacement_required = True
+            reason = RolloutReason.combination_not_registered
         selection = RuntimeTargetSelection(
             runtimeId=runtime_id,
             targetId=view.target_id if view else None,
@@ -332,6 +352,23 @@ def resolve_runtime_target_selection(
                 harness_id=view.harness_id if view else None,
             )
         return selection
+
+    explicit_runtime = str(requested_runtime or recorded_runtime_id or "").strip()
+    if explicit_runtime and not _is_supported_runtime(
+        normalize_runtime_id(explicit_runtime)
+    ):
+        return _selection(
+            runtime_id=normalize_runtime_id(explicit_runtime),
+            view=None,
+            source=(
+                SelectionSource.authored
+                if requested_runtime
+                else SelectionSource.recorded
+            ),
+            available=False,
+            replacement_required=True,
+            reason=RolloutReason.combination_not_registered,
+        )
 
     # 1. Recorded authority wins on continuation surfaces.
     if (

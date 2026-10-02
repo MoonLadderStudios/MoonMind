@@ -233,3 +233,12 @@ describe('formatRolloutStateLabel', () => {
      expect(groups.compatibility).toEqual([]);
    }
  });
+
+
+describe('removed and unknown authoring targets (#4644)', () => {
+  it.each([undefined, promotedCatalog, { targets: [target({ runtimeId: 'codex_cloud' })] }])('never offers Cloud from an old boot catalog or fallback', (catalog) => {
+    const groups = runtimeOptionGroups(['codex_cloud', 'codex_cli', 'omnigent'], catalog);
+    expect([...groups.recommended, ...groups.compatibility, ...groups.unavailable].some((row) => row.runtimeId === 'codex_cloud')).toBe(false);
+    expect(runtimeUnavailableReason('codex_cloud', catalog)).toMatch(/unsupported.*explicit|explicit.*supported/i);
+  });
+});
