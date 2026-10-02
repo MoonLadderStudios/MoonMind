@@ -3,7 +3,7 @@
 **Status:** Shared image, runtime packs, Codex/Claude Host Classes, OAuth-home materializers, and rollout mechanisms implemented; exact qualification, deployment promotion, and retirement remain evidence-gated
 **Document Class:** System / Operator Guide
 **Owners:** MoonMind Platform
-**Last updated:** 2026-09-23
+**Last updated:** 2026-10-02
 **Authority:** Shared host image contract and runtime-pack descriptor authority for the Omnigent primary-runtime program
 
 ## Related documents
@@ -81,7 +81,7 @@ ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 The image derives from the digest-pinned stock Omnigent host base and installs at build time only:
 
 ```text
-@openai/codex@0.104.0
+@openai/codex@0.159.0
 @anthropic-ai/claude-code@2.1.281
 opencode-ai@1.18.11
 gh (pinned by services/omnigent/tools/manifest.lock.json, e.g. 2.76.2)
@@ -92,6 +92,13 @@ The Claude Code 2.1.281 pin supports Opus 5.5, which rejects clients older
 than 2.1.280.
 
 Workflow launches never install runtimes. Every installed vendor version must sit inside its runtime-pack supported range (inclusive lower, exclusive upper); a drifted runtime fails the image build instead of becoming launch authority.
+
+The image build also runs the selected Omnigent installation's native CLI
+readiness checks for Codex, Claude, and OpenCode as UID 1000, with network
+disabled. Binary presence and MoonMind's broad supported range do not establish
+native compatibility: the selected Omnigent implementation must accept each
+installed CLI before publication. This check requires no provider credentials;
+OAuth authentication remains a launch-time Provider Profile check.
 
 `gh` and `moonmind` live image-owned at `/opt/moonmind-tools/bin` (with the non-secret manifest at `/opt/moonmind-tools/manifest.json` and the login-shell snippet at `/etc/profile.d/moonmind-tools.sh`), installed and probed by `services/omnigent/moonmind-host/install_moonmind_tools.py` from the `manifest.lock.json` pins. The selected image owns its tool contents for the host's lifetime: new tool contents require a new image build, and host launch never downloads, installs, or copies shared tool binaries. There is no tools initializer, tools mount, or tools volume on the shared-host path (MoonLadderStudios/MoonMind#4558); stale volume settings in an existing `.env` are ignored. Full tool-delivery semantics live in [`OmnigentHostMountedTools.md`](./OmnigentHostMountedTools.md).
 
@@ -143,7 +150,7 @@ A runtime pack is trusted deployment data, never workflow-authored. The registry
 
 | Pack | Harness | Vendor runtime | Credential home |
 | --- | --- | --- | --- |
-| `codex-native-pack@1` | `codex-native` | `codex >=0.100.0,<0.200.0` (pin `0.104.0`) | `/home/app/.codex` |
+| `codex-native-pack@1` | `codex-native` | `codex >=0.100.0,<0.200.0` (pin `0.159.0`) | `/home/app/.codex` |
 | `claude-native-pack@1` | `claude-native` | `claude >=2.0.0,<3.0.0` (pin `2.1.281`) | `/home/app/.claude` |
 | `opencode-native-pack@1` | `opencode-native` | `opencode >=1.17.7,<1.19.0` (pin `1.18.11`) | `/home/app/.local/share/opencode` |
 
