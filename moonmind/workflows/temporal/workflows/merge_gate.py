@@ -329,6 +329,7 @@ def build_resolver_run_request(
     provider_profile = _compact_text(template.get("executionProfileRef"))
     runtime_model = _compact_text(template.get("model"))
     runtime_effort = _compact_text(template.get("effort"))
+    resolver_instructions = str(template.get("instructions") or "").strip()
     required_capabilities = [
         str(item).strip()
         for item in (template.get("requiredCapabilities") or [])
@@ -451,6 +452,7 @@ def build_resolver_run_request(
                     if normalized_finish_mode == FINISH_MODE_FIX_ONLY
                     else ""
                 )
+                + ("\n\n" + resolver_instructions if resolver_instructions else "")
             ),
             "tool": {"type": "skill", "name": "pr-resolver"},
             "skill": {"id": "pr-resolver", "args": args},

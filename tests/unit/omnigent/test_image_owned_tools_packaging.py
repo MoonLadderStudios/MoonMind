@@ -9,6 +9,10 @@ mounts, or tools volume on the shared-host path.
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -62,6 +66,45 @@ def test_shared_host_image_installs_moonmind_cli_without_broadening_docker() -> 
     # Host launch must not download, install, or copy shared tool binaries.
     assert "gh --version" in dockerfile
     assert "moonmind --help" in dockerfile
+
+
+def test_tools_profile_selects_python_with_portable_skill_dependencies(
+    tmp_path,
+) -> None:
+    tools = tmp_path / "tools"
+    venv = tmp_path / "venv"
+    fallback = tmp_path / "fallback"
+    for directory in (tools, venv, fallback):
+        directory.mkdir()
+    # Real interpreters: the fallback deliberately lacks site packages, while
+    # the selected environment can import the actual queue-client dependency.
+    for directory, options in ((fallback, "-S "), (venv, "")):
+        executable = directory / "python3"
+        executable.write_text(
+            f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {options}"$@"\n'
+        )
+        executable.chmod(0o755)
+    profile = tmp_path / "moonmind-tools.sh"
+    profile.write_text(
+        (REPO_ROOT / "services/omnigent/scripts/moonmind-tools.sh")
+        .read_text()
+        .replace("/opt/moonmind-tools/bin", str(tools))
+        .replace("/opt/venv/bin", str(venv))
+    )
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            '. "$1"; python3 -c "import httpx; print(httpx.__name__)"',
+            "bash",
+            str(profile),
+        ],
+        env={**os.environ, "PATH": f"{fallback}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "httpx"
 
 
 def test_host_image_publish_rebuilds_on_tool_source_changes() -> None:

@@ -188,6 +188,13 @@ The backend pins the definition and target, resolves context bindings, checks sc
 
 A batch child receives its parent's frozen publishing/finish intent and validated per-PR target, not the coordinator's local None, a workspace default, or a freshly interpreted child recommendation. The single UI control explains whether fixes will be pushed and whether merging is enabled.
 
+The batch helper appends explicit `childInstructions` to each per-PR task.
+Existing-PR adoption retains those task instructions through the durable merge
+gate and into every resolver pass, alongside the selected Provider Profile,
+model, and effort. This carries constraints such as keeping all Tactics CI on
+self-hosted runners across fan-out and repair. The instruction propagation uses
+a Temporal patch so retained histories preserve their recorded child payloads.
+
 ---
 
 ## 10. Observability and Artifacts

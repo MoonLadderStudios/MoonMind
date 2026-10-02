@@ -183,6 +183,21 @@ def test_redact_sensitive_text_preserves_codex_event_name_but_scrubs_auth_paths(
     )
 
 
+@pytest.mark.parametrize(
+    "basename",
+    [
+        ".codex-auth",
+        "codex-auth.json",
+        ".claude-auth",
+        "claude-auth.json",
+        "runtime-codex-auth-home",
+        "auth-volume-generation-1",
+    ],
+)
+def test_redact_sensitive_text_scrubs_relative_auth_basenames(basename):
+    assert redact_sensitive_text(basename) == "[REDACTED_AUTH_PATH]"
+
+
 def test_redact_sensitive_text_redacts_quoted_secret_assignments():
     result = redact_sensitive_text('api_key="raw-secret" password: \'other-secret\'')
 
