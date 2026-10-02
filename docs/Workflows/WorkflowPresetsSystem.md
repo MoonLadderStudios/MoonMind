@@ -36,6 +36,8 @@ Presets do not replace Skills, require per-preset React forms, grant execution r
 
 Workflow-scoped expansion does not require a human account. Machine execution principals remain execution authority and are not written into UUID catalog attribution. Existing valid UUID recent-choice attribution is preserved while its historical catalog consumers remain; this transition ends when those UUID fields are retired.
 
+Recent-choice attribution records an explicit catalog selection. Automatic goal selection supplies no catalog-usage actor, so goal-selected submissions expand without recording usage under the execution owner.
+
 Trusted issue loaders persist the complete GitHub or Jira brief as a linked JSON
 artifact before returning to the workflow. The existing `briefArtifactRef` carries
 that source into attachment-capable assessment, implementation, remediation,
