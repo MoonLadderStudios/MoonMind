@@ -5,6 +5,7 @@ import json
 import os
 import runpy
 import subprocess
+import sys
 import tarfile
 import tempfile
 from datetime import UTC, datetime, timedelta
@@ -340,9 +341,7 @@ async def test_required_tool_probe_fails_with_stable_readiness_evidence() -> Non
     }
 
 
-def test_runtime_scripts_are_snapshotted_under_daemon_mapping(
-    tmp_path, monkeypatch
-):
+def test_runtime_scripts_are_snapshotted_under_worker_workspace(tmp_path, monkeypatch):
     scripts = tmp_path / "source-scripts"
     scripts.mkdir()
     for name in (
@@ -365,17 +364,113 @@ def test_runtime_scripts_are_snapshotted_under_daemon_mapping(
     monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
     monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", str(daemon_root))
 
-    daemon_scripts = runtime._prepare_daemon_runtime_scripts(
+    worker_scripts = runtime._prepare_runtime_scripts(
         "workflow:run:step",
         current_step_execution_id="workflow:run:step:execution:1",
     )
 
-    relative = daemon_scripts.relative_to(daemon_root)
-    worker_scripts = worker_root / relative
-    assert daemon_scripts != scripts
+    assert worker_scripts.is_relative_to(worker_root)
     assert worker_scripts.is_dir()
     assert (worker_scripts / "init-oauth-host.sh").stat().st_mode & 0o111
     assert (worker_scripts / "moonmind-execution.sh").is_file()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_mode", [True, False])
+async def test_remote_oauth_launch_reads_workspace_and_projections_from_volume(
+    tmp_path, monkeypatch, explicit_mode
+):
+    """Docker Desktop's volume storage path is not a host bind source."""
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "/daemon/volume-storage")
+    if explicit_mode:
+        monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+    else:
+        monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
+    workspace = tmp_path / "sandbox" / "repo"
+    workspace.mkdir(parents=True)
+    (workspace / "README.md").write_text("retained Tactics candidate\n")
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "SKILL.md").write_text("batch-pr-resolver\n")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path
+    )
+    scripts = runtime._prepare_runtime_scripts(
+        "lease-1", current_step_execution_id="workflow:run:node-1:execution:1"
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
+    runtime._run = AsyncMock(return_value=(1, "", "container absent"))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+
+    await runtime._launch_on_demand(
+        binding=binding,
+        host_lease=_host_lease(),
+        container_name="mm-host-lease-1",
+        workspace_source=workspace,
+        skill_projection=skills,
+        runtime_scripts=scripts,
+        current_step_execution_id="workflow:run:node-1:execution:1",
+        effective_launch=launch,
+        egress_attestation=_egress_attestation(),
+    )
+
+    init, host = [call.args for call in runtime._run.await_args_list][1:]
+
+    def projected_path(command, target, *, readonly):
+        mounts = [
+            command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "--mount"
+        ]
+        value = next(value for value in mounts if f"dst={target}" in value.split(","))
+        fields = dict(part.split("=", 1) for part in value.split(",") if "=" in part)
+        assert fields["type"] == "volume"
+        assert fields["src"] == runtime._workspace_volume
+        assert ("readonly" in value.split(",")) is readonly
+        return tmp_path / fields["volume-subpath"]
+
+    assert (
+        projected_path(init, "/opt/moonmind", readonly=True) / "init-oauth-host.sh"
+    ).is_file()
+    assert (
+        projected_path(host, "/opt/moonmind", readonly=True) / "init-oauth-host.sh"
+    ).is_file()
+    assert (
+        projected_path(host, "/workspaces/run", readonly=False) / "README.md"
+    ).read_text() == "retained Tactics candidate\n"
+    assert (
+        projected_path(host, "/opt/moonmind-skills", readonly=True) / "SKILL.md"
+    ).read_text() == "batch-pr-resolver\n"
+    assert (
+        projected_path(
+            host, "/etc/profile.d/moonmind-execution.sh", readonly=True
+        ).read_text()
+        == (scripts / "moonmind-execution.sh").read_text()
+    )
+    assert not any("/daemon/volume-storage" in str(arg) for arg in (*init, *host))
+
+
+@pytest.mark.asyncio
+async def test_oauth_runtime_command_failure_keeps_bounded_redacted_diagnostics():
+    """A real process failure must retain its reason without leaking a token."""
+    with pytest.raises(OmnigentOAuthHostError) as failure:
+        await OmnigentOAuthHostRuntime._run(
+            sys.executable,
+            "-c",
+            "import sys; print('initializer missing; token=private-test-token', file=sys.stderr); sys.exit(7)",
+        )
+    message = str(failure.value)
+    assert "exit 7" in message
+    assert "initializer missing" in message
+    assert "private-test-token" not in message
+    assert len(message) <= 512
 
 
 @pytest.mark.parametrize(
@@ -1481,7 +1576,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     runtime._prepare_workspace = AsyncMock(return_value=workspace)  # type: ignore[method-assign]
     runtime._resolve_daemon_workspace_root = AsyncMock(return_value=tmp_path)  # type: ignore[method-assign]
     runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
-    runtime._prepare_daemon_runtime_scripts = MagicMock(  # type: ignore[method-assign]
+    runtime._prepare_runtime_scripts = MagicMock(  # type: ignore[method-assign]
         return_value=tmp_path / "runtime-scripts"
     )
     runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
@@ -1658,11 +1753,9 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert cleanup_authority_store.bind_calls[1]["launch_evidence_ref"] == first[
         "egressEvidenceRef"
     ]
-    runtime_profile_environment = (
-        runtime._prepare_daemon_runtime_scripts.call_args.kwargs[
-            "runtime_environment"
-        ]
-    )
+    runtime_profile_environment = runtime._prepare_runtime_scripts.call_args.kwargs[
+        "runtime_environment"
+    ]
     assert runtime_profile_environment["MOONMIND_URL"] == "http://api:8000"
     assert runtime_profile_environment["MOONMIND_TASK_WORKFLOW_ID"] == "workflow-1"
     assert runtime_profile_environment["MOONMIND_AGENT_RUN_ID"] == "step-1"
@@ -5275,7 +5368,7 @@ async def _run_coordinator_failure_case(
     # This failure matrix stubs a synthetic path so each intended downstream
     # launch/cleanup owner can surface without being preempted by that guard.
     runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
-    runtime._prepare_daemon_runtime_scripts = MagicMock(  # type: ignore[method-assign]
+    runtime._prepare_runtime_scripts = MagicMock(  # type: ignore[method-assign]
         return_value=Path("/tmp/runtime-scripts")
     )
     runtime._resolve_daemon_workspace_root = AsyncMock(  # type: ignore[method-assign]
