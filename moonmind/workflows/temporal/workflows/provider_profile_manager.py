@@ -153,6 +153,31 @@ VALIDATION_LEASE_EXPIRY_PATCH = "provider-profile-manager-validation-lease-expir
 # live lease as gone, a release deleted a durable row that the restore then put
 # back in memory, and a slot request was overwritten by the restored queue.
 HANDLERS_AWAIT_RESTORE_PATCH = "provider-profile-manager-handlers-await-restore-v1"
+# Interactive OAuth login stops spending provider capacity: a scope cooldown no
+# longer holds the login terminal back, and a held login lease no longer fills
+# the scope. Runs started before the marker keep gating login on the scope.
+OAUTH_LOGIN_SCOPE_EXEMPT_PATCH = "provider-profile-manager-oauth-login-scope-exempt-v1"
+_OAUTH_LOGIN_PURPOSES = frozenset(
+    {
+        CredentialLeasePurpose.OAUTH_CONNECT,
+        CredentialLeasePurpose.OAUTH_RECONNECT,
+    }
+)
+
+
+def _purpose_spends_scope(purpose: str, *, oauth_login_exempt: bool) -> bool:
+    """Whether a lease purpose spends the shared upstream provider scope.
+
+    An unrecognized purpose fails closed and spends the scope.
+    """
+
+    try:
+        resolved = CredentialLeasePurpose(purpose)
+    except ValueError:
+        return True
+    if resolved in _OAUTH_LOGIN_PURPOSES and not oauth_login_exempt:
+        return True
+    return resolved.consumes_provider_capacity
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -672,28 +697,25 @@ class ProfileSlotState:
             if self.consumes_execution_capacity(lease_id)
         )
 
-    def scope_consuming_lease_count(self) -> int:
+    def scope_consuming_lease_count(self, *, oauth_login_exempt: bool) -> int:
         """Leases that spend the shared upstream provider resource.
 
         The scope ledger describes provider fullness and cooldown, so only
         purposes that actually spend provider capacity may fill it.
-        Credential repair and revocation are local credential-state work: once
-        granted they must not occupy the shared scope and block execution on
-        sibling profiles. A lease with an unrecognized purpose fails closed
-        and counts against the scope.
+        Credential repair, revocation, and interactive login are credential
+        work: once granted they must not occupy the shared scope and block
+        execution on sibling profiles. A lease with an unrecognized purpose
+        fails closed and counts against the scope.
         """
 
-        count = 0
-        for lease_id in self.current_leases:
-            try:
-                consuming = CredentialLeasePurpose(
-                    self.lease_purpose(lease_id)
-                ).consumes_provider_capacity
-            except ValueError:
-                consuming = True
-            if consuming:
-                count += 1
-        return count
+        return sum(
+            1
+            for lease_id in self.current_leases
+            if _purpose_spends_scope(
+                self.lease_purpose(lease_id),
+                oauth_login_exempt=oauth_login_exempt,
+            )
+        )
 
     def purpose_max_duration_seconds(self, purpose: str) -> int:
         """The longest one acquisition for this purpose may hold or wait."""
@@ -1166,6 +1188,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self._purpose_aware_capacity_ledger: bool = False
         # MoonLadderStudios/MoonMind#3879 durability state.
         self._durable_maintenance_queue: bool = False
+        self._oauth_login_scope_exempt: bool = False
         self._rollover_requested: bool = False
         self._maintenance_queue_sequence: int = 0
         self._lease_grant_sequence: int = 0
@@ -2696,13 +2719,16 @@ class MoonMindProviderProfileManagerWorkflow:
         """Whether shared-scope availability may gate this maintenance work.
 
         Scope fullness and cooldown describe the upstream provider resource.
-        Credential repair and revocation do not spend it, so a saturated or
-        cooling-down scope must never be what stops a broken credential from
-        being fixed or revoked.
+        Credential repair, revocation, and interactive OAuth login do not spend
+        it, so a saturated or cooling-down scope must never be what stops a
+        broken credential from being fixed or revoked, or the operator from
+        signing in.
 
         That exemption is an admission-semantics change, so it is gated on the
         same marker as the durable queue: a history recorded before it gated
         every maintenance purpose on scope, and must keep doing so on replay.
+        The OAuth login exemption came later and is gated separately by
+        ``OAUTH_LOGIN_SCOPE_EXEMPT_PATCH``.
         """
 
         try:
@@ -2713,10 +2739,9 @@ class MoonMindProviderProfileManagerWorkflow:
             return False
         if not self._durable_maintenance_queue:
             return True
-        try:
-            return CredentialLeasePurpose(purpose).consumes_provider_capacity
-        except ValueError:
-            return True
+        return _purpose_spends_scope(
+            purpose, oauth_login_exempt=self._oauth_login_scope_exempt
+        )
 
     async def _acquire_exclusive_maintenance_lease(
         self,
@@ -2985,6 +3010,9 @@ class MoonMindProviderProfileManagerWorkflow:
         )
         self._durable_maintenance_queue = workflow.patched(
             MAINTENANCE_QUEUE_DURABILITY_PATCH
+        )
+        self._oauth_login_scope_exempt = workflow.patched(
+            OAUTH_LOGIN_SCOPE_EXEMPT_PATCH
         )
         self._lease_transition_contract = workflow.patched(
             LEASE_TRANSITION_CONTRACT_PATCH
@@ -5679,7 +5707,9 @@ class MoonMindProviderProfileManagerWorkflow:
 
     def _scope_active_units(self, scope_ref: str) -> int:
         return sum(
-            p.scope_consuming_lease_count()
+            p.scope_consuming_lease_count(
+                oauth_login_exempt=self._oauth_login_scope_exempt
+            )
             for p in self._profiles.values()
             if (p.capacity_scope_ref or f"provider-profile:{p.profile_id}") == scope_ref
         )
