@@ -8789,6 +8789,8 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                 "mode": "codex_cli",
                 "model": "gpt-5.4",
                 "effort": "high",
+                "resolvedModel": "gpt-5.4",
+                "resolvedEffort": "high",
                 "requestedModel": "gpt-5.4",
                 "modelSource": "task_override",
             },
@@ -11261,10 +11263,26 @@ async def test_recurring_target_persists_normalized_tier_previews() -> None:
 
 def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_client, _service, _user = client
     test_client.app.dependency_overrides[get_async_session] = _empty_session_override
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(),
+                json.dumps(
+                    {"workflow": {"instructions": "Saved schedule input"}}
+                ).encode(),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        executions_module,
+        "get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
 
     with patch(
         "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
@@ -11302,6 +11320,8 @@ def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases
     assert target["inputArtifactRef"] == "artifact://input/1"
     assert target["planArtifactRef"] == "artifact://plan/1"
     assert target["failurePolicy"] == "fail_fast"
+    artifact_service.read.assert_awaited_once()
+    assert artifact_service.read.await_args.kwargs["artifact_id"] == "1"
 
 
 def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
@@ -12053,7 +12073,9 @@ def test_update_execution_invalid_update_name_returns_contract_error(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, user = client
-    service.describe_execution.return_value = SimpleNamespace(owner_id=str(user.id))
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id), has_workflow_input_snapshot=False
+    )
     service.update_execution.side_effect = TemporalExecutionValidationError(
         "Unsupported update name: UnknownUpdate"
     )
@@ -16119,9 +16141,25 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
             "message": "Inputs scheduled.",
         }
 
-        with patch(
-            "api_service.api.routers.executions.get_metrics_emitter",
-            return_value=metrics,
+        artifact_service = SimpleNamespace(
+            read=AsyncMock(
+                return_value=(
+                    SimpleNamespace(),
+                    json.dumps(
+                        {"workflow": {"instructions": "Edited instructions."}}
+                    ).encode(),
+                )
+            )
+        )
+        with (
+            patch(
+                "api_service.api.routers.executions.get_metrics_emitter",
+                return_value=metrics,
+            ),
+            patch(
+                "api_service.api.routers.executions.get_temporal_artifact_service",
+                return_value=artifact_service,
+            ),
         ):
             response = test_client.post(
                 "/api/executions/mm:wf-1/update",
@@ -16134,7 +16172,7 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
                 },
             )
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.json()
         metric_calls = [
             call
             for call in metrics.increment.call_args_list
