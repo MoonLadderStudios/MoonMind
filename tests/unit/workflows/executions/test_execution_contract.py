@@ -2833,3 +2833,30 @@ def test_removed_cloud_is_rejected_without_default_substitution(payload):
     """MoonLadderStudios/MoonMind#4644: explicit retired work is never retargeted."""
     with pytest.raises(WorkflowContractError):
         build_canonical_workflow_view(job_type="task", payload=payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"targetRuntime": "openclaw", "workflow": {"instructions": "Use the gateway"}},
+        {
+            "workflow": {
+                "instructions": "Use the gateway",
+                "runtime": {"mode": "openclaw"},
+            }
+        },
+        {
+            "workflow": {
+                "instructions": "Use the gateway",
+                "steps": [{**skill_step(), "runtime": {"mode": "openclaw"}}],
+            }
+        },
+    ],
+)
+def test_registered_external_runtime_is_admitted(payload):
+    canonical = build_canonical_workflow_view(job_type="task", payload=payload)
+    if "steps" in payload["workflow"]:
+        assert canonical["workflow"]["steps"][0]["runtime"]["mode"] == "openclaw"
+    else:
+        assert canonical["targetRuntime"] == "openclaw"
+        assert canonical["workflow"]["runtime"]["mode"] == "openclaw"

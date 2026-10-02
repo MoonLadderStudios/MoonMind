@@ -212,8 +212,10 @@ def _visibility_runtime_from_parameters(
         parameters.get("target_runtime"),
         task_runtime.get("mode"),
         task_runtime.get("targetRuntime"),
+        task_runtime.get("target_runtime"),
         runtime_payload.get("mode"),
         runtime_payload.get("targetRuntime"),
+        runtime_payload.get("target_runtime"),
     )
 
 
@@ -3015,12 +3017,15 @@ class TemporalExecutionService:
                 return dict(cached)
 
         if update_name == "RequestRerun":
-            if self._integration_state(record) is not None:
+            if (
+                record.state not in TERMINAL_STATES
+                and self._integration_state(record) is not None
+            ):
                 self._require_integration_state(record)
             rerun_parameters = dict(record.parameters or {})
             if parameters_patch:
                 rerun_parameters.update(parameters_patch)
-            self._validate_execution_targets(rerun_parameters)
+            self._validate_rerun_execution_targets(record, rerun_parameters)
 
         if update_name == "RequestRerun" and record.state not in TERMINAL_STATES:
             await self.validate_exact_rerun_execution_plan(
@@ -3468,6 +3473,22 @@ class TemporalExecutionService:
                 f"Unsupported integration target {raw!r}: {exc}"
             ) from exc
         return normalized
+
+    def _validate_rerun_execution_targets(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        self._validate_execution_targets(parameters)
+        # Fresh admission uses the resulting authored runtime. Historical
+        # monitoring state is not the new execution's integration binding.
+        # A source with only an old binding still needs an explicit replacement
+        # rather than silently selecting the default runtime.
+        if (
+            self._integration_state(record) is not None
+            and _visibility_runtime_from_parameters(parameters) is None
+        ):
+            self._require_integration_state(record)
 
     async def configure_integration_monitoring(
         self,
@@ -4675,8 +4696,6 @@ class TemporalExecutionService:
         parameters_patch: dict[str, Any] | None,
         idempotency_key: str | None,
     ) -> dict[str, Any]:
-        if self._integration_state(record) is not None:
-            self._require_integration_state(record)
         params = dict(record.parameters or {})
         if parameters_patch:
             params.update(parameters_patch)
@@ -4702,6 +4721,7 @@ class TemporalExecutionService:
             "runId": record.run_id,
         }
         params["rerunSource"] = rerun_source
+        self._validate_rerun_execution_targets(record, params)
         if has_unexpanded_task_template(params):
             params = await expand_preset_for_child_run(
                 session=self._session,

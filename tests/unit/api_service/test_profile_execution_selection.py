@@ -495,7 +495,7 @@ def test_normal_codex_profile_keeps_native_harness_and_auth_authority(runtime):
     assert selected["providerProfileRef"] == profile.profile_id
 
 
-@pytest.mark.parametrize("runtime_id", ["jules", "openclaw"])
+@pytest.mark.parametrize("runtime_id", ["jules", "jules_api", "openclaw"])
 def test_cloud_removal_preserves_retained_profile_requirements(runtime_id):
     """#4644: legacy retained Profiles do not need a native harness mapping."""
     retained = provider(runtime_id=runtime_id, provider_id=runtime_id)

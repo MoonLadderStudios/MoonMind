@@ -2265,3 +2265,50 @@ async def test_removed_runtime_schedule_is_paused_and_keeps_saved_work(
             mock_temporal_adapter.reset_mock()
             assert await service.reconcile_schedules() == 0
             mock_temporal_adapter.pause_schedule.assert_not_called()
+
+
+async def test_retained_openclaw_schedule_recovers_without_retiring_saved_work(
+    tmp_path, mock_temporal_adapter
+):
+    from copy import deepcopy
+
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            target = {
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "workflow": {
+                        "instructions": "Preserve gateway task",
+                        "runtime": {"mode": "openclaw"},
+                    }
+                },
+            }
+            saved = deepcopy(target)
+            definition = RecurringWorkflowDefinition(
+                id=uuid4(),
+                name="Retained OpenClaw schedule",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 * * * *",
+                timezone="UTC",
+                version=1,
+                target=target,
+                policy={},
+                temporal_schedule_id="mm-schedule:retained-openclaw",
+            )
+            session.add(definition)
+            await session.commit()
+            mock_temporal_adapter.describe_schedule.side_effect = ScheduleNotFoundError()
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            assert await service.reconcile_schedules() == 1
+            mock_temporal_adapter.pause_schedule.assert_not_called()
+            mock_temporal_adapter.create_schedule.assert_awaited_once()
+            assert definition.enabled is True
+            assert definition.target == saved
+            submitted = mock_temporal_adapter.create_schedule.call_args.kwargs
+            submitted_runtime = submitted["workflow_input"]["initial_parameters"][
+                "workflow"
+            ]["runtime"]["mode"]
+            assert submitted_runtime == "openclaw"

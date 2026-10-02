@@ -40,19 +40,16 @@ from .repository_contract import (
     derive_repository_capabilities,
     decode_legacy_repository_history_v1,
 )
+from .runtime_capabilities import RUNTIME_EXECUTION_CAPABILITIES
+
 # One canonical default. The runtime-provider rollout policy owns which target
 # that runtime resolves to (MoonLadderStudios/MoonMind#3833); no surface may
 # reconstruct a separate default from a literal or an environment variable.
 from .runtime_defaults import DEFAULT_WORKFLOW_RUNTIME, normalize_runtime_id
-SUPPORTED_RUNTIME_MODES = {
-    "codex",
-    "codex_cli",
-    "claude",
-    "claude_code",
-    "jules",
-    "omnigent",
-    "universal",
-}
+
+SUPPORTED_RUNTIME_MODES = {"codex", "claude", "universal"} | set(
+    RUNTIME_EXECUTION_CAPABILITIES.runtime_ids
+)
 SUPPORTED_EXECUTION_RUNTIMES = {
     "codex",
     "codex_cli",

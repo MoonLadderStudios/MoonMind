@@ -20052,6 +20052,24 @@ describe('removed target drafts (#4644)', () => {
     });
   });
   afterEach(() => { fetchSpy.mockRestore(); cleanup(); });
+  it('keeps supported legacy Jules selections when restoring a saved workflow', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init);
+      if (!String(input).startsWith('/api/executions/mm%3Aold-cloud')) return response;
+      const execution = await response.json();
+      execution.inputParameters.workflow.runtime.mode = 'jules_api';
+      execution.inputParameters.workflow.steps[0].runtime.mode = 'jules_api';
+      return { ...response, json: async () => execution } as Response;
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step'));
+    expect((screen.getByLabelText('Runtime') as HTMLSelectElement).value).toBe('jules_api');
+    expect(screen.queryByText(/unsupported runtime jules_api/i)).toBeNull();
+    expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('saved-model');
+    expect((screen.getAllByLabelText('Instructions')[1] as HTMLTextAreaElement).value).toBe('Keep the supported step');
+  });
+
   it('preserves a restored task and requires explicit replacement without recreating a choice', async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     await waitFor(() => expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step'));

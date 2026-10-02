@@ -16,6 +16,7 @@ from sqlalchemy import and_, or_, select
 
 from api_service.db.models import OmnigentAgentProfile, OmnigentAgentProfileVersion
 from moonmind.omnigent.harness_platform.harness_registry import canonical_harness_id
+from moonmind.runtime_identity import normalize_runtime_id
 
 
 class ProfileExecutionConfiguration(BaseModel):
@@ -51,7 +52,8 @@ def profile_runtime_supported(runtime_id: Any) -> bool:
         RUNTIME_EXECUTION_CAPABILITIES,
     )
 
-    normalized = str(runtime_id or "")
+    raw_runtime = str(runtime_id or "").strip()
+    normalized = normalize_runtime_id(raw_runtime) if raw_runtime else ""
     return (
         _expected_harness_for_runtime(normalized) is not None
         or normalized in RUNTIME_EXECUTION_CAPABILITIES.runtime_ids
