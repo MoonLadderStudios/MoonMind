@@ -25,7 +25,7 @@ on:
       codex_cli_version:
         description: "Codex CLI version to pin (must be within >=0.100.0,<0.200.0)"
         required: false
-        default: "0.104.0"
+        default: "0.159.0"
         type: string
       claude_cli_version:
         description: "Claude Code CLI version to pin (must be within >=2.0.0,<3.0.0)"
@@ -72,7 +72,7 @@ jobs:
       - name: Generate image metadata
         id: meta
         run: |
-          VERSION_TAG="${{ inputs.opencode_version || '1.18.11' }}-codex${{ inputs.codex_cli_version || '0.104.0' }}-claude${{ inputs.claude_cli_version || '2.1.281' }}"
+          VERSION_TAG="${{ inputs.opencode_version || '1.18.11' }}-codex${{ inputs.codex_cli_version || '0.159.0' }}-claude${{ inputs.claude_cli_version || '2.1.281' }}"
           echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
           IMAGE_NAME="${{ env.REGISTRY_IMAGE }}"
           IMAGE_NAME="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
@@ -80,7 +80,7 @@ jobs:
       - name: Resolve vendor versions
         id: out
         run: |
-          echo "codex_version=${{ inputs.codex_cli_version || '0.104.0' }}" >> "$GITHUB_OUTPUT"
+          echo "codex_version=${{ inputs.codex_cli_version || '0.159.0' }}" >> "$GITHUB_OUTPUT"
           echo "claude_version=${{ inputs.claude_cli_version || '2.1.281' }}" >> "$GITHUB_OUTPUT"
           echo "opencode_version=${{ inputs.opencode_version || '1.18.11' }}" >> "$GITHUB_OUTPUT"
           # gh remains pinned by the manifest single source; the explicit

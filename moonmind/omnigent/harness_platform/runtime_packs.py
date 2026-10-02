@@ -336,7 +336,7 @@ register_runtime_pack(
         version_command=("codex", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
         supported_range=">=0.100.0,<0.200.0",
-        pinned_version="0.104.0",
+        pinned_version="0.159.0",
         credential_target="/home/app/.codex",
         forbidden=_SHARED_OAUTH_FORBIDDEN
         + ("CODEX_ACCESS_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"),

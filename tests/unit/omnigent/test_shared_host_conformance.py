@@ -59,7 +59,7 @@ def _admission_kwargs(row_id: str, **overrides):
 
 def _observed_binaries():
     return (
-        {"name": "codex", "version": "0.104.0"},
+        {"name": "codex", "version": "0.159.0"},
         {"name": "claude", "version": "2.1.281"},
         {"name": "opencode", "version": "1.18.11"},
     )
@@ -415,7 +415,7 @@ def test_runtime_readiness_uses_pack_selected_probes():
     row = get_required_row("codex-shared-generic-v1")
     assert_runtime_readiness(
         row=row,
-        observed_vendor_version="0.104.0",
+        observed_vendor_version="0.159.0",
         probe_kinds_passed=("vendor-version",),
         required_env_present=(),
         required_env_expected=(),
@@ -436,7 +436,7 @@ def test_runtime_readiness_uses_pack_selected_probes():
     with pytest.raises(HarnessPlatformError):
         assert_runtime_readiness(
             row=row,
-            observed_vendor_version="0.104.0",
+            observed_vendor_version="0.159.0",
             probe_kinds_passed=(),
             required_env_present=(),
             required_env_expected=(),
@@ -446,7 +446,7 @@ def test_runtime_readiness_uses_pack_selected_probes():
     with pytest.raises(HarnessPlatformError):
         assert_runtime_readiness(
             row=row,
-            observed_vendor_version="0.104.0",
+            observed_vendor_version="0.159.0",
             probe_kinds_passed=("vendor-version",),
             required_env_present=(),
             required_env_expected=(),
