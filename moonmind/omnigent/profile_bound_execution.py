@@ -2507,33 +2507,60 @@ class OmnigentProfileBoundExecutionCoordinator:
                 and safe_to_release_provider
                 and lease_released
             ):
-                runtime_store = DbRuntimeBindingStore(self._session_factory)
-                runtime_state = await runtime_store.get_state(
-                    runtime_binding_ref
-                )
-                if runtime_state is not None:
+                try:
+                    runtime_store = DbRuntimeBindingStore(self._session_factory)
+                    runtime_state = await runtime_store.get_state(runtime_binding_ref)
+                    if runtime_state is None:
+                        raise HarnessPlatformError(
+                            "cleanup runtime binding is stale or unavailable",
+                            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                        )
                     completed_binding = await runtime_store.mark_cleanup_complete(
                         runtime_binding_ref,
                         expected_revision=runtime_state.revision,
-                        expected_fencing_generation=(
-                            runtime_state.fencing_generation
-                        ),
+                        expected_fencing_generation=runtime_state.fencing_generation,
                     )
                     runtime_binding_ref = completed_binding.runtimeBindingRef
-                    completed_state = await runtime_store.get_state(
-                        runtime_binding_ref
-                    )
+                    completed_state = await runtime_store.get_state(runtime_binding_ref)
                     if authority_result is not None and completed_state is not None:
                         authority_result.metadata.update(
                             {
                                 "runtimeBindingRef": runtime_binding_ref,
                                 "runtimeBindingRevision": completed_state.revision,
-                                "runtimeBindingFencingGeneration": (
-                                    completed_state.fencing_generation
-                                ),
+                                "runtimeBindingFencingGeneration": completed_state.fencing_generation,
                                 "runtimeBindingState": completed_state.state,
                             }
                         )
+                except Exception as cleanup_reporting_exc:
+                    # Resource cleanup and release are already confirmed. A
+                    # reporting conflict must preserve that work and the primary
+                    # provider result/error, leaving fenced reconciliation visible.
+                    janitor_required = True
+                    cleanup_code = getattr(
+                        cleanup_reporting_exc,
+                        "code",
+                        type(cleanup_reporting_exc).__name__,
+                    )
+                    authority_reasons.append(
+                        {
+                            "stage": "runtime_binding_cleanup",
+                            "code": cleanup_code,
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
+                    )
+                    await emit(
+                        "runtime_binding_cleanup",
+                        "waiting",
+                        code=cleanup_code,
+                        failure_class="system_error",
+                        remediation_action="inspect_cleanup_diagnostics",
+                        metadata={
+                            "janitorRequired": True,
+                            "leaseReleased": lease_released,
+                        },
+                        ignore_errors=True,
+                    )
             # Emit the single unified, bounded, credential-free authority chain
             # (MoonLadderStudios/MoonMind#3561) before terminal so Workflow Detail
             # exposes one workspace -> runtime -> publication -> terminal ->
@@ -2553,7 +2580,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         else "provider_lease_release_deferred"
                     )
                 release_ordering.append("terminal")
-                if janitor_required:
+                if provider_lease is not None and not lease_released:
                     authority_reasons.append(
                         {
                             "stage": "profile_lease_release",

@@ -132,7 +132,8 @@ def _redact_auth_paths(text: str) -> str:
             end += 1
         token = text[index:end]
         token_lower = token.lower()
-        if any(marker in token_lower for marker in _AUTH_PATH_MARKERS):
+        is_path = "/" in token or "\\" in token or token_lower in _AUTH_PATH_MARKERS
+        if is_path and any(marker in token_lower for marker in _AUTH_PATH_MARKERS):
             output.append("[REDACTED_AUTH_PATH]")
         else:
             output.append(token)
