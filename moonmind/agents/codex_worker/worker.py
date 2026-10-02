@@ -5306,12 +5306,33 @@ class CodexWorker:
                 f"evidence; running {rendered_command}"
             ),
         )
+        # Repository tests need their toolchain, never publisher credentials
+        # or the worker's service secrets. The repository execution boundary is
+        # still responsible for filesystem/network isolation.
+        verification_keys = {
+            "PATH",
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "TZ",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "VIRTUAL_ENV",
+            "PYTHONPATH",
+            "PYTHONHOME",
+        }
+        verification_env = {
+            key: value
+            for key, value in (prepared.repo_command_env or os.environ).items()
+            if key in verification_keys
+        }
         try:
             await self._run_stage_command(
                 command,
                 cwd=prepared.repo_dir,
                 log_path=prepared.publish_log_path,
-                env=prepared.publish_command_env,
+                env=verification_env,
             )
         except Exception as exc:
             raise RuntimeError(
@@ -7710,7 +7731,7 @@ class CodexWorker:
                     repo_dir=repo_dir,
                     env=scan_env,
                     timeout=30,
-                    args=["fetch", "origin", base_ref.removeprefix("origin/")],
+                    args=["fetch", "--", "origin", base_ref.removeprefix("origin/")],
                 )
         commit_range = f"{base_ref}..{branch_name}"
         try:
@@ -7770,6 +7791,7 @@ class CodexWorker:
                         args=[
                             "diff",
                             "--no-ext-diff",
+                            "--no-textconv",
                             "--text",
                             commit_range,
                             "--",
@@ -9659,7 +9681,7 @@ class CodexWorker:
             "REPOSITORY": repository,
         }
         for key in sorted(run_env):
-            command.extend(["--env", key])
+            command.extend(["--env", f"{key}={run_env[key]}"])
 
         command.append(container_spec.image)
         command.extend(container_spec.command)
@@ -9718,7 +9740,7 @@ class CodexWorker:
                 container_spec=container_spec,
             )
             run_command_env = dict(environ)
-            run_command_env.update(run_env)
+            # Container values are Docker arguments, never host process settings.
             run_result = await self._run_stage_command(
                 run_command,
                 cwd=prepared.repo_dir,
@@ -9752,7 +9774,9 @@ class CodexWorker:
                 stderr=error_message,
             )
         except Exception as exc:
-            error_message = str(exc)
+            error_message = self._redact_command_for_log(
+                [str(exc)], redaction_values=tuple(container_spec.env.values())
+            )[0]
             run_result = CommandResult(
                 command=tuple(run_command),
                 returncode=1,

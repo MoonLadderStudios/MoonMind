@@ -13,6 +13,7 @@ from moonmind.workflows.skills.workspace_links import (
     validate_shared_skill_links,
 )
 
+
 def test_ensure_shared_skill_links_points_both_adapters_to_same_path(tmp_path):
     run_root = tmp_path / "runs" / "run-1"
     skills_active = run_root / "skills_active"
@@ -73,22 +74,30 @@ def test_ensure_shared_skill_links_chowns_created_links(
     chowned_dirs: list[Path] = []
     lchowned_links: list[Path] = []
 
+    def _fake_fchown(fd, uid, gid):
+        assert uid == gid == 1000
+        assert Path(f"/proc/self/fd/{fd}").resolve().is_dir()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.fchown", _fake_fchown
+    )
+
     def _fake_chown(
         path: str | Path,
         uid: int,
         gid: int,
         *,
         follow_symlinks: bool = True,
+        dir_fd: int | None = None,
     ) -> None:
         assert uid == 1000
         assert gid == 1000
-        assert follow_symlinks is True
-        chowned_dirs.append(Path(path))
-
-    def _fake_lchown(path: str | Path, uid: int, gid: int) -> None:
-        assert uid == 1000
-        assert gid == 1000
-        lchowned_links.append(Path(path))
+        assert follow_symlinks is False
+        assert dir_fd is not None
+        parent = Path(f"/proc/self/fd/{dir_fd}").resolve()
+        assert Path(path).name == "skills"
+        chowned_dirs.append(parent)
+        lchowned_links.append(parent / str(path))
 
     monkeypatch.setattr(
         "moonmind.workflows.skills.workspace_links.os.chown",
@@ -97,11 +106,6 @@ def test_ensure_shared_skill_links_chowns_created_links(
     monkeypatch.setattr(
         "moonmind.workflows.skills.workspace_links.os.geteuid",
         lambda: 0,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.workspace_links.os.lchown",
-        _fake_lchown,
         raising=False,
     )
 
@@ -133,17 +137,29 @@ def test_ensure_shared_skill_links_chowns_reused_link_parents(
     gemini.symlink_to(skills_active)
     chowned_dirs: list[Path] = []
 
+    def _fake_fchown(fd, uid, gid):
+        assert uid == gid == 1000
+        assert Path(f"/proc/self/fd/{fd}").resolve().is_dir()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.fchown", _fake_fchown
+    )
+
     def _fake_chown(
         path: str | Path,
         uid: int,
         gid: int,
         *,
         follow_symlinks: bool = True,
+        dir_fd: int | None = None,
     ) -> None:
         assert uid == 1000
         assert gid == 1000
-        assert follow_symlinks is True
-        chowned_dirs.append(Path(path))
+        assert follow_symlinks is False
+        assert dir_fd is not None
+        parent = Path(f"/proc/self/fd/{dir_fd}").resolve()
+        assert Path(path).name == "skills"
+        chowned_dirs.append(parent)
 
     monkeypatch.setattr(
         "moonmind.workflows.skills.workspace_links.os.chown",
@@ -382,3 +398,31 @@ def test_dirty_workspace_preserved_on_conflicting_alias(tmp_path):
     assert agents.is_symlink()
     assert agents.resolve() == external.resolve()
     assert dirty.read_text(encoding="utf-8") == "cumulative work\n"
+
+
+@pytest.mark.parametrize("adapter", [".agents", ".gemini"])
+def test_skill_projection_rejects_symlinked_parent_without_modifying_target(
+    tmp_path, adapter
+):
+    workspace = tmp_path / "workspace"
+    active = workspace / "skills_active"
+    active.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / adapter).symlink_to(outside, target_is_directory=True)
+    with pytest.raises(SkillWorkspaceError):
+        ensure_shared_skill_links(run_root=workspace, skills_active_path=active)
+    assert not (outside / "skills").is_symlink()
+
+
+def test_skill_cleanup_preserves_links_outside_workspace(tmp_path):
+    root = tmp_path / "workspace"
+    active = root / "skills_active"
+    active.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external_link = outside / "skills"
+    external_link.symlink_to(active)
+    (root / ".agents").symlink_to(outside, target_is_directory=True)
+    cleanup_moonmind_skill_projections(run_root=root, skills_active_path=active)
+    assert external_link.is_symlink()

@@ -757,7 +757,7 @@ class PublishService:
                     repo_dir=repo_dir,
                     env=env,
                     timeout=30,
-                    args=["fetch", "origin", base_ref.removeprefix("origin/")],
+                    args=["fetch", "--", "origin", base_ref.removeprefix("origin/")],
                 )
         # A root commit (empty-destination initialization) scans its full tree.
         commit_range = f"{base_ref}..{branch_name}" if base_ref else branch_name
@@ -819,6 +819,7 @@ class PublishService:
                         args=[
                             "diff",
                             "--no-ext-diff",
+                            "--no-textconv",
                             "--text",
                             *diff_range,
                             "--",

@@ -39,6 +39,12 @@ The GitHub PR resolver flow described here is not authority to merge a Lore-back
 
 The compiler resolves a single authored policy and meaningful finish/review options, pins their definition evidence, and admits the relevant effects. Managed PR publication or trusted existing-PR resolution produces durable target context. The parent starts MergeAutomation and remains `awaiting_external`.
 
+At the parent handoff, the canonical GitHub PR URL must name the workflow's
+authored repository. A result URL cannot supply repository authority or donate
+its PR number to a different repository. Retained histories preserve their
+recorded handoff through a Temporal patch. This repository check does not replace
+the publication owner's task/candidate provenance requirements.
+
 The gate waits for configured external review/check/Jira state, then starts an ordinary UserWorkflow resolver child. The child executes the pinned resolved Skill bundle in AgentRun. Its machine-readable result either completes the admitted objective, requests review for the exact head, re-enters a durable gate, or reports a blocker/failure.
 
 After verified merge/already-merged, required Jira/GitHub completion runs through trusted issue activities. Merge finish succeeds only after those required effects succeed or no-op. Fix-only finish succeeds at a verified clean gate without merging or post-merge issue completion. Blocked/failed/expired fail the parent; canceled cancels it.
@@ -269,7 +275,7 @@ A no-op fix pass is successful only when the latest required review covers the c
 
 External scheduling reads cover PR state/current head, reported/running checks, configured review completion, and optional Jira state. These compact observations determine whether to launch the resolver, not permission to merge.
 
-Completed failing checks and merge conflicts are resolver-actionable. Once required check reporting is complete and no relevant checks are running, failing results can launch remediation rather than leave the gate waiting indefinitely.
+Completed failing checks and merge conflicts are resolver-actionable. Once required check reporting is complete and no relevant checks are running, failing results can launch remediation rather than leave the gate waiting indefinitely. A merge conflict does not skip required check observation or configured automated-review completion. Unavailable evidence retains its blocker; disabled gates and the active-request review-loop contract keep their existing semantics.
 
 ### 12.2 Gate semantics
 

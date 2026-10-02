@@ -76,7 +76,7 @@ Those systems may adopt the same cleanup-catalog shape later, but they remain se
 3. **Shared-checkout protection.** A workflow/correlation-key workspace can be shared by multiple child runs; it must survive until every owner is terminal and past retention.
 4. **Hot-path restraint.** Session termination and run completion should clean live runtime resources, not perform broad retained-state garbage collection.
 5. **Protective working default.** Retained-state cleanup runs automatically and destructively after retention; dry-run remains an explicit diagnostic override with actionable skip reasons.
-6. **Fail closed.** Missing stores, corrupt records, unsafe paths, symlinks, and ambiguous ownership must prevent deletion.
+6. **Fail closed.** Missing stores, corrupt records, unsafe paths, symlinks, and ambiguous ownership must prevent deletion. Candidate discovery opens cleanup roots without following links; quarantine rename and deletion use the same pinned parent descriptor. Failed recursive cleanup is reported and preserves any remaining quarantine contents.
 7. **Idempotent operations.** Cleanup may run repeatedly and concurrently with lifecycle reconciliation without corrupting active execution state.
 8. **Operator visibility.** Each cleanup pass should report scanned, eligible, skipped, deleted, errored, and dry-run counts.
 

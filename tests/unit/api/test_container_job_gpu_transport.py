@@ -96,7 +96,7 @@ def _install_real_service(monkeypatch, module, session_factory, temporal) -> Non
     monkeypatch.setattr(
         module,
         "ContainerJobService",
-        lambda session, artifacts=None: ContainerJobService(
+        lambda session, artifacts=None, capability=None: ContainerJobService(
             session, temporal=temporal, artifacts=None
         ),
     )

@@ -129,6 +129,15 @@ An instruction may *request* authority but never attests it: recorded authority
 comes only from durable session state. A dimension the instruction does not
 assert is not a request to change it and leaves the session's authority intact.
 
+Before AgentRun dispatch, the workflow also preserves the complete API-admitted
+`omnigentExecutionPlan` binding. Authored plan nodes and runtime parameters may
+repeat that binding but cannot substitute another plan, erase it, or mint a
+binding when admission supplied none. This does not change existing unbound
+step-override admission; it is not a claim that every supported launch already
+has a compiled workflow plan. The
+`run-omnigent-execution-plan-binding-authority-v1` replay marker retains the
+original request shape for pre-cutover histories, including no-plan histories.
+
 ### What bounds a remediation turn
 
 Each remediation attempt of a workflow-owned loop is materialized as its own

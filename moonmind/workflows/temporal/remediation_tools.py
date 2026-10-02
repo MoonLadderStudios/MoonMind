@@ -1054,7 +1054,6 @@ class RemediationEvidenceToolService:
             ),
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
-            principal=principal,
         )
 
         # Capture fresh "before" target evidence immediately prior to the side
@@ -1135,7 +1134,6 @@ class RemediationEvidenceToolService:
             payload=result_payload,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
-            principal=principal,
         )
 
         # Trusted post-action verification phase (issue #3622): re-read fresh
@@ -1180,7 +1178,6 @@ class RemediationEvidenceToolService:
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
             extra_metadata=verification_result.to_metadata(),
-            principal=principal,
         )
 
         # Retry/replay safety: publish_json_artifact deduplicates on the stable
@@ -1243,7 +1240,6 @@ class RemediationEvidenceToolService:
             payload=audit_payload,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
-            principal=principal,
         )
         annotation_payload = build_remediation_target_annotation(
             target_workflow_id=link.target_workflow_id,
@@ -1279,7 +1275,6 @@ class RemediationEvidenceToolService:
                     f"{action_request['actionId']}.json"
                 ),
                 payload=annotation_payload,
-                principal=principal,
             )
         )
 
@@ -1358,7 +1353,6 @@ class RemediationEvidenceToolService:
             payload=decision_log,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
-            principal=principal,
         )
         final_summary = build_remediation_final_summary(
             summary=summary,
@@ -1375,7 +1369,6 @@ class RemediationEvidenceToolService:
             payload=final_summary,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
-            principal=principal,
         )
 
         # The lifecycle resolution is recorded in its own column so it never

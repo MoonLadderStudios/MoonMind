@@ -340,3 +340,49 @@ async def test_activity_returns_disabled_structured_result(
 
     assert result["disabled"] is True
     assert result["dryRun"] is False
+
+
+def test_janitor_never_enumerates_symlinked_artifact_root(tmp_path):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    outside = tmp_path / "outside"
+    stale = outside / "old-artifact"
+    stale.mkdir(parents=True)
+    marker = stale / "payload.txt"
+    marker.write_text("keep outside")
+    _age_path(marker)
+    _age_path(stale)
+    (runtime / "artifacts").symlink_to(outside, target_is_directory=True)
+    result = _janitor(runtime, ManagedRunStore(runtime / "managed_runs"), ManagedSessionStore(runtime / "managed_sessions")).run()
+    assert marker.read_text() == "keep outside"
+    assert result.deleted_artifact_dirs == 0
+
+
+def test_quarantine_rejects_parent_swapped_to_symlink(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    parent = runtime / "artifacts"
+    candidate = parent / "old-artifact"
+    candidate.mkdir(parents=True)
+    (candidate / "payload.txt").write_text("original")
+    outside = tmp_path / "outside"
+    victim = outside / "old-artifact"
+    victim.mkdir(parents=True)
+    marker = victim / "payload.txt"
+    marker.write_text("keep outside")
+    janitor = _janitor(runtime, ManagedRunStore(runtime / "managed_runs"), ManagedSessionStore(runtime / "managed_sessions"))
+    estimate = janitor._estimate_bytes
+    swapped = False
+    def swap_after_estimate(path):
+        nonlocal swapped
+        size = estimate(path)
+        if not swapped:
+            swapped = True
+            parent.rename(runtime / "original-artifacts")
+            parent.symlink_to(outside, target_is_directory=True)
+        return size
+    monkeypatch.setattr(janitor, "_estimate_bytes", swap_after_estimate)
+    try:
+        janitor._quarantine_delete(candidate)
+    except OSError:
+        pass
+    assert marker.read_text() == "keep outside"

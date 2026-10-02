@@ -5679,3 +5679,34 @@ async def test_update_github_issue_status_prefers_durable_ref_over_compact() -> 
     assert result.outputs["decision"] == "blocked"
     assert result.outputs["assessmentVerdict"] == "BLOCKED"
     assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authenticated", [False, True])
+async def test_default_story_fetcher_resolves_credentials_for_requested_repository(
+    monkeypatch, authenticated
+):
+    import base64
+    from unittest.mock import AsyncMock, Mock
+
+    content = '{"stories": []}'
+    resolve = AsyncMock(return_value=("fixture-token" if authenticated else "", None))
+    monkeypatch.setattr(story_tools.GitHubService, "resolve_github_token", resolve)
+    response = Mock()
+    response.json.return_value = {
+        "content": base64.b64encode(content.encode()).decode()
+    }
+    response.text = content
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get.return_value = response
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", lambda **kwargs: client)
+
+    assert (
+        await story_tools._default_github_story_fetcher(
+            "owner/repo", "story-branch", "reports/stories.json"
+        )
+        == content
+    )
+    resolve.assert_awaited_once_with(repo="owner/repo")
+    assert client.get.await_count == 1

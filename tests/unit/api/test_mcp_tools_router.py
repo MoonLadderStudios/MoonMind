@@ -157,16 +157,21 @@ def _omnigent_container_submission(*, workspace_id: str = "sandbox-2") -> dict[s
     }
 
 
+@pytest.mark.parametrize("public_base_url", ["", "https://operator.example"])
 async def test_scoped_container_endpoint_dispatches_as_capability_owner(
     router_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
+    public_base_url: str,
 ) -> None:
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", public_base_url)
     captured: dict[str, Any] = {}
 
     async def _dispatch(
         payload: Any,
         owner: OwnerIdentity,
         session: Any,
+        *,
+        capability: Any = None,
     ) -> dict[str, Any]:
         captured.update(payload=payload, owner=owner, session=session)
         return {"jobId": "container-job:" + "1" * 32, "state": "queued"}
@@ -266,7 +271,7 @@ async def test_scoped_container_endpoint_accepts_omnigent_sandbox_authority(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    async def _dispatch(payload: Any, owner: OwnerIdentity, session: Any) -> dict[str, Any]:
+    async def _dispatch(payload: Any, owner: OwnerIdentity, session: Any, *, capability: Any = None) -> dict[str, Any]:
         captured.update(payload=payload, owner=owner, session=session)
         return {"jobId": "container-job:" + "2" * 32, "state": "queued"}
 
@@ -444,8 +449,10 @@ async def test_streamable_http_accepts_standard_json_accept_header(
     assert response.json()["result"] == {}
 
 
-async def test_streamable_http_allows_cross_origin_requests(
+@pytest.mark.parametrize("origin", ["http://evil.example", "http://testserver:8123", "https://testserver", "null"])
+async def test_streamable_http_rejects_cross_origin_requests(
     router_app: FastAPI,
+    origin: str,
 ) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=router_app),
@@ -453,12 +460,68 @@ async def test_streamable_http_allows_cross_origin_requests(
     ) as client:
         response = await client.post(
             "/api/mcp",
-            headers={**_mcp_headers(), "Origin": "http://evil.example"},
+            headers={**_mcp_headers(), "Origin": origin},
             json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
         )
 
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "origin_forbidden"
+
+
+@pytest.mark.parametrize("content_type", [None, "text/plain", "application/x-www-form-urlencoded", "multipart/form-data"])
+async def test_streamable_http_requires_json_before_dispatch(
+    router_app: FastAPI, monkeypatch: pytest.MonkeyPatch, content_type: str | None
+) -> None:
+    from unittest.mock import AsyncMock
+
+    dispatch = AsyncMock(return_value={"accepted": True})
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_tool_call", dispatch)
+    headers = _mcp_headers()
+    if content_type:
+        headers["Content-Type"] = content_type
+    async with AsyncClient(transport=ASGITransport(app=router_app), base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/mcp", headers=headers,
+            content='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jira.get_issue"}}',
+        )
+    assert response.status_code == 415
+    dispatch.assert_not_awaited()
+
+
+async def test_streamable_http_accepts_same_origin_json_with_charset(router_app: FastAPI) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app), base_url="http://localhost"
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers={
+                **_mcp_headers(),
+                "Origin": "http://localhost",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        )
     assert response.status_code == 200
-    assert response.json()["result"] == {}
+
+
+@pytest.mark.parametrize("origin", [None, "http://evil.example", "null"])
+async def test_tool_helper_cannot_bypass_browser_request_boundary(
+    router_app, monkeypatch, origin
+):
+    from unittest.mock import AsyncMock
+
+    dispatch = AsyncMock(return_value={"accepted": True})
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_tool_call", dispatch)
+    headers = {"Origin": origin, "Content-Type": "application/json"} if origin else {}
+    async with AsyncClient(transport=ASGITransport(app=router_app), base_url="http://testserver") as client:
+        # The helper must enforce origin itself; a permissive future CORS
+        # setting must not turn it into an alternate tool-dispatch path.
+        response = await client.post(
+            "/api/mcp/tools/call", headers=headers,
+            content='{"tool":"jira.get_issue","arguments":{}}',
+        )
+    assert response.status_code == (403 if origin else 415)
+    dispatch.assert_not_awaited()
 
 
 async def test_streamable_http_rejects_batched_initialize(

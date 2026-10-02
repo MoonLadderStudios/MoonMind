@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.publish_auto_evidence import (
     AutoPublishEvidenceError,
     parse_auto_publish_evidence,
@@ -247,8 +248,24 @@ def _first_batch_error_message(
         for key in ("error", "message"):
             candidate = str(item.get(key) or "").strip()
             if candidate:
-                return candidate[:max_chars]
+                return redact_sensitive_text(candidate)[:max_chars]
     return ""
+
+
+def _batch_failure_message(payload: Mapping[str, Any]) -> str:
+    """Keep the actionable cause while bounding and redacting public evidence."""
+    message = str(payload.get("failureMessage") or "").strip()
+    if not message:
+        failure = payload.get("failure")
+        if isinstance(failure, Mapping):
+            message = str(failure.get("message") or "").strip()
+    message = redact_sensitive_text(message)
+    cause = _first_batch_error_message(payload)
+    if cause and cause not in message:
+        # Legacy helpers can retain a generic top-level failure. Put the real
+        # target error first so both classification and the size bound keep it.
+        message = f"{cause}; {message}" if message else cause
+    return message[:1024]
 
 
 def _evaluate_batch_pr_fanout_evidence(
@@ -297,14 +314,7 @@ def _evaluate_batch_pr_fanout_evidence(
         return _failure("INVALID_TERMINAL_EVIDENCE", metadata=metadata)
 
     failure_code = str(payload.get("failureCode") or "").strip()
-    failure_message = str(payload.get("failureMessage") or "").strip()
-    if not failure_message:
-        failure_obj = payload.get("failure")
-        if isinstance(failure_obj, Mapping):
-            failure_message = str(failure_obj.get("message") or "").strip()
-    failure_message = failure_message[:1024]
-    if not failure_message:
-        failure_message = _first_batch_error_message(payload)
+    failure_message = _batch_failure_message(payload)
     if failure_code:
         metadata["terminalFailureCode"] = failure_code
     if failure_message:
@@ -666,9 +676,7 @@ def evaluate_terminal_evidence(
     failure = payload.get("failure")
     failure_payload = dict(failure) if isinstance(failure, Mapping) else {}
     failure_code = str(failure_payload.get("code") or "").strip()
-    failure_message = str(failure_payload.get("message") or "").strip()
-    if not failure_message:
-        failure_message = _first_batch_error_message(payload)
+    failure_message = _batch_failure_message(payload)
     metadata = {
         "terminalContractId": contract_id,
         "terminalContractEvidencePath": relative,

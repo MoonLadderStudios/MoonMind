@@ -214,7 +214,7 @@ async def test_workspace_authority_survives_api_persistence_and_worker_launch(
     monkeypatch.setattr(
         mcp_tools,
         "ContainerJobService",
-        lambda session, **_kwargs: ContainerJobService(session, temporal=temporal),
+        lambda session, **kwargs: ContainerJobService(session, temporal=temporal, **kwargs),
     )
     app = FastAPI()
     app.include_router(mcp_tools.router, prefix="/api")

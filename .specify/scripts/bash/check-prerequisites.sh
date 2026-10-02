@@ -86,8 +86,13 @@ check_feature_branch "$CURRENT_BRANCH" "$HAS_GIT" || exit 1
 if $PATHS_ONLY; then
     if $JSON_MODE; then
         # Minimal JSON paths payload (no validation performed)
-        printf '{"REPO_ROOT":"%s","BRANCH":"%s","FEATURE_DIR":"%s","FEATURE_SPEC":"%s","IMPL_PLAN":"%s","TASKS":"%s"}\n' \
-            "$REPO_ROOT" "$CURRENT_BRANCH" "$FEATURE_DIR" "$FEATURE_SPEC" "$IMPL_PLAN" "$TASKS"
+        python3 - "$REPO_ROOT" "$CURRENT_BRANCH" "$FEATURE_DIR" "$FEATURE_SPEC" "$IMPL_PLAN" "$TASKS" <<'PYJSON'
+import json
+import sys
+
+keys = ("REPO_ROOT", "BRANCH", "FEATURE_DIR", "FEATURE_SPEC", "IMPL_PLAN", "TASKS")
+print(json.dumps(dict(zip(keys, sys.argv[1:]))))
+PYJSON
     else
         echo "REPO_ROOT: $REPO_ROOT"
         echo "BRANCH: $CURRENT_BRANCH"
@@ -140,15 +145,12 @@ fi
 
 # Output results
 if $JSON_MODE; then
-    # Build JSON array of documents
-    if [[ ${#docs[@]} -eq 0 ]]; then
-        json_docs="[]"
-    else
-        json_docs=$(printf '"%s",' "${docs[@]}")
-        json_docs="[${json_docs%,}]"
-    fi
-    
-    printf '{"FEATURE_DIR":"%s","AVAILABLE_DOCS":%s}\n' "$FEATURE_DIR" "$json_docs"
+    python3 - "$FEATURE_DIR" "${docs[@]}" <<'PYJSON'
+import json
+import sys
+
+print(json.dumps({"FEATURE_DIR": sys.argv[1], "AVAILABLE_DOCS": sys.argv[2:]}))
+PYJSON
 else
     # Text output
     echo "FEATURE_DIR:$FEATURE_DIR"

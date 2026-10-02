@@ -13,6 +13,9 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 
 from __future__ import annotations
 
+from moonmind.provider_profiles.volume_mounts import validate_volume_ref
+
+
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
@@ -404,6 +407,7 @@ async def oauth_session_ensure_volume(
         logger.warning("No volume_ref provided for session %s", session_id)
         return {"session_id": session_id, "volume_ref": "", "status": "skipped"}
 
+    validate_volume_ref(volume_ref)
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker",

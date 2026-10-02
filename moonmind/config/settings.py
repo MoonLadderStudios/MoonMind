@@ -1303,14 +1303,40 @@ class SecuritySettings(BaseSettings):
             "Enable fail-closed outbound scans for protected runtime side effects."
         ),
     )
-    JWT_SECRET_KEY: Optional[str] = Field(
-        "test_jwt_secret_key", alias="JWT_SECRET_KEY"
-    )  # Made Optional and added default
+    JWT_SECRET_KEY: Optional[str] = Field(None, alias="JWT_SECRET_KEY", repr=False)
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(
         None, alias="ENCRYPTION_MASTER_KEY"
     )
 
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
+    @field_validator("JWT_SECRET_KEY", mode="after")
+    @classmethod
+    def resolve_machine_signing_key(cls, value: str | None) -> str:
+        from moonmind.security.auth_modes_4120 import (
+            looks_like_placeholder_secret,
+            resolve_session_secret,
+        )
+
+        if value and value.strip():
+            if looks_like_placeholder_secret(value) or len(value.encode("utf-8")) < 32:
+                raise ValueError(
+                    "JWT_SECRET_KEY must contain at least 32 bytes of "
+                    "non-placeholder key material"
+                )
+            return value
+        # API and workers already share this deployment-owned secrets volume.
+        # Keep machine authority separate from the API-only session key. Reuse
+        # the atomic durable-key mechanism so concurrent starters agree.
+        return resolve_session_secret(
+            key_path=ENV_FILE.parent / "var" / "secrets" / "machine_signing_key",
+        ).hex()
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 

@@ -270,16 +270,10 @@ def _is_dependabot_author(pr: dict[str, Any]) -> bool:
     author = pr.get("author")
     if not isinstance(author, dict):
         return False
-    for key in ("login", "name"):
-        value = str(author.get(key) or "").strip().lower()
-        if not value:
-            continue
-        normalized = value.removeprefix("app/")
-        if normalized.endswith("[bot]"):
-            normalized = normalized[: -len("[bot]")]
-        if normalized.strip() == "dependabot":
-            return True
-    return False
+    # GitHub display names are mutable and cannot establish bot identity.
+    login = str(author.get("login") or "").strip().lower()
+    return login in {"dependabot", "dependabot[bot]", "app/dependabot"}
+
 
 
 def _is_dependabot_branch(branch: str | None) -> bool:

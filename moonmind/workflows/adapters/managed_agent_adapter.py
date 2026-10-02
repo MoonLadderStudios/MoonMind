@@ -62,10 +62,6 @@ from moonmind.workflows.temporal.publish_auto_evidence import (
 
 logger = logging.getLogger(__name__)
 
-# GitHub CLI authentication is required for workflows like pr-resolver.
-# Only the *key names* are propagated through workflow/activity payloads; the
-# values are injected at launch time by the agent-runtime activity worker.
-_SECRET_ENV_PASSTHROUGH_KEYS: tuple[str, ...] = ("GITHUB_TOKEN",)
 _RESERVED_MANAGED_LAUNCH_ENV_KEYS: frozenset[str] = frozenset(
     {
         "MOONMIND_EXECUTION_PROFILE_REF",
@@ -643,7 +639,10 @@ def build_managed_profile_launch_context(
     if profile_runtime:
         delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"] = profile_runtime
 
-    passthrough_env_keys = list(_SECRET_ENV_PASSTHROUGH_KEYS)
+    # Repository/tool requirements select GitHub auth at the launcher. An
+    # adapter-wide passthrough would masquerade as an explicit profile choice,
+    # leaking ambient credentials to scratch work and overriding selected ones.
+    passthrough_env_keys: list[str] = []
     return ManagedProfileLaunchContext(
         profile_id=profile_id,
         credential_source=credential_source,

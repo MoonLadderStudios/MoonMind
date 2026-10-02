@@ -9401,67 +9401,21 @@ export interface components {
         };
         /**
          * GitHubAppBeginRequest
-         * @description Operator request to begin one GitHub App enrollment.
+         * @description Operator configuration bound to one GitHub App enrollment.
          */
         GitHubAppBeginRequest: {
             /** Appslug */
             appSlug: string;
             /** Expectedappref */
             expectedAppRef: string;
-            /** Requestid */
-            requestId: string;
-            /** Connectionid */
-            connectionId: string;
-            /** Principalref */
-            principalRef: string;
-            /**
-             * Principalscopetype
-             * @default system
-             */
-            principalScopeType: string;
-            /** Principalscoperef */
-            principalScopeRef?: string | null;
-            /**
-             * Expectedaccount
-             * @default
-             */
-            expectedAccount: string;
-            /**
-             * Permittedrepositories
-             * @default []
-             */
-            permittedRepositories: string[];
-        };
-        /** GitHubAppBeginResponse */
-        GitHubAppBeginResponse: {
-            /** Setupurl */
-            setupUrl: string;
-            /** State */
-            state: string;
-            /** Requestid */
-            requestId: string;
-            /** Connectionid */
-            connectionId: string;
-        };
-        /**
-         * GitHubAppCallbackRequest
-         * @description Browser callback payload after the operator installs the App.
-         */
-        GitHubAppCallbackRequest: {
-            /** State */
-            state: string;
-            /** Installationid */
-            installationId: string;
-            /** Expectedappref */
-            expectedAppRef: string;
-            /** Requestid */
-            requestId: string;
-            /** Connectionid */
-            connectionId: string;
             /** Appid */
             appId: string;
             /** Keysecretref */
             keySecretRef: string;
+            /** Requestid */
+            requestId: string;
+            /** Connectionid */
+            connectionId: string;
             /**
              * Expectedaccount
              * @default
@@ -9472,11 +9426,6 @@ export interface components {
              * @default []
              */
             permittedRepositories: string[];
-            /**
-             * Allowedapihosts
-             * @default []
-             */
-            allowedApiHosts: string[];
             /**
              * Displayname
              * @default GitHub App connection
@@ -9494,30 +9443,29 @@ export interface components {
              *     ]
              */
             allowedOperations: string[];
-            /**
-             * Ownerref
-             * @default
-             */
-            ownerRef: string;
-            /**
-             * Principalref
-             * @default
-             */
-            principalRef: string;
-            /**
-             * Callerscopetype
-             * @default system
-             */
-            callerScopeType: string;
-            /** Callerscoperef */
-            callerScopeRef?: string | null;
-            /**
-             * Actorref
-             * @default
-             */
-            actorRef: string;
-            /** Keyref */
-            keyRef?: string | null;
+        };
+        /** GitHubAppBeginResponse */
+        GitHubAppBeginResponse: {
+            /** Setupurl */
+            setupUrl: string;
+            /** State */
+            state: string;
+            /** Requestid */
+            requestId: string;
+            /** Connectionid */
+            connectionId: string;
+        };
+        /**
+         * GitHubAppCallbackRequest
+         * @description Provider result for an existing server-held enrollment.
+         */
+        GitHubAppCallbackRequest: {
+            /** State */
+            state: string;
+            /** Installationid */
+            installationId: string;
+            /** Connectionid */
+            connectionId: string;
         };
         /** GitHubAppCallbackResponse */
         GitHubAppCallbackResponse: {

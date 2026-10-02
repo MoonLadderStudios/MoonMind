@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Sequence
+
+from moonmind.utils.workspace_paths import open_directory
 
 class SkillWorkspaceError(RuntimeError):
     """Raised when workspace adapter links cannot be created or validated."""
@@ -101,14 +103,51 @@ def _replace_link(
     owner_uid: int | None = None,
     owner_gid: int | None = None,
 ) -> SkillAliasResult:
-    if path.exists() or path.is_symlink():
-        if path.is_symlink():
-            current = path.resolve(strict=False)
+    try:
+        with open_directory(path.parent, create=True) as parent_fd:
+            return _replace_link_at(
+                path,
+                target=target,
+                owned_roots=owned_roots,
+                optional=optional,
+                owner_uid=owner_uid,
+                owner_gid=owner_gid,
+                parent_fd=parent_fd,
+            )
+    except OSError as exc:
+        message = f"Unsafe adapter projection parent at {path.parent}: {exc}"
+        if optional:
+            return SkillAliasResult(
+                path=path,
+                status=SkillAliasStatus.BLOCKED,
+                available=False,
+                reason=message,
+            )
+        raise SkillWorkspaceError(message) from exc
+
+
+def _replace_link_at(
+    path: Path,
+    *,
+    target: Path,
+    owned_roots: Sequence[Path],
+    optional: bool,
+    owner_uid: int | None,
+    owner_gid: int | None,
+    parent_fd: int,
+) -> SkillAliasResult:
+    # Inspect and mutate the same pinned directory, even if an agent renames
+    # its lexical path while the worker is preparing the projection.
+    inspected = Path(f"/proc/self/fd/{parent_fd}") / path.name
+    if inspected.exists() or inspected.is_symlink():
+        if inspected.is_symlink():
+            current = inspected.resolve(strict=False)
             if current == target.resolve(strict=False):
                 _align_projection_ownership(
                     path,
                     owner_uid=owner_uid,
                     owner_gid=owner_gid,
+                    parent_fd=parent_fd,
                 )
                 return SkillAliasResult(
                     path=path,
@@ -116,7 +155,7 @@ def _replace_link(
                     available=True,
                 )
             if not is_moonmind_owned_projection(
-                path,
+                inspected,
                 target=target,
                 owned_roots=owned_roots,
             ):
@@ -135,7 +174,7 @@ def _replace_link(
                         reason=message,
                     )
                 raise SkillWorkspaceError(message)
-            path.unlink()
+            os.unlink(path.name, dir_fd=parent_fd)
         else:
             message = (
                 f"Cannot create adapter link at {path}: existing non-symlink path present; "
@@ -152,13 +191,13 @@ def _replace_link(
                 )
             raise SkillWorkspaceError(message)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     relative_target = Path(os.path.relpath(target, path.parent))
-    path.symlink_to(relative_target)
+    os.symlink(str(relative_target), path.name, dir_fd=parent_fd)
     _align_projection_ownership(
         path,
         owner_uid=owner_uid,
         owner_gid=owner_gid,
+        parent_fd=parent_fd,
     )
     return SkillAliasResult(
         path=path,
@@ -166,11 +205,13 @@ def _replace_link(
         available=True,
     )
 
+
 def _align_projection_ownership(
     path: Path,
     *,
     owner_uid: int | None,
     owner_gid: int | None,
+    parent_fd: int,
 ) -> None:
     if owner_uid is None or owner_gid is None:
         return
@@ -179,15 +220,15 @@ def _align_projection_ownership(
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         return
     try:
-        os.chown(path.parent, owner_uid, owner_gid)
-        if path.is_symlink() and hasattr(os, "lchown"):
-            os.lchown(path, owner_uid, owner_gid)
-        else:
-            os.chown(path, owner_uid, owner_gid, follow_symlinks=False)
+        os.fchown(parent_fd, owner_uid, owner_gid)
+        os.chown(
+            path.name, owner_uid, owner_gid, dir_fd=parent_fd, follow_symlinks=False
+        )
     except OSError as exc:
         raise SkillWorkspaceError(
             f"Failed to align adapter projection ownership for {path}: {exc}"
         ) from exc
+
 
 def ensure_shared_skill_links(
     *,
@@ -262,7 +303,7 @@ def cleanup_moonmind_skill_projections(
 ) -> SkillProjectionCleanupResult:
     """Remove only MoonMind-owned runtime adapter projections from a workspace."""
 
-    resolved_run_root = run_root.resolve(strict=False)
+    resolved_run_root = run_root.absolute()
     active_path = (
         skills_active_path
         if skills_active_path is not None
@@ -277,23 +318,27 @@ def cleanup_moonmind_skill_projections(
     removed: list[Path] = []
     skipped: list[Path] = []
     for candidate in candidates:
-        if not candidate.exists() and not candidate.is_symlink():
+        try:
+            with open_directory(candidate.parent) as parent_fd:
+                inspected = Path(f"/proc/self/fd/{parent_fd}") / candidate.name
+                if not inspected.exists() and not inspected.is_symlink():
+                    continue
+                if not is_moonmind_owned_projection(
+                    inspected, target=active_path, owned_roots=owned
+                ):
+                    skipped.append(candidate)
+                    continue
+                os.unlink(candidate.name, dir_fd=parent_fd)
+                removed.append(candidate)
+        except FileNotFoundError:
             continue
-        if not candidate.is_symlink():
+        except (OSError, RuntimeError):
             skipped.append(candidate)
             continue
-        if not is_moonmind_owned_projection(
-            candidate,
-            target=active_path,
-            owned_roots=owned,
-        ):
-            skipped.append(candidate)
-            continue
-        candidate.unlink()
-        removed.append(candidate)
         if candidate.parent.name == ".gemini":
             try:
-                candidate.parent.rmdir()
+                with open_directory(candidate.parent.parent) as root_fd:
+                    os.rmdir(candidate.parent.name, dir_fd=root_fd)
             except OSError:
                 # Removing the empty adapter parent is optional.
                 pass

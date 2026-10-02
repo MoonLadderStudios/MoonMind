@@ -45,6 +45,20 @@ Three host classes are intentionally distinct:
 
 All three use stock compatible Omnigent server/host behavior. They do not share credential authority or cleanup semantics.
 
+The optional generic host receives only the explicit environment keys in its
+Compose service, not the complete deployment `.env`. Its existing state volume
+preserves ordinary host login and identity. Optional host identity, state/config,
+provider credentials, Databricks profile/PAT/OAuth, and host logging selectors
+use null passthrough so omitted keys retain upstream defaults. Explicit host ID
+and name must be configured together; empty IDs remain invalid.
+
+Custom provider configurations that refer to additional environment variables,
+or additional Databricks SDK federation chains, must expose only their required
+keys through a normal Compose override. Do not forward database, application
+signing, server-account signing, or unrelated integration secrets. This list is
+based on the supported host inputs, not a claim that arbitrary variables in a
+custom `.env` remain available to agent execution.
+
 ## DOC-REQ-001 Host Access
 
 The combined stack exposes MoonMind's API and dashboard on:

@@ -2352,3 +2352,12 @@ async def test_legacy_successor_stop_and_remove_follow_the_same_continuation(
         workspace_root=tmp_path, command_runner=gone_runner
     )
     await gone_backend.remove_container(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("volume", [None, "agent_workspaces"])
+async def test_resolve_external_state_never_grants_workspace_store_root(tmp_path, volume):
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, workspace_volume_name=volume)
+    request = _request(tmp_path, workspaceRef={"kind": "external_state", "artifactRef": "."})
+    with pytest.raises(RuntimeError, match="workspace is unavailable"):
+        await backend.resolve_workspace(request)

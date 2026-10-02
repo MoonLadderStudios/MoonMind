@@ -15,7 +15,11 @@ frozen workspace capability. A session `external_state_ref` never represents fil
 git metadata, generated tests, or uncommitted changes. Omnigent workspace boundaries
 therefore use MoonMind `worktree_archive` checkpoints and
 `workspace.apply_checkpoint`, while replay consumes the recorded capability snapshot
-instead of performing a mutable registry lookup.
+instead of performing a mutable registry lookup. The workflow derives that snapshot
+from its selected runtime before launch. Authored node inputs and step result
+`runtimeCapabilities` fields cannot override it or supply checkpoint Activity
+bindings. Retained histories keep their recorded decisions behind Temporal patch
+markers.
 
 ---
 
@@ -681,6 +685,10 @@ staged files retain both their staged and unstaged bytes. Index blobs and patch
 bytes pass the same bounded secret scan as other exported evidence. Historical
 clean-index manifests remain restorable; a historical staged-path list without
 index content cannot authorize reconstruction from worktree bytes.
+
+Legacy sandbox checkpoint capture and recovery must select a child workspace;
+the shared `temporal_sandbox` store itself is never a capture, copy, or replacement
+target. This containment check does not establish ownership of a sibling workspace.
 
 Selected Git history preserves exact commits. A selected commit that introduces
 or changes a credential-sensitive path under the shared exclusion policy cannot

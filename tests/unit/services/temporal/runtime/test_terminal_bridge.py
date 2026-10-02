@@ -214,8 +214,8 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
 
     assert result["container_name"] == "moonmind_auth_oas_terminal_runner"
     assert "--init" in observed
-    assert "-v" in observed
-    assert "codex_auth_volume:/home/app/.codex" in observed
+    assert "--mount" in observed
+    assert "type=volume,source=codex_auth_volume,target=/home/app/.codex" in observed
     assert "--user" in observed
     assert "1000:1000" in observed
     assert "-e" in observed
@@ -329,7 +329,7 @@ async def test_start_terminal_bridge_container_uses_claude_home_environment(
         bootstrap_command=("claude", "auth", "login"),
     )
 
-    assert "claude_auth_volume:/home/app/.claude" in observed
+    assert "type=volume,source=claude_auth_volume,target=/home/app/.claude" in observed
     assert "HOME=/home/app" in observed
     assert "CLAUDE_HOME=/home/app/.claude" in observed
     assert "CLAUDE_CONFIG_DIR=/home/app/.claude" in observed
@@ -436,3 +436,38 @@ async def test_start_terminal_bridge_container_redacts_claude_auth_paths_in_star
     assert "/home/app/.claude/credentials.json" not in message
     assert "[REDACTED]" in message
     assert "[REDACTED_AUTH_PATH]" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runner", [start_terminal_bridge_container, start_tmate_auth_runner_container])
+@pytest.mark.parametrize(
+    "volume_ref,mount_path",
+    [("/", "/mnt/auth"), ("/var/run/docker.sock", "/mnt/auth"),
+     ("../auth", "/mnt/auth"), ("auth:/etc", "/mnt/auth"),
+     ("auth", "/mnt/auth:rw"), ("auth", "/mnt/../etc"),
+     ("auth", "relative"), ("auth", "/mnt/auth,bind-propagation=shared")],
+)
+async def test_auth_runner_rejects_host_mounts_before_docker(monkeypatch, runner, volume_ref, mount_path):
+    from unittest.mock import AsyncMock
+
+    docker = AsyncMock(return_value=_FakeProcess())
+    monkeypatch.setattr(terminal_bridge, "_create_docker_subprocess", docker)
+    with pytest.raises(ValueError, match="volume|mount"):
+        await runner(
+            session_id="oas_safe_mount", runtime_id="codex_cli",
+            volume_ref=volume_ref, volume_mount_path=mount_path,
+            session_ttl=60, bootstrap_command=("codex", "login"),
+        )
+    docker.assert_not_called()
+
+
+@pytest.mark.parametrize("field,value", [("volume_ref", "/etc"), ("volume_mount_path", "/mnt/auth:rw")])
+def test_oauth_request_rejects_host_mount_syntax(field, value):
+    from pydantic import ValidationError
+    from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest
+
+    with pytest.raises(ValidationError):
+        CreateOAuthSessionRequest(
+            runtime_id="codex_cli", profile_id="oauth", account_label="test",
+            **{field: value},
+        )

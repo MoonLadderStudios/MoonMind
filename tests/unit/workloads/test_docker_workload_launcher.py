@@ -547,10 +547,10 @@ def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> 
     assert "type=volume,source=agent_workspaces,target=/work/agent_jobs" in run_args
     assert "type=volume,source=unreal_ccache_volume,target=/work/.ccache" in run_args
     assert "type=volume,source=unreal_ubt_volume,target=/work/ubt-cache" in run_args
-    assert (
-        "type=volume,source=ghcr_pull_auth_volume,target=/home/runner/.docker,readonly"
-        in run_args
-    )
+    # Registry authentication belongs to the image-pulling host; the running
+    # offline workload must not receive the deployment's pull credential.
+    assert "ghcr_pull_auth_volume" not in " ".join(run_args)
+    assert "/home/runner/.docker" not in " ".join(run_args)
     assert "ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3" in run_args
     assert "/var/run/docker.sock" not in " ".join(run_args)
     assert "read:packages" not in " ".join(run_args)
@@ -2683,3 +2683,77 @@ async def test_none_network_launch_records_no_egress_attestation(
     assert result.metadata["workload"]["egressAttestation"] is None
     diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
     assert diagnostics["egressAttestation"] is None
+
+
+@pytest.mark.parametrize("link_level", ["file", "parent", "root", "hardlink"])
+def test_runtime_artifact_write_does_not_follow_workload_links(tmp_path, link_level):
+    from moonmind.workloads.docker_launcher import _write_text_artifact
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    protected = outside / "runtime.stdout.log"
+    protected.write_text("protected")
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    parent = root / "workload"
+    parent.mkdir()
+    destination = parent / "runtime.stdout.log"
+    if link_level == "file":
+        destination.symlink_to(protected)
+    elif link_level == "hardlink":
+        destination.hardlink_to(protected)
+    elif link_level == "parent":
+        parent.rmdir()
+        parent.symlink_to(outside, target_is_directory=True)
+    else:
+        parent.rmdir()
+        root.rmdir()
+        root.symlink_to(outside, target_is_directory=True)
+    try:
+        _write_text_artifact(destination, "attacker output")
+    except OSError:
+        pass
+    assert protected.read_text() == "protected"
+    assert not (outside / "workload").exists()
+
+
+def test_collection_never_enumerates_symlinked_directories(tmp_path, monkeypatch):
+    import os
+    from moonmind.workloads.docker_launcher import _collect_workspace_artifacts
+
+    root = tmp_path / "workspace"
+    repo = root / "task-1" / "repo"
+    repo.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "host-secret.conf").write_text("private")
+    (repo / "hostroot").symlink_to(outside, target_is_directory=True)
+    request = _validated_request(tmp_path, workspace_root=root, collectGlobs=["hostroot/**/*.conf"])
+    scanned = []
+    original = os.scandir
+
+    def record_scandir(path):
+        scanned.append(os.fspath(path) if not isinstance(path, int) else os.readlink(f"/proc/self/fd/{path}"))
+        return original(path)
+
+    monkeypatch.setattr(os, "scandir", record_scandir)
+    refs, diagnostics = _collect_workspace_artifacts(request)
+    assert refs == {}
+    assert not any("hostroot" in path or str(outside) in path for path in scanned)
+    assert "host-secret.conf" not in json.dumps(diagnostics)
+
+
+def test_collection_bounds_nonmatching_entries(tmp_path, monkeypatch):
+    from moonmind.workloads.docker_launcher import _collect_workspace_artifacts
+
+    root = tmp_path / "workspace"
+    repo = root / "task-1" / "repo"
+    repo.mkdir(parents=True)
+    for number in range(4):
+        (repo / f"ignored-{number}.txt").write_text("data")
+    request = _validated_request(tmp_path, workspace_root=root, collectGlobs=["*.conf"])
+    monkeypatch.setattr("moonmind.workloads.docker_launcher._MAX_ARTIFACT_SCAN_ENTRIES", 2)
+    refs, diagnostics = _collect_workspace_artifacts(request)
+    assert refs == {}
+    assert diagnostics[0]["status"] == "truncated"
+    assert diagnostics[0]["truncated"] is True

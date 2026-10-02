@@ -10,6 +10,7 @@ import re
 import shlex
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 
+from moonmind.provider_profiles.volume_mounts import credential_volume_mount
 from moonmind.utils.logging import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -325,6 +326,7 @@ async def start_terminal_bridge_container(
     bootstrap_command: tuple[str, ...] | list[str],
 ) -> dict[str, Any]:
     """Start an idle auth container for PTY-owned provider bootstrap."""
+    volume_mount = credential_volume_mount(volume_ref, volume_mount_path)
     command = tuple(str(part).strip() for part in bootstrap_command)
     if not command or any(not part for part in command):
         raise ValueError("provider bootstrap command is not configured")
@@ -350,7 +352,7 @@ async def start_terminal_bridge_container(
         "--label", f"moonmind.runtime_id={runtime_id}",
         "--user", _oauth_runner_user(),
         *_runner_environment_args(runtime_id, volume_mount_path),
-        "-v", f"{volume_ref}:{volume_mount_path}",
+        "--mount", volume_mount,
         runner_image,
         "/bin/sh",
         "-lc",
@@ -383,6 +385,7 @@ async def start_tmate_auth_runner_container(
     bootstrap_command: tuple[str, ...] | list[str],
 ) -> dict[str, Any]:
     """Start a Tmate-backed OAuth auth runner and return safe connection refs."""
+    volume_mount = credential_volume_mount(volume_ref, volume_mount_path)
     command = tuple(str(part).strip() for part in bootstrap_command)
     if not command or any(not part for part in command):
         raise ValueError("provider bootstrap command is not configured")
@@ -409,7 +412,7 @@ async def start_tmate_auth_runner_container(
         "--label", "moonmind.oauth_session_transport=tmate",
         "--user", _oauth_runner_user(),
         *_runner_environment_args(runtime_id, volume_mount_path),
-        "-v", f"{volume_ref}:{volume_mount_path}",
+        "--mount", volume_mount,
         runner_image,
         "/bin/sh",
         "-lc",

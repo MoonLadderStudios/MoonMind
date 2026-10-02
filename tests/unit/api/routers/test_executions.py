@@ -2068,7 +2068,8 @@ def test_create_task_shaped_execution_keeps_integration_as_metadata(
     assert "integration" not in kwargs["initial_parameters"]
 
 
-def test_list_executions_temporal_query_includes_target_runtime_filter() -> None:
+@pytest.mark.parametrize("runtime", ["codex_cli", 'codex\\" OR WorkflowType="Injected'])
+def test_list_executions_temporal_query_includes_target_runtime_filter(runtime) -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -2102,7 +2103,7 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "targetRuntime": "codex_cli",
+                "targetRuntime": runtime,
             },
         )
 
@@ -2114,7 +2115,8 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
     query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
-    assert 'mm_target_runtime="codex_cli"' in query
+    escaped_runtime = runtime.replace("\\", "\\\\").replace('"', '\\"')
+    assert f'mm_target_runtime="{escaped_runtime}"' in query
     temporal_client.list_workflows.assert_called_once()
     temporal_client.count_workflows.assert_not_awaited()
     body = response.json()
@@ -9538,6 +9540,62 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
     assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
     assert initial_parameters["targetRuntime"] == "codex_cli"
     assert service.create_execution.await_args.kwargs["owner_id"] == user.id
+
+
+def test_execution_fanout_cannot_author_recovery_or_profile_snapshots(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """The machine envelope cannot turn submitted metadata into root authority."""
+
+    test_client, service, user = client
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: None
+    service.create_execution.return_value = _build_execution_record(owner_id=str(user.id))
+    service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="mm:parent-task",
+        owner_id=user.id,
+        owner_type="user",
+        parameters={"targetRuntime": "codex_cli"},
+        memo={},
+        search_attributes={},
+    )
+    forged = {
+        "recoverySource": {"failedStepId": "forged-step"},
+        "recovery_source": {"failed_step_id": "forged-step"},
+        "agentProfileSnapshot": {"agentId": "forged-agent"},
+    }
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "Authorization": f"Bearer {_execution_fanout_token()}",
+            "X-MoonMind-Execution-Fanout": "v1",
+        },
+        json={
+            "type": "workflow",
+            "initialParameters": forged,
+            "payload": {
+                **forged,
+                "runtimeInheritance": "caller",
+                "initialParameters": forged,
+                "workflow": {
+                    **forged,
+                    "instructions": "Do the explicitly authored work.",
+                    "idempotencyKey": "parent:snapshot-boundary",
+                },
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["parentWorkflowId"] == "mm:parent-task"
+    for key in forged:
+        assert key not in parameters
+        assert key not in parameters["workflow"]
 
 
 def test_execution_fanout_inherits_exact_omnigent_agent_profile(
@@ -21244,3 +21302,32 @@ def test_4636_execution_update_replaces_unavailable_input_artifact(
         == "art-new-replacement"
     )
     artifact_service.read.assert_awaited_once()
+
+
+@pytest.mark.parametrize("field", ["branch", "startingBranch"])
+def test_create_execution_rejects_structured_repository_with_conflicting_legacy_branch(
+    client, field
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {
+                    "instructions": "Keep the admitted branch.",
+                    field: "other",
+                },
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert f"workflow.{field}" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()

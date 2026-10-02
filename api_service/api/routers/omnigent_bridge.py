@@ -6220,6 +6220,7 @@ async def _relay_native_websocket(
     upstream_frame_filter: Any | None = None,
     browser_frame_guard: Any | None = None,
     browser_frame_audit: Any | None = None,
+    browser_read_only: bool = False,
 ) -> None:
     """Relay one reviewed native transport with bounded, renewable authority."""
 
@@ -6249,6 +6250,17 @@ async def _relay_native_websocket(
                         kind = message.get("type")
                         if kind == "websocket.disconnect":
                             await upstream.close()
+                            return
+                        if browser_read_only and (
+                            message.get("text") is not None
+                            or message.get("bytes") is not None
+                        ):
+                            # The facade owns terminal read-only enforcement;
+                            # an upstream query flag is not an input boundary.
+                            await browser.close(
+                                code=WS_CLOSE_READ_ONLY,
+                                reason=CODE_SESSION_READ_ONLY,
+                            )
                             return
                         now = time.monotonic()
                         recent_messages[:] = [
@@ -6822,6 +6834,7 @@ async def workflow_chat_binding_facade_ws(
         upstream_frame_filter=upstream_frame_filter,
         browser_frame_guard=browser_frame_guard,
         browser_frame_audit=browser_frame_audit,
+        browser_read_only=terminal_read_only,
     )
 
 

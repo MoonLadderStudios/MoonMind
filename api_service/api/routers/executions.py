@@ -2514,7 +2514,7 @@ def _is_user_workflow_list_entry(entry: str | None) -> bool:
 
 
 def _escape_temporal_value(value: str) -> str:
-    return value.replace('"', '\\"')
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _split_temporal_values(raw: str | list[str] | None, *, alias: str) -> list[str]:
@@ -11443,6 +11443,14 @@ def _validate_repository_submission_compatibility(
             "payload.repository target."
         )
 
+    branch = repository_branch_from_value(repository_payload)
+    for key in ("branch", "startingBranch"):
+        legacy_branch = task_payload.get(key)
+        if isinstance(legacy_branch, str) and legacy_branch.strip() not in {"", branch}:
+            raise _invalid_workflow_request(
+                f"payload.workflow.{key} conflicts with payload.repository.branch."
+            )
+
     provider = str(repository_payload.get("provider") or "").strip().lower()
     if provider == "lore":
         incompatible = sorted(
@@ -12424,6 +12432,15 @@ async def _create_execution_from_workflow_request(
         # inheritance: the scoped authority user already carries the
         # parent's authoritative owner.
         fanout_principal = (principal_context or {}).get("verified_principal")
+        # Persist transport-verified machine authority independently of authored
+        # plans and artifacts. Child creation/runtime inheritance grants do not
+        # confer deployment-control capabilities on the child execution.
+        if principal.is_workflow_principal and not principal.is_superuser:
+            initial_parameters["executionPrincipal"] = {
+                "kind": "workflow",
+                "workflowId": principal.workflow_id,
+                "scopes": sorted(principal.scopes),
+            }
         record = await service.create_execution(
             workflow_type=start_contract.workflow_type,
             owner_id=getattr(user, "id", None) if fanout_principal is not None else None,

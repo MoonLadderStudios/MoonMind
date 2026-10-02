@@ -652,6 +652,8 @@ Suggested input:
 
 The issue picker should use a constrained search helper rather than exposing arbitrary JQL to normal users by default.
 
+The tool validates balanced parentheses and quoted strings before adding the project restriction. Only a top-level, unquoted `ORDER BY` is moved outside that restriction; quoted text and nested expressions remain intact.
+
 ### 14.4 Create issue
 
 Tool name:
@@ -783,6 +785,8 @@ Implementation notes:
 - if the transition screen has required fields, include them in `fields` or `update`
 
 ### 14.9 Add comment
+
+Before submission, high-security outbound scanning covers all string values in the ADF document, including link marks and other attributes as well as visible text. Metadata is transmitted content and must not bypass the scan.
 
 Tool name:
 

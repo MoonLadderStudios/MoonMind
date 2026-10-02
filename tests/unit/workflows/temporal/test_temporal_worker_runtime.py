@@ -5013,3 +5013,37 @@ def test_gh_readiness_checks_the_cli_not_ambient_tokens(
         )
         == []
     )
+
+
+@pytest.mark.parametrize("legacy_field", ["branch", "startingBranch"])
+def test_runtime_planner_keeps_structured_branch_authority(legacy_field):
+    planner = _build_runtime_planner()
+    target = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "owner/approved"},
+        "branch": {"name": "approved-main"},
+    }
+    plan = planner(
+        inputs={
+            "workflow": {
+                "instructions": "Inspect the repository",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                legacy_field: "other",
+            }
+        },
+        parameters={
+            "repository": target,
+            "targetRuntime": "codex_cli",
+            "requiredCapabilities": ["codex_cli", "git", "repo.read"],
+        },
+        snapshot=SimpleNamespace(
+            digest="reg:sha256:test", artifact_ref="art_registry_123"
+        ),
+    )
+    assert plan["nodes"][0]["inputs"]["branch"] == "approved-main"
+    assert (
+        plan["nodes"][0]["inputs"].get("startingBranch", "approved-main")
+        == "approved-main"
+    )

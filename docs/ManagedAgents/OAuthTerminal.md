@@ -90,6 +90,10 @@ contract so auth material stays separate from the workflow workspace. A future
 Claude managed-session controller should preserve that separation before
 recording any Claude Code session binding.
 
+Managed-session launch paths reject Docker mount delimiters and control characters
+before preparing the workspace. A configured auth target is one mount destination,
+never additional comma-separated Docker options.
+
 That shape describes the credential enrollment and verification home only. It
 does not set `CODEX_HOME` for managed sessions. The managed-session launcher
 maps the durable auth volume through the managed-session volume rules below and
@@ -151,7 +155,13 @@ allow the managed-session user to copy them.
 
 1. **Auth volumes are provider-profile credential stores.**
    They are referenced by `volume_ref` and verified by OAuth/provider-profile
-   workflows. They are not workflow workspaces.
+   workflows. They are not workflow workspaces. OAuth enrollment (PTY and
+   Tmate) and credential verification accept only Docker named-volume identifiers,
+   never host paths. Container targets must be canonical absolute directory paths
+   without mount-option delimiters. The API validates requested and derived
+   defaults, and each Docker launch independently validates the mount and uses
+   explicit `--mount type=volume` semantics. Existing invalid session records fail
+   closed before contacting Docker.
 
 2. **Managed-session containers always receive the shared workflow workspace.**
    For Codex, the workflow workspace volume is the only required managed-session

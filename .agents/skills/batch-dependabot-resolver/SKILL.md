@@ -264,6 +264,6 @@ to validate a schedule without creating resolver workflows.
 - Reject missing `repo` unless it can be inferred from task context / `git remote origin` / env.
 - Use `state=open` by default to avoid dispatching against non-open PRs.
 - Skip fork and cross-repository PRs (cannot reliably check out fork head refs in queued jobs).
-- Match conservatively: author AND branch AND title must all indicate a Dependabot version bump.
+- Match conservatively: author AND branch AND title must all indicate a Dependabot version bump. Establish bot identity from the GitHub account login only; display names never confer trust.
 - Require `MOONMIND_URL` to reach the MoonMind API; the legacy direct-DB queue fallback is unsupported.
 - Never queue a PR without a head SHA (no stable idempotency key) — skip it instead.

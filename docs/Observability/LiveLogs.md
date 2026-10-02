@@ -274,6 +274,7 @@ Rules:
 - a process-local replay buffer may exist as an optimization, but it is not the architecture boundary
 - live publication must target a shared MoonMind observability transport such as Redis pub/sub, a shared append-only spool, or DB-backed tailing
 - the current implementation choice of a shared append-only spool file under the run workspace remains valid
+- spool reads and appends pin every directory component and reject symlink or special-file endpoints; appends also reject hardlinks, and readers retain partial records until a complete newline-delimited event arrives
 
 ## 6.5 Projection model
 

@@ -170,6 +170,30 @@ def _moonmind_config(mode="oidc") -> q.MoonmindAuthConfig:
     )
 
 
+@pytest.mark.parametrize("claims,accepted", [
+    ({"amr": ["pwd"]}, False),
+    ({"acr": "1"}, False),
+    ({"amr": ["pwd", "otp"]}, True),
+    ({"acr": "operator-mfa"}, True),
+])
+def test_advanced_callback_enforces_configured_mfa(claims, accepted):
+    config = validate_advanced_mode_config("oidc", environ={
+        "MOONMIND_OIDC_ISSUER": ISSUER,
+        "MOONMIND_OIDC_CLIENT_ID": CLIENT_ID,
+        "MOONMIND_OIDC_CLIENT_SECRET": "fixture-secret",
+        "MOONMIND_PUBLIC_BASE_URL": BASE_URL,
+        "MOONMIND_OIDC_REQUIRE_MFA": "1",
+        "MOONMIND_OIDC_MFA_ACR_VALUES": "operator-mfa",
+    })
+    kwargs = dict(config=config, discovery=_discovery(), expected_nonce="n", jwks=JWKS)
+    token = _id_token(extra=claims)
+    if accepted:
+        assert validate_id_token(token, **kwargs)["sub"] == "user-123"
+    else:
+        with pytest.raises(OidcLoginError, match="MFA"):
+            validate_id_token(token, **kwargs)
+
+
 async def _db(tmp_path, name="adv4124.db"):
     url = f"sqlite+aiosqlite:///{tmp_path}/{name}"
     engine = create_async_engine(url, future=True)

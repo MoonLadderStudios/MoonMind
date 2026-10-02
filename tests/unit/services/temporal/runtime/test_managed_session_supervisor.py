@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.codex_conformance.canary import (
     CANARY_DUPLICATE_EXECUTION,
     CANARY_SCENARIO_VERSION,
@@ -16,6 +15,7 @@ from moonmind.codex_conformance.canary import (
     DEFAULT_MARKER_PATH,
     validate_canary_evidence,
 )
+from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -23,6 +23,7 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
 from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
     ManagedSessionSupervisor,
 )
+
 
 class _LocalArtifactStorage:
     def __init__(self, root: Path) -> None:
@@ -995,3 +996,76 @@ async def test_publish_reset_artifacts_tolerates_event_publication_failure(
 
     assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert published.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
+
+
+@pytest.mark.parametrize("parent_link", [False, True])
+def test_spool_snapshot_does_not_follow_symlinks(tmp_path, parent_link):
+    record = _record(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "stdout.log").write_text("private-host-data")
+    spool = Path(record.artifact_spool_path)
+    if parent_link:
+        spool.rmdir()
+        spool.symlink_to(outside, target_is_directory=True)
+    else:
+        (spool / "stdout.log").symlink_to(outside / "stdout.log")
+    assert ManagedSessionSupervisor._read_spool_bytes(record) == (b"", b"")
+
+
+@pytest.mark.parametrize("marker_data", [b'{"secret": "private-host-data"}', b"\xff"])
+def test_canary_invalid_marker_is_never_published(tmp_path, marker_data):
+    record = _record(tmp_path)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=ManagedSessionStore(tmp_path / "store"),
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    marker = Path(record.workspace_path) / DEFAULT_MARKER_PATH
+    marker.parent.mkdir(parents=True)
+    marker.write_bytes(marker_data)
+    assert (
+        supervisor._publish_codex_canary_observation(
+            record=record, status="completed", observability_events=[]
+        )
+        is None
+    )
+    assert not (tmp_path / "published").exists()
+
+
+def test_spool_live_stream_never_publishes_symlink_target(tmp_path):
+    record = _record(tmp_path)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=ManagedSessionStore(tmp_path / "store"),
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    private = tmp_path / "private"
+    private.write_text("private-host-data")
+    (Path(record.artifact_spool_path) / "stdout.log").symlink_to(private)
+    assert not supervisor._publish_new_output_chunks(record, {}, {})
+    assert not (tmp_path / "published").exists()
+
+
+def test_canary_marker_never_follows_symlink(tmp_path):
+    record = _record(tmp_path)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=ManagedSessionStore(tmp_path / "store"),
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    private = tmp_path / "private"
+    private.write_text(json.dumps(_canary_marker()))
+    marker = Path(record.workspace_path) / DEFAULT_MARKER_PATH
+    marker.parent.mkdir(parents=True)
+    marker.symlink_to(private)
+    assert (
+        supervisor._publish_codex_canary_observation(
+            record=record, status="completed", observability_events=_canary_events()
+        )
+        is None
+    )
+    assert not (tmp_path / "published").exists()

@@ -1958,32 +1958,6 @@ class GitHubService:
                 )
 
             active_review = bool(review_loop_enabled and review_request)
-            if (
-                pr_open is True
-                and pr_merged is not True
-                and merge_conflicted
-                and not active_review
-            ):
-                return PullRequestReadinessResult(
-                    headSha=observed_head_sha,
-                    baseSha=observed_base_sha,
-                    ready=True,
-                    pullRequestOpen=pr_open,
-                    pullRequestMerged=pr_merged,
-                    checksComplete=checks_complete,
-                    checksPassing=checks_passing,
-                    automatedReviewComplete=automated_review_complete,
-                    policyAllowed=True,
-                    blockers=[
-                        {
-                            "kind": "merge_conflict",
-                            "summary": "Pull request has merge conflicts.",
-                            "retryable": False,
-                            "source": "github",
-                        }
-                    ],
-                )
-
             if pr_open is True and pr_merged is not True and merge_conflicted:
                 blockers.append(
                     {
@@ -1994,7 +1968,13 @@ class GitHubService:
                     }
                 )
 
-            if checks_required and pr_merged is not True and not blockers:
+            if (
+                checks_required
+                and pr_merged is not True
+                and not any(
+                    blocker.get("kind") != "merge_conflict" for blocker in blockers
+                )
+            ):
                 check_evidence = await self._evaluate_github_checks(
                     client=client,
                     repo=repo,
@@ -2009,7 +1989,13 @@ class GitHubService:
                 blockers.extend(check_evidence["blockers"])
 
             if pr_merged is not True and (
-                (review_required and not blockers)
+                (
+                    review_required
+                    and not any(
+                        blocker.get("kind") not in {"merge_conflict", "checks_failed"}
+                        for blocker in blockers
+                    )
+                )
                 or (active_review and pr_open is True)
             ):
                 if review_loop_enabled:
@@ -2053,7 +2039,10 @@ class GitHubService:
         return PullRequestReadinessResult(
             headSha=observed_head_sha,
             baseSha=observed_base_sha,
-            ready=not blockers and pr_merged is not True,
+            ready=not any(
+                blocker.get("kind") != "merge_conflict" for blocker in blockers
+            )
+            and pr_merged is not True,
             pullRequestOpen=pr_open,
             pullRequestMerged=pr_merged,
             checksComplete=checks_complete,
