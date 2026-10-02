@@ -16,6 +16,7 @@ from api_service.db.models import (
     ProviderCredentialSource,
     RuntimeMaterializationMode,
 )
+from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 
 
 def _mount_ref(profile_id: str, generation: int = 1) -> dict:
@@ -74,6 +75,84 @@ def test_binding_rejects_mount_contract_owned_by_another_profile() -> None:
             harness="codex-native",
             credential_mount_template_json=_mount_ref("profile-b"),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "lease_purpose", ["execution_omnigent", "credential_validation"]
+)
+async def test_repository_projects_persisted_host_owner_and_container_identity(
+    tmp_path,
+    lease_purpose,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/host-owner.db")
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    acquired_at = datetime(2026, 10, 2, tzinfo=UTC)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with session_factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="profile-a",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    max_parallel_runs=1,
+                    credential_generation=1,
+                )
+            )
+            session.add(
+                OmnigentOAuthHostBindingRecord(
+                    binding_ref="binding-a",
+                    provider_profile_id="profile-a",
+                    endpoint_ref="default",
+                    harness="codex-native",
+                    credential_mount_template_json=_mount_ref("profile-a"),
+                )
+            )
+            await session.commit()
+        async with session_factory() as session:
+            session.add(
+                OmnigentOAuthHostLeaseRecord(
+                    lease_id="host-owner-lease",
+                    provider_profile_id="profile-a",
+                    provider_lease_id="provider-owner-lease",
+                    binding_ref="binding-a",
+                    credential_generation=1,
+                    holder_workflow_id="workflow-owner",
+                    idempotency_key="host-owner",
+                    lease_purpose=lease_purpose,
+                    container_id="stopped-container-id",
+                    container_name="owned-host",
+                    status="starting",
+                    acquired_at=acquired_at,
+                    last_heartbeat_at=acquired_at,
+                    expires_at=acquired_at + timedelta(minutes=10),
+                )
+            )
+            await session.commit()
+        lease = await OmnigentOAuthHostRepository(session_factory).get_host_lease(
+            "host-owner-lease"
+        )
+        assert lease is not None
+        projected = lease.model_dump(by_alias=True)
+        assert {
+            "holderWorkflowId": projected.get("holderWorkflowId"),
+            "leasePurpose": projected.get("leasePurpose"),
+        } == {"holderWorkflowId": "workflow-owner", "leasePurpose": lease_purpose}
+        assert lease.container_id == "stopped-container-id"
+        assert lease.container_name == "owned-host"
+        assert lease.provider_lease_id == "provider-owner-lease"
+        legacy_payload = lease.model_dump(by_alias=True)
+        legacy_payload.pop("holderWorkflowId")
+        legacy_payload.pop("leasePurpose")
+        restored = type(lease).model_validate(legacy_payload)
+        assert restored.holder_workflow_id is None
+        assert restored.lease_purpose == "execution_omnigent"
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
