@@ -767,3 +767,116 @@ def test_4636_artifact_step_reset_restores_workflow_inheritance(
         runtime = plan["nodes"][0]["inputs"]["runtime"]
         assert model_selection_fields(runtime) == {"modelTier": 2}
     assert runtime["parameters"] == {"seed": 42 if reset_runtime is None else 7}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("model", "new-model"), ("effort", "max"), ("model", None), ("effort", None)],
+)
+def test_4636_flat_edit_reaches_child_authored_pair_and_launch(
+    monkeypatch, field, value
+):
+    from copy import deepcopy
+    from unittest.mock import patch
+
+    from moonmind.runtime_intent import model_selection_fields
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        ManagedRuntimeProfile,
+    )
+    from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+    from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+        CodexCliStrategy,
+    )
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    monkeypatch.setenv("MOONMIND_CODEX_MODEL", "runtime-model")
+    monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
+    previous_runtime = {
+        "model": "old-model",
+        "effort": "high",
+        "parameters": {"seed": 7},
+    }
+    attempts = [{"model": "already-launched", "effort": "high"}]
+    request = AgentExecutionRequest(
+        agent_kind="managed",
+        agent_id="codex_cli",
+        correlation_id="4636-edit",
+        idempotency_key="4636-edit",
+        parameters={
+            "runtime": deepcopy(previous_runtime),
+            "workflow": {"runtime": deepcopy(previous_runtime)},
+            "attempts": deepcopy(attempts),
+        },
+    )
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched", return_value=True
+    ):
+        parent_signal = MoonMindRunWorkflow()._runtime_selection_update_payload(
+            {"parametersPatch": {field: value}}
+        )
+    assert parent_signal is not None
+    child = MoonMindAgentRun()
+    monkeypatch.setattr(child, "_workflow_patch_enabled", lambda _name: True)
+    child.update_runtime_selection(parent_signal)
+    assert child.runtime_selection_updated_event.is_set()
+    child._apply_runtime_selection_update(
+        request, child._pending_runtime_selection_update, refresh_derived_selection=True
+    )
+    expected = {"model": "old-model", "effort": "high", field: value}
+    assert model_selection_fields(request.parameters["runtime"]) == expected
+    assert model_selection_fields(request.parameters["workflow"]["runtime"]) == expected
+    assert request.parameters["runtime"]["parameters"] == {"seed": 7}
+    assert request.parameters["attempts"] == attempts
+    child._synchronize_runtime_selection_authority(request)
+    selected_profile = ManagedRuntimeProfile.model_validate(
+        {**vars(profile()), "command_template": ["codex", "exec"]}
+    )
+    strategy = CodexCliStrategy()
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request, profile=selected_profile, strategy=strategy
+    )
+    assert request.parameters["model"] == (expected["model"] or "runtime-model")
+    assert request.parameters["effort"] == (expected["effort"] or "medium")
+    assert request.parameters["seed"] == 7
+    command = strategy.build_command(selected_profile, request)
+    assert command[command.index("-m") + 1] == request.parameters["model"]
+    assert request.parameters["attempts"] == attempts
+
+
+def test_4636_flat_edit_keeps_recorded_behavior_before_repair_patch(monkeypatch):
+    from unittest.mock import patch
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    request = AgentExecutionRequest(
+        agent_kind="managed",
+        agent_id="codex_cli",
+        correlation_id="4636-history",
+        idempotency_key="4636-history",
+        parameters={
+            "runtime": {"model": "old-model", "effort": "high"},
+            "workflow": {"runtime": {"model": "old-model", "effort": "high"}},
+        },
+    )
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda name: name != "run-model-selection-flat-edit-4636-v1",
+    ):
+        signal = MoonMindRunWorkflow()._runtime_selection_update_payload(
+            {"parametersPatch": {"model": "new-model"}}
+        )
+    child = MoonMindAgentRun()
+    monkeypatch.setattr(
+        child,
+        "_workflow_patch_enabled",
+        lambda name: name != "agent-run-model-selection-flat-edit-4636-v1",
+    )
+    child._apply_runtime_selection_update(
+        request, signal, refresh_derived_selection=True
+    )
+    assert request.parameters["model"] == "old-model"
+    assert request.parameters["runtime"] == {"model": "old-model", "effort": "high"}

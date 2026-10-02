@@ -34,7 +34,9 @@ Tier selection chooses reusable profile policy. Custom selects explicit model/ef
 
 Public execution, remediation, preset, and recurring-definition mutations reject newly authored strict policy. Unchanged saved strict fields and accepted input-artifact references retain server-verified provenance; newly supplied input artifacts are inspected before execution or schedule mutation. Trusted recurrence, recovery, exact rerun, and replay continue to use accepted durable input. Runtime launch records effective values separately from authored fields and preserves explicit non-model parameters.
 
-Temporal request construction and pending launch edits use the `run-model-selection-presence-4636-v1` and `agent-run-model-selection-presence-4636-v1` patch boundaries. Histories recorded before those patches keep their previous command behavior. Historical and active attempt records remain attempt evidence.
+Save preset serializes authored step selection through the existing `skill.runtime` contract, including explicit nulls and non-model parameters. Expansion restores that runtime into step authoring state without pinning an omitted selection to a preview.
+
+Temporal request construction and pending launch edits use the `run-model-selection-presence-4636-v1` and `agent-run-model-selection-presence-4636-v1` patch boundaries. The `run-model-selection-flat-edit-4636-v1` and `agent-run-model-selection-flat-edit-4636-v1` boundaries make explicit flat model or effort edits supersede the saved value while preserving the untouched companion. Canonical nested runtime selections remain authoritative. Histories recorded before each patch keep their previous command behavior. Historical and active attempt records remain attempt evidence.
 
 ## 3. Interaction Contract
 

@@ -1100,6 +1100,7 @@ interface PresetListResponse {
 }
 
 interface PresetStepSkill {
+  runtime?: Record<string, unknown>;
   id?: string;
   name?: string;
   type?: string;
@@ -1112,6 +1113,7 @@ interface PresetStepSkill {
 }
 
 interface ExpandedStepPayload {
+  runtime?: Record<string, unknown>;
   id?: string;
   title?: string;
   instructions?: string;
@@ -3231,6 +3233,7 @@ function mapExpandedStepToState(
     Boolean(step.tool && !step.skill) ||
     String(step.tool?.type || "").trim().toLowerCase() === "tool";
   const tool = step.tool || step.skill || {};
+  const runtime = recordValue(step.runtime ?? step.skill?.runtime);
   const inlineInputs =
     tool.inputs && typeof tool.inputs === "object"
       ? tool.inputs
@@ -3264,6 +3267,11 @@ function mapExpandedStepToState(
     title: String(step.title || "").trim(),
     stepType: isToolStep ? "tool" : "skill",
     instructions,
+    runtimeMode: String(runtime.mode || "").trim(),
+    runtimeSelection: readModelSelection(runtime),
+    runtimeProviderProfile: String(
+      runtime.profileId || runtime.providerProfile || "",
+    ).trim(),
     repositoryOperation:
       step.repositoryOperation === "read" ||
       step.repositoryOperation === "write"
@@ -8607,6 +8615,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         continue;
       }
       const blueprint: Record<string, unknown> = { instructions };
+      const runtime = stepRuntimePayload(step);
       const skillId = step.skillId.trim();
       // MM-936: explicit capabilities are authored through the always-visible
       // chip selector, so they persist into presets regardless of Advanced mode.
@@ -8633,7 +8642,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         skillId ||
         skillArgsRaw ||
         Object.keys(structuredSkillInputs.values).length > 0 ||
-        caps.length > 0
+        caps.length > 0 ||
+        runtime !== null
       ) {
         let skillArgs: Record<string, unknown> = {};
         if (skillArgsRaw) {
@@ -8664,17 +8674,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           inputs: skillArgs,
           ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
         };
-        blueprint.tool = normalizedTool;
-        const selectedSkillDetail =
-          skillsQuery.data?.detailsById[normalizedTool.name] || null;
-        blueprint.skill = skillPayloadWithInputs({
-          skillId: normalizedTool.name,
-          inputs: skillArgs,
-          savedInputContractDigest: selectedSkillDetail?.contractDigest,
-          currentInputContractDigest: selectedSkillDetail?.contractDigest,
-          requiredCapabilities: caps,
-          detail: selectedSkillDetail,
-        });
+        // Presets own step intent under skill.runtime. Do not save resolved
+        // previews or a competing tool payload for this Skill blueprint.
+        blueprint.type = "skill";
+        blueprint.skill = {
+          id: normalizedTool.name,
+          args: skillArgs,
+          ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
+          ...(runtime ? { runtime } : {}),
+        };
       }
       presetSteps.push(blueprint);
     }

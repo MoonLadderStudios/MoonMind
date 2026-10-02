@@ -25915,6 +25915,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 selection.update(self._runtime_selection_from_source(authored_runtime))
 
         if self._workflow_patch_enabled("run-model-selection-presence-4636-v1"):
+            if self._workflow_patch_enabled("run-model-selection-flat-edit-4636-v1"):
+                # A cleared flat field is still an explicit edit. Keep presence
+                # until the child merges it with the accepted authored companion.
+                selection.update(model_selection_fields(parameters_patch))
             sources = [parameters_patch.get("runtime")]
             sources.extend(
                 block.get("runtime")
