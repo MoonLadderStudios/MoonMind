@@ -117,6 +117,7 @@ def _manager() -> MoonMindProviderProfileManagerWorkflow:
     wf._runtime_id = "opencode"
     wf._purpose_aware_capacity_ledger = True
     wf._durable_maintenance_queue = True
+    wf._oauth_login_scope_exempt = True
     return wf
 
 
@@ -505,7 +506,8 @@ async def test_a_full_scope_and_an_empty_profile_do_not_spin(capacity: int) -> N
         task = asyncio.ensure_future(
             wf.acquire_credential_maintenance_lease(
                 _maintenance_payload(
-                    "connect-a", purpose=CredentialLeasePurpose.OAUTH_CONNECT.value
+                    "validate-a",
+                    purpose=CredentialLeasePurpose.CREDENTIAL_VALIDATION.value,
                 )
             )
         )
@@ -515,7 +517,7 @@ async def test_a_full_scope_and_an_empty_profile_do_not_spin(capacity: int) -> N
         assert (
             wf._maintenance_grant_blocker(
                 profile_id=PROFILE_ID,
-                requester_id="connect-a",
+                requester_id="validate-a",
                 scope_gated=True,
             )
             == "scope_unavailable"
@@ -554,6 +556,79 @@ async def test_a_full_scope_never_blocks_credential_repair_or_revocation(
     assert repair["already_held"] is False
     assert repair["lease_mode"] == "exclusive_maintenance"
     assert fake.wait_calls == 0
+
+
+OAUTH_LOGIN_PURPOSES = (
+    CredentialLeasePurpose.OAUTH_CONNECT.value,
+    CredentialLeasePurpose.OAUTH_RECONNECT.value,
+)
+
+
+@pytest.mark.parametrize("purpose", OAUTH_LOGIN_PURPOSES)
+@pytest.mark.parametrize("capacity", CAPACITIES)
+@pytest.mark.asyncio
+async def test_a_cooling_scope_never_blocks_oauth_login(
+    capacity: int, purpose: str
+) -> None:
+    """A 429 cooldown on inference must not keep the operator from signing in."""
+
+    wf = _manager()
+    profile = _install(wf, _profile(capacity))
+    _install_full_scope(wf, profile)
+    fake = _FakeWorkflow(patched=(PROVIDER_CAPACITY_SCOPE_PATCH,))
+
+    with mock_patch(MANAGER_MODULE, fake):
+        login = await asyncio.wait_for(
+            wf.acquire_credential_maintenance_lease(
+                _maintenance_payload("oauth-session:a", purpose=purpose)
+            ),
+            timeout=1,
+        )
+
+    assert login["already_held"] is False
+    assert login["lease_mode"] == "exclusive_maintenance"
+    assert fake.wait_calls == 0
+    # Signing in spends no provider capacity, so it does not fill the scope.
+    assert wf._scope_active_units(profile.capacity_scope_ref) == 0
+
+
+@pytest.mark.parametrize("purpose", OAUTH_LOGIN_PURPOSES)
+@pytest.mark.asyncio
+async def test_a_pre_marker_history_still_gates_oauth_login_on_scope(
+    purpose: str,
+) -> None:
+    """Exempting OAuth login from scope is a new rule, not a retroactive one."""
+
+    wf = _manager()
+    wf._oauth_login_scope_exempt = False
+    profile = _install(wf, _profile(1))
+    _install_full_scope(wf, profile)
+    fake = _FakeWorkflow(patched=(PROVIDER_CAPACITY_SCOPE_PATCH,))
+
+    with mock_patch(MANAGER_MODULE, fake):
+        task = asyncio.ensure_future(
+            wf.acquire_credential_maintenance_lease(
+                _maintenance_payload("oauth-session:a", purpose=purpose)
+            )
+        )
+        await _settle()
+
+        assert (
+            wf._maintenance_grant_blocker(
+                profile_id=PROFILE_ID,
+                requester_id="oauth-session:a",
+                scope_gated=wf._maintenance_consumes_scope(purpose),
+            )
+            == "scope_unavailable"
+        )
+        assert task.done() is False
+        assert profile.current_leases == []
+        assert fake.wait_calls == 1
+
+        await _cancel(task)
+
+    profile.reserve("oauth-session:b", NOW, purpose=purpose, allow_unready=True)
+    assert wf._scope_active_units(profile.capacity_scope_ref) == 1
 
 
 @pytest.mark.parametrize("capacity", CAPACITIES)
@@ -1214,7 +1289,7 @@ async def test_two_live_waiters_keep_their_history_s_ordering_rule(
 ) -> None:
     """Two concurrent maintainers, parked on the same condition, order differently.
 
-    Both are ``oauth_connect``, which spends the upstream resource, so a
+    Both are ``credential_validation``, which spends the upstream resource, so a
     cooling capacity scope parks both under either rule. What differs is *why*
     the second one is parked: a pre-marker history has no turn to wait for, so
     it is still parked on the scope; with the marker established it is parked
@@ -1229,14 +1304,14 @@ async def test_two_live_waiters_keep_their_history_s_ordering_rule(
         fake = _FakeWorkflow(patched=(PROVIDER_CAPACITY_SCOPE_PATCH,))
         tasks: list[asyncio.Task] = []
         with mock_patch(MANAGER_MODULE, fake):
-            for owner in ("connect-a", "connect-b"):
+            for owner in ("validate-a", "validate-b"):
                 tasks.append(
                     asyncio.ensure_future(
                         wf.acquire_credential_maintenance_lease(
                             _maintenance_payload(
                                 owner,
                                 purpose=(
-                                    CredentialLeasePurpose.OAUTH_CONNECT.value
+                                    CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
                                 ),
                             )
                         )
@@ -1254,7 +1329,7 @@ async def test_two_live_waiters_keep_their_history_s_ordering_rule(
             pre_marker._maintenance_grant_blocker(
                 profile_id=PROFILE_ID, requester_id=owner, scope_gated=True
             )
-            for owner in ("connect-a", "connect-b")
+            for owner in ("validate-a", "validate-b")
         ] == ["scope_unavailable", "scope_unavailable"]
         assert all(task.done() is False for task in pre_tasks)
         for task in pre_tasks:
@@ -1264,13 +1339,13 @@ async def test_two_live_waiters_keep_their_history_s_ordering_rule(
     patched_profile, patched_fake, patched_tasks = await _park_two(patched)
 
     with mock_patch(MANAGER_MODULE, patched_fake):
-        assert patched_profile.maintenance_queue_position("connect-a") == 0
-        assert patched_profile.maintenance_queue_position("connect-b") == 1
+        assert patched_profile.maintenance_queue_position("validate-a") == 0
+        assert patched_profile.maintenance_queue_position("validate-b") == 1
         assert [
             patched._maintenance_grant_blocker(
                 profile_id=PROFILE_ID, requester_id=owner, scope_gated=True
             )
-            for owner in ("connect-a", "connect-b")
+            for owner in ("validate-a", "validate-b")
         ] == ["scope_unavailable", "queued_behind_earlier_maintenance"]
         assert all(task.done() is False for task in patched_tasks)
         for task in patched_tasks:
