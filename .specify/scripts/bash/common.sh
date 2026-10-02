@@ -170,5 +170,23 @@ get_feature_paths() {
         CONTRACTS_DIR "$feature_dir/contracts"
 }
 
+# Encode JSON strings using the Bash runtime shared by projected workflows.
+json_string() {
+    local value="$1" result='' character encoded offset LC_ALL=C
+    for ((offset = 0; offset < ${#value}; offset++)); do
+        character=${value:offset:1}
+        case "$character" in
+            '"') result+='\"' ;;
+            '\') result+='\\' ;;
+            [[:cntrl:]])
+                printf -v encoded '\\u%04x' "'$character"
+                result+="$encoded"
+                ;;
+            *) result+="$character" ;;
+        esac
+    done
+    printf '"%s"' "$result"
+}
+
 check_file() { [[ -f "$1" ]] && echo "  ✓ $2" || echo "  ✗ $2"; }
 check_dir() { [[ -d "$1" && -n $(ls -A "$1" 2>/dev/null) ]] && echo "  ✓ $2" || echo "  ✗ $2"; }

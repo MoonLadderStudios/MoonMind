@@ -79,20 +79,17 @@ SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 # Get feature paths and validate branch
-eval $(get_feature_paths)
+eval "$(get_feature_paths)"
 check_feature_branch "$CURRENT_BRANCH" "$HAS_GIT" || exit 1
 
 # If paths-only mode, output paths and exit (support JSON + paths-only combined)
 if $PATHS_ONLY; then
     if $JSON_MODE; then
         # Minimal JSON paths payload (no validation performed)
-        python3 - "$REPO_ROOT" "$CURRENT_BRANCH" "$FEATURE_DIR" "$FEATURE_SPEC" "$IMPL_PLAN" "$TASKS" <<'PYJSON'
-import json
-import sys
-
-keys = ("REPO_ROOT", "BRANCH", "FEATURE_DIR", "FEATURE_SPEC", "IMPL_PLAN", "TASKS")
-print(json.dumps(dict(zip(keys, sys.argv[1:]))))
-PYJSON
+        printf '{"REPO_ROOT":%s,"BRANCH":%s,"FEATURE_DIR":%s,"FEATURE_SPEC":%s,"IMPL_PLAN":%s,"TASKS":%s}\n' \
+            "$(json_string "$REPO_ROOT")" "$(json_string "$CURRENT_BRANCH")" \
+            "$(json_string "$FEATURE_DIR")" "$(json_string "$FEATURE_SPEC")" \
+            "$(json_string "$IMPL_PLAN")" "$(json_string "$TASKS")"
     else
         echo "REPO_ROOT: $REPO_ROOT"
         echo "BRANCH: $CURRENT_BRANCH"
@@ -145,12 +142,13 @@ fi
 
 # Output results
 if $JSON_MODE; then
-    python3 - "$FEATURE_DIR" "${docs[@]}" <<'PYJSON'
-import json
-import sys
-
-print(json.dumps({"FEATURE_DIR": sys.argv[1], "AVAILABLE_DOCS": sys.argv[2:]}))
-PYJSON
+    printf '{"FEATURE_DIR":%s,"AVAILABLE_DOCS":[' "$(json_string "$FEATURE_DIR")"
+    separator=''
+    for doc in "${docs[@]}"; do
+        printf '%s%s' "$separator" "$(json_string "$doc")"
+        separator=','
+    done
+    printf ']}\n'
 else
     # Text output
     echo "FEATURE_DIR:$FEATURE_DIR"

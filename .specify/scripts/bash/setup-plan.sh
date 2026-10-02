@@ -28,7 +28,7 @@ SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 # Get all paths and variables from common functions
-eval $(get_feature_paths)
+eval "$(get_feature_paths)"
 
 # Check if we're on a proper feature branch (only for git repos)
 check_feature_branch "$CURRENT_BRANCH" "$HAS_GIT" || exit 1
@@ -49,13 +49,10 @@ fi
 
 # Output results
 if $JSON_MODE; then
-    python3 - "$FEATURE_SPEC" "$IMPL_PLAN" "$FEATURE_DIR" "$CURRENT_BRANCH" "$HAS_GIT" <<'PYJSON'
-import json
-import sys
-
-keys = ("FEATURE_SPEC", "IMPL_PLAN", "SPECS_DIR", "BRANCH", "HAS_GIT")
-print(json.dumps(dict(zip(keys, sys.argv[1:]))))
-PYJSON
+    printf '{"FEATURE_SPEC":%s,"IMPL_PLAN":%s,"SPECS_DIR":%s,"BRANCH":%s,"HAS_GIT":%s}\n' \
+        "$(json_string "$FEATURE_SPEC")" "$(json_string "$IMPL_PLAN")" \
+        "$(json_string "$FEATURE_DIR")" "$(json_string "$CURRENT_BRANCH")" \
+        "$(json_string "$HAS_GIT")"
 else
     echo "FEATURE_SPEC: $FEATURE_SPEC"
     echo "IMPL_PLAN: $IMPL_PLAN" 
@@ -63,4 +60,3 @@ else
     echo "BRANCH: $CURRENT_BRANCH"
     echo "HAS_GIT: $HAS_GIT"
 fi
-
