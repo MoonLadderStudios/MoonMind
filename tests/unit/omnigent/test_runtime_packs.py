@@ -112,7 +112,16 @@ def test_vendor_version_range_is_exclusive_upper():
     assert not is_vendor_version_supported(claude, "3.0.0")
     codex = get_runtime_pack("codex-native-pack@1")
     assert is_vendor_version_supported(codex, "0.104.0")
+    assert is_vendor_version_supported(codex, "0.137.0")
     assert not is_vendor_version_supported(codex, "0.200.0")
+
+
+def test_pinned_codex_runtime_meets_native_harness_readiness_floor():
+    from packaging.version import Version
+
+    codex = get_runtime_pack("codex-native-pack@1")
+    # Omnigent's native Codex installer/readiness contract requires this floor.
+    assert Version(codex.vendorRuntime.pinnedVersion) >= Version("0.137.0")
 
 
 def test_pinned_claude_runtime_supports_opus_5_5():

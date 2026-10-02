@@ -25,7 +25,7 @@
 
 ARG OMNIGENT_HOST_BASE_IMAGE
 ARG OMNIGENT_BUILD_DIGEST
-ARG CODEX_CLI_VERSION=0.104.0
+ARG CODEX_CLI_VERSION=0.159.0
 ARG CODEX_MIN_VERSION=0.100.0
 ARG CODEX_MAX_VERSION=0.200.0
 ARG CLAUDE_CLI_VERSION=2.1.281
@@ -165,6 +165,19 @@ RUN command -v codex && codex --version \
     && command -v gh && gh --version \
     && command -v moonmind && moonmind --help \
     && bash -lc 'command -v gh && command -v moonmind'
+
+# A binary and MoonMind's supported range alone do not prove the installed
+# Omnigent native harness can use it. Check that owner's actual readiness
+# contract without credentials or network before publishing the image.
+RUN --network=none /opt/venv/bin/python - <<'PY'
+from omnigent.onboarding.harness_readiness import harness_cli_installed
+
+families = ("openai", "anthropic", "opencode")
+unavailable = [family for family in families if not harness_cli_installed(family, timeout=10)]
+if unavailable:
+    raise SystemExit(f"Omnigent native CLI readiness failed: {unavailable}")
+print("Omnigent native CLI readiness verified for Codex, Claude, and OpenCode")
+PY
 
 LABEL org.opencontainers.image.title="omnigent-host-moonmind" \
       org.opencontainers.image.description="Neutral shared MoonMind Omnigent host image (Codex ${CODEX_CLI_VERSION}, Claude Code ${CLAUDE_CLI_VERSION}, OpenCode ${OPENCODE_VERSION})" \
