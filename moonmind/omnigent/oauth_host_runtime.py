@@ -30,6 +30,8 @@ from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
 )
+from moonmind.omnigent.host_services.launcher import docker_attachment_mount
+from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
 from moonmind.omnigent.host_services.registration import (
     HOST_REGISTRATION_ATTEMPTS,
     HOST_REGISTRATION_INTERVAL_SECONDS,
@@ -677,15 +679,6 @@ class OmnigentOAuthHostRuntime:
             runtime_uid=int(launch["runtimeUid"]),
             runtime_gid=int(launch["runtimeGid"]),
         )
-        daemon_workspace_root = await self._resolve_daemon_workspace_root()
-        daemon_workspace_source = daemon_visible_workspace_path(
-            workspace_source,
-            daemon_root=daemon_workspace_root,
-        )
-        daemon_skill_projection = daemon_visible_workspace_path(
-            skill_projection,
-            daemon_root=daemon_workspace_root,
-        )
         launched_container_name: str | None = None
         static_compose_env: Mapping[str, str] | None = None
         if binding.host_launch_profile_ref:
@@ -700,11 +693,10 @@ class OmnigentOAuthHostRuntime:
                 execution_fanout_authorization=execution_fanout_authorization,
                 repository_connection_ref=repository_connection_ref,
             )
-            daemon_runtime_scripts = self._prepare_daemon_runtime_scripts(
+            runtime_scripts = self._prepare_runtime_scripts(
                 host_lease.lease_id,
                 current_step_execution_id=current_step_execution_id,
                 runtime_environment=container_job_environment,
-                daemon_workspace_root=daemon_workspace_root,
             )
             host_runtime_environment = self._host_runtime_environment(
                 container_job_environment
@@ -722,9 +714,9 @@ class OmnigentOAuthHostRuntime:
                 binding=binding,
                 host_lease=host_lease,
                 container_name=container_name,
-                workspace_source=daemon_workspace_source,
-                skill_projection=daemon_skill_projection,
-                runtime_scripts=daemon_runtime_scripts,
+                workspace_source=workspace_source,
+                skill_projection=skill_projection,
+                runtime_scripts=runtime_scripts,
                 current_step_execution_id=current_step_execution_id,
                 github_token=github_token,
                 container_job_environment=host_runtime_environment,
@@ -732,6 +724,13 @@ class OmnigentOAuthHostRuntime:
                 egress_attestation=egress_attestation,
             )
         else:
+            daemon_workspace_root = await self._resolve_daemon_workspace_root()
+            daemon_workspace_source = daemon_visible_workspace_path(
+                workspace_source, daemon_root=daemon_workspace_root
+            )
+            daemon_skill_projection = daemon_visible_workspace_path(
+                skill_projection, daemon_root=daemon_workspace_root
+            )
             # Workflow-side static-enrollment wait starts at the Compose
             # launch admission (MoonLadderStudios/MoonMind#3936 R5). The
             # packaged entrypoint bounds the operator waiting state with
@@ -1986,23 +1985,6 @@ class OmnigentOAuthHostRuntime:
                 visible[file_env_name] = f"{_RUNTIME_CAPABILITY_MOUNT_ROOT}/{filename}"
         return visible
 
-    def _prepare_daemon_runtime_scripts(
-        self,
-        owner_key: str,
-        *,
-        current_step_execution_id: str,
-        runtime_environment: Mapping[str, str] | None = None,
-        daemon_workspace_root: Path | str | None = None,
-    ) -> Path:
-        return daemon_visible_workspace_path(
-            self._prepare_runtime_scripts(
-                owner_key,
-                current_step_execution_id=current_step_execution_id,
-                runtime_environment=runtime_environment,
-            ),
-            daemon_root=daemon_workspace_root,
-        )
-
     async def _resolve_daemon_workspace_root(self) -> Path | None:
         """Resolve the named workspace volume in the selected Docker daemon."""
         from moonmind.omnigent.host_services.workspace import (
@@ -2292,6 +2274,18 @@ class OmnigentOAuthHostRuntime:
         artifacts_volume = f"{container_name}-artifacts"
         cache_volume = f"{container_name}-cache"
         host_image_ref = str(effective_launch["hostImageRef"])
+        scripts_mount = self._workspace_mount(
+            runtime_scripts, "/opt/moonmind", readonly=True
+        )
+        profile_mount = self._workspace_mount(
+            runtime_scripts / "moonmind-execution.sh",
+            "/etc/profile.d/moonmind-execution.sh",
+            readonly=True,
+        )
+        workspace_mount = self._workspace_mount(workspace_source, "/workspaces/run")
+        skills_mount = self._workspace_mount(
+            skill_projection, OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR, readonly=True
+        )
         host_path = await self._discover_upstream_path(host_image_ref)
         # A retry may find a stopped container with this deterministic name.
         # Inspect its lease before removal; a deterministic name is not itself
@@ -2342,7 +2336,7 @@ class OmnigentOAuthHostRuntime:
             "--mount",
             f"type=volume,src={cache_volume},dst=/home/app/.cache",
             "--mount",
-            f"type=bind,src={runtime_scripts},dst=/opt/moonmind,readonly",
+            scripts_mount,
             "--env",
             f"OAUTH_HOME={adapter['home']}",
             "--entrypoint",
@@ -2410,21 +2404,17 @@ class OmnigentOAuthHostRuntime:
             "--mount",
             f"type=volume,src={cache_volume},dst=/home/app/.cache",
             "--mount",
-            f"type=bind,src={runtime_scripts},dst=/opt/moonmind,readonly",
+            scripts_mount,
             "--mount",
-            "type=bind,"
-            f"src={runtime_scripts / 'moonmind-execution.sh'},"
-            "dst=/etc/profile.d/moonmind-execution.sh,readonly",
+            profile_mount,
             # MoonLadderStudios/MoonMind#4558: no tools-volume or profile
             # mount overlays. The selected image owns /opt/moonmind-tools and
             # /etc/profile.d/moonmind-tools.sh; mounting over them would hide
             # the image-owned executables.
             "--mount",
-            f"type=bind,src={workspace_source},dst=/workspaces/run",
+            workspace_mount,
             "--mount",
-            "type=bind,"
-            f"src={skill_projection},"
-            f"dst={OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR},readonly",
+            skills_mount,
             "--env",
             f"PATH={self._prepend_tools_path(host_path)}",
             "--env",
@@ -4171,6 +4161,19 @@ class OmnigentOAuthHostRuntime:
             if readiness is True or str(readiness).strip().lower() in ready_values
         }
 
+    def _workspace_mount(
+        self, path: Path, target: str, *, readonly: bool = False
+    ) -> str:
+        return docker_attachment_mount(
+            {
+                **resolve_daemon_attachment_source(
+                    workspace_volume=self._workspace_volume, path=path
+                ),
+                "targetPath": target,
+                "accessMode": "read-only" if readonly else "read-write",
+            }
+        )
+
     @staticmethod
     async def _run(
         *args: str,
@@ -4186,8 +4189,10 @@ class OmnigentOAuthHostRuntime:
         output = stdout.decode("utf-8", errors="replace")
         error = stderr.decode("utf-8", errors="replace")
         if check and return_code != 0:
+            detail = (error or output).strip()[:350]
             raise OmnigentOAuthHostError(
-                "OAuth host runtime command failed",
+                f"OAuth host runtime command failed (exit {return_code})"
+                + (f": {detail}" if detail else ""),
                 code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
             )
         return return_code, output, error
