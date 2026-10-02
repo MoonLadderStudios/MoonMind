@@ -21,6 +21,10 @@ from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
 )
+from moonmind.omnigent.harness_platform.execution_plan import (
+    bind_omnigent_model_selection,
+)
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.repository_sources import (
     RepositorySourceError,
     normalize_repository_source,
@@ -163,19 +167,21 @@ def build_omnigent_selection(
 
     agent = _parse_agent(raw_payload.get("agent"))
     session = _parse_session(raw_payload.get("session"))
-    model_fields = {}
-    for field_name, session_field, selected in (
-        ("model", "model_override", session.model_override),
-        ("effort", "reasoning_effort", session.reasoning_effort),
-    ):
-        authored = _clean(parameters.get(field_name))
-        if authored is not None and selected is not None and authored != selected:
-            raise OmnigentAdapterError(
-                f"Omnigent session {field_name} conflicts with execution parameters",
-                failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
-            )
-        model_fields[session_field] = authored or selected
-    session = replace(session, **model_fields)
+    try:
+        bound_request = bind_omnigent_model_selection(
+            request,
+            model=_clean(parameters.get("model")) or session.model_override,
+            effort=_clean(parameters.get("effort")) or session.reasoning_effort,
+        )
+    except HarnessPlatformError as exc:
+        raise OmnigentAdapterError(
+            str(exc), failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS
+        ) from exc
+    session = replace(
+        session,
+        model_override=bound_request.parameters["model"],
+        reasoning_effort=bound_request.parameters["effort"],
+    )
     session = _normalize_session_workspace(
         request=request,
         parameters=parameters,
@@ -196,48 +202,6 @@ def build_omnigent_selection(
             field_name="parameters.omnigent.capture",
         ),
     )
-
-
-def bind_omnigent_model_selection(
-    request: AgentExecutionRequest,
-    *,
-    model: str | None,
-    effort: str | None,
-) -> AgentExecutionRequest:
-    """Project the admitted pair into the native session request without fallback.
-
-    Planning owns model resolution. Every realizer carries that same decision
-    across the shared session boundary, rejecting contradictory authored inputs
-    without resolving another model or effort.
-    """
-
-    parameters = dict(request.parameters or {})
-    omnigent = _mapping(parameters.get("omnigent"), field_name="parameters.omnigent")
-    session = _mapping(
-        omnigent.get("session"), field_name="parameters.omnigent.session"
-    )
-    for root_field, session_field, planned in (
-        ("model", "modelOverride", _clean(model)),
-        ("effort", "reasoningEffort", _clean(effort)),
-    ):
-        authored = _clean(parameters.get(root_field))
-        if authored is not None and authored != planned:
-            raise OmnigentAdapterError(
-                f"authored {root_field} conflicts with persisted execution plan",
-                failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
-            )
-        authored_session = _clean(session.get(session_field))
-        if authored_session is not None and authored_session != planned:
-            raise OmnigentAdapterError(
-                f"authored Omnigent session {session_field} conflicts with "
-                "persisted execution plan",
-                failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
-            )
-        parameters[root_field] = planned
-        session[session_field] = planned
-    omnigent["session"] = session
-    parameters["omnigent"] = omnigent
-    return request.model_copy(update={"parameters": parameters})
 
 
 async def resolve_omnigent_target(
@@ -577,7 +541,6 @@ __all__ = [
     "OmnigentExternalAdapter",
     "OmnigentResolvedTarget",
     "OmnigentSessionSelection",
-    "bind_omnigent_model_selection",
     "build_omnigent_selection",
     "build_omnigent_session_create_payload",
     "resolve_omnigent_target",

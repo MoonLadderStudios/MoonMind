@@ -22,6 +22,7 @@ from typing import Any
 
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
+    bind_omnigent_model_selection,
     execution_support_identity,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -63,10 +64,6 @@ class CodexProfileBoundRealizer:
         from moonmind.omnigent.realizers.turn_delivery import (
             deliver_canonical_turn,
         )
-        from moonmind.workflows.adapters.omnigent_agent_adapter import (
-            OmnigentAdapterError,
-            bind_omnigent_model_selection,
-        )
 
         # The normal Activity carries a typed admitted binding. Retained
         # callers may carry the flat ref; an explicitly supplied flat ref must
@@ -91,17 +88,11 @@ class CodexProfileBoundRealizer:
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
 
-        try:
-            request = bind_omnigent_model_selection(
-                request,
-                model=plan.payload.modelConfig.qualifiedId,
-                effort=plan.payload.modelConfig.effort,
-            )
-        except OmnigentAdapterError as exc:
-            raise HarnessPlatformError(
-                str(exc),
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-            ) from exc
+        request = bind_omnigent_model_selection(
+            request,
+            model=plan.payload.modelConfig.qualifiedId,
+            effort=plan.payload.modelConfig.effort,
+        )
 
         return await deliver_canonical_turn(
             self._turn_commands,

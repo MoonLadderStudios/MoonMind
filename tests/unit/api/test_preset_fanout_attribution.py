@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from sqlalchemy import select
@@ -27,7 +27,16 @@ from moonmind.workflows.executions.runtime_inheritance import (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("owner_id", ["system", None, uuid4(), str(uuid4())])
+@pytest.mark.parametrize(
+    "owner_id",
+    [
+        "system",
+        None,
+        UUID("d7135e61-a73c-4bfa-b4de-92f6c075d821"),
+        "1e946d09-a478-4c5c-8dfe-b67837ab69f2",
+    ],
+    ids=["system", "no_owner", "uuid", "uuid_string"],
+)
 async def test_child_preset_expansion_preserves_authority_and_valid_recent_attribution(
     tmp_path: Path, owner_id: str | UUID | None
 ) -> None:

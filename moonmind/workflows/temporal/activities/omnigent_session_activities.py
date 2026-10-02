@@ -31,6 +31,9 @@ from moonmind.omnigent.harness_platform.credential_bindings import (
     plan_bindings_have_repository_authority,
     required_worker_authority_kinds,
 )
+from moonmind.omnigent.harness_platform.execution_plan import (
+    bind_omnigent_model_selection,
+)
 from moonmind.omnigent.harness_platform.harness_registry import (
     canonical_harness_id,
     find_harness_registration,
@@ -53,9 +56,6 @@ from moonmind.schemas.omnigent_session_models import (
     OmnigentSessionActivityRequest,
     OmnigentSessionTerminalResult,
     OmnigentSessionWorkflowInput,
-)
-from moonmind.workflows.adapters.omnigent_agent_adapter import (
-    bind_omnigent_model_selection,
 )
 
 
