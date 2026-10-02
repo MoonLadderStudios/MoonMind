@@ -2482,6 +2482,27 @@ def main(argv: list[str] | None = None) -> int:
     # unsuccessfully; that observed outcome is not newly queued work.
     live = [item for item in created if item["status"] not in {"failed", "canceled"}]
     requested = len(targets) - len(duplicates)
+    failure_message = ""
+    if errors or skipped or len(live) < len(created):
+        parts: list[str] = []
+        if errors:
+            first_error = ""
+            first = errors[0] if isinstance(errors[0], dict) else {}
+            for key in ("error", "message"):
+                candidate = str(first.get(key) or "").strip() if isinstance(first, dict) else ""
+                if candidate:
+                    first_error = candidate
+                    break
+            if first_error:
+                parts.append(first_error[:1024])
+            parts.append(f"{len(errors)} child submission(s) failed")
+        if skipped:
+            parts.append(f"{len(skipped)} target(s) skipped")
+        if len(live) < len(created):
+            parts.append(
+                f"{len(created) - len(live)} queued child(ren) already terminal"
+            )
+        failure_message = "; ".join(parts)[:1024]
     payload = {
         **base_result,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -2512,7 +2533,14 @@ def main(argv: list[str] | None = None) -> int:
         ],
         "errors": errors,
         "failure": (
-            {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if live else "BATCH_FANOUT_FAILED"}
+            {
+                "code": "BATCH_FANOUT_PARTIAL_FAILURE" if live else "BATCH_FANOUT_FAILED",
+                "message": failure_message or (
+                    "some targets need attention"
+                    if live
+                    else "no child workflows were queued"
+                ),
+            }
             if errors or skipped or len(live) < len(created) else None
         ),
     }
