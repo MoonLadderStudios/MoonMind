@@ -536,7 +536,7 @@ async def test_bound_legacy_host_launch_preserves_exact_policy_version() -> None
 async def test_plan_bound_admission_uses_persisted_host_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from api_service.db import base as db_base
+    import api_service.db.base as db_base
 
     binding = OmnigentExecutionPlanBinding(
         planRef="omnigent-execution-plan:sha256:" + "a" * 64,
