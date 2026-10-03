@@ -445,7 +445,9 @@ def test_activation_summary_exposes_on_demand_commands_when_enabled() -> None:
     assert "moonmind.skills.request" in summary
 
 
-def test_activation_summary_warns_when_alias_unavailable() -> None:
+def test_activation_summary_preserves_requested_skill_source_authoring() -> (
+    None
+):
     summary = build_skill_activation_summary(
         parameters={"selectedSkill": "pr-resolver"},
         materialization_metadata={
@@ -454,7 +456,12 @@ def test_activation_summary_warns_when_alias_unavailable() -> None:
         },
         skills_on_demand_enabled=False,
     )
-    assert "repo-authored source and must not be modified" in summary
+    assert (
+        "Repository Skill sources may be read and edited when required by the task"
+        in summary
+    )
+    assert "Keep the active snapshot unchanged" in summary
+    assert "must not be modified" not in summary
 
 
 def test_prepend_is_idempotent() -> None:

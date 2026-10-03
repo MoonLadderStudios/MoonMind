@@ -488,3 +488,22 @@ The production compiler, schema forms, preset expansion, child API, runtime adap
 - Historical reconstruction, mixed API/worker versions, stale defaults, and changed definition digests cannot silently change authority.
 
 Source review and documentation coverage are not runtime, browser, or deployed conformance evidence. Required regressions belong in the existing selected test suites; protected live-provider qualification remains separately identified.
+
+## Dependency publication
+
+Managed, immediate, and saved-candidate Git publication verify each changed
+gitlink against the URL declared in that revision's `.gitmodules`, including
+uninitialized dependencies and URL-only changes. Git resolves relative URLs
+against the consumer's publication remote. Verification fetches the exact
+dependency commit into a temporary repository; local remote overrides, cached
+refs, and commits available only from a fork are not sufficient. The parent push
+uses `--recurse-submodules=no` so stale local remote refs cannot override this
+proof and configured recursive push behavior cannot publish dependencies on the
+consumer's behalf.
+A dependency commit must be fetchable from its declared remote before it can be
+included in a published consumer candidate. Retain the candidate and dependency
+work when verification fails. Managed and saved-candidate publication record
+`dependency_commit_unavailable` as a prerequisite failure, rather than repeatedly
+retrying an unchanged push. Resume the same candidate once its owning
+repository has published the dependency under the authorized scope. Do not
+replace the intended bundle with an unrelated published revision to pass CI.
