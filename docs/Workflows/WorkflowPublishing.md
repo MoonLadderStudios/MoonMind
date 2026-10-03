@@ -471,12 +471,18 @@ Source review and documentation coverage are not runtime, browser, or deployed c
 
 ## Dependency publication
 
-Managed, immediate, and saved-candidate Git publication use
-`--recurse-submodules=check`. Git checks changed initialized submodules before
-pushing the parent; it does not publish dependencies on the consumer's behalf.
-A local dependency commit must already have a remote reference before it can be
+Managed, immediate, and saved-candidate Git publication verify each changed
+gitlink against the URL declared in that revision's `.gitmodules`, including
+uninitialized dependencies and URL-only changes. Git resolves relative URLs
+against the consumer's publication remote. Verification fetches the exact
+dependency commit into a temporary repository; local remote overrides, cached
+refs, and commits available only from a fork are not sufficient. The parent push
+uses `--recurse-submodules=no` so stale local remote refs cannot override this
+proof and configured recursive push behavior cannot publish dependencies on the
+consumer's behalf.
+A dependency commit must be fetchable from its declared remote before it can be
 included in a published consumer candidate. Retain the candidate and dependency
-work when that check fails. Managed and saved-candidate publication record
+work when verification fails. Managed and saved-candidate publication record
 `dependency_commit_unavailable` as a prerequisite failure, rather than repeatedly
 retrying an unchanged push. Resume the same candidate once its owning
 repository has published the dependency under the authorized scope. Do not

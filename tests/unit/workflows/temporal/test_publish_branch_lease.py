@@ -16,7 +16,7 @@ def test_build_git_push_with_lease_args_pins_recorded_remote_sha() -> None:
 
     assert args == [
         "push",
-        "--recurse-submodules=check",
+        "--recurse-submodules=no",
         "-u",
         "--force-with-lease=refs/heads/feature/mm-680:abc123",
         "origin",
@@ -29,7 +29,7 @@ def test_build_git_push_with_lease_args_uses_empty_expect_for_new_branch() -> No
 
     assert args == [
         "push",
-        "--recurse-submodules=check",
+        "--recurse-submodules=no",
         "-u",
         "--force-with-lease=refs/heads/feature/new:",
         "origin",

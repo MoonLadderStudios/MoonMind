@@ -33,12 +33,21 @@ from moonmind.publish.sanitization import (
     sanitize_metadata_footer_value,
     sanitize_publish_subject,
 )
+from moonmind.publish.submodules import verify_submodule_publication
 
 class CommandResult(Protocol):
-    """Protocol for a command result with stdout."""
+    """Protocol for a completed command and its diagnostics."""
 
     @property
     def stdout(self) -> str:
+        pass
+
+    @property
+    def stderr(self) -> str:
+        pass
+
+    @property
+    def returncode(self) -> int:
         pass
 
 CommandRunner = Callable[
@@ -427,7 +436,25 @@ class PublishService:
                     raise RuntimeError(
                         "selected publication branch is not a fast-forward of the remote head"
                     )
-        push_command = [self._git_binary, "push", "--recurse-submodules=check", "-u"]
+
+        async def run_dependency_git(
+            *args: str, cwd: Path = repo_dir, network: bool = False
+        ) -> CommandResult:
+            return await run_command(
+                [self._git_binary, "-c", "core.hooksPath=/dev/null", *args],
+                cwd=cwd,
+                check=False,
+                env=push_env if network else {**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                redaction_values=(token,) if token else (),
+            )
+
+        await verify_submodule_publication(
+            repo_dir=repo_dir,
+            candidate_ref=branch_name,
+            base_ref=base_ref,
+            run_git=run_dependency_git,
+        )
+        push_command = [self._git_binary, "push", "--recurse-submodules=no", "-u"]
         if verify_remote:
             # The ancestry check protects shared history; the exact-tip lease
             # also rejects deletion or replacement between inspection and push.

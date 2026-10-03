@@ -29,6 +29,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
@@ -37,6 +38,10 @@ from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
 from moonmind.publish import is_unpublished_submodule_failure
+from moonmind.publish.submodules import (
+    SubmodulePublicationError,
+    verify_submodule_publication,
+)
 from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.security.outbound_scan import (
     OutboundBundleItem,
@@ -627,7 +632,7 @@ def build_git_push_with_lease_args(
         if remote_sha
         else f"--force-with-lease=refs/heads/{branch_name}:"
     )
-    return ["push", "--recurse-submodules=check", "-u", lease, "origin", branch_name]
+    return ["push", "--recurse-submodules=no", "-u", lease, "origin", branch_name]
 
 
 def classify_git_push_failure(
@@ -15056,6 +15061,49 @@ class TemporalAgentRuntimeActivities:
             if pre_push_scan_result is not None:
                 return pre_push_scan_result
 
+            async def verify_dependencies() -> dict[str, Any] | None:
+                async def run_git(
+                    *args: str, cwd: Path = Path(workspace), network: bool = False
+                ) -> SimpleNamespace:
+                    proc = await _create_managed_agent_subprocess(
+                        *self._workspace_git_command(
+                            str(cwd), "-c", "core.hooksPath=/dev/null", *args
+                        ),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=auth_command_env if network else command_env,
+                    )
+                    try:
+                        stdout, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=120
+                        )
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                        raise
+                    return SimpleNamespace(
+                        returncode=proc.returncode, stdout=stdout, stderr=stderr
+                    )
+
+                try:
+                    await verify_submodule_publication(
+                        repo_dir=Path(workspace),
+                        candidate_ref=current_branch,
+                        base_ref=base_ref,
+                        run_git=run_git,
+                    )
+                except SubmodulePublicationError as exc:
+                    return classify_git_push_failure(
+                        stderr=str(exc),
+                        branch=current_branch,
+                        base_branch=base_branch_name,
+                    )
+                return None
+
+            dependency_failure = await verify_dependencies()
+            if dependency_failure is not None:
+                return dependency_failure
+
             push_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
@@ -15226,6 +15274,10 @@ class TemporalAgentRuntimeActivities:
                         if retry_scan_result is not None:
                             retry_scan_result.update(retry_metadata)
                             return retry_scan_result
+                        dependency_failure = await verify_dependencies()
+                        if dependency_failure is not None:
+                            dependency_failure.update(retry_metadata)
+                            return dependency_failure
                         retry_push_proc = await _create_managed_agent_subprocess(
                             *self._workspace_git_command(
                                 workspace,

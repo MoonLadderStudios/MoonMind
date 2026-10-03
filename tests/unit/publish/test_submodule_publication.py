@@ -12,8 +12,9 @@ from uuid import uuid4
 import pytest
 
 from moonmind.publish.service import PublishService
+from moonmind.publish.submodules import SubmodulePublicationError
 from moonmind.workflows.temporal.activity_runtime import (
-    build_git_push_with_lease_args,
+    TemporalAgentRuntimeActivities,
     classify_git_push_failure,
 )
 
@@ -104,10 +105,18 @@ async def _command(command, *, cwd, check=True, env=None, **_kwargs):
 
 async def _publish(candidate, route: str):
     if route == "managed":
-        return await _command(
-            ["git", *build_git_push_with_lease_args(branch="feature/rescue")],
-            cwd=candidate.parent,
-            check=False,
+        activities = TemporalAgentRuntimeActivities(
+            run_store=SimpleNamespace(
+                load=lambda _run_id: SimpleNamespace(
+                    workspace_path=str(candidate.parent)
+                )
+            )
+        )
+        return await activities._push_workspace_branch(
+            "fixture-run",
+            target_branch="main",
+            head_branch="feature/rescue",
+            github_token="fixture-token",
         )
     service = PublishService()
     if route == "immediate":
@@ -138,21 +147,34 @@ async def _publish(candidate, route: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["managed", "immediate", "saved"])
+@pytest.mark.parametrize("fork_only", [False, True])
+@pytest.mark.parametrize("publication_owner", ["workspace", "separate"])
 async def test_publication_preserves_unpublished_dependency_then_resumes(
     dependency_candidate,
     route: str,
+    fork_only: bool,
+    publication_owner: str,
 ):
     candidate = dependency_candidate
+    if fork_only:
+        fork = candidate.parent.parent / "dependency-fork.git"
+        _git(candidate.parent.parent, "init", "--bare", str(fork))
+        _git(candidate.parent / "dependency", "remote", "add", "fork", str(fork))
+        _git(candidate.parent / "dependency", "push", "fork", "HEAD:main")
     try:
         first = await _publish(candidate, route)
-    except subprocess.CalledProcessError as exc:
-        error = exc.stderr.decode()
+    except (subprocess.CalledProcessError, SubmodulePublicationError) as exc:
+        error = (
+            exc.stderr.decode()
+            if isinstance(exc, subprocess.CalledProcessError)
+            else str(exc)
+        )
     else:
         if route == "managed":
             assert (
-                first.returncode != 0
+                first["push_status"] == "failed"
             ), "parent was pushed with an unpublished dependency"
-            error = first.stderr
+            error = first["push_error"]
         else:
             assert (
                 first.status == "unavailable"
@@ -180,10 +202,21 @@ async def test_publication_preserves_unpublished_dependency_then_resumes(
     )
 
     # The dependency owner publishes; the consumer does not acquire that authority.
-    _git(candidate.parent / "dependency", "push", "origin", "HEAD:main")
+    owner = candidate.parent / "dependency"
+    if publication_owner == "separate":
+        owner = candidate.parent.parent / "dependency-owner"
+        _git(
+            candidate.parent.parent,
+            "clone",
+            str(candidate.parent / "dependency"),
+            str(owner),
+        )
+        _git(owner, "remote", "set-url", "origin", str(candidate.dependency_remote))
+    _git(owner, "push", "origin", "HEAD:main")
     second = await _publish(candidate, route)
     if route == "managed":
-        assert second.returncode == 0, second.stderr
+        assert second["push_status"] == "pushed", second
+        assert second["remote_verified"]
     elif route == "immediate":
         assert second.status == "published" and second.remote_verified
     else:
@@ -192,6 +225,85 @@ async def test_publication_preserves_unpublished_dependency_then_resumes(
         _git(candidate.remote, "rev-parse", "refs/heads/feature/rescue").stdout.strip()
         == candidate.head
     )
+    fresh = candidate.parent.parent / "fresh-consumer"
+    _git(
+        candidate.parent.parent,
+        "clone",
+        "--branch",
+        "feature/rescue",
+        str(candidate.remote),
+        str(fresh),
+    )
+    _git(
+        fresh,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+        "--checkout",
+    )
+    assert (fresh / "dependency" / "SKILL.md").read_text() == "Requested Skill fix\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["managed", "immediate", "saved"])
+@pytest.mark.parametrize("local_state", ["uninitialized", "overridden-origin"])
+async def test_publication_checks_committed_relative_dependency_url(
+    dependency_candidate, route: str, local_state: str
+):
+    candidate = dependency_candidate
+    # Git resolves this against the parent repository's origin, as a fresh clone does.
+    _git(
+        candidate.parent,
+        "config",
+        "-f",
+        ".gitmodules",
+        "submodule.dependency.url",
+        "../dependency.git",
+    )
+    _git(candidate.parent, "add", ".gitmodules")
+    _git(candidate.parent, "commit", "--amend", "--no-edit")
+    candidate.head = _git(candidate.parent, "rev-parse", "HEAD").stdout.strip()
+    fork = candidate.parent.parent / "dependency-fork.git"
+    _git(candidate.parent.parent, "init", "--bare", str(fork))
+    _git(candidate.parent / "dependency", "remote", "add", "fork", str(fork))
+    _git(candidate.parent / "dependency", "push", "fork", "HEAD:main")
+    if local_state == "uninitialized":
+        _git(candidate.parent, "submodule", "deinit", "--force", "dependency")
+    else:
+        _git(candidate.parent / "dependency", "remote", "set-url", "origin", str(fork))
+
+    try:
+        blocked = await _publish(candidate, route)
+    except (subprocess.CalledProcessError, SubmodulePublicationError):
+        pass
+    else:
+        status = blocked["push_status"] if route == "managed" else blocked.status
+        assert status in {
+            "failed",
+            "unavailable",
+        }, "declared remote cannot supply the dependency"
+    assert not _git(
+        candidate.remote,
+        "show-ref",
+        "--verify",
+        "refs/heads/feature/rescue",
+        check=False,
+    ).stdout
+    assert _git(candidate.parent, "rev-parse", "HEAD").stdout.strip() == candidate.head
+
+    # Publish through the dependency owner without changing the consumer candidate.
+    _git(
+        candidate.parent,
+        "--git-dir=.git/modules/dependency",
+        "push",
+        str(candidate.dependency_remote),
+        "HEAD:main",
+    )
+    resumed = await _publish(candidate, route)
+    status = resumed["push_status"] if route == "managed" else resumed.status
+    assert status in {"pushed", "published"}, resumed
     fresh = candidate.parent.parent / "fresh-consumer"
     _git(
         candidate.parent.parent,
