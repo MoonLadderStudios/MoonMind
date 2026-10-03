@@ -261,16 +261,66 @@ def test_begin_cannot_supply_principal_or_trusted_hosts(enrollment):
     assert not routes.get_setup_service()._pending
 
 
-def test_enterprise_enrollment_uses_only_server_trusted_host(enrollment, monkeypatch):
+@pytest.mark.parametrize(
+    "endpoint,api_base",
+    [
+        ("https://github.example", "https://github.example/api/v3"),
+        ("https://github.example/api/v3", "https://github.example/api/v3"),
+        ("https://github.example:8443/api/v3", "https://github.example:8443/api/v3"),
+    ],
+    ids=["origin", "api-path", "configured-port"],
+)
+def test_enterprise_enrollment_uses_only_server_trusted_host(
+    enrollment, monkeypatch, endpoint, api_base
+):
     client, _, calls = enrollment
     from moonmind.config.settings import GitHubSettings, settings
 
     monkeypatch.setenv("GITHUB_TRUSTED_API_HOSTS", " other.example , GITHUB.example ")
     monkeypatch.setattr(settings, "github", GitHubSettings())
-    state = _begin(client, endpointRef="https://github.example")
+    state = _begin(client, endpointRef=endpoint)
     pending = next(iter(routes.get_setup_service()._pending.values()))
-    assert pending.configuration.api_base == "https://github.example/api/v3"
+    assert pending.configuration.api_base == api_base
     assert pending.state == state
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://github.example",
+        "https://@github.example",
+        "https://:@github.example",
+        "https://github.example?redirect=capture.example",
+        "https://github.example#other-origin",
+        "https://github.example/other/api/v3",
+        "https://github.example:invalid/api/v3",
+        "https://github.\nexample",
+    ],
+    ids=["http", "empty-user", "empty-password", "query", "fragment", "path", "port", "whitespace"],
+)
+def test_enterprise_enrollment_rejects_unsafe_endpoint_before_issuance(
+    enrollment, monkeypatch, endpoint
+):
+    from moonmind.config.settings import GitHubSettings, settings
+
+    client, _, calls = enrollment
+    monkeypatch.setenv("GITHUB_TRUSTED_API_HOSTS", "github.example")
+    monkeypatch.setattr(settings, "github", GitHubSettings())
+    response = client.post(
+        "/github-app/begin",
+        json={
+            "appSlug": "moonmind",
+            "expectedAppRef": "github-app:123",
+            "appId": "123",
+            "keySecretRef": "db://github-app-key/configured",
+            "requestId": "request:blocked-endpoint",
+            "connectionId": "connection:blocked-endpoint",
+            "endpointRef": endpoint,
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert not routes.get_setup_service()._pending
     assert calls == []
 
 

@@ -48,12 +48,23 @@ def github_api_base_for(endpoint_ref: str = "", *, allowed_hosts: Sequence[str] 
 
     try:
         parsed = urlsplit(candidate)
+        # Validate the port before enrollment records a credential destination.
+        _ = parsed.port
     except ValueError as exc:
         raise BoundAccessError(BOUND_DENIED, "GitHub endpoint is not a valid URL") from exc
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        raise BoundAccessError(BOUND_DENIED, "GitHub endpoint is not a valid URL")
-    if parsed.username or parsed.password:
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        raise BoundAccessError(BOUND_DENIED, "GitHub endpoint must be a valid HTTPS URL")
+    if parsed.username is not None or parsed.password is not None:
         raise BoundAccessError(BOUND_DENIED, "GitHub endpoint must not embed credentials")
+    if (
+        any(character.isspace() for character in raw)
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/", "/api/v3", "/api/v3/"}
+    ):
+        raise BoundAccessError(
+            BOUND_DENIED, "GitHub endpoint must be an origin or canonical /api/v3 URL"
+        )
     host = parsed.hostname.lower()
     from moonmind.config.settings import settings
 
@@ -66,10 +77,7 @@ def github_api_base_for(endpoint_ref: str = "", *, allowed_hosts: Sequence[str] 
     if host in {"github.com", "api.github.com"}:
         return _GITHUB_API_BASE
     if host in allowlisted:
-        base = candidate.rstrip("/")
-        if not base.endswith("/api/v3"):
-            base += "/api/v3"
-        return base
+        return f"https://{parsed.netloc}/api/v3"
     raise BoundAccessError(
         BOUND_DENIED,
         f"GitHub endpoint host {host!r} is not an allowlisted API host",
