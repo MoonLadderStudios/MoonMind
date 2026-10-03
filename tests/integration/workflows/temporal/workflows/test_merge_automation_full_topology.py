@@ -174,6 +174,7 @@ async def _readiness(_payload: dict[str, Any]) -> dict[str, Any]:
         }
     if _scenario == "ci_failure_queued" and _terminal_evidence_calls == 0:
         return {
+            "actionableCiFailuresVersion": "v1",
             "headSha": "abcdef1",
             "ready": False,
             "pullRequestOpen": True,
