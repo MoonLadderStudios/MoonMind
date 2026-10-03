@@ -32,7 +32,11 @@ _DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 # its authoritative success or structured startup failure before MoonMind
 # releases the on-demand host.
 _DEFAULT_EVENT_TIMEOUT_SECONDS = 150.0
-_MAX_SSE_LINE_BYTES = 1_000_000
+# Stock Omnigent mirrors at most 1 MiB of UTF-8 tool output plus a truncation
+# notice (omnigent.runtime.tool_output). JSON can encode one control byte as
+# six bytes; reserve bounded notice and event-envelope headroom as well.
+_MAX_SSE_LINE_BYTES = 6 * (1024 * 1024 + 200) + 64 * 1024
+_SSE_PROCESS_CHUNK_BYTES = 64 * 1024
 # A refused or timed-out connect never delivered the request, so a client
 # opted into an outage grace re-sends it on this interval until the grace ends.
 _CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS = 2.0
@@ -706,35 +710,53 @@ class OmnigentHttpClient:
             )
             raise self._error_from_response(response.status_code, body)
         pending = bytearray()
+        frame_bytes = 0
+        # Keep HTTPX's immediate delivery: specifying chunk_size would retain
+        # small live frames until that many bytes arrive or the stream ends.
         async for chunk in response.aiter_bytes():
-            pending.extend(chunk)
-            if len(pending) > _MAX_SSE_LINE_BYTES + 1_000_000:
-                raise OmnigentClientError(
-                    "Omnigent SSE frame exceeds bounded buffer size",
-                    failure_class="integration_error",
-                )
-            while True:
-                newline = pending.find(b"\n")
-                if newline < 0:
-                    break
-                raw = bytes(pending[:newline])
-                del pending[: newline + 1]
-                if len(raw) > _MAX_SSE_LINE_BYTES:
+            for start in range(0, len(chunk), _SSE_PROCESS_CHUNK_BYTES):
+                pending.extend(chunk[start : start + _SSE_PROCESS_CHUNK_BYTES])
+                while True:
+                    newline = pending.find(b"\n")
+                    if newline < 0:
+                        break
+                    raw = bytes(pending[:newline])
+                    del pending[: newline + 1]
+                    if len(raw) > _MAX_SSE_LINE_BYTES:
+                        raise OmnigentClientError(
+                            "Omnigent SSE frame exceeds bounded line size",
+                            failure_class="integration_error",
+                        )
+                    if raw in (b"", b"\r"):
+                        frame_bytes = 0
+                    else:
+                        # Count ignored metadata too, without buffering or
+                        # joining multiple data lines into another payload.
+                        frame_bytes += len(raw) + 1
+                        if frame_bytes > _MAX_SSE_LINE_BYTES:
+                            raise OmnigentClientError(
+                                "Omnigent SSE frame exceeds bounded frame size",
+                                failure_class="integration_error",
+                            )
+                    try:
+                        line = raw.decode("utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    event = parse_sse_line(line)
+                    if event is not None:
+                        yield event
+                # Drain complete lines before bounding the residual. Local
+                # slices bound pending growth to the ceiling plus 64 KiB. A
+                # lone CR may be the blank CRLF delimiter split across chunks.
+                if pending != b"\r" and frame_bytes + len(pending) > _MAX_SSE_LINE_BYTES:
                     raise OmnigentClientError(
-                        "Omnigent SSE frame exceeds bounded line size",
+                        "Omnigent SSE frame exceeds bounded frame size",
                         failure_class="integration_error",
                     )
-                try:
-                    line = raw.decode("utf-8", errors="replace")
-                except Exception:
-                    continue
-                event = parse_sse_line(line)
-                if event is not None:
-                    yield event
         if pending:
-            if len(pending) > _MAX_SSE_LINE_BYTES:
+            if pending != b"\r" and frame_bytes + len(pending) > _MAX_SSE_LINE_BYTES:
                 raise OmnigentClientError(
-                    "Omnigent SSE frame exceeds bounded line size",
+                    "Omnigent SSE frame exceeds bounded frame size",
                     failure_class="integration_error",
                 )
             try:

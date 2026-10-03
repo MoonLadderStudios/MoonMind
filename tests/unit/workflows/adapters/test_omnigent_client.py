@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -61,7 +62,9 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
                 },
             )
         if request.method == "GET" and request.url.path.endswith("/diff/src/app.py"):
-            return httpx.Response(200, content=b"diff --git a/src/app.py b/src/app.py\n")
+            return httpx.Response(
+                200, content=b"diff --git a/src/app.py b/src/app.py\n"
+            )
         if request.method == "GET" and request.url.path.endswith(
             "/filesystem/src/app.py"
         ):
@@ -111,10 +114,13 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
     assert await client.list_changed_files("sess_1") == {"ok": True}
     assert await client.list_workspace_files("sess_1") == {"ok": True}
     assert await client.get_workspace_file("sess_1", "src/app.py") == b"print('ok')\n"
-    assert await client.get_workspace_diff(
-        "sess_1",
-        "src/app.py",
-    ) == b"diff --git a/src/app.py b/src/app.py\n"
+    assert (
+        await client.get_workspace_diff(
+            "sess_1",
+            "src/app.py",
+        )
+        == b"diff --git a/src/app.py b/src/app.py\n"
+    )
     assert await client.list_session_files("sess_1") == {"ok": True}
     assert await client.interrupt("sess_1") == {"ok": True}
     assert await client.stop_session("sess_1") == {"ok": True}
@@ -155,9 +161,7 @@ async def test_injected_http_client_preserves_omnigent_timeout_contract() -> Non
         )
 
         assert await client.get_session("sess_1") == {"ok": True}
-        assert await client.post_event("sess_1", {"type": "message"}) == {
-            "ok": True
-        }
+        assert await client.post_event("sess_1", {"type": "message"}) == {"ok": True}
         assert await client.interrupt("sess_1") == {"ok": True}
         assert await client.stop_session("sess_1") == {"ok": True}
         assert [event async for event in client.stream_events("sess_1")] == []
@@ -304,9 +308,7 @@ async def test_omnigent_client_maps_http_failures_to_canonical_classes(
 def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
     assert parse_sse_line("event: response.created") is None
 
-    parsed = parse_sse_line(
-        'data: {"type":"message","token":"sensitive-value"}'
-    )
+    parsed = parse_sse_line('data: {"type":"message","token":"sensitive-value"}')
     assert parsed == {"type": "message", "token": "[REDACTED]"}
 
     with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
@@ -672,3 +674,160 @@ async def test_connect_outage_grace_never_retries_after_the_server_answered(
     with pytest.raises(OmnigentClientError, match="connection reset"):
         await client.post_event("sess_1", {"type": "message"})
     assert attempts["value"] == 1
+
+
+class _SseWireStream(httpx.AsyncByteStream):
+    def __init__(self, body: bytes, *, fragment_bytes: int | None) -> None:
+        self.body = body
+        self.fragment_bytes = fragment_bytes
+        self.bytes_delivered = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        size = self.fragment_bytes or len(self.body)
+        for start in range(0, len(self.body), size):
+            chunk = self.body[start : start + size]
+            self.bytes_delivered += len(chunk)
+            yield chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fragment_bytes", [4093, None])
+@pytest.mark.parametrize(
+    ("character", "ensure_ascii"),
+    [
+        ("x", True),
+        ("\x00", True),
+        ("é", True),
+        ("😀", True),
+        ("é", False),
+        ("😀", False),
+    ],
+)
+async def test_stream_accepts_bounded_omnigent_tool_output_wire_contract(
+    fragment_bytes: int | None, character: str, ensure_ascii: bool
+) -> None:
+    # Omnigent's mirrored tool output allows 1 MiB of UTF-8 plus a truncation
+    # notice. JSON escapes an ASCII control byte to six wire bytes.
+    output = character * (1024 * 1024 // len(character.encode("utf-8"))) + (
+        "\n\n[output truncated by omnigent: 1000 of 1049576 bytes omitted]"
+    )
+    event = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call_output",
+            "id": "item-large-output",
+            "call_id": "call-large-output",
+            "status": "completed",
+            "output": output,
+        },
+    }
+    body = (
+        "event: response.output_item.done\ndata: "
+        + json.dumps(event, ensure_ascii=ensure_ascii)
+        + "\n\n"
+    ).encode()
+    wire = _SseWireStream(body, fragment_bytes=fragment_bytes)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/sessions/sess-large/stream"
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=wire
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    events = [item async for item in client.stream_events("sess-large")]
+    assert events == [event]
+    assert wire.bytes_delivered == len(body)
+
+
+@pytest.mark.asyncio
+async def test_stream_parses_coalesced_valid_frames_with_bounded_reads() -> None:
+    event = {"type": "response.output_text.delta", "delta": "x" * 100_000}
+    frame = ("data: " + json.dumps(event) + "\n\n").encode()
+    # Network chunks are independent of SSE boundaries. This one contains 80
+    # valid small lines and exceeds the finite per-line wire budget in total.
+    wire = _SseWireStream(frame * 80, fragment_bytes=None)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=wire
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    events = [item async for item in client.stream_events("sess-coalesced")]
+    assert events == [event] * 80
+
+
+@pytest.mark.asyncio
+async def test_stream_delivers_small_frame_before_next_network_chunk() -> None:
+    release_next_chunk = asyncio.Event()
+    first_event = {"type": "session.heartbeat"}
+
+    class LiveStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield ("data: " + json.dumps(first_event) + "\n\n").encode()
+            await release_next_chunk.wait()
+            yield b'data: {"type":"session.heartbeat"}\n\n'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=LiveStream()
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    async with aclosing(client.stream_events("sess-live")) as events:
+        try:
+            # A live stream need not produce another byte for many seconds.
+            # Deliver its complete status/progress frame without waiting for
+            # a transport buffer threshold or EOF.
+            assert await asyncio.wait_for(anext(events), timeout=1) == first_event
+            assert not release_next_chunk.is_set()
+        finally:
+            release_next_chunk.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminated", [False, True])
+async def test_stream_rejects_genuinely_oversized_wire_lines(terminated: bool) -> None:
+    body = b"data: " + b"x" * (8 * 1024 * 1024)
+    if terminated:
+        body += b"\n\n"
+    wire = _SseWireStream(body, fragment_bytes=64 * 1024)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=wire
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(OmnigentClientError, match="exceeds bounded"):
+        _ = [item async for item in client.stream_events("sess-overflow")]
+    assert wire.bytes_delivered < len(body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [b'data: {"type":', b'data: {\ndata: "type": "session.heartbeat"}\n\n'],
+)
+async def test_stream_rejects_truncated_or_split_json_frames(body: bytes) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_SseWireStream(body, fragment_bytes=3),
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
+        _ = [item async for item in client.stream_events("sess-malformed")]
