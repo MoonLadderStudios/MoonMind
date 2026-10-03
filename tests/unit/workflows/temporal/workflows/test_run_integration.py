@@ -1751,17 +1751,22 @@ async def test_run_integration_stage_signal_driven_completion(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bound_merge", [False, True])
 @pytest.mark.parametrize("durable_merge", [False, True])
+@pytest.mark.parametrize("canonical_target", [False, True])
+@pytest.mark.parametrize("publish_base", [None, "trunk"])
 async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
     bound_merge: bool,
     durable_merge: bool,
+    canonical_target: bool,
+    publish_base: str | None,
 ) -> None:
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
         lambda patch: (bound_merge and patch == "jules-merge-target-authority-v1")
-        or (durable_merge and patch == "jules-merge-durable-candidate-v1"),
+        or (durable_merge and patch == "jules-merge-durable-candidate-v1")
+        or (canonical_target and patch == "jules-merge-canonical-authority-v1"),
     )
     captured: list[tuple[str, dict[str, Any]]] = []
 
@@ -1807,12 +1812,26 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
         run_workflow_module.workflow, "wait_condition", fake_wait_condition
     )
 
-    await mock_run_workflow._run_integration_stage(
-        parameters={
+    if canonical_target:
+        mock_run_workflow._repo = None
+        parameters = {
+            "publishMode": "branch",
+            "workspaceSpec": {"repositoryTarget": {
+                "provider": "git",
+                "repository": {"name": "org/repo"},
+                "branch": {"name": "release"},
+            }},
+        }
+    else:
+        parameters = {
             "repo": "org/repo",
             "publishMode": "branch",
             "workspaceSpec": {"startingBranch": "feature-branch"},
-        },
+        }
+    if publish_base is not None:
+        parameters["publishBaseBranch"] = publish_base
+    await mock_run_workflow._run_integration_stage(
+        parameters=parameters,
         plan_ref="plan-1",
     )
 
@@ -1827,13 +1846,16 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     merge_payload = captured[3][1]
     # The activity always receives the authored destination, even without an override.
     expected = {"pr_url": "https://github.com/org/repo/pull/123"}
+    target_branch = publish_base or ("release" if canonical_target else "feature-branch")
     if bound_merge:
-        expected.update(expected_repository="org/repo", target_branch="feature-branch")
+        expected.update(expected_repository="org/repo", target_branch=target_branch)
+    elif publish_base:
+        expected["target_branch"] = publish_base
     assert merge_payload == expected
     if durable_merge:
         assert captured[-1] == ("repo.merge_pr", {
             "pr_url": "https://github.com/org/repo/pull/123",
-            "expected_repository": "org/repo", "target_branch": "feature-branch",
+            "expected_repository": "org/repo", "target_branch": target_branch,
             "expected_head_sha": "a" * 40,
         })
 

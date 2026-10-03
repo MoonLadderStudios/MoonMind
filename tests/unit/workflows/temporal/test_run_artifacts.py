@@ -9,6 +9,10 @@ from typing import Any, Callable
 import pytest
 
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
+from moonmind.workflows.skills.tool_registry import (
+    compute_registry_digest,
+    parse_tool_registry,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityRetries,
     TemporalActivityRoute,
@@ -791,6 +795,29 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     captured: list[tuple[str, dict[str, object]]] = []
+    registry = {
+        "skills": [
+            {
+                "name": "repo.run_tests",
+                "description": "Run repository tests",
+                "inputs": {"schema": {"type": "object"}},
+                "outputs": {"schema": {"type": "object"}},
+                "executor": {
+                    "activity_type": "mm.skill.execute",
+                    "selector": {"mode": "by_capability"},
+                },
+                "requirements": {"capabilities": ["sandbox"]},
+                "policies": {
+                    "timeouts": {
+                        "start_to_close_seconds": 1800,
+                        "schedule_to_close_seconds": 3600,
+                    },
+                    "retries": {"max_attempts": 1},
+                },
+            }
+        ]
+    }
+    registry_digest = compute_registry_digest(skills=parse_tool_registry(registry))
 
     async def fake_execute_activity(
         activity_type: str,
@@ -807,30 +834,7 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
                 else getattr(payload, "artifact_ref", None)
             ) if payload is not None else None
             if artifact_ref == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.run_tests",
-                                "description": "Run repository tests",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.skill.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 1},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
+                return json.dumps(registry).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -838,7 +842,7 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
                         "title": "Test Plan",
                         "created_at": "2026-03-12T00:00:00Z",
                         "registry_snapshot": {
-                            "digest": "reg:sha256:" + ("a" * 64),
+                            "digest": registry_digest,
                             "artifact_ref": "artifact://registry/1",
                         },
                     },

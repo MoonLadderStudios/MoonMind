@@ -1316,6 +1316,11 @@ class SecuritySettings(BaseSettings):
             resolve_session_secret,
         )
 
+        # Migrate the previous template's scaffolding through the same durable
+        # owner as an omitted key, without relaxing other weak-value checks.
+        if value and value.strip() == "replace_with_a_strong_random_jwt_secret":
+            value = None
+
         if value and value.strip():
             if looks_like_placeholder_secret(value) or len(value.encode("utf-8")) < 32:
                 raise ValueError(
