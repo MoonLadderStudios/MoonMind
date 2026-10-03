@@ -520,16 +520,90 @@ def test_unknown_terminal_create_websocket_is_not_proxied() -> None:
     assert disconnect.code == WS_CLOSE_TRANSPORT_UNSUPPORTED
 
 
-def test_terminal_view_passes_capability_then_relays() -> None:
+def test_terminal_view_passes_capability_then_relays(monkeypatch) -> None:
     # Terminal viewing is a read capability the owner holds, so it clears the
     # capability gate and reaches the compatibility-review disposition (proving
     # view is gated separately from input).
+    captured = {}
+
+    async def relay(*, browser, **kwargs):
+        captured.update(kwargs)
+        await browser.accept()
+        await browser.close(code=1000)
+
+    monkeypatch.setattr("api_service.api.routers.omnigent_bridge._relay_native_websocket", relay)
     client = _build()
     disconnect = _connect_expect_close(
         client,
         _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"),
     )
     assert disconnect.code == 1000
+    assert captured["browser_read_only"] is True
+
+
+@pytest.mark.parametrize("frame", [{"text": "echo injected"}, {"bytes": b"echo injected"}])
+def test_read_only_relay_never_forwards_browser_frames(monkeypatch, frame):
+    from unittest.mock import AsyncMock
+
+    received_output = asyncio.Event()
+    browser = SimpleNamespace(
+        accept=AsyncMock(), close=AsyncMock(), send_bytes=AsyncMock(),
+    )
+
+    async def send_text(payload):
+        received_output.set()
+
+    async def receive():
+        await received_output.wait()
+        return {"type": "websocket.receive", **frame}
+
+    browser.send_text = AsyncMock(side_effect=send_text)
+    browser.receive = receive
+
+    class Upstream:
+        closed = False
+        send_str = AsyncMock()
+        send_bytes = AsyncMock()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def close(self):
+            self.closed = True
+
+        def __aiter__(self):
+            async def messages():
+                yield SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data="terminal output")
+                await asyncio.Event().wait()
+            return messages()
+
+    upstream = Upstream()
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def ws_connect(self, *_args, **_kwargs):
+            return upstream
+
+    monkeypatch.setattr("api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", lambda **kwargs: Client())
+    guard = AsyncMock()
+    asyncio.run(_relay_native_websocket(
+        browser=browser, upstream_url="ws://upstream.invalid/terminal", subprotocol=None,
+        still_authorized=AsyncMock(return_value=True), browser_frame_guard=guard,
+        browser_read_only=True,
+    ))
+    browser.send_text.assert_awaited_once_with("terminal output")
+    upstream.send_str.assert_not_awaited()
+    upstream.send_bytes.assert_not_awaited()
+    guard.assert_not_awaited()
+    assert any(call.kwargs["code"] == WS_CLOSE_READ_ONLY for call in browser.close.await_args_list)
 
 
 def test_unknown_browser_websocket_is_not_proxied() -> None:

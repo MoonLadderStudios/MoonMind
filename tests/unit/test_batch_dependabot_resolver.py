@@ -113,7 +113,6 @@ def _args(**overrides: Any) -> Any:
         {"login": "dependabot[bot]"},
         {"login": "app/dependabot"},
         {"login": "DEPENDABOT[BOT]"},
-        {"login": "", "name": "dependabot[bot]"},
     ],
 )
 def test_is_dependabot_author_accepts_bot_spellings(author: dict[str, Any]) -> None:
@@ -125,6 +124,9 @@ def test_is_dependabot_author_accepts_bot_spellings(author: dict[str, Any]) -> N
     "author",
     [
         {"login": "octocat"},
+        {"login": "octocat", "name": "dependabot[bot]"},
+        {"login": "", "name": "dependabot[bot]"},
+        {"name": "app/dependabot"},
         {"login": "renovate[bot]"},
         {},
         None,
@@ -478,6 +480,7 @@ def test_partition_matches_only_genuine_dependabot_prs() -> None:
         _dependabot_pr(number=4, headRefName="feature/manual"),  # non-dependabot-branch
         _dependabot_pr(number=5, title="Bump the pip group with 2 updates"),  # title-mismatch
         _dependabot_pr(number=6, headRefOid=""),  # missing-head-sha
+        _dependabot_pr(number=7, author={"login": "octocat", "name": "dependabot[bot]"}),
     ]
     queue_requests, skipped, matched_count = _partition(module, prs)
 
@@ -490,6 +493,7 @@ def test_partition_matches_only_genuine_dependabot_prs() -> None:
         4: "non-dependabot-branch",
         5: "title-mismatch",
         6: "missing-head-sha",
+        7: "not-dependabot-author",
     }
 
 

@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from moonmind.security.egress_conformance_evidence import (
+from moonmind.security import (
     EGRESS_EVIDENCE_DIGEST_KEY,
     EgressEvidenceDigestError,
     EgressEvidenceSecretError,

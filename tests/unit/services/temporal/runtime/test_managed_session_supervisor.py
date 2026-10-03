@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.codex_conformance.canary import (
     CANARY_DUPLICATE_EXECUTION,
     CANARY_SCENARIO_VERSION,
@@ -16,6 +16,7 @@ from moonmind.codex_conformance.canary import (
     DEFAULT_MARKER_PATH,
     validate_canary_evidence,
 )
+from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -23,6 +24,7 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
 from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
     ManagedSessionSupervisor,
 )
+
 
 class _LocalArtifactStorage:
     def __init__(self, root: Path) -> None:
@@ -182,6 +184,93 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     assert artifact_storage.resolve_storage_path("sess-1/stderr.log").read_text(encoding="utf-8") == "warning: none\n"
     assert artifact_storage.resolve_storage_path("sess-1/session.summary.json").exists()
     assert artifact_storage.resolve_storage_path("sess-1/session.step_checkpoint.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("publication", ["snapshot", "finalize"])
+@pytest.mark.parametrize("present_stream", [None, "stdout", "stderr"])
+async def test_absent_spools_publish_empty_artifacts_without_read_failure(
+    tmp_path: Path,
+    publication: str,
+    present_stream: str | None,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    source = b"session output\n"
+    if present_stream is not None:
+        (Path(record.artifact_spool_path) / f"{present_stream}.log").write_bytes(source)
+
+    if publication == "snapshot":
+        published = await supervisor.publish_snapshot(record.session_id)
+    else:
+        published = await supervisor.finalize(record.session_id, status="terminated")
+
+    for stream_name in ("stdout", "stderr"):
+        expected = source if stream_name == present_stream else b""
+        artifact_ref = getattr(published, f"{stream_name}_artifact_ref")
+        assert storage.resolve_storage_path(artifact_ref).read_bytes() == expected
+        assert getattr(published, f"{stream_name}_log_offset") == len(expected)
+    assert published.last_log_offset == (len(source) if present_stream else 0)
+    diagnostics = json.loads(
+        storage.resolve_storage_path(published.diagnostics_ref).read_text()
+    )
+    assert not any(
+        item["type"] == "managed_session_spool_read_failed"
+        for item in diagnostics["annotations"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_name", ["stdout", "stderr"])
+async def test_snapshot_reports_oversized_spool_without_losing_source_offsets(
+    tmp_path: Path, stream_name: str,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    spool = Path(record.artifact_spool_path)
+    for name in ("stdout", "stderr"):
+        (spool / f"{name}.log").write_bytes(b"")
+    oversized_path = spool / f"{stream_name}.log"
+    # A sparse file reproduces a real oversized spool without a large fixture.
+    with oversized_path.open("wb") as output:
+        output.seek(64 * 1024 * 1024)
+        output.write(b"private diagnostic data\n")
+    source_size = oversized_path.stat().st_size
+
+    snapshot = await supervisor.publish_snapshot(record.session_id)
+
+    published = storage.resolve_storage_path(
+        getattr(snapshot, f"{stream_name}_artifact_ref")
+    ).read_bytes()
+    assert b"truncated" in published.lower()
+    assert b"private diagnostic data" not in published
+    assert len(published) < 1024
+    diagnostics = json.loads(
+        storage.resolve_storage_path(snapshot.diagnostics_ref).read_text()
+    )
+    annotation = next(
+        item for item in diagnostics["annotations"]
+        if item.get("stream") == stream_name
+    )
+    assert annotation["type"] == "managed_session_spool_truncated"
+    assert annotation["metadata"]["sourceBytes"] == source_size
+    assert getattr(snapshot, f"{stream_name}_log_offset") == source_size
+    assert snapshot.last_log_offset == source_size
+
 
 @pytest.mark.asyncio
 async def test_session_supervisor_publishes_output_chunks_to_live_spool(
@@ -995,3 +1084,149 @@ async def test_publish_reset_artifacts_tolerates_event_publication_failure(
 
     assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert published.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "leaf_link",
+        "dangling_leaf_link",
+        "parent_link",
+        "dangling_parent_link",
+        "fifo",
+        "directory",
+        "unreadable",
+    ],
+)
+async def test_spool_snapshot_reports_unsafe_input_without_publishing_it(tmp_path, kind):
+    record = _record(tmp_path).model_copy(
+        update={"stdout_log_offset": 7, "last_log_offset": 7}
+    )
+    store = ManagedSessionStore(tmp_path / "store")
+    store.save(record)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "stdout.log").write_text("private-host-data")
+    (outside / "stderr.log").write_text("private-host-data")
+    spool = Path(record.artifact_spool_path)
+    if kind in {"parent_link", "dangling_parent_link"}:
+        spool.rmdir()
+        target = outside if kind == "parent_link" else tmp_path / "absent"
+        spool.symlink_to(target, target_is_directory=True)
+    else:
+        (spool / "stderr.log").write_bytes(b"")
+        if kind == "leaf_link":
+            (spool / "stdout.log").symlink_to(outside / "stdout.log")
+        elif kind == "dangling_leaf_link":
+            (spool / "stdout.log").symlink_to(outside / "absent.log")
+        elif kind == "fifo":
+            os.mkfifo(spool / "stdout.log")
+        elif kind == "unreadable":
+            (spool / "stdout.log").write_text("private-host-data")
+            (spool / "stdout.log").chmod(0)
+        else:
+            (spool / "stdout.log").mkdir()
+
+    snapshot = await supervisor.publish_snapshot(record.session_id)
+
+    published = storage.resolve_storage_path(snapshot.stdout_artifact_ref).read_bytes()
+    assert b"private-host-data" not in published
+    assert b"could not be read" in published
+    diagnostics = json.loads(
+        storage.resolve_storage_path(snapshot.diagnostics_ref).read_text()
+    )
+    assert any(
+        item["type"] == "managed_session_spool_read_failed"
+        and item["stream"] == "stdout"
+        for item in diagnostics["annotations"]
+    )
+    assert snapshot.stdout_log_offset == 7
+
+
+@pytest.mark.asyncio
+async def test_spool_snapshot_redacts_output_and_preserves_source_offset(tmp_path):
+    record = _record(tmp_path)
+    store = ManagedSessionStore(tmp_path / "store")
+    store.save(record)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    source = b"operation failed\npassword=diagnostic-fixture\n"
+    (Path(record.artifact_spool_path) / "stdout.log").write_bytes(source)
+    (Path(record.artifact_spool_path) / "stderr.log").write_bytes(b"")
+
+    snapshot = await supervisor.publish_snapshot(record.session_id)
+
+    published = storage.resolve_storage_path(snapshot.stdout_artifact_ref).read_bytes()
+    assert b"operation failed" in published
+    assert b"diagnostic-fixture" not in published
+    assert b"[REDACTED]" in published
+    assert snapshot.stdout_log_offset == len(source)
+
+
+@pytest.mark.parametrize("marker_data", [b'{"secret": "private-host-data"}', b"\xff"])
+def test_canary_invalid_marker_is_never_published(tmp_path, marker_data):
+    record = _record(tmp_path)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=ManagedSessionStore(tmp_path / "store"),
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    marker = Path(record.workspace_path) / DEFAULT_MARKER_PATH
+    marker.parent.mkdir(parents=True)
+    marker.write_bytes(marker_data)
+    assert (
+        supervisor._publish_codex_canary_observation(
+            record=record, status="completed", observability_events=[]
+        )
+        is None
+    )
+    assert not (tmp_path / "published").exists()
+
+
+def test_spool_live_stream_never_publishes_symlink_target(tmp_path):
+    record = _record(tmp_path)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=ManagedSessionStore(tmp_path / "store"),
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    private = tmp_path / "private"
+    private.write_text("private-host-data")
+    (Path(record.artifact_spool_path) / "stdout.log").symlink_to(private)
+    assert not supervisor._publish_new_output_chunks(record, {}, {})
+    assert not (tmp_path / "published").exists()
+
+
+def test_canary_marker_never_follows_symlink(tmp_path):
+    record = _record(tmp_path)
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=ManagedSessionStore(tmp_path / "store"),
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    private = tmp_path / "private"
+    private.write_text(json.dumps(_canary_marker()))
+    marker = Path(record.workspace_path) / DEFAULT_MARKER_PATH
+    marker.parent.mkdir(parents=True)
+    marker.symlink_to(private)
+    assert (
+        supervisor._publish_codex_canary_observation(
+            record=record, status="completed", observability_events=_canary_events()
+        )
+        is None
+    )
+    assert not (tmp_path / "published").exists()

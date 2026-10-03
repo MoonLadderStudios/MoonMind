@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from api_service.api.routers import executions as executions_module
 from api_service.api.routers.executions import _get_service, router
 from api_service.db.base import get_async_session
 from api_service.db.models import Base, ManagedAgentProviderProfile, PresetRecent
@@ -20,6 +22,11 @@ from api_service.services.presets.catalog import PresetCatalogService
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
+)
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
 )
 from tests.unit.api.routers.test_executions import (
     _build_execution_record,
@@ -29,12 +36,24 @@ from tests.unit.api.routers.test_executions import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "artifact_field", [None, "planArtifactRef", "inputArtifactRef"]
+)
 async def test_system_owned_fanout_expands_existing_pr_preset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, artifact_field: str | None
 ) -> None:
     """Replay the failed batch child without treating SYSTEM as a user UUID."""
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/fanout.db")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    artifact_store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+    monkeypatch.setattr(
+        executions_module,
+        "get_temporal_artifact_service",
+        lambda session: TemporalArtifactService(
+            TemporalArtifactRepository(session), store=artifact_store
+        ),
+    )
+    artifact_ref = "art:sha256:machine-plan"
     repository = "MoonLadderStudios/Tactics"
     parent_id = "mm:a282ca74-abd3-43aa-83a0-5d0aa386e457"
     parent = SimpleNamespace(
@@ -113,6 +132,31 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
                 )
             )
             await PresetCatalogService(session).sync_seed_templates(seed_dir=seed_dir)
+            if artifact_field == "inputArtifactRef":
+                artifacts = executions_module.get_temporal_artifact_service(session)
+                artifact, _ = await artifacts.create(
+                    principal="system", content_type="application/json"
+                )
+                artifact_ref = artifact.artifact_id
+                await artifacts.write_complete(
+                    artifact_id=artifact_ref,
+                    principal="system",
+                    content_type="application/json",
+                    payload=json.dumps(
+                        {
+                            "workflow": {
+                                "steps": [
+                                    {
+                                        "type": "tool",
+                                        "tool": {
+                                            "name": "deployment.update_compose_stack"
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ).encode(),
+                )
             await session.commit()
 
         async with httpx.AsyncClient(
@@ -127,7 +171,12 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
                 json={
                     "type": "task",
                     "payload": {
+                        **({artifact_field: artifact_ref} if artifact_field else {}),
                         "repository": repository,
+                        "executionPrincipal": {
+                            "kind": "operator",
+                            "scopes": ["deployment_control", "docker_admin"],
+                        },
                         "runtimeInheritance": "caller",
                         "idempotencyKey": "batch-pr-resolver:parent:pr:2752",
                         "task": {
@@ -153,7 +202,19 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
         creation = service.create_execution.await_args.kwargs
         assert creation["owner_id"] == "system"
         assert creation["owner_type"] == "system"
+        if artifact_field:
+            argument = (
+                "plan_artifact_ref"
+                if artifact_field == "planArtifactRef"
+                else "input_artifact_ref"
+            )
+            assert creation[argument] == artifact_ref
         initial = creation["initial_parameters"]
+        assert initial["executionPrincipal"] == {
+            "kind": "workflow",
+            "workflowId": parent_id,
+            "scopes": ["executions:create-child", "executions:inherit-runtime"],
+        }
         assert initial["parentWorkflowId"] == parent_id
         assert initial["targetRuntime"] == "codex_cli"
         assert initial["profileId"] == "codex_openai_oauth"

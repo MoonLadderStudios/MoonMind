@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -72,7 +73,8 @@ def _verified_push_info(
         "remote_verified": True,
     }
 
-def test_detect_pr_url_uses_workspace_command_shims_and_resolved_token(tmp_path):
+
+def test_detect_pr_url_avoids_workspace_command_shims_and_uses_resolved_token(tmp_path):
     store = _make_mock_store(workspace_path=str(tmp_path / "run-1" / "repo"))
     activities = TemporalAgentRuntimeActivities(run_store=store)
     workspace = Path(str(store.load.return_value.workspace_path))
@@ -99,9 +101,10 @@ def test_detect_pr_url_uses_workspace_command_shims_and_resolved_token(tmp_path)
     gh_call = calls[2]
     gh_env = gh_call["kwargs"]["env"]
     assert isinstance(gh_env, dict)
-    assert gh_env["PATH"].startswith(str(workspace.parent / ".moonmind" / "bin"))
+    assert str(workspace.parent / ".moonmind" / "bin") not in gh_env["PATH"]
     assert gh_env["GITHUB_TOKEN"] == "resolved-token"
     assert gh_env["GH_TOKEN"] == "resolved-token"
+
 
 def test_parse_git_status_paths_handles_nul_delimited_non_ascii_and_renames() -> None:
     status_output = (
@@ -2045,8 +2048,10 @@ class TestPushWorkspaceBranch:
             "moonmind/workflows/temporal/activity_runtime.py",
         ]
 
-    def test_workspace_command_env_includes_support_gitconfig_and_git_identity(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    def test_workspace_command_env_ignores_support_gitconfig_and_sets_identity(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         workspace = tmp_path / "run-1" / "repo"
         support_root = workspace.parent / ".moonmind"
@@ -2062,8 +2067,8 @@ class TestPushWorkspaceBranch:
 
         env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
 
-        assert env["PATH"].startswith(str(support_bin))
-        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+        assert env["PATH"] == "/usr/bin"
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
         assert env["GIT_AUTHOR_NAME"] == "MoonMind Bot"
         assert env["GIT_COMMITTER_NAME"] == "MoonMind Bot"
         assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
@@ -2113,19 +2118,19 @@ class TestPushWorkspaceBranch:
 
         env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
 
-        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
         assert env["GIT_AUTHOR_NAME"] == "MoonMind Bot"
         assert env["GIT_COMMITTER_NAME"] == "MoonMind Bot"
         assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
         assert env["GIT_COMMITTER_EMAIL"] == "moonmind@example.com"
 
-    def test_workspace_command_env_bootstraps_git_helper_without_writing_token(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    def test_workspace_command_env_uses_in_memory_git_helper_without_writing_files(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         workspace = tmp_path / "run-1" / "repo"
         support_root = workspace.parent / ".moonmind"
-        support_bin = support_root / "bin"
-        gitconfig = support_root / "gitconfig"
         monkeypatch.setenv("PATH", "/usr/bin")
         monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token_value")
         monkeypatch.setattr(settings.workflow, "git_user_name", "MoonMind Bot")
@@ -2135,24 +2140,17 @@ class TestPushWorkspaceBranch:
 
         env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
 
-        helper_path = support_bin / "git-credential-moonmind"
-        assert support_bin.is_dir()
-        assert gitconfig.is_file()
-        assert helper_path.is_file()
-        assert env["PATH"].startswith(str(support_bin))
-        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+        assert not support_root.exists()
+        assert env["PATH"] == "/usr/bin"
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
         assert env["GITHUB_TOKEN"] == "ghp_test_token_value"
         assert env["GH_TOKEN"] == "ghp_test_token_value"
         assert env["GIT_TERMINAL_PROMPT"] == "0"
 
-        helper_text = helper_path.read_text(encoding="utf-8")
-        gitconfig_text = gitconfig.read_text(encoding="utf-8")
-        assert "ghp_test_token_value" not in helper_text
-        assert "ghp_test_token_value" not in gitconfig_text
-        assert "os.environ.get('GITHUB_TOKEN'" in helper_text
-        assert "password={token}" in helper_text
-        assert "git-credential-moonmind" in gitconfig_text
-        assert str(workspace.resolve()) in gitconfig_text
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
+        assert "ghp_test_token_value" not in env["GIT_CONFIG_VALUE_1"]
+        assert "$GITHUB_TOKEN" in env["GIT_CONFIG_VALUE_1"]
 
     def test_workspace_command_env_uses_resolved_github_token(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
@@ -2174,13 +2172,15 @@ class TestPushWorkspaceBranch:
         assert env["GITHUB_TOKEN"] == "resolved-token"
         assert env["GH_TOKEN"] == "resolved-token"
         assert env["GIT_TERMINAL_PROMPT"] == "0"
-        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
-        assert helper_path.is_file()
-        assert "resolved-token" not in helper_path.read_text(encoding="utf-8")
-        assert "resolved-token" not in gitconfig.read_text(encoding="utf-8")
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+        assert not helper_path.exists()
+        assert not gitconfig.exists()
+        assert "resolved-token" not in env["GIT_CONFIG_VALUE_1"]
 
-    def test_workspace_command_env_logs_bootstrap_failures(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    def test_workspace_command_env_works_with_read_only_workspace(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         workspace = tmp_path / "run-1" / "repo"
         monkeypatch.setenv("PATH", "/usr/bin")
@@ -2195,9 +2195,8 @@ class TestPushWorkspaceBranch:
             env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
 
         assert env["PATH"] == "/usr/bin"
-        assert "GIT_CONFIG_GLOBAL" not in env
-        warning_mock.assert_called_once()
-        assert warning_mock.call_args.args[1] == str(workspace)
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+        warning_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_push_revlist_failure_blocks_publication(self):

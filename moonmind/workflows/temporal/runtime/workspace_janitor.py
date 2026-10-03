@@ -11,6 +11,8 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import logging
+import stat
 import os
 import shutil
 import subprocess
@@ -20,6 +22,8 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+
+from moonmind.utils.workspace_paths import open_directory
 
 from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
@@ -232,6 +236,9 @@ class _Decision:
     classification: str
     reason: str
     estimated_bytes: int = 0
+
+
+logger = logging.getLogger(__name__)
 
 
 class ManagedRuntimeWorkspaceJanitor:
@@ -495,21 +502,50 @@ class ManagedRuntimeWorkspaceJanitor:
         return candidate
 
     def _quarantine_delete(self, path: Path) -> int:
-        estimated = self._estimate_bytes(path)
-        quarantine = path.parent / f".gc-{uuid.uuid4()}-{path.name}"
-        path.rename(quarantine)
-        try:
-            if quarantine.is_dir():
-                shutil.rmtree(quarantine)
+        # Keep the parent pinned across the rename and recursive delete. A
+        # swapped cleanup-root symlink cannot redirect either operation.
+        with open_directory(path.parent) as parent_fd:
+            info = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                raise OSError("refusing to quarantine a symlink")
+            if stat.S_ISDIR(info.st_mode) and not shutil.rmtree.avoids_symlink_attacks:
+                raise OSError("descriptor-safe recursive cleanup is unavailable")
+            estimated = self._estimate_bytes(path)
+            quarantine = f".gc-{uuid.uuid4()}-{path.name}"
+            os.rename(path.name, quarantine, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            if stat.S_ISDIR(info.st_mode):
+                try:
+                    shutil.rmtree(quarantine, dir_fd=parent_fd)
+                except OSError as original_error:
+                    # Retry transient traversal failures while the same parent
+                    # remains pinned. Never touch a recreated canonical path.
+                    try:
+                        shutil.rmtree(quarantine, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        try:
+                            os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            # Absence under the pinned parent confirms cleanup.
+                            pass
+                        except OSError:
+                            raise original_error
+                        else:
+                            raise original_error
+                    except OSError as retry_error:
+                        logger.warning(
+                            "Quarantine cleanup retry failed for %s/%s: %s",
+                            path.parent,
+                            quarantine,
+                            retry_error,
+                        )
+                        raise original_error
+                    logger.warning(
+                        "Quarantine cleanup recovered after %s (errno=%s)",
+                        type(original_error).__name__,
+                        original_error.errno,
+                    )
             else:
-                quarantine.unlink(missing_ok=True)
-        finally:
-            if quarantine.exists():
-                if quarantine.is_dir():
-                    shutil.rmtree(quarantine, ignore_errors=True)
-                else:
-                    with contextlib.suppress(OSError):
-                        quarantine.unlink()
+                os.unlink(quarantine, dir_fd=parent_fd)
         return estimated
 
     def _delete_record_candidates(
@@ -714,9 +750,11 @@ class ManagedRuntimeWorkspaceJanitor:
 
     def _safe_candidate_path(self, candidate: _Candidate) -> bool:
         try:
-            path = candidate.path.resolve()
-            runtime_root = self._config.runtime_root.resolve()
-            artifact_root = self._config.artifact_root.resolve()
+            path = candidate.path.absolute()
+            runtime_root = self._config.runtime_root.absolute()
+            artifact_root = self._config.artifact_root.absolute()
+            with open_directory(path.parent):
+                pass
         except OSError:
             return False
         if candidate.kind == "artifact":
@@ -770,8 +808,13 @@ class ManagedRuntimeWorkspaceJanitor:
 
     def _iter_children(self, root: Path) -> Iterable[Path]:
         try:
-            yield from (path for path in root.iterdir() if path.exists())
+            with open_directory(root) as root_fd:
+                for name in os.listdir(root_fd):
+                    yield root / name
         except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning("Skipping unsafe cleanup root %s: %s", root, exc)
             return
 
     def _estimate_bytes(self, path: Path) -> int:

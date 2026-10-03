@@ -20,6 +20,7 @@ from moonmind.schemas.agent_skill_models import (
     SkillsOnDemandRequestResult,
     RuntimeSkillMaterialization,
     RuntimeMaterializationMode,
+    validate_skill_path_component,
 )
 from moonmind.config.settings import settings
 from moonmind.services.skills_on_demand import SkillsOnDemandService
@@ -28,6 +29,18 @@ from moonmind.services.skill_resolution import (
     SkillResolutionContext,
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
+
+
+def _activity_snapshot_id(info: Any, *, derived: bool = False) -> str:
+    """Keep ordinary IDs stable without turning Temporal IDs into paths."""
+
+    snapshot_id = f"skillset_{info.workflow_id}_{info.activity_id}"
+    try:
+        validate_skill_path_component(snapshot_id)
+    except ValueError:
+        identity = json.dumps([info.workflow_id, info.activity_id]).encode("utf-8")
+        snapshot_id = "skillset_" + hashlib.sha256(identity).hexdigest()
+    return snapshot_id + ("_derived" if derived else "")
 
 
 class AgentSkillsActivities:
@@ -54,7 +67,7 @@ class AgentSkillsActivities:
 
         # Instantiate the proper context bounds
         info = activity.info()
-        snapshot_id = f"skillset_{info.workflow_id}_{info.activity_id}"
+        snapshot_id = _activity_snapshot_id(info)
 
         context = SkillResolutionContext(
             snapshot_id=snapshot_id,
@@ -319,7 +332,7 @@ class AgentSkillsActivities:
                 ]
             )
             context = SkillResolutionContext(
-                snapshot_id=f"skillset_{info.workflow_id}_{info.activity_id}_derived",
+                snapshot_id=_activity_snapshot_id(info, derived=True),
                 deployment_id=active_snapshot.deployment_id,
                 workspace_root=settings.workflow.repo_root,
                 async_session_maker=getattr(self, "_async_session_maker", None),

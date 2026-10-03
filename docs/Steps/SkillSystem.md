@@ -904,6 +904,13 @@ Rules:
 4. it must correspond exactly to one resolved snapshot;
 5. it must contain only selected Skills and MoonMind-owned metadata.
 
+Snapshot IDs and resolved Skill names are single filesystem components, never
+paths. Artifact admission and materialization reject empty, dot, traversal,
+absolute, or separator-bearing identities before filesystem changes. Temporal
+workflow/activity IDs containing separators produce a deterministic hashed
+snapshot ID; ordinary safe IDs remain stable. Backing-store preparation rejects
+symlinked directory parents rather than following them outside the run root.
+
 ### 14.3 Runtime-Visible Shape
 
 The runtime-visible tree should look like:

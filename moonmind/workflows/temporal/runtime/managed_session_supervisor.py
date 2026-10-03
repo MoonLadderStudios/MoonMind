@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import errno
 import json
 import logging
+import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -15,6 +18,8 @@ from moonmind.codex_conformance.canary import (
     DEFAULT_MARKER_PATH,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.workspace_paths import open_regular_file, read_regular_file
 
 from .log_streamer import RuntimeLogStreamer
 from .managed_session_store import ManagedSessionStore
@@ -23,6 +28,7 @@ from .session_observability_bridge import ManagedSessionObservabilityBridge
 logger = logging.getLogger(__name__)
 
 _LOG_READ_CHUNK_BYTES = 64 * 1024
+_SPOOL_SNAPSHOT_LIMIT_BYTES = 64 * 1024 * 1024
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 _CANARY_EVIDENCE_ARTIFACT_NAME = "codex_conformance_canary.evidence.json"
 _CANARY_MARKER_ARTIFACT_NAME = "codex_conformance_canary.marker.json"
@@ -35,6 +41,14 @@ _CANARY_MUTATION_MARKERS = (
     "gh issue",
     "api.github.com",
 )
+
+
+@dataclass(frozen=True)
+class _SpoolSnapshot:
+    data: bytes
+    source_bytes: int | None
+    annotation: dict[str, object] | None = None
+
 
 class ArtifactStorageWriter(Protocol):
     def write_artifact(
@@ -133,23 +147,20 @@ class ManagedSessionSupervisor:
             ("stderr", self._stderr_path(record)),
         ):
             try:
-                if not path.exists():
-                    stream_offsets.setdefault(stream_name, 0)
-                    continue
-                current_size = path.stat().st_size
-                previous_offset = stream_offsets.get(stream_name, 0)
-                if current_size < previous_offset:
-                    previous_offset = 0
-                    stream_decoders.pop(stream_name, None)
-                if current_size <= previous_offset:
-                    stream_offsets[stream_name] = current_size
-                    continue
-                decoder = stream_decoders.setdefault(
-                    stream_name,
-                    codecs.getincrementaldecoder("utf-8")(errors="replace"),
-                )
-                committed_offset = previous_offset
-                with path.open("rb") as handle:
+                with open_regular_file(path) as handle:
+                    current_size = os.fstat(handle.fileno()).st_size
+                    previous_offset = stream_offsets.get(stream_name, 0)
+                    if current_size < previous_offset:
+                        previous_offset = 0
+                        stream_decoders.pop(stream_name, None)
+                    if current_size <= previous_offset:
+                        stream_offsets[stream_name] = current_size
+                        continue
+                    decoder = stream_decoders.setdefault(
+                        stream_name,
+                        codecs.getincrementaldecoder("utf-8")(errors="replace"),
+                    )
+                    committed_offset = previous_offset
                     handle.seek(previous_offset)
                     remaining = current_size - previous_offset
                     while remaining > 0:
@@ -170,9 +181,9 @@ class ManagedSessionSupervisor:
                         )
                         committed_offset = decoded_offset
                         emitted = True
-                if decoder.getstate()[0]:
-                    decoder.reset()
-                stream_offsets[stream_name] = committed_offset
+                    if decoder.getstate()[0]:
+                        decoder.reset()
+                    stream_offsets[stream_name] = committed_offset
             except OSError:
                 continue
         return emitted
@@ -183,8 +194,8 @@ class ManagedSessionSupervisor:
     ) -> str | None:
         state_path = ManagedSessionSupervisor._session_state_path(record)
         try:
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(read_regular_file(state_path, limit=1024 * 1024))
+        except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         if not isinstance(payload, dict):
             return None
@@ -321,16 +332,56 @@ class ManagedSessionSupervisor:
         )
 
     @staticmethod
-    def _read_spool_bytes(record: CodexManagedSessionRecord) -> tuple[bytes, bytes]:
-        stdout_bytes = b""
-        stderr_bytes = b""
-        stdout_path = ManagedSessionSupervisor._stdout_path(record)
-        stderr_path = ManagedSessionSupervisor._stderr_path(record)
-        if stdout_path.exists():
-            stdout_bytes = stdout_path.read_bytes()
-        if stderr_path.exists():
-            stderr_bytes = stderr_path.read_bytes()
-        return stdout_bytes, stderr_bytes
+    def _read_spool_snapshot(path: Path, stream_name: str) -> _SpoolSnapshot:
+        try:
+            with open_regular_file(path) as handle:
+                source_bytes = os.fstat(handle.fileno()).st_size
+                if source_bytes > _SPOOL_SNAPSHOT_LIMIT_BYTES:
+                    # A tail can start inside a secret whose redaction prefix
+                    # was discarded. Publish explicit bounded evidence instead.
+                    message = (
+                        f"{stream_name} output truncated: {source_bytes}-byte spool "
+                        f"exceeds {_SPOOL_SNAPSHOT_LIMIT_BYTES}-byte snapshot limit; "
+                        "spool content was not published."
+                    )
+                    return _SpoolSnapshot(
+                        data=(message + "\n").encode("utf-8"),
+                        source_bytes=source_bytes,
+                        annotation={
+                            "type": "managed_session_spool_truncated",
+                            "stream": stream_name,
+                            "text": message,
+                            "metadata": {
+                                "sourceBytes": source_bytes,
+                                "retainedBytes": 0,
+                                "limitBytes": _SPOOL_SNAPSHOT_LIMIT_BYTES,
+                            },
+                        },
+                    )
+                data = handle.read(source_bytes)
+                if len(data) != source_bytes:
+                    raise OSError(errno.EIO, "spool changed during snapshot read")
+            return _SpoolSnapshot(
+                data=redact_sensitive_text(
+                    data.decode("utf-8", errors="replace")
+                ).encode("utf-8"),
+                source_bytes=source_bytes,
+            )
+        except FileNotFoundError:
+            # The runtime creates each stream lazily when output first arrives.
+            return _SpoolSnapshot(data=b"", source_bytes=0)
+        except OSError as exc:
+            message = f"{stream_name} spool could not be read; diagnostic output unavailable."
+            return _SpoolSnapshot(
+                data=(message + "\n").encode("utf-8"),
+                source_bytes=None,
+                annotation={
+                    "type": "managed_session_spool_read_failed",
+                    "stream": stream_name,
+                    "text": message,
+                    "metadata": {"errorType": type(exc).__name__, "errno": exc.errno},
+                },
+            )
 
     def _write_json_artifact(
         self,
@@ -567,17 +618,13 @@ class ManagedSessionSupervisor:
     ) -> dict[str, Any] | None:
         marker_path = Path(record.workspace_path) / DEFAULT_MARKER_PATH
         try:
-            marker = json.loads(marker_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            marker = json.loads(read_regular_file(marker_path, limit=64 * 1024))
+        except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         if not isinstance(marker, dict):
             return None
 
-        marker_ref = self._write_json_artifact(
-            job_id=record.session_id,
-            artifact_name=_CANARY_MARKER_ARTIFACT_NAME,
-            payload=marker,
-        )
+        marker_ref = f"{record.session_id}/{_CANARY_MARKER_ARTIFACT_NAME}"
         cleanup_timestamp = datetime.now(tz=UTC).isoformat()
         evidence_ref = f"{record.session_id}/{_CANARY_EVIDENCE_ARTIFACT_NAME}"
         observation = self._build_codex_canary_observation(
@@ -591,6 +638,11 @@ class ManagedSessionSupervisor:
         )
         if observation is None:
             return None
+        observation["markerArtifactRef"] = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name=_CANARY_MARKER_ARTIFACT_NAME,
+            payload=marker,
+        )
         observation["marker"] = marker
         evidence_payload = {
             "codexConformanceCanary": observation,
@@ -670,16 +722,27 @@ class ManagedSessionSupervisor:
         status: str,
         error_message: str | None,
     ) -> CodexManagedSessionRecord:
-        stdout_bytes, stderr_bytes = self._read_spool_bytes(record)
+        stdout_snapshot = self._read_spool_snapshot(self._stdout_path(record), "stdout")
+        stderr_snapshot = self._read_spool_snapshot(self._stderr_path(record), "stderr")
+        stdout_offset = (
+            stdout_snapshot.source_bytes
+            if stdout_snapshot.source_bytes is not None
+            else record.stdout_log_offset or 0
+        )
+        stderr_offset = (
+            stderr_snapshot.source_bytes
+            if stderr_snapshot.source_bytes is not None
+            else record.stderr_log_offset or 0
+        )
         _, stdout_ref = self._artifact_storage.write_artifact(
             job_id=record.session_id,
             artifact_name="stdout.log",
-            data=stdout_bytes,
+            data=stdout_snapshot.data,
         )
         _, stderr_ref = self._artifact_storage.write_artifact(
             job_id=record.session_id,
             artifact_name="stderr.log",
-            data=stderr_bytes,
+            data=stderr_snapshot.data,
         )
         observability_events = self._log_streamer.consume_observability_events(record.agent_run_id)
         summary_ref = self._write_json_artifact(
@@ -747,7 +810,11 @@ class ManagedSessionSupervisor:
             exit_code=None,
             duration_seconds=0.0,
             log_refs={"stdout": stdout_ref, "stderr": stderr_ref},
-            annotations=[],
+            annotations=[
+                snapshot.annotation
+                for snapshot in (stdout_snapshot, stderr_snapshot)
+                if snapshot.annotation is not None
+            ],
             events=[],
             observability_events=observability_events,
         )
@@ -801,9 +868,9 @@ class ManagedSessionSupervisor:
             observability_events_ref=observability_events_ref,
             latest_summary_ref=summary_ref,
             latest_checkpoint_ref=checkpoint_ref,
-            last_log_offset=len(stdout_bytes) + len(stderr_bytes),
-            stdout_log_offset=len(stdout_bytes),
-            stderr_log_offset=len(stderr_bytes),
+            last_log_offset=stdout_offset + stderr_offset,
+            stdout_log_offset=stdout_offset,
+            stderr_log_offset=stderr_offset,
             last_log_at=now,
             updated_at=now,
             error_message=error_message,

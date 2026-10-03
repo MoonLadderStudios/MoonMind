@@ -83,6 +83,17 @@ The blank-workspace default is results saved in MoonMind, no publication, and th
 | `checkpoint` | Authorized checkpoint reference and supported restore contract. Workspace restore is separate from provider-session reattachment. |
 | `existing_workspace` | Server-issued workspace locator and ownership grant. An advanced capability, not a raw server path. |
 
+Existing-workspace materialization checks both the recorded owner workflow and
+owner step before acquiring a claim or advancing its generation. Cross-workflow
+reuse requires a server-signed grant even when the source kind is omitted.
+Unsigned historical grants can resume only within their durable owner's workflow.
+This compatibility path does not authenticate a grant for another workflow.
+
+For retained `sandbox.checkout_repo` activities, a `file://` URL is a local source
+and must resolve beneath the configured workspace root, just like a local path.
+Contained file URLs retain Git clone and revision-selection behavior; URI encoding
+does not grant access to other worker filesystems.
+
 The source `repository` is present only for a repository source. Repository provenance within an imported artifact is evidence, not a live source binding. A publication destination is another role using the same repository-target type, not another independently authored alias for the source.
 
 The following shapes express desired authoring semantics. They are not complete wire-schema definitions or claims about today's API:
@@ -183,6 +194,13 @@ Acquisition supports expiring issuance independently of PAT lifetime. Consumers 
 OAuth/device enrollment and SSH can be additional qualified adapters. Enrollment method does not imply token lifetime. SSH repository transport does not grant hosting-service issue or PR API authority. Collaboration operations need their own admitted role or an explicit unsupported-capability result.
 
 GitHub.com is the initial GitHub endpoint. Enterprise and other-host support require operator-controlled endpoint/TLS policy and qualified adapters, not a free-form credential destination exposed to execution content.
+
+GitHub App enrollment and credential acquisition read deployment-trusted Enterprise
+API hostnames from the comma-delimited `GITHUB_TRUSTED_API_HOSTS` setting. Enrollment
+input cannot add trusted hosts. GitHub.com installation links use `/apps/<slug>/installations/new`;
+trusted Enterprise Server links use `/github-apps/<slug>/installations/new`.
+Enrollment validates `allowedOperations` against the repository operation contract
+before issuing setup state, so an invalid operation cannot fail only after installation.
 
 ### CONTRACT-007 Selection is deterministic for each declared role
 
@@ -309,6 +327,8 @@ All source kinds use server-generated locators, authoritative workspace storage,
 Scratch code initializes local Git only when its output/checkpoint profile needs it, with a neutral local identity, empty baseline, and no remote. Report-only work can remain an ordinary directory. Non-Git checkpoints do not fabricate commits or repository IDs to satisfy a Git-shaped schema.
 
 A materialized repository carries the deployment's commit identity in its repository-local configuration. A Skill that owns its own publication commits inside the host, where the shared image provides a credential helper and no identity, so clone preparation writes one and workspace reconciliation reapplies it to the final writable Git workspace after checkpoint and attachment projection: retries reuse the attempt workspace so no clone runs, an authoritative restore replaces the cloned config, and an additive restore can overwrite it with the imported config. Only the identity entries are rewritten; preserved work is kept. The deployment already determines this value; an undeclared identity resolves to the documented default rather than blocking a commit-capable run.
+
+Once a checkout is recognized, failures reading, replacing, or handing off its identity configuration stop preparation and retain the original error. Non-Git workspaces continue without configuring Git.
 
 Artifact and checkpoint import verify authorization and digest, bound expanded size/file count, and reject traversal, escaping links, device files, and privileged metadata. Imported executable content and Git configuration remain untrusted. Runtime credential paths, hooks, helpers, and old session authority are not restored.
 
@@ -470,6 +490,10 @@ The normal creation view presents workspace source, saved results, one publicati
 For ordinary repository work, Skill/Preset settings do not repeat repository, branch, or publish-mode controls. Typed context bindings supply equivalent arguments. Read-only explanations identify the workflow context or resolved PR target. Meaningful task options such as filters, verification, review provider, and Merge when ready remain available. Auto explains the selected batch's child outputs and possible merges while distinguishing its coordinator's own no-publication role.
 
 The existing Source Control setup supports a named PAT connection or a verified App installation through the same connection lifecycle. PAT setup creates a Managed Secret internally; App signing material also stays in the Secrets System. Authorized reuse of existing secret material is advanced. Actor, resource owner, repositories, health, and expiry are prominent; revisions, materializers, detailed probes, and per-operation routing are progressively disclosed. Do not add another connection wizard or expose token plumbing to implement a new acquisition adapter.
+
+The GitHub App enrollment API binds App ID, managed signing-key reference, endpoint, account, repository scope, display name, and operations when the admitted operator begins setup. `POST /api/v1/repository-connections/github-app/begin` accepts `appSlug`, `expectedAppRef`, `appId`, `keySecretRef`, `requestId`, and `connectionId`, plus those optional connection settings. Enterprise API hosts must already be trusted by server configuration; neither request can supply a trusted-host allowlist. Caller identity comes from the existing admission dependency, never request ownership or scope fields.
+
+`POST /api/v1/repository-connections/github-app/callback` accepts only `state`, `installationId`, and `connectionId`. Clients send configuration at begin rather than repeating it at callback. Before resolving a secret, signing a JWT, or contacting GitHub, the server validates the state signature, enrollment existence and expiry, admitted caller, and destination. Provider verification still checks the intended App, installation, account, and repositories before saving through the existing connection writer. Failed saves keep the state retryable; an already-committed retry returns its recorded connection without new provider traffic. Pending setup state remains process-local and time-limited, so a process restart requires a new begin request.
 
 Repository discovery uses authority admitted for the operator or execution, deduplicates by endpoint/provider identity, and never depends on a global token. Public URL entry does not require authenticated discovery. Simple routing presents one default; separate read/publication identities remain explicit advanced choices when genuinely required.
 

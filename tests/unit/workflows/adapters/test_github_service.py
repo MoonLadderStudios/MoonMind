@@ -1280,90 +1280,84 @@ async def test_evaluate_pull_request_readiness_ignores_empty_combined_status_pen
     assert result.checks_passing is True
     assert result.blockers == []
 
+
 @pytest.mark.asyncio
-async def test_evaluate_pull_request_readiness_opens_for_merge_conflicts_before_checks(
+@pytest.mark.parametrize("mergeable_state", ["dirty", "clean"])
+@pytest.mark.parametrize(
+    "checks_complete,review_complete,unavailable,expected_ready",
+    [
+        (False, True, False, False),
+        (True, False, False, False),
+        (None, True, True, False),
+        (True, True, False, True),
+    ],
+)
+async def test_merge_conflicts_preserve_required_readiness_gates(
     monkeypatch,
+    mergeable_state,
+    checks_complete,
+    review_complete,
+    unavailable,
+    expected_ready,
 ):
+    from moonmind.workflows.temporal.workflows.merge_gate import classify_readiness
+
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-
     mock_client = AsyncMock()
-    mock_client.get = AsyncMock(
-        return_value=_mock_get_response(
-            200,
-            {
-                "state": "open",
-                "merged": False,
-                "mergeable": False,
-                "mergeable_state": "dirty",
-                "head": {"sha": "abc123"},
-            },
-        )
-    )
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await GitHubService().evaluate_pull_request_readiness(
-            repo="owner/repo",
-            pr_number=341,
-            head_sha="abc123",
-            policy={"checks": "required", "automatedReview": "required"},
-        )
-
-    assert result.ready is True
-    assert result.blockers == [
+    mock_client.get.return_value = _mock_get_response(
+        200,
         {
-            "kind": "merge_conflict",
-            "summary": "Pull request has merge conflicts.",
-            "retryable": False,
-            "source": "github",
-        }
-    ]
-    assert result.checks_complete is None
-    assert result.automated_review_complete is None
-    mock_client.get.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_evaluate_pull_request_readiness_detects_boolean_mergeable_conflict(
-    monkeypatch,
-):
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(
-        return_value=_mock_get_response(
-            200,
-            {
-                "state": "open",
-                "merged": False,
-                "mergeable": False,
-                "mergeable_state": "clean",
-                "head": {"sha": "abc123"},
-            },
-        )
+            "state": "open",
+            "merged": False,
+            "mergeable": False,
+            "mergeable_state": mergeable_state,
+            "head": {"sha": "abc123"},
+        },
     )
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
+    mock_client.__aenter__.return_value = mock_client
+    service = GitHubService()
+    service._evaluate_github_checks = AsyncMock(
+        return_value={
+            "complete": checks_complete,
+            "passing": checks_complete,
+            "blockers": (
+                [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": "Checks unavailable.",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ]
+                if unavailable
+                else []
+            ),
+        }
+    )
+    service._evaluate_automated_review = AsyncMock(
+        return_value={"complete": review_complete, "blockers": []}
+    )
     with patch(
         "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
         return_value=mock_client,
     ):
-        result = await GitHubService().evaluate_pull_request_readiness(
+        result = await service.evaluate_pull_request_readiness(
             repo="owner/repo",
             pr_number=341,
             head_sha="abc123",
             policy={"checks": "required", "automatedReview": "required"},
         )
+    service._evaluate_github_checks.assert_awaited_once()
+    assert result.checks_complete is checks_complete
+    if not unavailable:
+        service._evaluate_automated_review.assert_awaited_once()
+        assert result.automated_review_complete is review_complete
+    assert any(blocker["kind"] == "merge_conflict" for blocker in result.blockers)
+    evidence = classify_readiness(
+        result.model_dump(by_alias=True), tracked_head_sha="abc123"
+    )
+    assert evidence.ready is expected_ready
 
-    assert result.ready is True
-    assert result.blockers[0]["kind"] == "merge_conflict"
-    assert result.checks_complete is None
-    assert result.automated_review_complete is None
-    mock_client.get.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_respects_failed_combined_status_without_check_runs(
@@ -1397,6 +1391,7 @@ async def test_evaluate_pull_request_readiness_respects_failed_combined_status_w
     assert result.checks_complete is True
     assert result.checks_passing is False
     assert [blocker["kind"] for blocker in result.blockers] == ["checks_failed"]
+
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_treats_commented_automated_review_as_complete(

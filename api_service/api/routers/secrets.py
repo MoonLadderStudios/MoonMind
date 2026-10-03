@@ -225,6 +225,7 @@ async def update_secret_status(
 async def delete_secret(
     slug: str,
     db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
 ) -> None:
     try:
         deleted = await SecretsService.delete_secret(db, slug, strict=True)

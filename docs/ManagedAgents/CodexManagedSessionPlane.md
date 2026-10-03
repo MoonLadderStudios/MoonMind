@@ -27,6 +27,12 @@ submits typed jobs through MoonMind and receives neither a Docker endpoint nor
 daemon credentials. The deployment-selected daemon retains one image cache for
 reuse across workflows.
 
+The session bearer authorizes only its signed workflow, agent run, step, session,
+and workspace. Status, logs, artifacts, and cancellation validate those claims
+against the API-owned saved job before any read or side effect. Sharing an
+operator identity does not grant access to another session's jobs; the ordinary
+authenticated operator API retains owner-wide access.
+
 At the final managed-session turn boundary, every Codex turn whose durable
 session metadata admits the scoped container-job capability receives the
 container execution policy as an authoritative generated suffix. This includes

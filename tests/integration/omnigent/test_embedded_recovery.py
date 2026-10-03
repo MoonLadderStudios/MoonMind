@@ -719,6 +719,13 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
                 )
             if identity == host_container_id and format_value == "{{.State.Running}}":
                 return (0, "true\n" if container_running else "false\n", "")
+            if identity == host_container_id and format_value.startswith(
+                "{{range .Mounts}}"
+            ):
+                assert 'eq .Name "codex_auth_volume"' in format_value
+                assert 'eq .Destination "/home/app/.codex"' in format_value
+                command_order.append("credential_mount_attested")
+                return (0, "valid\n", "")
             raise AssertionError(f"unexpected Docker inspect: {args}")
         if args[:2] == ("docker", "image") and args[2] == "inspect":
             if args[4].startswith('{"repoDigests"'):
@@ -755,6 +762,15 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
                     "metadata.invalid:443/ - HIER_NONE/- text/html\n",
                     "",
                 )
+        if args == (
+            "docker",
+            "exec",
+            host_container_id,
+            "/opt/moonmind/check-runner-projections.sh",
+        ):
+            assert command_order[-1] == "credential_mount_attested"
+            command_order.append("projections_checked")
+            return (0, "", "")
         raise AssertionError(f"unexpected host command: {args}")
 
     runtime._run = run_host_command  # type: ignore[method-assign]

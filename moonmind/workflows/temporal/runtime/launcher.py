@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import pwd
 import re
 import shlex
 import shutil
@@ -55,6 +56,8 @@ from moonmind.workflows.executions.repository_contract import (
     resolve_selected_git_credential,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
+from moonmind.utils.workspace_paths import atomic_write_text, chown_tree, ensure_directory, open_directory
+from moonmind.utils.workspace_paths import read_regular_file
 from moonmind.workflows.skills.run_projection import (
     append_remediation_attempt_context,
     load_resolved_skillset,
@@ -90,8 +93,41 @@ _AMBIENT_GITHUB_TOKEN_ENV_KEYS: tuple[str, ...] = (
     "GH_TOKEN",
     "WORKFLOW_GITHUB_TOKEN",
 )
-_MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
-    {"ATLASSIAN_"}
+# Inherit execution mechanics only. Provider secrets and settings come from
+# the selected profile and explicit launch capabilities below.
+_MANAGED_RUNTIME_AMBIENT_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "TERM",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "MOONMIND_URL",
+    }
 )
 
 logger = logging.getLogger(__name__)
@@ -760,6 +796,7 @@ class ManagedRuntimeLauncher:
         declared: list[object] = []
         for value in (
             skill.get("requiredCapabilities"),
+            parameters.get("requiredCapabilities"),
             parameters.get("repositoryToolCapabilities"),
         ):
             if isinstance(value, (list, tuple)):
@@ -790,20 +827,12 @@ class ManagedRuntimeLauncher:
 
     @staticmethod
     def _build_managed_runtime_base_env() -> dict[str, str]:
-        """Return ambient env inherited by managed-agent subprocesses.
-
-        Atlassian configuration stays on the trusted MoonMind side and must not
-        leak into managed agent subprocesses, even when it is configured on the
-        worker via direct values or secret refs.
-        """
+        """Retain execution context without copying worker credential authority."""
 
         return {
             key: value
             for key, value in os.environ.items()
-            if not any(
-                key.startswith(prefix)
-                for prefix in _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST
-            )
+            if key in _MANAGED_RUNTIME_AMBIENT_ENV_KEYS
         }
 
     @staticmethod
@@ -963,7 +992,7 @@ class ManagedRuntimeLauncher:
         behavior is identical across project types.
         """
         if resolved_workspace_path:
-            repo_dir = Path(resolved_workspace_path).resolve()
+            repo_dir = Path(resolved_workspace_path).absolute()
             run_root = repo_dir.parent
         else:
             # Workspace-less launches fall back to the documented
@@ -979,14 +1008,7 @@ class ManagedRuntimeLauncher:
 
         step_id = cls._resolve_generic_env_step_id(run_id=run_id, request=request)
         artifacts_dir = run_root / "artifacts" / step_id
-        try:
-            artifacts_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            logger.warning(
-                "Failed to pre-create managed-agent artifacts dir %s",
-                artifacts_dir,
-                exc_info=True,
-            )
+        ensure_directory(artifacts_dir)
 
         return {
             "MOONMIND_REPO_DIR": str(repo_dir),
@@ -1145,6 +1167,12 @@ class ManagedRuntimeLauncher:
         )
 
     @staticmethod
+    async def _chown_workspace_to_runtime_user(path: str | Path) -> None:
+        """Use pinned directory descriptors, never recursive path-based chown."""
+        account = pwd.getpwnam("app")
+        await asyncio.to_thread(chown_tree, path, account.pw_uid, account.pw_gid)
+
+    @staticmethod
     def _path_within(candidate: str | Path, root: str | Path | None) -> bool:
         """Return True when ``candidate`` is ``root`` or nested beneath it."""
         if not root:
@@ -1167,7 +1195,7 @@ class ManagedRuntimeLauncher:
 
         if os.geteuid() != 0 or resolved_workspace_path is None:
             return
-        artifacts_dir = Path(resolved_workspace_path).resolve() / "artifacts"
+        artifacts_dir = Path(resolved_workspace_path).absolute() / "artifacts"
         try:
             artifacts_stat = artifacts_dir.lstat()
         except FileNotFoundError:
@@ -1180,7 +1208,7 @@ class ManagedRuntimeLauncher:
             raise RuntimeError(
                 f"repo-local artifacts path must be a directory: {artifacts_dir}"
             )
-        await self._run_checked_command("chown", "-R", "-h", "app:app", str(artifacts_dir))
+        await self._chown_workspace_to_runtime_user(artifacts_dir)
 
     def _resolve_workspace_ownership_root(
         self,
@@ -1191,7 +1219,7 @@ class ManagedRuntimeLauncher:
         if not resolved_workspace_path:
             return None
 
-        resolved_path = Path(resolved_workspace_path).resolve()
+        resolved_path = Path(resolved_workspace_path).absolute()
         run_root = resolved_path.parent
 
         if resolved_path.name == "repo" and run_root.parent.name == "workspaces":
@@ -1241,11 +1269,15 @@ class ManagedRuntimeLauncher:
         git_env: dict[str, str] | None = None,
     ) -> str | None:
         if workspace_path:
+            with open_directory(workspace_path):
+                pass
             return workspace_path
 
         workspace_root = self._workspace_root()
         run_workspace = workspace_root / run_id / "repo"
-        if run_workspace.exists():
+        if run_workspace.exists() or run_workspace.is_symlink():
+            with open_directory(run_workspace):
+                pass
             return str(run_workspace)
 
         workspace_spec = (
@@ -1260,7 +1292,7 @@ class ManagedRuntimeLauncher:
         if clone_source is None:
             return None
 
-        run_workspace.parent.mkdir(parents=True, exist_ok=True)
+        ensure_directory(run_workspace.parent)
         branch = self._extract_workspace_branch(workspace_spec)
         command_env = (
             git_env if self._source_uses_github_https(clone_source) else None
@@ -1467,9 +1499,9 @@ class ManagedRuntimeLauncher:
         git_env: dict[str, str] | None = None,
     ) -> str | None:
         if workspace_path is not None:
-            resolved = Path(workspace_path).expanduser().resolve()
-            if not resolved.exists():
-                raise RuntimeError(f"workspace_path does not exist: {resolved}")
+            resolved = Path(workspace_path).expanduser().absolute()
+            with open_directory(resolved):
+                pass
             return str(resolved)
 
         workspace_spec = (
@@ -1482,7 +1514,7 @@ class ManagedRuntimeLauncher:
             repository_target if isinstance(repository_target, Mapping) else {}
         )
         provider = str(
-            workspace_spec.get("provider") or target_mapping.get("provider") or ""
+            target_mapping.get("provider") or workspace_spec.get("provider") or ""
         ).strip().lower()
         if provider == "lore":
             if self._lore_repository_adapter is None:
@@ -1508,10 +1540,11 @@ class ManagedRuntimeLauncher:
                 self._store.store_root.parent
                 / "temporal_sandbox"
                 / locator.workspace_id
-            ).resolve()
+            ).absolute()
+            ensure_directory(workspace_root)
             authority_path = workspace_root.joinpath(
                 *PurePosixPath(locator.relative_path).parts
-            ).resolve()
+            )
             if not authority_path.is_relative_to(workspace_root):
                 raise RuntimeError("Lore sandbox locator escapes workspace authority")
             target_repository = target_mapping.get("repository")
@@ -1531,15 +1564,15 @@ class ManagedRuntimeLauncher:
                 prepared_revision if isinstance(prepared_revision, Mapping) else {}
             )
             repository = str(
-                workspace_spec.get("repository")
+                target_repository_mapping.get("name")
+                or workspace_spec.get("repository")
                 or workspace_spec.get("repo")
-                or target_repository_mapping.get("name")
                 or ""
             ).strip()
             branch = str(
-                workspace_spec.get("startingBranch")
+                target_branch_mapping.get("name")
+                or workspace_spec.get("startingBranch")
                 or workspace_spec.get("branch")
-                or target_branch_mapping.get("name")
                 or ""
             ).strip()
             revision = str(
@@ -1552,7 +1585,9 @@ class ManagedRuntimeLauncher:
                 raise RuntimeError(
                     "Lore workspaceSpec requires repository, branch, and revisionSignature"
                 )
-            if authority_path.exists():
+            if authority_path.exists() or authority_path.is_symlink():
+                with open_directory(authority_path):
+                    pass
                 prepared = await asyncio.to_thread(
                     self._lore_repository_adapter.load_prepared_workspace,
                     locator=locator,
@@ -1586,8 +1621,13 @@ class ManagedRuntimeLauncher:
             return self._lore_repository_adapter.bind_workspace(
                 prepared, runtime_lane="managed_runtime"
             ).runtime_visible_path
+        target_repository = target_mapping.get("repository")
+        target_repository_mapping = (
+            target_repository if isinstance(target_repository, Mapping) else {}
+        )
         repository = str(
-            workspace_spec.get("repository")
+            target_repository_mapping.get("name")
+            or workspace_spec.get("repository")
             or workspace_spec.get("repo")
             or ""
         ).strip()
@@ -1597,10 +1637,12 @@ class ManagedRuntimeLauncher:
         workspace_key = self._workspace_key_for_request(run_id=run_id, request=request)
         workspace_root = (
             self._store.store_root.parent / "workspaces" / workspace_key
-        ).resolve()
-        repo_path = (workspace_root / "repo").resolve()
-        workspace_root.mkdir(parents=True, exist_ok=True)
-        if repo_path.exists():
+        ).absolute()
+        repo_path = workspace_root / "repo"
+        ensure_directory(workspace_root)
+        if repo_path.exists() or repo_path.is_symlink():
+            with open_directory(repo_path):
+                pass
             await self._checkout_resolved_read_only_revision(
                 repo_path=repo_path,
                 workspace_spec=workspace_spec,
@@ -1744,9 +1786,7 @@ class ManagedRuntimeLauncher:
 
     @staticmethod
     def _write_executable_script(path: Path, content: str) -> str:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        path.chmod(0o700)
+        atomic_write_text(path, content, mode=0o700)
         return str(path)
 
     @staticmethod
@@ -1796,7 +1836,7 @@ class ManagedRuntimeLauncher:
         cleanup_paths: list[str] = []
         git_helper_path: Path | None = None
 
-        support_dir.mkdir(parents=True, exist_ok=True)
+        ensure_directory(support_dir)
         cleanup_paths.append(str(git_config_path))
 
         if github_socket_path:
@@ -1847,8 +1887,7 @@ class ManagedRuntimeLauncher:
                 git_config_lines.append(f"\tname = {git_name}\n")
             if git_email:
                 git_config_lines.append(f"\temail = {git_email}\n")
-        git_config_path.write_text("".join(git_config_lines), encoding="utf-8")
-        git_config_path.chmod(0o600)
+        atomic_write_text(git_config_path, "".join(git_config_lines))
         env["GIT_CONFIG_GLOBAL"] = str(git_config_path)
 
         if git_helper_path is None:
@@ -1859,7 +1898,7 @@ class ManagedRuntimeLauncher:
             return cleanup_paths
 
         marker = "# moonmind-credential-helper"
-        existing_config = repo_git_config_path.read_text(encoding="utf-8")
+        existing_config = read_regular_file(repo_git_config_path, limit=1024 * 1024).decode("utf-8")
         if marker not in existing_config:
             git_helper_command = shlex.quote(str(git_helper_path))
             credential_section = (
@@ -1867,10 +1906,7 @@ class ManagedRuntimeLauncher:
                 f"[credential]\n"
                 f"\thelper = !{git_helper_command}\n"
             )
-            repo_git_config_path.write_text(
-                existing_config + credential_section,
-                encoding="utf-8",
-            )
+            atomic_write_text(repo_git_config_path, existing_config + credential_section)
         return cleanup_paths
 
     async def cleanup_run_support(self, run_id: str) -> None:
@@ -1885,13 +1921,20 @@ class ManagedRuntimeLauncher:
 
         spool_path = Path(workspace_path) / _LIVE_LOG_SPOOL_FILENAME
         try:
-            if spool_path.is_dir():
-                logger.warning(
-                    "Skipping live log spool reset because %s is a directory",
-                    spool_path,
-                )
-                return
-            spool_path.unlink(missing_ok=True)
+            with open_directory(spool_path.parent) as parent_fd:
+                try:
+                    info = os.stat(
+                        spool_path.name, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    return
+                if stat.S_ISDIR(info.st_mode):
+                    logger.warning(
+                        "Skipping live log spool reset because %s is a directory",
+                        spool_path,
+                    )
+                    return
+                os.unlink(spool_path.name, dir_fd=parent_fd)
         except OSError:
             logger.warning(
                 "Failed to reset live log spool at %s",
@@ -2211,7 +2254,7 @@ class ManagedRuntimeLauncher:
 
         from moonmind.config.settings import settings as _mm_settings
 
-        run_root = Path(resolved_workspace_path).resolve().parent
+        run_root = Path(resolved_workspace_path).absolute().parent
         resolved_skillset = await load_resolved_skillset(
             self._artifact_service, skillset_ref
         )
@@ -2399,7 +2442,7 @@ class ManagedRuntimeLauncher:
         runtime_support_dir = None
         if resolved_workspace_path is not None:
             runtime_support_dir = str(
-                (Path(resolved_workspace_path).resolve().parent / ".moonmind").resolve()
+                Path(resolved_workspace_path).absolute().parent / ".moonmind"
             )
 
         env_overrides, mat_cmd = await materializer.materialize(
@@ -2501,7 +2544,7 @@ class ManagedRuntimeLauncher:
             )
 
         run_root: Path | None = (
-            Path(resolved_workspace_path).resolve().parent
+            Path(resolved_workspace_path).absolute().parent
             if resolved_workspace_path is not None
             else None
         )
@@ -2613,9 +2656,8 @@ class ManagedRuntimeLauncher:
                 runtime_id=normalize_runtime_id(profile.runtime_id),
             )
 
-            # The base environment mirrors the worker's ambient process
-            # environment; a GitHub token there is not this run's selection
-            # (#4023). Only a token the profile itself declares is explicit.
+            # A GitHub token is authority only when the profile itself declares
+            # it; ambient worker credentials are not this run's selection.
             explicit_github_token = self._profile_declared_github_token(
                 profile, env_overrides
             )
@@ -2677,9 +2719,7 @@ class ManagedRuntimeLauncher:
                     resolved_workspace_path=resolved_workspace_path,
                     run_id=run_id,
                 )
-                await self._run_checked_command(
-                    "chown", "-R", "app:app", ownership_root,
-                )
+                await self._chown_workspace_to_runtime_user(ownership_root)
                 # MM-861: the pre-created artifacts dir lives under the run root
                 # and is owned by root until the recursive chown above runs. For
                 # external workspaces the ownership root is only the repo subtree,
@@ -2691,14 +2731,11 @@ class ManagedRuntimeLauncher:
                 if artifacts_dir and not self._path_within(
                     artifacts_dir, ownership_root
                 ):
-                    await self._run_checked_command(
-                        "chown", "-R", "app:app", artifacts_dir,
-                    )
+                    await self._chown_workspace_to_runtime_user(artifacts_dir)
 
             if _needs_priv_drop:
-                # runuser -u does not rewrite HOME/USER/LOGNAME for us when we pass
-                # an explicit env block, so seed the target-user login context
-                # explicitly before any app-user command.
+                # Native privilege dropping does not rewrite the login context.
+                # Seed it explicitly for the target runtime identity.
                 env_overrides["HOME"] = "/home/app"
                 env_overrides["USER"] = "app"
                 env_overrides["LOGNAME"] = "app"
@@ -2729,28 +2766,24 @@ class ManagedRuntimeLauncher:
                         "Unable to ensure Claude workspace trust config"
                     ) from exc
 
-            if _needs_priv_drop:
-                # Use runuser with env= so secrets do not appear in process argv.
-                process = await asyncio.create_subprocess_exec(
-                    "runuser", "-u", "app", "--",
-                    *cmd,
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env_overrides,
-                    cwd=resolved_workspace_path,
-                    start_new_session=True,
-                )
-            else:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env_overrides,
-                    cwd=resolved_workspace_path,
-                    start_new_session=True,
-                )
+            # Python applies user/group changes in the child before exec. A
+            # profile-controlled loader or PATH value must never reach a
+            # still-privileged launcher such as runuser.
+            privilege_options: dict[str, Any] = (
+                {"user": "app", "group": "app", "extra_groups": []}
+                if _needs_priv_drop
+                else {}
+            )
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_overrides,
+                cwd=resolved_workspace_path,
+                start_new_session=True,
+                **privilege_options,
+            )
         except Exception:
             if self._log_streamer is not None:
                 self._log_streamer.consume_annotations(run_id)
