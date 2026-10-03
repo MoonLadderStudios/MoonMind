@@ -196,8 +196,8 @@ class AgentPullRequestMetadataProposal:
     path: Path
 
 # Worker runtime modes accepted by MOONMIND_WORKER_RUNTIME. Intentionally a subset
-# of SUPPORTED_RUNTIME_MODES: `codex_cloud` is excluded because it is not a local
-# worker runtime, and aliases (`codex_cli`, `claude_code`) are accepted but
+# of SUPPORTED_RUNTIME_MODES: external integrations are not local worker
+# runtimes, and aliases (`codex_cli`, `claude_code`) are accepted but
 # canonicalized for execution dispatch via _RUNTIME_MODE_EXECUTION_ALIASES.
 _ALLOWED_WORKER_RUNTIMES = frozenset(
     {

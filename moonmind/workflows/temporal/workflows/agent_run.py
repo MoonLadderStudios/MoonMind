@@ -8,7 +8,13 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from temporalio import workflow, activity
-from temporalio.exceptions import ApplicationError, CancelledError
+from temporalio.exceptions import (
+    ActivityError,
+    ApplicationError,
+    CancelledError,
+    TimeoutType,
+)
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 from temporalio.workflow import (
     ActivityCancellationType,
     ChildWorkflowCancellationType,
@@ -319,6 +325,12 @@ OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
 # execution Activity starts, so queued work occupies no execution slot.
 OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-pre-activity-capacity-admission-v1"
+)
+CODEX_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
+    "agent-run-codex-pre-activity-capacity-admission-v1"
+)
+CODEX_EXECUTION_HANDOFF_RECOVERY_PATCH_ID = (
+    "agent-run-codex-execution-handoff-recovery-v1"
 )
 OMNIGENT_CAPACITY_PAYLOAD_PREFLIGHT_PATCH_ID = (
     "agent-run-omnigent-capacity-payload-preflight-v1"
@@ -685,8 +697,12 @@ async def resolve_adapter_metadata(agent_id: str) -> dict:
     Returns ``{"agent_id": ..., "execution_style": ...}`` on success;
     raises if no adapter is registered for *agent_id*.
     """
-    registry = build_default_registry()
     resolved_agent_id = str(agent_id).strip().lower()
+    try:
+        resolve_runtime_execution_capabilities(resolved_agent_id)
+    except ValueError as exc:
+        raise ApplicationError(str(exc), non_retryable=True) from exc
+    registry = build_default_registry()
     adapter = registry.create(resolved_agent_id)
     execution_style = "polling"
     supports_callbacks = False
@@ -2243,13 +2259,6 @@ class MoonMindAgentRun:
                     "noProgressTimeoutSeconds": 2400,
                     "stuckAction": "request_intervention",
                     "retryPolicy": "provider_polling_with_human_feedback_escalation",
-                }
-            if agent_id == "codex_cloud":
-                return {
-                    "runtime": agent_id,
-                    "noProgressTimeoutSeconds": 1800,
-                    "stuckAction": "request_intervention",
-                    "retryPolicy": "provider_polling_with_terminal_fetch",
                 }
             return {
                 "runtime": agent_id or request.agent_id,
@@ -4380,6 +4389,7 @@ class MoonMindAgentRun:
         request_priority: int | None = None,
         request_queue_metadata: dict[str, Any] | None = None,
         lease_metadata: dict[str, Any] | None = None,
+        lease_purpose: str = "execution_direct",
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the ProviderProfileManager for slot requests; auto-start it on first failure.
 
@@ -4398,7 +4408,7 @@ class MoonMindAgentRun:
         signal_payload = {
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
-            "purpose": "execution_direct",
+            "purpose": lease_purpose,
             "metadata": {
                 "workflowId": workflow.info().workflow_id,
                 # MoonLadderStudios/MoonMind#1089: bind liveness to the exact
@@ -4721,13 +4731,15 @@ class MoonMindAgentRun:
         admission: Any,
         parent_info: Any,
     ) -> AgentExecutionRequest:
-        """Run the target admission order for the generic Omnigent plane.
+        """Admit Provider Profile capacity before Omnigent execution.
 
         MoonLadderStudios/MoonMind#3878 target flow: request Provider Profile
         capacity, wait durably when unavailable, then reserve provisional
         generic-host capacity — all before ``integration.omnigent.execute``
         starts. Effective concurrency is therefore the minimum of the provider
         ceiling, its effective limit, and available host capacity.
+        Codex keeps host allocation in its existing coordinator after the
+        workflow admits Provider Profile capacity.
 
         MoonLadderStudios/MoonMind#3880 completes the handoff: the returned
         request carries a ticket that binds the committed plan, this run's step
@@ -4785,6 +4797,12 @@ class MoonMindAgentRun:
             runtime_id=profiles[0]["providerRuntimeId"],
             profile_id=profiles[0]["providerProfileRef"],
             parent_info=parent_info,
+            lease_purpose=(
+                "execution_omnigent"
+                if getattr(admission, "execution_realizer_ref", None)
+                == "codex-profile-bound@1"
+                else "execution_direct"
+            ),
             lease_metadata={
                 "stepExecutionId": step_execution_id,
                 "idempotencyKey": request.idempotency_key,
@@ -4792,6 +4810,13 @@ class MoonMindAgentRun:
                 "credentialGeneration": profiles[0].get("credentialGeneration"),
             },
         )
+        if (
+            getattr(admission, "execution_realizer_ref", None)
+            == "codex-profile-bound@1"
+        ):
+            # Codex's existing coordinator owns its OAuth host lifecycle. Only
+            # Provider Profile admission moves out of the execution Activity.
+            return admitted_request
         try:
             await self._await_omnigent_host_capacity(
                 parent_info=parent_info,
@@ -4837,6 +4862,10 @@ class MoonMindAgentRun:
         onto the Activity-owned lane it already contains, a new run is rejected.
         """
 
+        if recorded_plan_realizer == "codex-profile-bound@1":
+            # Retained histories already scheduled Activity-owned acquisition.
+            # A fresh marker preserves those commands through worker upgrades.
+            return workflow.patched(CODEX_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID)
         if recorded_plan_realizer != "generic-omnigent-host@1":
             return False
         if not workflow.patched(
@@ -4861,6 +4890,26 @@ class MoonMindAgentRun:
             "support",
             type="CapacityAdmissionOwnerUnsupported",
             non_retryable=True,
+        )
+
+    def _omnigent_uses_remaining_budget_retry(
+        self,
+        *,
+        act_name: str,
+        admission: Any,
+        admit_capacity_before_activity: bool,
+    ) -> bool:
+        if act_name == "integration.omnigent.profile_bound_execute":
+            return workflow.patched(OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID)
+        # A ScheduleToStart timeout on a server-side retry does not prove
+        # the first delivery never owned a host. Reuse the profile-bound
+        # single-shot owner so new Codex admissions can distinguish them.
+        return (
+            act_name == "integration.omnigent.execute"
+            and admit_capacity_before_activity
+            and getattr(admission, "execution_realizer_ref", None)
+            == "codex-profile-bound@1"
+            and workflow.patched(CODEX_EXECUTION_HANDOFF_RECOVERY_PATCH_ID)
         )
 
     @staticmethod
@@ -5010,6 +5059,7 @@ class MoonMindAgentRun:
         profile_id: str,
         parent_info: Any,
         lease_metadata: dict[str, Any] | None = None,
+        lease_purpose: str = "execution_direct",
     ) -> None:
         """Admit Provider Profile capacity before the long execution Activity.
 
@@ -5058,6 +5108,7 @@ class MoonMindAgentRun:
             request_priority=self._request_priority(request),
             request_queue_metadata=self._request_queue_metadata(request),
             lease_metadata=fence_metadata,
+            lease_purpose=lease_purpose,
         )
         self._omnigent_capacity_runtime_id = runtime_id
         waited_seconds = 0
@@ -5117,6 +5168,7 @@ class MoonMindAgentRun:
                     request_priority=self._request_priority(request),
                     request_queue_metadata=self._request_queue_metadata(request),
                     lease_metadata=fence_metadata,
+                    lease_purpose=lease_purpose,
                 )
         admitted_profile_id = str(self._assigned_profile_id or "").strip()
         if admitted_profile_id and admitted_profile_id != profile_id:
@@ -5169,6 +5221,14 @@ class MoonMindAgentRun:
         readiness_wait_started = None
         recovering_interrupted_admission = False
         reconcile_admission = self._workflow_patch_enabled("omnigent-resume-owned-admission-v1")
+        codex_capacity = (
+            admit_capacity_before_activity
+            and getattr(admission, "execution_realizer_ref", None)
+            == "codex-profile-bound@1"
+        )
+        codex_handoff_recovery = codex_capacity and self._workflow_patch_enabled(
+            CODEX_EXECUTION_HANDOFF_RECOVERY_PATCH_ID
+        )
         while True:
             resuming = (
                 reconcile_admission
@@ -5192,8 +5252,12 @@ class MoonMindAgentRun:
                 await self._signal_parent_child_state_changed(
                     parent_info,
                     "launching",
-                    "Provider Profile and generic host capacity admitted; "
-                    "waiting for an execution worker "
+                    (
+                        "Provider Profile capacity admitted; "
+                        if codex_capacity
+                        else "Provider Profile and generic host capacity admitted; "
+                    )
+                    + "waiting for an execution worker "
                     f"(bounded to {_OMNIGENT_EXECUTION_HANDOFF_SECONDS}s "
                     "independently of the execution budget). The Activity "
                     "reports launching again once it actually starts.",
@@ -5227,6 +5291,7 @@ class MoonMindAgentRun:
                 # StartToClose from a server-side retry.
                 routed_overrides["retry_policy"] = retry_policy
             activity_returned = False
+            activity_never_started = False
             activity_started_at = workflow.now()
             try:
                 result_payload = await self._execute_routed_activity(
@@ -5260,6 +5325,21 @@ class MoonMindAgentRun:
                 )
                 activity_returned = True
             except Exception as exc:
+                if codex_handoff_recovery and admitted_at is not None:
+                    # The retry owner must not charge durable profile queueing
+                    # against this execution. Preserve the clock even when
+                    # known-unused capacity is released in finally below.
+                    setattr(exc, "_omnigent_capacity_admitted_at", admitted_at)
+                activity_never_started = (
+                    codex_handoff_recovery
+                    and reconcile_admission
+                    and not resuming
+                    and retry_policy is not None
+                    and retry_policy.maximum_attempts == 1
+                    and isinstance(exc, ActivityError)
+                    and isinstance(exc.cause, TemporalTimeoutError)
+                    and exc.cause.type == TimeoutType.SCHEDULE_TO_START
+                )
                 cause = exc
                 while getattr(cause, "cause", None) is not None:
                     cause = cause.cause
@@ -5315,8 +5395,26 @@ class MoonMindAgentRun:
                 # A heartbeat timeout or worker loss is not a cleanup receipt.
                 # Keep the admitted request and lease while reconciliation may
                 # find a live session; the runtime's existing binding/turn fence
-                # owns reattachment. Only a completed Activity can release here.
-                if admit_capacity_before_activity and (activity_returned or not reconcile_admission):
+                # owns reattachment. A single-shot ScheduleToStart timeout
+                # on a fresh admission proves no host ever consumed it. A
+                # resumed admission can still belong to an earlier live
+                # delivery even when this delivery never started.
+                cleanup_confirmed = activity_returned or activity_never_started
+                if codex_capacity and activity_returned:
+                    metadata = (
+                        result_payload.get("metadata", {})
+                        if isinstance(result_payload, Mapping)
+                        else getattr(result_payload, "metadata", {})
+                    )
+                    cleanup_confirmed = (
+                        isinstance(metadata, Mapping)
+                        and metadata.get("admittedProviderCapacityCleanupCompleted")
+                        is True
+                    )
+                if admit_capacity_before_activity and (
+                    cleanup_confirmed
+                    or (not codex_capacity and not reconcile_admission)
+                ):
                     self._omnigent_capacity_state = "granted"
                     await self._release_omnigent_provider_capacity(
                         request=request
@@ -5326,6 +5424,7 @@ class MoonMindAgentRun:
             requeue_reason = (
                 self._omnigent_capacity_requeue_reason(result_payload, request=request)
                 if admit_capacity_before_activity
+                and (not codex_capacity or cleanup_confirmed)
                 else None
             )
             if requeue_reason is None:
@@ -5420,7 +5519,8 @@ class MoonMindAgentRun:
                 if getattr(cause, "non_retryable", False):
                     raise
                 cause = getattr(cause, "cause", None)
-            elapsed = (workflow.now() - lane_start).total_seconds()
+            budget_start = getattr(exc, "_omnigent_capacity_admitted_at", lane_start)
+            elapsed = (workflow.now() - budget_start).total_seconds()
             retry_stc = profile_bound_retry_start_to_close_seconds(
                 first_stc_seconds=stc_seconds,
                 elapsed_seconds=elapsed,
@@ -6102,6 +6202,13 @@ class MoonMindAgentRun:
         *,
         refresh_derived_selection: bool = False,
     ) -> None:
+        if self._workflow_patch_enabled("agent-run-supported-runtime-admission-v1"):
+            target_runtime = str(payload.get("targetRuntime") or "").strip()
+            if target_runtime:
+                try:
+                    resolve_runtime_execution_capabilities(target_runtime)
+                except ValueError as exc:
+                    raise ApplicationError(str(exc), non_retryable=True) from exc
         previous_runtime_id = self._managed_runtime_id(request.agent_id)
         params = dict(request.parameters or {})
         preserve_model_selection = self._workflow_patch_enabled(
@@ -6918,6 +7025,14 @@ class MoonMindAgentRun:
 
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
+        # #4644: reject queued/indirect unsupported work before capacity or launch.
+        # Recorded histories retain their command sequence; release drainage is
+        # owned by the existing update procedure.
+        if workflow.patched("agent-run-supported-runtime-admission-v1"):
+            try:
+                resolve_runtime_execution_capabilities(request.agent_id)
+            except ValueError as exc:
+                raise ApplicationError(str(exc), non_retryable=True) from exc
         lease = request.parameters.get("issueClaimLease")
         if lease:
             from moonmind.workflows.temporal.github_issue_lease_workflow import execute_with_issue_lease
@@ -8083,10 +8198,12 @@ class MoonMindAgentRun:
                                 )
                             )
                             use_remaining_budget_retry = (
-                                act_name
-                                == "integration.omnigent.profile_bound_execute"
-                                and workflow.patched(
-                                    OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID
+                                self._omnigent_uses_remaining_budget_retry(
+                                    act_name=act_name,
+                                    admission=admission,
+                                    admit_capacity_before_activity=(
+                                        admit_capacity_before_activity
+                                    ),
                                 )
                             )
                             if use_remaining_budget_retry:

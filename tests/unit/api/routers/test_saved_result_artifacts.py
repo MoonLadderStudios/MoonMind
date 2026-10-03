@@ -211,6 +211,74 @@ async def test_saved_outputs_list_and_download_after_workspace_removal(tmp_path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recorded_runtime", ["codex_cli", "codex_cloud"])
+async def test_historical_runtime_logs_results_and_patches_remain_readable(
+    tmp_path, monkeypatch, recorded_runtime
+):
+    """#4644: persisted outputs and identity do not need an executable adapter."""
+    for name in ("CODEX_CLOUD_ENABLED", "CODEX_CLOUD_API_URL", "CODEX_CLOUD_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    async with _artifact_service(tmp_path) as service:
+        session = service._repository._session
+        parameters = {
+            "workflow": {
+                "instructions": "Original saved task",
+                "runtime": {
+                    "mode": recorded_runtime,
+                    "model": "recorded-model",
+                    "effort": "high",
+                },
+            },
+            "runtimeCapabilities": {"runtimeId": recorded_runtime, "version": "v1"},
+        }
+        record = db_models.TemporalExecutionCanonicalRecord(
+            workflow_id="mm:source",
+            run_id="source-run",
+            namespace=settings.temporal.namespace,
+            workflow_type=db_models.TemporalWorkflowType.USER_WORKFLOW,
+            owner_id=OPERATOR,
+            owner_type=db_models.TemporalExecutionOwnerType.USER,
+            entry="user_workflow",
+            state=db_models.MoonMindWorkflowState.COMPLETED,
+            parameters=parameters,
+        )
+        session.add(record)
+        await session.commit()
+        outputs = [
+            (b"original run log\n", "text/plain", "output.log"),
+            (b'{"summary":"original result"}', "application/json", "output.primary"),
+            (b"diff --git a/file b/file\n", "text/x-diff", "output.patch"),
+        ]
+        refs = []
+        for payload, content_type, link_type in outputs:
+            refs.append(
+                await _put_output(
+                    service,
+                    payload,
+                    content_type=content_type,
+                    link_type=link_type,
+                    title=link_type,
+                )
+            )
+        record.artifact_refs = list(refs)
+        await session.commit()
+        async with _client(service) as client:
+            response = await client.get(_listing_path())
+            assert response.status_code == 200, response.text
+            listed = {item["artifact_id"] for item in response.json()["artifacts"]}
+            assert listed == set(refs)
+            for ref, (payload, _content_type, _link_type) in zip(refs, outputs):
+                downloaded = await client.get(f"/api/artifacts/{ref}/download")
+                assert downloaded.status_code == 200, downloaded.text
+                assert downloaded.content == payload
+        await session.refresh(record)
+        assert record.parameters == parameters
+        assert record.artifact_refs == refs
+        assert record.run_id == "source-run"
+        assert record.state == db_models.MoonMindWorkflowState.COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_restricted_and_expired_saved_outputs_stay_accurate(tmp_path):
     async with _artifact_service(tmp_path) as service:
         saved = await capture_saved_work(

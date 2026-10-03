@@ -180,6 +180,19 @@ if [ -f "$github_config_dir/hosts.yml" ] \
   } > "$github_version_tmp"
   mv "$github_version_tmp" "$github_config_file"
 fi
+# Git transport must use the same lease-private account as gh. The host root
+# filesystem is read-only, so use Git's standard XDG config under the writable
+# cache instead of ~/.gitconfig or token-bearing repository configuration.
+# Reapply on restart, preserving unrelated settings and replacing this helper
+# list so repeated launches cannot accumulate entries.
+if [ -f "$github_config_dir/hosts.yml" ]; then
+  umask 077
+  github_git_config=$github_config_home/git/config
+  mkdir -p "$github_config_home/git"
+  git config --file "$github_git_config" --replace-all credential.https://github.com.helper ''
+  git config --file "$github_git_config" --add credential.https://github.com.helper '!/opt/moonmind-tools/bin/gh auth git-credential'
+  chmod 0600 "$github_git_config"
+fi
 unset github_token GH_TOKEN GIT_TOKEN GITHUB_TOKEN
 
 # --- 8. Bounded pack staging ------------------------------------------------------

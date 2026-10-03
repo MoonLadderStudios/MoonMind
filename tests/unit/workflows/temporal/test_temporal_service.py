@@ -4410,6 +4410,181 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert service._client_adapter.update_workflow.await_count == 0
 
 
+async def _insert_historical_cloud_execution(session, *, runtime_recorded):
+    parameters = {"workflow": {"instructions": "Preserve historical task"}}
+    if runtime_recorded:
+        parameters["targetRuntime"] = "codex_cloud"
+        parameters["workflow"]["runtime"] = {
+            "mode": "codex_cloud",
+            "model": "saved-model",
+        }
+    record = TemporalExecutionCanonicalRecord(
+        workflow_id=f"mm:historical-cloud:{uuid4().hex[:8]}",
+        run_id=uuid4().hex,
+        namespace="default",
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        owner_id=str(uuid4()),
+        owner_type=TemporalExecutionOwnerType.USER,
+        state=MoonMindWorkflowState.FAILED,
+        close_status=TemporalExecutionCloseStatus.FAILED,
+        closed_at=datetime.now(UTC),
+        entry="user_workflow",
+        parameters=parameters,
+        memo={"title": "Historical cloud task"},
+        search_attributes={"mm_integration": "codex_cloud", "mm_stage": "failed"},
+        integration_state={
+            "integration_name": "codex_cloud",
+            "correlation_id": "archived-correlation",
+            "external_operation_id": "archived-cloud-task",
+            "normalized_status": "failed",
+        },
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", ["codex_cli", "openclaw"])
+@pytest.mark.parametrize("runtime_recorded", [True, False])
+async def test_terminal_cloud_rerun_admits_explicit_supported_replacement(
+    tmp_path, mock_client_adapter, replacement, runtime_recorded
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await _insert_historical_cloud_execution(
+            session, runtime_recorded=runtime_recorded
+        )
+        source_run_id = source.run_id
+        source_parameters = json.loads(json.dumps(source.parameters))
+        source_integration = dict(source.integration_state)
+        response = await service.update_execution(
+            workflow_id=source.workflow_id,
+            update_name="RequestRerun",
+            parameters_patch={
+                "targetRuntime": replacement,
+                "workflow": {
+                    "instructions": "Preserve historical task",
+                    "runtime": {"mode": replacement, "model": "saved-model"},
+                },
+            },
+            idempotency_key="explicit-runtime-replacement",
+        )
+        rerun = await service.describe_execution(response["workflow_id"])
+        await session.refresh(source)
+
+        assert response["accepted"] is True
+        assert rerun.workflow_id != source.workflow_id
+        assert rerun.parameters["targetRuntime"] == replacement
+        assert rerun.parameters["workflow"]["runtime"]["mode"] == replacement
+        assert rerun.parameters["workflow"]["instructions"] == "Preserve historical task"
+        assert rerun.parameters["rerunSource"] == {
+            "workflowId": source.workflow_id,
+            "runId": source_run_id,
+        }
+        assert rerun.integration_state is None
+        assert rerun.search_attributes.get("mm_integration") != "codex_cloud"
+        assert source.run_id == source_run_id
+        assert source.state is MoonMindWorkflowState.FAILED
+        assert source.close_status is TemporalExecutionCloseStatus.FAILED
+        assert source.parameters == source_parameters
+        assert source.integration_state == source_integration
+        assert source.search_attributes["mm_integration"] == "codex_cloud"
+        mock_client_adapter.update_workflow.assert_not_awaited()
+        mock_client_adapter.start_workflow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_recorded", [True, False])
+@pytest.mark.parametrize("entrypoint", ["update", "fresh"])
+async def test_cloud_rerun_requires_explicit_replacement(
+    tmp_path, mock_client_adapter, runtime_recorded, entrypoint
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await _insert_historical_cloud_execution(
+            session, runtime_recorded=runtime_recorded
+        )
+        source_run_id = source.run_id
+        source_parameters = json.loads(json.dumps(source.parameters))
+        source_integration = dict(source.integration_state)
+        with pytest.raises(TemporalExecutionValidationError):
+            if entrypoint == "update":
+                await service.update_execution(
+                    workflow_id=source.workflow_id,
+                    update_name="RequestRerun",
+                    idempotency_key="unchanged-cloud-rerun",
+                )
+            else:
+                await service.create_fresh_rerun_execution(
+                    workflow_id=source.workflow_id,
+                    idempotency_key="unchanged-cloud-rerun",
+                )
+        await session.refresh(source)
+        assert source.run_id == source_run_id
+        assert source.parameters == source_parameters
+        assert source.integration_state == source_integration
+        mock_client_adapter.update_workflow.assert_not_awaited()
+        mock_client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_terminal_cloud_rerun_accepts_nested_runtime_alias(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await _insert_historical_cloud_execution(
+            session, runtime_recorded=False
+        )
+        response = await service.update_execution(
+            workflow_id=source.workflow_id,
+            update_name="RequestRerun",
+            parameters_patch={
+                "workflow": {
+                    "instructions": "Preserve historical task",
+                    "runtime": {"target_runtime": "codex_cli"},
+                }
+            },
+            idempotency_key="nested-runtime-replacement",
+        )
+        rerun = await service.describe_execution(response["workflow_id"])
+        assert rerun.search_attributes["mm_target_runtime"] == "codex_cli"
+        assert rerun.integration_state is None
+        await session.refresh(source)
+        assert source.integration_state["integration_name"] == "codex_cloud"
+
+
+@pytest.mark.asyncio
+async def test_cloud_fresh_rerun_requires_replacement_before_preset_expansion(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    expand = AsyncMock(
+        return_value={
+            "targetRuntime": "codex_cli",
+            "workflow": {"instructions": "Expanded historical task"},
+        }
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.service.expand_preset_for_child_run", expand
+    )
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await _insert_historical_cloud_execution(
+            session, runtime_recorded=False
+        )
+        source.parameters = {"workflow": {"taskTemplate": {"slug": "jira-orchestrate"}}}
+        await session.commit()
+        with pytest.raises(TemporalExecutionValidationError, match="codex_cloud"):
+            await service.create_fresh_rerun_execution(
+                workflow_id=source.workflow_id,
+                idempotency_key="no-implicit-template-replacement",
+            )
+        expand.assert_not_awaited()
+        mock_client_adapter.start_workflow.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
     tmp_path, mock_client_adapter

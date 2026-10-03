@@ -60,7 +60,11 @@ const RUNTIME_ID_LABELS: Record<string, string> = {
   claude_code: 'Claude Code',
   claude: 'Claude Code',
   codex_cli: 'Codex CLI',
-  codex_cloud: 'Codex Cloud',
+  codex: 'Codex',
+  jules: 'Jules',
+  jules_api: 'Jules',
+  openclaw: 'OpenClaw',
+  universal: 'Universal',
   omnigent: 'Omnigent',
   opencode: 'OpenCode',
 };
@@ -131,6 +135,9 @@ export function runtimeOptionGroups(
     unavailable: [],
   };
   runtimeIds.forEach((runtimeId) => {
+    if (!Object.prototype.hasOwnProperty.call(RUNTIME_ID_LABELS, runtimeId)) {
+      return;
+    }
     const registered = targetsForRuntime(catalog, runtimeId);
     const option: RuntimeOption = {
       runtimeId,
@@ -181,6 +188,9 @@ export function runtimeUnavailableReason(
   runtimeId: string,
   catalog?: RuntimeTargetCatalog | null,
 ): string | null {
+  if (!Object.prototype.hasOwnProperty.call(RUNTIME_ID_LABELS, runtimeId)) {
+    return `Unsupported runtime ${runtimeId}. Explicitly choose a supported replacement; your draft content is preserved.`;
+  }
   const registered = targetsForRuntime(catalog, runtimeId);
   if (registered.length === 0) {
     return null;

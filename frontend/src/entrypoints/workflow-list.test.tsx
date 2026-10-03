@@ -957,7 +957,7 @@ describe('Workflows Entrypoint', () => {
       target: { value: 'owner/repo' },
     });
     fireEvent.change(screen.getByLabelText('Runtime filter value'), {
-      target: { value: 'codex_cloud' },
+      target: { value: 'jules' },
     });
     fireEvent.change(screen.getByLabelText('Title filter value'), {
       target: { value: 'Example' },
@@ -966,7 +966,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=jules&titleContains=Example',
       );
     });
   });
@@ -1061,7 +1061,6 @@ describe('Workflows Entrypoint', () => {
       'codex_cli',
       'claude_code',
       'jules',
-      'codex_cloud',
     ]);
   });
 

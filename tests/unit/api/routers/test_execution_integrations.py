@@ -217,17 +217,17 @@ async def test_generic_callback_profile_accepts_matching_bearer_token(monkeypatc
         _workflow_id, callback_key = await _create_monitored_execution(
             client,
             execution_suffix=f"generic-auth-{uuid4().hex[:8]}",
-            integration_name="codex_cloud",
+            integration_name="openclaw",
         )
         unauthorized = await client.post(
-            f"/api/integrations/codex_cloud/callbacks/{callback_key}",
+            f"/api/integrations/openclaw/callbacks/{callback_key}",
             json={
                 "eventType": "completed",
                 "normalizedStatus": "completed",
             },
         )
         accepted = await client.post(
-            f"/api/integrations/codex_cloud/callbacks/{callback_key}",
+            f"/api/integrations/openclaw/callbacks/{callback_key}",
             headers={"Authorization": "Bearer generic-secret"},
             json={
                 "eventType": "completed",
@@ -239,7 +239,7 @@ async def test_generic_callback_profile_accepts_matching_bearer_token(monkeypatc
     assert unauthorized.status_code == 401
     assert unauthorized.json()["detail"]["code"] == "integration_callback_unauthorized"
     assert accepted.status_code == 202
-    assert accepted.json()["integration"]["integrationName"] == "codex_cloud"
+    assert accepted.json()["integration"]["integrationName"] == "openclaw"
     assert accepted.json()["integration"]["normalizedStatus"] == "completed"
 
 
@@ -383,3 +383,223 @@ async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
         str(ref).startswith("art_")
         for ref in response.json().get("artifactRefs", [])
     )
+
+
+@pytest.mark.asyncio
+async def test_removed_integration_binding_is_rejected_without_signalling(monkeypatch):
+    """MoonLadderStudios/MoonMind#4644: a generic binding cannot re-enable Cloud."""
+    signals = []
+
+    async def signal(*args, **kwargs):
+        signals.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter.signal_workflow",
+        signal,
+    )
+    async with _shared_client(uuid4()) as client:
+        created = await client.post(
+            "/api/executions",
+            json={
+                "workflowType": "MoonMind.UserWorkflow",
+                "title": "Preserve",
+                "planArtifactRef": "old-cloud-plan",
+                "idempotencyKey": uuid4().hex,
+            },
+        )
+        assert created.status_code == 201
+        bound = await client.post(
+            f"/api/executions/{created.json()['workflowId']}/integration",
+            json={
+                "integrationName": "codex_cloud",
+                "externalOperationId": "old-operation",
+                "normalizedStatus": "running",
+                "callbackSupported": True,
+            },
+        )
+        assert bound.status_code == 422
+        assert "unsupported" in bound.text.lower()
+        assert signals == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", [False, True])
+async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
+    _module_db, monkeypatch, terminal, tmp_path
+):
+    from sqlalchemy import select
+    from api_service.db.models import (
+        TemporalExecutionRecord,
+        TemporalExecutionCanonicalRecord,
+        TemporalIntegrationCorrelationRecord,
+    )
+    from moonmind.workflows.temporal.service import MoonMindWorkflowState
+
+    signals = []
+
+    async def signal(*args, **kwargs):
+        signals.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter.signal_workflow",
+        signal,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter.update_workflow",
+        signal,
+    )
+    monkeypatch.setattr(settings.integration_callbacks, "callback_token", None)
+    monkeypatch.setattr(
+        settings.integration_callbacks, "artifact_capture_enabled", False
+    )
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow, "temporal_artifact_root", str(tmp_path / "artifacts")
+    )
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    async with _shared_client(uuid4()) as client:
+        from api_service.api.routers.executions import get_temporal_client
+
+        class HistoricalClient:
+            def get_workflow_handle(self, workflow_id, **kwargs):
+                raise RuntimeError("Fixture record no longer has a live provider")
+
+        app.dependency_overrides[get_temporal_client] = HistoricalClient
+        execution_suffix = uuid4().hex
+        workflow_id, key = await _create_monitored_execution(
+            client, execution_suffix=execution_suffix, integration_name="openclaw"
+        )
+        async with db_base.async_session_maker() as session:
+            row = await session.scalar(
+                select(TemporalExecutionRecord).where(
+                    TemporalExecutionRecord.workflow_id == workflow_id
+                )
+            )
+            snapshot = dict(row.integration_state)
+            snapshot["integration_name"] = "codex_cloud"
+            snapshot["result_refs"] = ["saved-result-original"]
+            row.integration_state = snapshot
+            canonical = await session.scalar(
+                select(TemporalExecutionCanonicalRecord).where(
+                    TemporalExecutionCanonicalRecord.workflow_id == workflow_id
+                )
+            )
+            canonical.integration_state = dict(snapshot)
+            if terminal:
+                canonical.state = MoonMindWorkflowState.COMPLETED
+            if terminal:
+                row.state = MoonMindWorkflowState.COMPLETED
+            correlation = await session.scalar(
+                select(TemporalIntegrationCorrelationRecord).where(
+                    TemporalIntegrationCorrelationRecord.workflow_id == workflow_id
+                )
+            )
+            correlation.integration_name = "codex_cloud"
+            await session.commit()
+        read = await client.get(f"/api/executions/{workflow_id}")
+        assert read.status_code == 200
+        assert read.json()["integration"]["integrationName"] == "codex_cloud"
+        assert read.json()["integration"]["resultRefs"] == ["saved-result-original"]
+        signals.clear()
+        existing = await client.post(
+            "/api/executions",
+            json={
+                "workflowType": "MoonMind.UserWorkflow",
+                "planArtifactRef": "old-plan",
+                "idempotencyKey": f"execution-integrations-create-{execution_suffix}",
+                "initialParameters": {"targetRuntime": "codex_cloud"},
+            },
+        )
+        assert existing.status_code == 201, existing.text
+        assert existing.json()["workflowId"] == workflow_id
+        assert existing.json()["integration"] == read.json()["integration"]
+        assert signals == []
+        if not terminal:
+            resumed = await client.post(
+                f"/api/executions/{workflow_id}/signal",
+                json={"signalName": "Resume", "payload": {}},
+            )
+            assert resumed.status_code == 409
+            assert "unsupported integration" in resumed.text.lower()
+            assert signals == []
+        rerun = await client.post(
+            f"/api/executions/{workflow_id}/update",
+            json={"updateName": "RequestRerun"},
+        )
+        assert rerun.status_code == 422, rerun.text
+        assert "unsupported integration" in rerun.text.lower()
+        assert signals == []
+        late = await client.post(
+            f"/api/integrations/codex_cloud/callbacks/{key}",
+            json={"eventType": "completed", "normalizedStatus": "completed"},
+        )
+        assert late.status_code == (202 if terminal else 409)
+        assert signals == []
+        after = await client.get(f"/api/executions/{workflow_id}")
+        assert after.json()["integration"] == read.json()["integration"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_payload",
+    [
+        {
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Keep task",
+                    "runtime": {
+                        "mode": "codex_cloud",
+                        "model": "saved-model",
+                        "effort": "high",
+                    },
+                }
+            },
+        },
+        {
+            "type": "workflow",
+            "payload": {
+                "targetRuntime": "codex_cloud",
+                "workflow": {
+                    "instructions": "Keep task",
+                    "runtime": {"mode": "codex_cli"},
+                },
+            },
+        },
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "planArtifactRef": "saved-plan",
+            "initialParameters": {
+                "workflow": {
+                    "instructions": "Keep task",
+                    "steps": [
+                        {
+                            "runtime": {"mode": "codex_cloud"},
+                            "instructions": "Keep this step",
+                        }
+                    ],
+                }
+            },
+        },
+    ],
+)
+async def test_removed_execution_targets_reject_before_temporal_start(
+    monkeypatch, request_payload
+):
+    """#4644: stale canonical and legacy API envelopes never launch new work."""
+    calls = []
+
+    async def start(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("Unsupported target reached Temporal start")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter.start_workflow", start
+    )
+    async with _shared_client(uuid4()) as client:
+        response = await client.post(
+            "/api/executions", json={**request_payload, "idempotencyKey": uuid4().hex}
+        )
+    assert response.status_code == 422, response.text
+    assert "must be one of" in response.text.lower()
+    assert calls == []

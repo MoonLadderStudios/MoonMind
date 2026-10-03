@@ -92,7 +92,7 @@ async def execute_typed_activity(
 
 @overload
 async def execute_typed_activity(
-    activity: Literal["integration.jules.start", "integration.codex_cloud.start"],
+    activity: Literal["integration.jules.start"],
     arg: AgentExecutionRequest,
     *,
     task_queue: str | None = None,
@@ -107,7 +107,7 @@ async def execute_typed_activity(
 
 @overload
 async def execute_typed_activity(
-    activity: Literal["integration.jules.status", "integration.codex_cloud.status"],
+    activity: Literal["integration.jules.status"],
     arg: ExternalAgentRunInput,
     *,
     task_queue: str | None = None,
@@ -124,7 +124,6 @@ async def execute_typed_activity(
 async def execute_typed_activity(
     activity: Literal[
         "integration.jules.fetch_result",
-        "integration.codex_cloud.fetch_result",
         "agent_runtime.publish_artifacts",
     ],
     arg: ExternalAgentRunInput | AgentRunResult,
@@ -141,7 +140,7 @@ async def execute_typed_activity(
 
 @overload
 async def execute_typed_activity(
-    activity: Literal["integration.jules.cancel", "integration.codex_cloud.cancel"],
+    activity: Literal["integration.jules.cancel"],
     arg: ExternalAgentRunInput,
     *,
     task_queue: str | None = None,

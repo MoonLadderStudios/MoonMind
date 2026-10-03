@@ -641,7 +641,7 @@ def test_runtime_command_preview_config_includes_all_passthrough_runtime_ids() -
     assert config["runtimes"]["claude"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["claude_code"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["universal"]["slashCommandPassthrough"] is True
-    assert config["runtimes"]["codex_cloud"]["slashCommandPassthrough"] is False
+    assert "codex_cloud" not in config["runtimes"]
 
 
 def test_runtime_command_leading_whitespace_is_not_detected() -> None:
@@ -2809,3 +2809,54 @@ def test_runtime_aliases_do_not_shadow_harness_identities() -> None:
     assert canonical_harness_id("codex") == "codex-native"
     assert normalize_runtime_id("claude") == "claude_code"
     assert canonical_harness_id("claude") == "claude-native"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"targetRuntime": "codex_cloud", "workflow": {"instructions": "Keep the task"}},
+        {
+            "workflow": {
+                "instructions": "Keep the task",
+                "runtime": {"mode": "codex_cloud"},
+            }
+        },
+        {
+            "workflow": {
+                "instructions": "Keep the task",
+                "steps": [{**skill_step(), "runtime": {"mode": "codex_cloud"}}],
+            }
+        },
+    ],
+)
+def test_removed_cloud_is_rejected_without_default_substitution(payload):
+    """MoonLadderStudios/MoonMind#4644: explicit retired work is never retargeted."""
+    with pytest.raises(WorkflowContractError):
+        build_canonical_workflow_view(job_type="task", payload=payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"targetRuntime": "openclaw", "workflow": {"instructions": "Use the gateway"}},
+        {
+            "workflow": {
+                "instructions": "Use the gateway",
+                "runtime": {"mode": "openclaw"},
+            }
+        },
+        {
+            "workflow": {
+                "instructions": "Use the gateway",
+                "steps": [{**skill_step(), "runtime": {"mode": "openclaw"}}],
+            }
+        },
+    ],
+)
+def test_registered_external_runtime_is_admitted(payload):
+    canonical = build_canonical_workflow_view(job_type="task", payload=payload)
+    if "steps" in payload["workflow"]:
+        assert canonical["workflow"]["steps"][0]["runtime"]["mode"] == "openclaw"
+    else:
+        assert canonical["targetRuntime"] == "openclaw"
+        assert canonical["workflow"]["runtime"]["mode"] == "openclaw"

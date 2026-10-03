@@ -142,7 +142,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         "omnigent",
         "codex_cli",
         "claude_code",
-        "codex_cloud",
     ]
     assert "runtimeCommandPreview" in config["system"]
     assert "claude_code" in config["system"]["supportedWorkerRuntimes"]
@@ -175,7 +174,7 @@ def test_build_runtime_config_exposes_browser_safe_runtime_command_preview_metad
         "renderMode": "prompt_prefix",
         "commandHintsRef": "claude_code",
     }
-    assert preview["runtimes"]["codex_cloud"]["slashCommandPassthrough"] is False
+    assert "codex_cloud" not in preview["runtimes"]
     assert "review" in preview["knownRuntimeCommandHints"]
     assert preview["knownRuntimeCommandHints"]["review"]["aliases"] == ["/review"]
     serialized = repr(preview).lower()
@@ -271,7 +270,6 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
         "omnigent",
         "codex_cli",
         "claude_code",
-        "codex_cloud",
     ]
     assert config["system"]["defaultRuntime"] == "claude_code"
     assert config["system"]["defaultModel"] == "claude-opus-4-8"
@@ -1139,7 +1137,6 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
         "omnigent",
         "codex_cli",
         "claude_code",
-        "codex_cloud",
     ]
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
@@ -1203,7 +1200,6 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
         "omnigent",
         "codex_cli",
         "claude_code",
-        "codex_cloud",
         "jules",
     ]
 

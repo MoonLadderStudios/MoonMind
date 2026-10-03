@@ -572,7 +572,7 @@ def test_create_page_shows_runtime_command_previews(server):
         page.wait_for_selector("text=Runtime command: /foo")
         page.wait_for_selector("text=Pass-through runtime command.")
 
-        page.select_option('select[name="runtime"]', "codex_cloud")
+        page.select_option('select[name="runtime"]', "jules")
         page.wait_for_selector("text=Unsupported runtime command: /foo")
         assert instructions.input_value() == "/foo\nUse provider behavior."
 

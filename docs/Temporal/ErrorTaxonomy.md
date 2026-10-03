@@ -304,7 +304,6 @@ Examples:
 
 - `integration.jules.start`
 - `integration.jules.status`
-- `integration.codex_cloud.fetch_result`
 
 Typical retryable failures:
 

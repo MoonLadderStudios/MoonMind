@@ -1,7 +1,7 @@
 """Reusable base class for external-agent adapter implementations.
 
 Extracts shared logic that repeats across provider-specific adapters
-(Jules, Codex Cloud, future BYOA) into one canonical pattern.
+(Jules, OpenClaw, future BYOA) into one canonical pattern.
 
 Provider subclasses override ``do_start``, ``do_status``,
 ``do_fetch_result``, and ``do_cancel`` while the base handles:

@@ -780,7 +780,10 @@ async def _try_generic_realizer_dispatch(
                 failureClass="integration_error",
                 providerErrorCode=provider_error_code,
                 retryRecommendation=remediation_for(provider_error_code),
-                metadata={"dispatchError": str(exc)[:1000]},
+                metadata={
+                    "dispatchError": str(exc)[:1000],
+                    **_capacity_cleanup_receipt(exc),
+                },
             )
 
     params = request.parameters if isinstance(request.parameters, dict) else {}
@@ -917,6 +920,7 @@ async def _try_generic_realizer_dispatch(
             ),
             providerErrorCode=code,
             retryRecommendation=remediation_for(code),
+            metadata=_capacity_cleanup_receipt(exc),
         )
     except Exception as exc:
         # Unknown implementation defects retain one generic boundary code; do
@@ -934,6 +938,7 @@ async def _try_generic_realizer_dispatch(
             retryRecommendation=remediation_for(
                 HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
             ),
+            metadata=_capacity_cleanup_receipt(exc),
         )
 
 
@@ -945,6 +950,15 @@ async def omnigent_execute_activity(
 
     async with omnigent_activity_heartbeat():
         return await _omnigent_execute_activity(request)
+
+
+def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
+    completed = getattr(exc, "admitted_provider_capacity_cleanup_completed", None)
+    return (
+        {"admittedProviderCapacityCleanupCompleted": completed}
+        if isinstance(completed, bool)
+        else {}
+    )
 
 
 def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
@@ -970,6 +984,7 @@ def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
         failureClass="integration_error",
         providerErrorCode=typed_code,
         retryRecommendation=remediation_for(typed_code),
+        metadata=_capacity_cleanup_receipt(exc),
     )
 
 

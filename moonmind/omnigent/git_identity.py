@@ -180,7 +180,11 @@ def ensure_workspace_git_identity(
     except FileNotFoundError:
         existing = []
     updated = _write_user_identity(existing, name, email)
-    atomic_write_text(config, "\n".join(updated) + "\n")
+    atomic_write_text(
+        config,
+        "\n".join(updated) + "\n",
+        preserve_existing_owner=(runtime_uid is None and runtime_gid is None),
+    )
     if runtime_uid is not None and runtime_gid is not None:
         with open_directory(config.parent) as parent_fd:
             os.chown(

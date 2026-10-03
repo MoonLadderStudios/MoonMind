@@ -150,6 +150,112 @@ def test_ensure_workspace_git_identity_replaces_stale_imported_identity(
     assert '"Deployment Operator"' in config
 
 
+def _model_config_owner(config, monkeypatch):
+    """Model retained-runtime metadata without changing the test process UID."""
+    import os
+
+    from moonmind.utils import workspace_paths
+
+    before = config.stat()
+    owner = (before.st_uid + 1, before.st_gid + 1)
+    real_stat = os.stat
+
+    def existing_metadata(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if path == config.name and kwargs.get("dir_fd") is not None:
+            assert kwargs.get("follow_symlinks") is False
+            values = list(result)
+            values[4], values[5] = owner
+            return os.stat_result(values)
+        return result
+
+    monkeypatch.setattr(workspace_paths.os, "stat", existing_metadata)
+    return before, owner
+
+
+@pytest.mark.parametrize("already_current", [False, True])
+def test_identity_without_runtime_owner_preserves_existing_config_owner(
+    tmp_path, monkeypatch, already_current
+):
+    import os
+    import stat
+
+    from moonmind.utils import workspace_paths
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+    config = git_dir / "config"
+    original = (
+        '[user]\n\tname = "Deployment Operator"\n'
+        '\temail = "operator@example.test"\n'
+        if already_current
+        else "[core]\n\tbare = false\n"
+    )
+    config.write_text(original)
+    before, owner = _model_config_owner(config, monkeypatch)
+    retained = tmp_path / "retained-config"
+    os.link(config, retained)
+    ownership_changes = []
+
+    def preserve(fd, uid, gid):
+        assert os.fstat(fd).st_ino != before.st_ino
+        assert config.stat().st_ino == before.st_ino
+        assert retained.read_text() == original
+        ownership_changes.append((uid, gid))
+
+    monkeypatch.setattr(workspace_paths.os, "fchown", preserve)
+
+    assert ensure_workspace_git_identity(
+        tmp_path, runtime_uid=None, runtime_gid=None
+    )
+
+    after = config.stat()
+    assert ownership_changes == [owner]
+    assert stat.S_IMODE(after.st_mode) == 0o600
+    assert after.st_ino != before.st_ino
+    assert '"Deployment Operator"' in config.read_text()
+    assert retained.read_text() == original
+    assert retained.stat().st_ino == before.st_ino
+
+
+def test_identity_owner_preservation_failure_keeps_original_config(
+    tmp_path, monkeypatch
+):
+    import os
+
+    from moonmind.utils import workspace_paths
+
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+    config = git_dir / "config"
+    original = "[core]\n\tbare = false\n"
+    config.write_text(original)
+    before, owner = _model_config_owner(config, monkeypatch)
+    failure = PermissionError("preserving Git config ownership refused")
+
+    def refuse(fd, uid, gid):
+        assert os.fstat(fd).st_ino != before.st_ino
+        assert (uid, gid) == owner
+        raise failure
+
+    monkeypatch.setattr(workspace_paths.os, "fchown", refuse)
+    with pytest.raises(PermissionError) as captured:
+        ensure_workspace_git_identity(
+            tmp_path, runtime_uid=None, runtime_gid=None
+        )
+
+    assert captured.value is failure
+    after = config.stat()
+    assert after.st_ino == before.st_ino
+    assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
+    assert config.read_text() == original
+    assert list(git_dir.glob(".moonmind-write-*")) == []
+
+
 @pytest.mark.parametrize("failure_phase", ["write", "chown"])
 def test_ensure_workspace_git_identity_propagates_preparation_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_phase: str
