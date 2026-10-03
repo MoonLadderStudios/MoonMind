@@ -206,6 +206,26 @@ Use initializing, awaiting_external, executing, finalizing, completed, failed, a
 
 Load admitted context, evaluate external scheduling readiness, wait by signal/bounded timer when necessary, start one deterministically identified resolver child, await it, validate its disposition/evidence, then complete required effects or return to the gate. Child acceptance/process exit is not completion of the PR objective.
 
+An observed completed CI failure admits the resolver even while other checks are
+queued or running. A failed build must not wait for its queued downstream CI Gate
+before `pr-resolver` can select `fix-ci` or reconcile an infrastructure failure.
+Incomplete checks with no confirmed failure continue to wait. Raw check evidence
+remains incomplete and failing; resolver admission does not certify merge readiness.
+Current-head, policy, unavailable-evidence, Jira, and active automated-review
+barriers still apply. The changed timer-versus-child decision is Temporal-patched
+so retained histories keep their recorded waits during replay.
+
+Retained gates that already recorded the earlier wait decision retain that
+behavior after a worker upgrade. For an identified gate with a confirmed
+current-head failure, send the existing `merge_automation.external_event` signal
+with `{"schemaVersion":"merge-automation-reconcile/v1","action":"reconcile_known_ci_failure"}`.
+The recorded signal enables the same failure-aware readiness reevaluation for
+that gate. Ordinary events only wake the gate; malformed reconciliation requests
+do not change its admission behavior. Reconciliation preserves its saved head,
+resolver attempts, review state, and deadlines, and still checks every other
+readiness barrier before dispatching a resolver. It does not repeat publication
+or merge effects.
+
 ## 11.3 Automated review loop
 
 ### 11.3.1 Purpose

@@ -125,6 +125,7 @@ def classify_readiness(
     *,
     tracked_head_sha: str,
     actionable_merge_conflicts: bool = True,
+    actionable_ci_failures: bool = True,
 ) -> ReadinessEvidenceModel:
     """Normalize provider readiness evidence into bounded merge-gate evidence."""
 
@@ -132,6 +133,10 @@ def classify_readiness(
     pull_request_merged = (
         payload.get("pullRequestMerged") is True
         or payload.get("pull_request_merged") is True
+    )
+    known_ci_failure = actionable_ci_failures and not pull_request_merged and any(
+        isinstance(raw, Mapping) and raw.get("kind") == "checks_failed"
+        for raw in payload.get("blockers") or []
     )
     blockers: list[ReadinessBlockerModel] = []
     actionable_merge_conflict_seen = False
@@ -151,6 +156,10 @@ def classify_readiness(
                 raw.get("kind"),
                 actionable_merge_conflicts=actionable_merge_conflicts,
             )
+            if kind == "checks_running" and known_ci_failure:
+                # Admit the existing resolver to repair a completed failure;
+                # queued downstream checks do not make that failure disappear.
+                continue
             if _is_non_blocking_blocker(
                 kind,
                 actionable_merge_conflicts=actionable_merge_conflicts,
@@ -191,7 +200,10 @@ def classify_readiness(
                 )
             )
         )
-    if payload.get("checksComplete") is False or payload.get("checks_complete") is False:
+    if not known_ci_failure and (
+        payload.get("checksComplete") is False
+        or payload.get("checks_complete") is False
+    ):
         blockers.append(
             ReadinessBlockerModel.model_validate(
                 _default_blocker(
@@ -247,7 +259,8 @@ def classify_readiness(
         or payload.get("checks_complete") is False
     )
     checks_failed_but_actionable = (
-        not pull_request_merged and checks_are_failing and checks_are_complete
+        not pull_request_merged
+        and (known_ci_failure or (checks_are_failing and checks_are_complete))
     )
     ready = (
         explicit_ready or checks_failed_but_actionable or actionable_merge_conflict_seen

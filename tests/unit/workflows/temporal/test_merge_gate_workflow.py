@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
 from moonmind.workflows.temporal.workflows import merge_gate
@@ -152,6 +154,87 @@ def test_classify_readiness_allows_resolver_launch_when_checks_failed_but_are_co
 
     assert evidence.ready is True
     assert evidence.blockers == []
+
+
+def _failed_and_running_checks() -> dict[str, object]:
+    return {
+        "headSha": "abc123",
+        "ready": False,
+        "pullRequestOpen": True,
+        "checksComplete": False,
+        "checksPassing": False,
+        "blockers": [
+            {
+                "kind": "checks_running",
+                "summary": "Downstream CI Gate is queued.",
+            },
+            {
+                "kind": "checks_failed",
+                "summary": "The build completed with a test failure.",
+            },
+        ],
+    }
+
+
+def test_classify_readiness_admits_known_ci_failure_while_other_checks_wait() -> None:
+    evidence = classify_readiness(
+        _failed_and_running_checks(), tracked_head_sha="abc123"
+    )
+
+    assert evidence.ready is True
+    assert evidence.checks_complete is False
+    assert evidence.checks_passing is False
+    assert evidence.blockers == []
+
+
+def test_classify_readiness_does_not_infer_failure_from_incomplete_checks() -> None:
+    payload = _failed_and_running_checks()
+    payload["blockers"] = payload["blockers"][:1]
+    evidence = classify_readiness(payload, tracked_head_sha="abc123")
+
+    assert evidence.ready is False
+    assert {blocker.kind for blocker in evidence.blockers} == {"checks_running"}
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected_blocker"),
+    [
+        ({"headSha": "def456"}, "stale_revision"),
+        ({"policyAllowed": False}, "policy_denied"),
+        ({"automatedReviewComplete": False}, "automated_review_pending"),
+        ({"jiraStatusAllowed": False}, "jira_status_pending"),
+        ({"pullRequestOpen": False}, "pull_request_closed"),
+        (
+            {
+                "blockers": [
+                    {"kind": "external_state_unavailable", "summary": "GitHub evidence is unavailable."}
+                ]
+            },
+            "external_state_unavailable",
+        ),
+    ],
+)
+def test_known_ci_failure_preserves_other_readiness_barriers(
+    extra: dict[str, object], expected_blocker: str
+) -> None:
+    payload = _failed_and_running_checks()
+    payload.update({key: value for key, value in extra.items() if key != "blockers"})
+    payload["blockers"] += extra.get("blockers", [])
+    evidence = classify_readiness(payload, tracked_head_sha="abc123")
+
+    assert evidence.ready is False
+    assert {blocker.kind for blocker in evidence.blockers} == {expected_blocker}
+
+
+def test_classify_readiness_preserves_pre_patch_failed_and_running_wait() -> None:
+    evidence = classify_readiness(
+        _failed_and_running_checks(),
+        tracked_head_sha="abc123",
+        actionable_ci_failures=False,
+    )
+
+    assert evidence.ready is False
+    assert {blocker.kind for blocker in evidence.blockers} == {"checks_running"}
 
 def test_classify_readiness_allows_resolver_launch_for_merge_conflicts() -> None:
     evidence = classify_readiness(
