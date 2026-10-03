@@ -514,8 +514,8 @@ def test_publish_push_consumes_bound_credential(tmp_path: Path, monkeypatch) -> 
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(stdout=" M file.py\n", stderr="", returncode=0)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     result = asyncio.run(
         PublishService().publish(
@@ -547,8 +547,8 @@ def test_publish_gh_fallback_consumes_bound_credential(tmp_path: Path) -> None:
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(stdout=" M file.py\n", stderr="", returncode=0)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     with patch(
         "moonmind.publish.service.verify_cli_is_executable", return_value=None

@@ -70,8 +70,8 @@ async def test_publish_pr_boundary_uses_explicit_credential(monkeypatch, tmp_pat
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(stdout=" M file.py\n", stderr="", returncode=0)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     async def _create_pr(**kwargs):
         created.update(kwargs)
@@ -102,8 +102,8 @@ async def test_publish_branch_boundary_uses_token_aware_push(monkeypatch, tmp_pa
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(stdout=" M file.py\n", stderr="", returncode=0)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     result = await PublishService().publish(
         job_id=uuid4(),
