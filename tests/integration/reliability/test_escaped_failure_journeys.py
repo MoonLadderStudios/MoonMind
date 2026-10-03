@@ -3690,6 +3690,19 @@ async def test_agent_workspace_daemon_root_uses_compose_volume_identity() -> Non
     assert "WORKFLOW_WORKSPACE_DAEMON_ROOT" not in worker_environment
 
 
+def _fresh_oauth_host_docker_result(
+    *args: str, **_kwargs: object
+) -> tuple[int, str, str]:
+    # Container inventory must not consume a later launch's response.
+    if args[:2] == ("docker", "inspect"):
+        return (1, "", "no such container")
+    if args[:2] == ("docker", "ps"):
+        return (0, "", "")
+    if args[:2] == ("docker", "run"):
+        return (0, "container-id" if "-d" in args else "", "")
+    raise AssertionError(f"Unexpected Docker command: {args}")
+
+
 async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3714,17 +3727,7 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     runtime.container_exists = AsyncMock(return_value=False)
     runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
 
-    def docker_result(*args: str, **_kwargs: object) -> tuple[int, str, str]:
-        # Container inventory must not consume a later launch's response.
-        if args[:2] == ("docker", "inspect"):
-            return (1, "", "no such container")
-        if args[:2] == ("docker", "ps"):
-            return (0, "", "")
-        if args[:2] == ("docker", "run"):
-            return (0, "container-id" if "-d" in args else "", "")
-        raise AssertionError(f"Unexpected Docker command: {args}")
-
-    runtime._run = AsyncMock(side_effect=docker_result)
+    runtime._run = AsyncMock(side_effect=_fresh_oauth_host_docker_result)
     binding = _oauth_binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
@@ -5138,9 +5141,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
     )
     runtime.container_exists = AsyncMock(return_value=False)
     runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
-    runtime._run = AsyncMock(
-        side_effect=[(1, "", "no such container"), (0, "", ""), (0, "", "")]
-    )
+    runtime._run = AsyncMock(side_effect=_fresh_oauth_host_docker_result)
     binding = _oauth_binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
