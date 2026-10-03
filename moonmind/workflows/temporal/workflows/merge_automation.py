@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -107,6 +108,9 @@ MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH = (
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
 MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
+MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
+    "merge-automation-actionable-ci-failure-v1:"
+)
 MAX_PUBLISHED_REVIEW_CYCLES = 20
 # Typed routing for validated pr-resolver terminal verdicts
 # (MoonLadderStudios/MoonMind#4223). Guarded so histories recorded before the
@@ -1096,6 +1100,7 @@ class MoonMindMergeAutomationWorkflow:
             evaluation,
             tracked_head_sha=self._input.pull_request.head_sha,
             actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
+            actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
         )
 
     def _should_refresh_pre_resolver_head(
@@ -1120,6 +1125,24 @@ class MoonMindMergeAutomationWorkflow:
     @staticmethod
     def _actionable_merge_conflicts_enabled() -> bool:
         return workflow.patched("merge-automation-actionable-merge-conflict-v1")
+
+    def _actionable_ci_failures_enabled(self, evaluation: Any = None) -> bool:
+        if (
+            not isinstance(evaluation, Mapping)
+            or evaluation.get("actionableCiFailuresVersion") != "v1"
+        ):
+            return False
+        observation_id = evaluation.get("readinessObservationId")
+        if not isinstance(observation_id, str) or not observation_id.strip():
+            return False
+        # An old consumer can have recorded a wait even with new producer
+        # evidence. Preserve that observation's branch, while a new poll's
+        # Activity ID allows automatic adoption instead of caching False for
+        # the entire retained workflow.
+        observation_key = hashlib.sha256(observation_id.encode("utf-8")).hexdigest()
+        return workflow.patched(
+            MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX + observation_key
+        )
 
     @staticmethod
     def _resolver_child_failure_summary(error: Exception) -> str:
@@ -1620,6 +1643,7 @@ class MoonMindMergeAutomationWorkflow:
                 evaluation,
                 tracked_head_sha="",
                 actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
+                actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
             )
         readiness_payload = self._input.model_dump(by_alias=True, mode="json")
         # Always publish the *live* request state so a restored input can never
@@ -1654,6 +1678,7 @@ class MoonMindMergeAutomationWorkflow:
             evaluation if isinstance(evaluation, Mapping) else {},
             tracked_head_sha=self._input.pull_request.head_sha,
             actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
+            actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
         )
         return evaluation, evidence
 
@@ -1679,6 +1704,7 @@ class MoonMindMergeAutomationWorkflow:
                 evaluation if isinstance(evaluation, Mapping) else {},
                 tracked_head_sha=self._input.pull_request.head_sha,
                 actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
+                actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
             )
         self._blockers = list(evidence.blockers)
         await self._write_gate_snapshot(evidence_ready=evidence.ready)
@@ -1750,6 +1776,7 @@ class MoonMindMergeAutomationWorkflow:
                         actionable_merge_conflicts=(
                             self._actionable_merge_conflicts_enabled()
                         ),
+                        actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
                     )
             if workflow.patched("merge-automation-refresh-stale-current-head"):
                 evidence = self._refresh_current_head_for_stale_wait(
@@ -1767,6 +1794,7 @@ class MoonMindMergeAutomationWorkflow:
                     evaluation if isinstance(evaluation, Mapping) else {},
                     tracked_head_sha=self._input.pull_request.head_sha,
                     actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
+                    actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
                 )
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=evidence.ready)

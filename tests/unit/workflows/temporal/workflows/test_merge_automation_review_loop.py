@@ -262,7 +262,7 @@ def _posted(head_sha: str, comment_id: int = 98765) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("observation", [0, 1])
+@pytest.mark.parametrize("observation", [0, 1, "failed_queued"])
 @pytest.mark.parametrize("barrier_enabled", [True, False])
 async def test_recorded_pending_review_cannot_release_a_repair(
     monkeypatch, observation, barrier_enabled
@@ -271,7 +271,22 @@ async def test_recorded_pending_review_cannot_release_a_repair(
         Path(__file__).resolve().parents[4]
         / "fixtures/temporal/pr_review_completion/premature_readiness.json"
     )
-    recorded = json.loads(fixture.read_text())["observations"][observation]["result"]
+    if observation == "failed_queued":
+        recorded = {
+            "headSha": HEAD_1,
+            "ready": False,
+            "pullRequestOpen": True,
+            "checksComplete": False,
+            "checksPassing": False,
+            # Older readiness results can omit review evidence while reporting
+            # both a completed build failure and a queued downstream check.
+            "blockers": [
+                {"kind": "checks_failed", "summary": "Build tests failed."},
+                {"kind": "checks_running", "summary": "Downstream CI Gate is queued."},
+            ],
+        }
+    else:
+        recorded = json.loads(fixture.read_text())["observations"][observation]["result"]
     head = recorded["headSha"]
     payload = _payload()
     payload["pullRequest"]["headSha"] = head
@@ -302,7 +317,7 @@ async def test_recorded_pending_review_cannot_release_a_repair(
     result = await MoonMindMergeAutomationWorkflow().run(payload)
     assert result["status"] == "review_clean"
     assert len(harness.child_payloads) == 1
-    assert harness.wait_calls == int(barrier_enabled)
+    assert harness.wait_calls == int(barrier_enabled or observation == "failed_queued")
     assert not harness.request_payloads
 
 
@@ -313,8 +328,14 @@ async def test_clean_response_crosses_activity_skill_and_workflow_without_anothe
 ):
     import httpx
     import runpy
+    from moonmind.workflows.temporal import activity_runtime
     from moonmind.workflows.temporal.activity_runtime import (
         TemporalIntegrationActivities,
+    )
+
+    monkeypatch.setattr(
+        activity_runtime.temporal_activity, "info",
+        lambda: SimpleNamespace(activity_id="readiness-clean-review"),
     )
 
     root = Path(__file__).resolve().parents[5]

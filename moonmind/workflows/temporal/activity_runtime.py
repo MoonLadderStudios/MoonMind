@@ -4830,6 +4830,10 @@ class TemporalIntegrationActivities:
         else:
             evidence["jiraStatusAllowed"] = True
 
+        # Recorded evidence, rather than an ambient worker version, lets an
+        # upgraded gate adopt failure-aware admission on its next normal poll.
+        evidence["actionableCiFailuresVersion"] = "v1"
+        evidence["readinessObservationId"] = temporal_activity.info().activity_id
         return evidence
 
     async def merge_automation_request_automated_review(self, payload, /, **kwargs):

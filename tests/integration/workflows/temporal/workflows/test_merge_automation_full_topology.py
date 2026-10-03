@@ -172,6 +172,31 @@ async def _readiness(_payload: dict[str, Any]) -> dict[str, Any]:
             "checksComplete": True,
             "checksPassing": True,
         }
+    if _scenario == "ci_failure_queued" and _terminal_evidence_calls == 0:
+        return {
+            "actionableCiFailuresVersion": "v1",
+            "readinessObservationId": activity.info().activity_id,
+            "headSha": "abcdef1",
+            "ready": False,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": False,
+            "checksPassing": False,
+            "blockers": [
+                {
+                    "kind": "checks_failed",
+                    "summary": "Required test job failed",
+                    "retryable": True,
+                    "source": "github",
+                },
+                {
+                    "kind": "checks_running",
+                    "summary": "Downstream workflow is queued",
+                    "retryable": True,
+                    "source": "github",
+                },
+            ],
+        }
     if (
         _scenario == "ci_wait"
         and _terminal_evidence_calls == 1
@@ -227,7 +252,7 @@ async def _terminal_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     _terminal_evidence_calls += 1
     contract = payload["terminalContract"]
     if _terminal_evidence_calls == 1:
-        if _scenario == "ci_wait":
+        if _scenario in {"ci_wait", "ci_failure_queued"}:
             return {
                 "summary": "CI wait returned to durable owner",
                 "failureClass": "execution_error",
@@ -317,7 +342,7 @@ async def _register_search_attributes(env: WorkflowEnvironment) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["review", "ci_wait"])
+@pytest.mark.parametrize("scenario", ["review", "ci_wait", "ci_failure_queued"])
 async def test_real_three_workflow_topology_requests_review_then_merges(
     scenario,
 ) -> None:
@@ -418,6 +443,11 @@ async def test_real_three_workflow_topology_requests_review_then_merges(
                         "baseBranch": "main",
                     },
                     "mergeAutomationConfig": {
+                        "gate": {
+                            "github": {
+                                "automatedReview": "required" if scenario == "review" else "disabled"
+                            }
+                        },
                         "timeouts": {"fallbackPollSeconds": 2},
                         "reviewLoop": {
                             "enabled": scenario == "review",
@@ -429,7 +459,7 @@ async def test_real_three_workflow_topology_requests_review_then_merges(
                         "targetRuntime": "claude_code",
                         **(
                             {"inputs": {"maxIterations": 7, "returnToGate": True}}
-                            if scenario == "ci_wait"
+                            if scenario in {"ci_wait", "ci_failure_queued"}
                             else {}
                         ),
                     },
@@ -526,6 +556,17 @@ async def test_real_three_workflow_topology_requests_review_then_merges(
         assert any(
             event.HasField("timer_started_event_attributes") for event in history.events
         )
+    elif scenario == "ci_failure_queued":
+        first_child_started = next(
+            event.event_id
+            for event in history.events
+            if event.HasField("start_child_workflow_execution_initiated_event_attributes")
+        )
+        assert not any(
+            event.HasField("timer_started_event_attributes")
+            and event.event_id < first_child_started
+            for event in history.events
+        ), "Failed CI must dispatch the resolver before waiting for queued downstream checks"
     await Replayer(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
