@@ -3713,13 +3713,18 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
     )
     runtime.container_exists = AsyncMock(return_value=False)
     runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
-    runtime._run = AsyncMock(
-        side_effect=[
-            (1, "", "no such container"),
-            (0, "", ""),
-            (0, "container-id", ""),
-        ]
-    )
+
+    def docker_result(*args: str, **_kwargs: object) -> tuple[int, str, str]:
+        # Container inventory must not consume a later launch's response.
+        if args[:2] == ("docker", "inspect"):
+            return (1, "", "no such container")
+        if args[:2] == ("docker", "ps"):
+            return (0, "", "")
+        if args[:2] == ("docker", "run"):
+            return (0, "container-id" if "-d" in args else "", "")
+        raise AssertionError(f"Unexpected Docker command: {args}")
+
+    runtime._run = AsyncMock(side_effect=docker_result)
     binding = _oauth_binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
