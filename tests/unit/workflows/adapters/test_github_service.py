@@ -1123,13 +1123,18 @@ async def test_evaluate_pull_request_readiness_reports_checks_permission_missing
 async def test_readiness_activity_preserves_required_review_for_retained_gate(
     monkeypatch, review_state, known_failure
 ):
+    from moonmind.workflows.temporal import activity_runtime
     from moonmind.workflows.temporal.activity_runtime import (
         TemporalIntegrationActivities,
     )
     from moonmind.workflows.temporal.workflows import merge_automation as module
     from moonmind.workflows.temporal.workflows.merge_gate import classify_readiness
 
-    monkeypatch.setattr(module.workflow, "patched", lambda _: False)
+    monkeypatch.setattr(module.workflow, "patched", lambda _: True)
+    monkeypatch.setattr(
+        activity_runtime.temporal_activity, "info",
+        lambda: SimpleNamespace(activity_id="readiness-341"),
+    )
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     requested_urls = []
@@ -1189,6 +1194,7 @@ async def test_readiness_activity_preserves_required_review_for_retained_gate(
         )
 
     assert result["actionableCiFailuresVersion"] == "v1"
+    assert result["readinessObservationId"] == "readiness-341"
     gate = module.MoonMindMergeAutomationWorkflow()
     evidence = classify_readiness(
         result,
@@ -1223,6 +1229,7 @@ async def test_readiness_activity_preserves_required_review_for_retained_gate(
 async def test_readiness_activity_capability_preserves_jira_barrier(
     monkeypatch, jira_allowed
 ):
+    from moonmind.workflows.temporal import activity_runtime
     from moonmind.workflows.temporal.activity_runtime import (
         TemporalIntegrationActivities,
     )
@@ -1241,7 +1248,11 @@ async def test_readiness_activity_capability_preserves_jira_barrier(
         GitHubService, "evaluate_pull_request_readiness",
         AsyncMock(return_value=github_result),
     )
-    monkeypatch.setattr(module.workflow, "patched", lambda _: False)
+    monkeypatch.setattr(module.workflow, "patched", lambda _: True)
+    monkeypatch.setattr(
+        activity_runtime.temporal_activity, "info",
+        lambda: SimpleNamespace(activity_id="readiness-341"),
+    )
     jira_blocker = {
         "kind": "jira_status_pending" if jira_allowed is False else "external_state_unavailable",
         "summary": "Jira status is pending or unavailable.",
@@ -1260,6 +1271,7 @@ async def test_readiness_activity_capability_preserves_jira_barrier(
 
     jira_reader.assert_awaited_once_with("MM-341")
     assert result["actionableCiFailuresVersion"] == "v1"
+    assert result["readinessObservationId"] == "readiness-341"
     assert result["jiraStatusAllowed"] is jira_allowed
     evidence = classify_readiness(
         result,

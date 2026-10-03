@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -107,6 +108,9 @@ MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH = (
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
 MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
+MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
+    "merge-automation-actionable-ci-failure-v1:"
+)
 MAX_PUBLISHED_REVIEW_CYCLES = 20
 # Typed routing for validated pr-resolver terminal verdicts
 # (MoonLadderStudios/MoonMind#4223). Guarded so histories recorded before the
@@ -1123,9 +1127,21 @@ class MoonMindMergeAutomationWorkflow:
         return workflow.patched("merge-automation-actionable-merge-conflict-v1")
 
     def _actionable_ci_failures_enabled(self, evaluation: Any = None) -> bool:
-        return (
-            isinstance(evaluation, Mapping)
-            and evaluation.get("actionableCiFailuresVersion") == "v1"
+        if (
+            not isinstance(evaluation, Mapping)
+            or evaluation.get("actionableCiFailuresVersion") != "v1"
+        ):
+            return False
+        observation_id = evaluation.get("readinessObservationId")
+        if not isinstance(observation_id, str) or not observation_id.strip():
+            return False
+        # An old consumer can have recorded a wait even with new producer
+        # evidence. Preserve that observation's branch, while a new poll's
+        # Activity ID allows automatic adoption instead of caching False for
+        # the entire retained workflow.
+        observation_key = hashlib.sha256(observation_id.encode("utf-8")).hexdigest()
+        return workflow.patched(
+            MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX + observation_key
         )
 
     @staticmethod

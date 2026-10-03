@@ -123,7 +123,11 @@ def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
 @pytest.mark.parametrize(
     ("evaluation", "enabled"),
     [
-        ({"actionableCiFailuresVersion": "v1"}, True),
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": "readiness-1"}, True),
+        ({"actionableCiFailuresVersion": "v1"}, False),
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": ""}, False),
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": " "}, False),
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": 1}, False),
         ({"actionableCiFailuresVersion": "v0"}, False),
         ({"actionableCiFailuresVersion": "v2"}, False),
         ({"actionableCiFailuresVersion": True}, False),
@@ -141,9 +145,33 @@ def test_retained_gate_uses_recorded_readiness_capability(
     gate = MoonMindMergeAutomationWorkflow()
     monkeypatch.setattr(merge_automation_module.workflow, "patched", lambda _: patch_enabled)
 
-    assert gate._actionable_ci_failures_enabled(evaluation) is enabled
+    assert gate._actionable_ci_failures_enabled(evaluation) is (enabled and patch_enabled)
     # A later old producer must not inherit authority from a prior observation.
     assert gate._actionable_ci_failures_enabled({}) is False
+
+
+def test_readiness_observations_have_independent_replay_decisions(monkeypatch):
+    decisions: dict[str, bool] = {}
+    seen_patches: list[str] = []
+
+    def patched(patch_id: str) -> bool:
+        seen_patches.append(patch_id)
+        # The SDK caches absence for the old observation; a new Activity
+        # schedules a different observation and can take the new branch.
+        if patch_id not in decisions:
+            decisions[patch_id] = bool(decisions)
+        return decisions[patch_id]
+
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", patched)
+    gate = MoonMindMergeAutomationWorkflow()
+    old = {"actionableCiFailuresVersion": "v1", "readinessObservationId": "activity-7"}
+    fresh = {"actionableCiFailuresVersion": "v1", "readinessObservationId": "activity-12"}
+
+    assert gate._actionable_ci_failures_enabled(old) is False
+    assert gate._actionable_ci_failures_enabled(fresh) is True
+    assert gate._actionable_ci_failures_enabled(old) is False
+    assert len(set(seen_patches)) == 2
+    assert seen_patches[0] == seen_patches[2]
 
 
 def test_merge_automation_workflow_child_task_queue_is_replay_patched(
@@ -1097,6 +1125,7 @@ async def test_merge_automation_dispatches_known_failure_before_queued_check(
     }
     if capable_producer:
         initial_evidence["actionableCiFailuresVersion"] = "v1"
+        initial_evidence["readinessObservationId"] = "readiness-1"
 
     async def evaluate(activity_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
         assert activity_type == "merge_automation.evaluate_readiness"
@@ -1146,8 +1175,8 @@ async def test_new_gate_waits_for_review_capable_activity_during_worker_rollout(
     observations = iter([
         # An older Activity skips review in this failed-plus-queued path.
         {**shared_evidence, "automatedReviewComplete": None},
-        {**shared_evidence, "actionableCiFailuresVersion": "v1", "automatedReviewComplete": False},
-        {**shared_evidence, "actionableCiFailuresVersion": "v1", "automatedReviewComplete": True},
+        {**shared_evidence, "actionableCiFailuresVersion": "v1", "readinessObservationId": "readiness-2", "automatedReviewComplete": False},
+        {**shared_evidence, "actionableCiFailuresVersion": "v1", "readinessObservationId": "readiness-3", "automatedReviewComplete": True},
     ])
 
     async def evaluate(activity_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
