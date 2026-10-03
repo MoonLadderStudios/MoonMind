@@ -3,7 +3,8 @@
 **Document Class:** Canonical declarative  
 **Status:** Current desired state  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-28  
+**Last updated:** 2026-10-02
+
 **Authority:** Provider Profile, OAuth materialization, host binding, generation fencing, readiness, cleanup, and migration contract for OAuth-backed Omnigent harnesses
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines the durable desired state and the security invariants that every OAuth-backed Omnigent launch must enforce.
@@ -474,6 +475,7 @@ Cleanup distinguishes resource ownership.
 Run cleanup may remove:
 
 - run-owned host container
+- run-owned OAuth initialization container
 - run-owned Omnigent state volume
 - run-owned control material
 - run-owned OpenCode credential state
@@ -492,6 +494,19 @@ Run cleanup may not remove:
 
 A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release remains last even when cleanup requires retries.
 
+On-demand OAuth initialization uses a deterministic `<host-container>-init`
+container carrying the host lease, profile, and credential generation labels.
+Docker `--rm` alone does not cover interruption between container creation and
+start: a container left in `Created` still holds its mounted volumes. Launch
+retries reconcile the same lease's initializer before starting another one;
+launch failure or cancellation attempts immediate cleanup while preserving the
+original error. Host cleanup verifies initializer removal before deleting
+run-owned volumes or releasing Provider Profile capacity. Unavailable Docker
+inventory leaves cleanup unconfirmed, and foreign ownership is refused.
+The existing durable lease lets the janitor finish cleanup after worker loss.
+Pre-upgrade unnamed, unlabeled initializers require evidence-based operator
+reconciliation; they cannot be attributed safely from a generated Docker name.
+
 Automatically captured Activity lease ownership uses the Activity's workflow ID
 and run ID together. A parent workflow ID must never be paired with a child run
 ID: that nonexistent pair would make a live consumer appear absent to Temporal.
@@ -499,9 +514,10 @@ An explicitly supplied owner workflow/run pair remains authoritative.
 
 An on-demand lease with no attached container, host, session, or bridge identity
 can complete cleanup without launch-egress evidence only after the runtime
-confirms that its deterministic container is absent. The normal stop owner still
-reconciles and verifies removal before capacity releases. This proves consumer
-absence, not successful launch or egress conformance; an existing attachment or
+confirms that its deterministic host and initialization containers are absent.
+The normal stop owner still reconciles and verifies removal before capacity
+releases. This proves consumer absence, not successful launch or egress
+conformance; an existing attachment or
 recorded attachment identity still requires its durable cleanup authority.
 The persisted workflow owner and lease purpose survive host-model projection.
 A binding saved before host attachment can be completed only when the current
