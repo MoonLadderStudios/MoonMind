@@ -14,7 +14,9 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from temporalio import activity
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from temporalio import activity, workflow
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
 from temporalio.common import (
@@ -26,12 +28,9 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
-from api_service.api.routers.executions import (
-    _get_service,
-    get_temporal_client,
-    router,
-)
-from api_service.db.base import get_async_session
+from api_service.api.routers.executions import _get_service, get_temporal_client, router
+from api_service.db import base as db_base
+from api_service.db.models import ProviderProfileSlotLease
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
     DesiredLifecycle,
@@ -60,16 +59,19 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
     get_workflow_task_queue,
 )
+from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
-from moonmind.workflows.temporal.workflows import (
-    omnigent_session as session_module,
-)
+from moonmind.workflows.temporal.workflows import omnigent_session as session_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.omnigent_session import (
     MoonMindOmnigentSessionWorkflow,
     canonical_omnigent_session_id,
     canonical_omnigent_turn_attempt_id,
     omnigent_session_workflow_id,
+)
+from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+    MoonMindProviderProfileManagerWorkflow,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from tests.unit.api.routers.test_executions import (
@@ -821,7 +823,7 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
         commit=AsyncMock(),
         refresh=AsyncMock(),
     )
-    app.dependency_overrides[get_async_session] = lambda: db_session
+    app.dependency_overrides[db_base.get_async_session] = lambda: db_session
     _override_user_dependencies(app, is_superuser=False)
     profile_snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
@@ -1084,8 +1086,117 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
     assert CALLS[-1] == "publish_artifacts"
 
 
-async def test_plan_bound_codex_keeps_recorded_realizer_and_replays() -> None:
-    """A new Codex plan never crosses into the generic session supervisor."""
+@workflow.defn(name="Test.CodexCapacityParent")
+class _CodexCapacityParent(MoonMindUserWorkflow):
+    """Exercise the real parent's progress projection around a known child."""
+
+    @workflow.run
+    async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
+        child_id = workflow.info().workflow_id + ":agent"
+        self._active_agent_child_workflow_id = child_id
+        return await workflow.execute_child_workflow(
+            MoonMindAgentRun.run,
+            request,
+            id=child_id,
+            task_queue=workflow.info().task_queue,
+        )
+
+
+class _CodexCapacityActivities:
+    def __init__(self, client):
+        self.client = client
+        self.started: list[AgentExecutionRequest] = []
+        self.finish_first = asyncio.Event()
+        self.first_started = asyncio.Event()
+        self.ledger = TemporalArtifactActivities(service=None)
+
+    @activity.defn(name="provider_profile.list")
+    async def list_profiles(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "profiles": [
+                {
+                    "profile_id": "provider-codex-native",
+                    "runtime_id": "codex_cli",
+                    "credential_source": "oauth",
+                    "runtime_materialization_mode": "codex_home",
+                    "max_parallel_runs": 1,
+                    "enabled": True,
+                    "launch_ready": True,
+                    "credential_generation": 3,
+                }
+            ]
+        }
+
+    @activity.defn(name="provider_profile.sync_slot_leases")
+    async def sync_slot_leases(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self.ledger.provider_profile_sync_slot_leases(**payload)
+
+    @activity.defn(name="provider_profile.pending_request_order")
+    async def pending_request_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"orders": {key: {} for key in payload["workflow_ids"]}}
+
+    @activity.defn(name="provider_profile.verify_lease_holders")
+    async def verify_holders(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: {"running": True, "status": "RUNNING"}
+            for key in payload["workflow_ids"]
+        }
+
+    @activity.defn(name="provider_profile.manager_state")
+    async def manager_state(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        state = await self.client.get_workflow_handle(
+            "provider-profile-manager:codex_cli"
+        ).query("get_state")
+        return {"running": True, **state}
+
+    @activity.defn(name="omnigent.evaluate_session_admission")
+    async def evaluate_admission(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **await _evaluate_session_admission(payload),
+            "capacityAcquisitionOwner": "workflow",
+            "capacityProfiles": [
+                {
+                    "providerProfileRef": "provider-codex-native",
+                    "providerRuntimeId": "codex_cli",
+                    "credentialGeneration": 3,
+                    "capacityScopeRef": "provider-profile:provider-codex-native",
+                }
+            ],
+        }
+
+    @activity.defn(name="integration.omnigent.execute")
+    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+        ticket = request.admitted_provider_capacity
+        assert ticket is not None
+        inspection = await self.client.get_workflow_handle(
+            "provider-profile-manager:codex_cli"
+        ).execute_update(
+            "InspectCredentialLease",
+            {
+                "lease_id": ticket.lease_owner_id,
+                "owner_id": ticket.lease_owner_id,
+            },
+        )
+        assert inspection["active"] is True
+        assert inspection["purpose"] == "execution_omnigent"
+        assert inspection["executionPlanRef"] == ticket.execution_plan_ref
+        assert inspection["idempotencyKey"] == request.idempotency_key
+        assert inspection["credentialGeneration"] == 3
+        self.started.append(request)
+        if len(self.started) == 1:
+            self.first_started.set()
+            await self.finish_first.wait()
+        result = await _execute_recorded_plan_realizer(request)
+        result.metadata["admittedProviderCapacityCleanupCompleted"] = True
+        return result
+
+
+@pytest.mark.integration_ci
+async def test_plan_bound_codex_keeps_recorded_realizer_and_replays(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two Codex runs share one real slot; the parent's wait is observable."""
 
     _reset_state()
     STATE["execution_realizer_ref"] = "codex-profile-bound@1"
@@ -1106,13 +1217,26 @@ async def test_plan_bound_codex_keeps_recorded_realizer_and_replays() -> None:
         instructionRef="art_codex_task_3706",
     )
     workflow_queue = get_workflow_task_queue()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/codex-slots.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(ProviderProfileSlotLease.__table__.create)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", maker)
 
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+    ) as env:
+        await _register_search_attributes(env)
+        capacity = _CodexCapacityActivities(env.client)
         async with (
             Worker(
                 env.client,
                 task_queue=workflow_queue,
-                workflows=[MoonMindAgentRun],
+                workflows=[
+                    MoonMindAgentRun,
+                    _CodexCapacityParent,
+                    MoonMindProviderProfileManagerWorkflow,
+                ],
                 activities=[_resolve_adapter_metadata],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
@@ -1120,31 +1244,112 @@ async def test_plan_bound_codex_keeps_recorded_realizer_and_replays() -> None:
                 env.client,
                 task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=[
-                    _evaluate_session_admission,
-                    _execute_recorded_plan_realizer,
+                    capacity.evaluate_admission,
+                    capacity.execute,
                     _publish_artifacts,
                 ],
             ),
+            Worker(
+                env.client,
+                task_queue=ARTIFACTS_TASK_QUEUE,
+                activities=[
+                    capacity.list_profiles,
+                    capacity.sync_slot_leases,
+                    capacity.pending_request_order,
+                    capacity.verify_holders,
+                    capacity.manager_state,
+                ],
+            ),
         ):
-            handle = await env.client.start_workflow(
-                MoonMindAgentRun.run,
-                request,
-                id=f"agent-run-codex-plan-{uuid4()}",
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "codex_cli"},
+                id="provider-profile-manager:codex_cli",
                 task_queue=workflow_queue,
             )
-            result = AgentRunResult.model_validate(await handle.result())
-            history = await handle.fetch_history()
+            first = await env.client.start_workflow(
+                _CodexCapacityParent.run,
+                request,
+                id=f"codex-plan-first-{uuid4()}",
+                task_queue=workflow_queue,
+            )
+            await asyncio.wait_for(capacity.first_started.wait(), timeout=30)
+            second = await env.client.start_workflow(
+                _CodexCapacityParent.run,
+                request.model_copy(update={"idempotency_key": "step-codex-second"}),
+                id=f"codex-plan-second-{uuid4()}",
+                task_queue=workflow_queue,
+            )
+            async with asyncio.timeout(30):
+                while (await second.query("get_status"))["state"] != "awaiting_slot":
+                    await asyncio.sleep(0.05)
+            assert (await first.query("get_status"))["state"] == "executing"
+            assert (await second.query("get_status"))[
+                "waiting_reason"
+            ] == "provider_capacity"
+            assert len(capacity.started) == 1
+            async with maker() as session:
+                held = (
+                    (
+                        await session.execute(
+                            select(ProviderProfileSlotLease).where(
+                                ProviderProfileSlotLease.lease_state == "held"
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert [row.lease_id for row in held] == [first.id + ":agent"]
 
-    assert result.summary == "Recorded Codex realizer completed"
+            # Exercise the release wakeup without advancing the manager's
+            # periodic fallback timer while waiting for workflow completion.
+            with env.auto_time_skipping_disabled():
+                capacity.finish_first.set()
+                results = await asyncio.wait_for(
+                    asyncio.gather(first.result(), second.result()), 30
+                )
+            assert len(capacity.started) == 2
+            assert all(
+                AgentRunResult.model_validate(result).summary
+                == "Recorded Codex realizer completed"
+                for result in results
+            )
+            async with asyncio.timeout(30):
+                while (await manager.query("get_state"))["profiles"][
+                    "provider-codex-native"
+                ]["current_leases"]:
+                    await asyncio.sleep(0.05)
+            async with maker() as session:
+                leases = (
+                    (await session.execute(select(ProviderProfileSlotLease)))
+                    .scalars()
+                    .all()
+                )
+                assert len(leases) == 2
+                assert all(row.lease_state == "released" for row in leases)
+            histories = [
+                await env.client.get_workflow_handle(
+                    parent.id + ":agent"
+                ).fetch_history()
+                for parent in (first, second)
+            ]
+            await manager.signal("shutdown")
+            await manager.result()
+
+    await engine.dispose()
+
     assert STATE["codex_dispatch_plan"] == binding.model_dump(
         mode="json", by_alias=True
     )
     assert "execute_recorded_plan_realizer" in CALLS
     assert "resolve_intent" not in CALLS
-    await Replayer(
-        workflows=[MoonMindAgentRun],
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    ).replay_workflow(history)
+    for history in histories:
+        await Replayer(
+            workflows=[MoonMindAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+        ).replay_workflow(history)
 
 
 async def test_continue_as_new_preserves_active_provider_session(

@@ -1350,6 +1350,32 @@ If no compatible launch-ready profile is available, the run waits durably in `aw
 
 A profile whose slots are all in use is busy, not unavailable. New work for it queues in the manager whatever the profile's `rate_limit_policy` is, because that field governs provider 429 handling (§11.7), not slot capacity. Launch surfaces such as the Omnigent readiness catalog mark the profile busy and keep it selectable.
 
+New plan-bound Codex and generic-host Omnigent runs acquire Provider Profile
+capacity in the workflow before scheduling the long execution Activity. A
+queued child projects `awaiting_slot` to its parent, so the workflows list
+reflects the capacity wait. Queue time consumes neither an execution worker
+slot nor the execution timeout. Codex retains its existing OAuth host lifecycle;
+the generic host reservation applies only to the generic realizer.
+
+The execution Activity consumes the admitted lease by inspecting its recorded
+plan, request, step, and credential authority. The workflow releases that lease
+after the Codex coordinator confirms host cleanup. New Codex handoffs use a
+single Activity attempt and bounded workflow retries. A ScheduleToStart timeout
+releases a fresh admission because execution never started; a resumed admission
+retains capacity when an earlier delivery may still own a host. Failed or
+interrupted cleanup keeps capacity spent for reconciliation and verified janitor
+teardown. Temporal patch markers preserve the Activity-owned acquisition of runs
+scheduled before this change; those retained runs can still display `executing`
+while waiting internally until they finish.
+
+After a confirmed durable owner release, the manager immediately offers the
+returned capacity to queued requests. It consumes its wakeup before awaited
+loop work so signals received during persistence remain pending for the next
+pass. The separate `provider-profile-manager-durable-release-wakeup-v1` marker
+preserves the timer ordering in retained manager histories.
+Acknowledgements of an unchanged cleanup claim wait for the periodic retry;
+only new cleanup obligations or confirmed releases request another pass.
+
 The UI and parent workflow should clearly indicate:
 
 - runtime family
