@@ -32,7 +32,11 @@ _DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 # its authoritative success or structured startup failure before MoonMind
 # releases the on-demand host.
 _DEFAULT_EVENT_TIMEOUT_SECONDS = 150.0
-_MAX_SSE_LINE_BYTES = 1_000_000
+# Stock Omnigent mirrors at most 1 MiB of UTF-8 tool output plus a truncation
+# notice (omnigent.runtime.tool_output). JSON can encode one control byte as
+# six bytes; reserve bounded notice and event-envelope headroom as well.
+_MAX_SSE_LINE_BYTES = 6 * (1024 * 1024 + 200) + 64 * 1024
+_SSE_PROCESS_CHUNK_BYTES = 64 * 1024
 # A refused or timed-out connect never delivered the request, so a client
 # opted into an outage grace re-sends it on this interval until the grace ends.
 _CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS = 2.0
@@ -706,43 +710,61 @@ class OmnigentHttpClient:
             )
             raise self._error_from_response(response.status_code, body)
         pending = bytearray()
+        line_start = 0
+        # Keep HTTPX's immediate delivery: specifying chunk_size would retain
+        # small live frames until that many bytes arrive or the stream ends.
         async for chunk in response.aiter_bytes():
-            pending.extend(chunk)
-            if len(pending) > _MAX_SSE_LINE_BYTES + 1_000_000:
-                raise OmnigentClientError(
-                    "Omnigent SSE frame exceeds bounded buffer size",
-                    failure_class="integration_error",
-                )
-            while True:
-                newline = pending.find(b"\n")
-                if newline < 0:
-                    break
-                raw = bytes(pending[:newline])
-                del pending[: newline + 1]
-                if len(raw) > _MAX_SSE_LINE_BYTES:
+            for start in range(0, len(chunk), _SSE_PROCESS_CHUNK_BYTES):
+                pending.extend(chunk[start : start + _SSE_PROCESS_CHUNK_BYTES])
+                while True:
+                    newline = pending.find(b"\n", line_start)
+                    if newline < 0:
+                        break
+                    if newline - line_start > _MAX_SSE_LINE_BYTES:
+                        raise OmnigentClientError(
+                            "Omnigent SSE frame exceeds bounded line size",
+                            failure_class="integration_error",
+                        )
+                    blank = newline == line_start or (
+                        newline == line_start + 1 and pending[line_start] == 13
+                    )
+                    if blank:
+                        # Transfer the bounded frame; only the current local
+                        # slice's remainder needs copying into the next buffer.
+                        frame = pending
+                        pending = frame[newline + 1 :]
+                        del frame[line_start:]
+                        line_start = 0
+                        for event in _iter_validated_sse_frame(frame):
+                            yield event
+                        del frame
+                    else:
+                        # Metadata and data share one finite wire-frame budget.
+                        # Retain raw bytes until its delimiter validates the
+                        # full frame before a terminal consumer can stop reading.
+                        line_start = newline + 1
+                        if line_start > _MAX_SSE_LINE_BYTES:
+                            raise OmnigentClientError(
+                                "Omnigent SSE frame exceeds bounded frame size",
+                                failure_class="integration_error",
+                            )
+                # Drain complete frames before bounding the residual. Local
+                # slices bound pending growth to the ceiling plus 64 KiB. A
+                # lone tail CR may be a blank CRLF delimiter split across reads.
+                if len(pending) > _MAX_SSE_LINE_BYTES and pending[line_start:] != b"\r":
                     raise OmnigentClientError(
-                        "Omnigent SSE frame exceeds bounded line size",
+                        "Omnigent SSE frame exceeds bounded frame size",
                         failure_class="integration_error",
                     )
-                try:
-                    line = raw.decode("utf-8", errors="replace")
-                except Exception:
-                    continue
-                event = parse_sse_line(line)
-                if event is not None:
-                    yield event
         if pending:
-            if len(pending) > _MAX_SSE_LINE_BYTES:
+            if len(pending) > _MAX_SSE_LINE_BYTES and pending[line_start:] != b"\r":
                 raise OmnigentClientError(
-                    "Omnigent SSE frame exceeds bounded line size",
+                    "Omnigent SSE frame exceeds bounded frame size",
                     failure_class="integration_error",
                 )
-            try:
-                line = bytes(pending).decode("utf-8", errors="replace")
-            except Exception:
-                return
-            event = parse_sse_line(line)
-            if event is not None:
+            # Preserve bounded EOF compatibility only after the transport has
+            # ended, so no unread suffix can invalidate an emitted terminal.
+            for event in _iter_validated_sse_frame(pending):
                 yield event
 
     async def resolve_elicitation(
@@ -1094,6 +1116,21 @@ class OmnigentHttpClient:
 
         detail = str(exc).strip() or type(exc).__name__
         return self._redact(f"Omnigent transport error: {detail}")
+
+
+def _iter_validated_sse_frame(frame: bytes | bytearray) -> Iterable[dict[str, Any]]:
+    """Validate every data line before yielding, without retaining parsed rows."""
+
+    for emit in (False, True):
+        start = 0
+        while start < len(frame):
+            newline = frame.find(b"\n", start)
+            end = newline if newline >= 0 else len(frame)
+            event = parse_sse_line(frame[start:end].decode("utf-8", errors="replace"))
+            start = end + 1
+            if emit and event is not None:
+                yield event
+            event = None
 
 
 def parse_sse_line(line: str) -> dict[str, Any] | None:
