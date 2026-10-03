@@ -23,30 +23,31 @@ from moonmind.omnigent.execution_profiles import validate_effective_launch_snaps
 from moonmind.omnigent.git_identity import ensure_workspace_git_identity
 from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
-from moonmind.omnigent.mounted_tool_preflight import (
-    MountedToolPreflightError,
-    preflight_mounted_tools,
-)
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_services.launcher import docker_attachment_mount
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
+    initializer_container_name,
 )
-from moonmind.omnigent.host_services.launcher import docker_attachment_mount
-from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
 from moonmind.omnigent.host_services.registration import (
     HOST_REGISTRATION_ATTEMPTS,
     HOST_REGISTRATION_INTERVAL_SECONDS,
+)
+from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
+from moonmind.omnigent.mounted_tool_preflight import (
+    MountedToolPreflightError,
+    preflight_mounted_tools,
 )
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
     deterministic_host_container_name,
     validate_preflight_result,
 )
-from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.omnigent.repository_sources import (
     RepositorySourceError,
     normalize_repository_source,
 )
+from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
     LoreRepositoryProviderAdapter,
@@ -2088,6 +2089,9 @@ class OmnigentOAuthHostRuntime:
                 await self.assert_container_owned(
                     container_name=container_name, lease_id=host_lease.lease_id
                 )
+            await self._containers.remove_initializer(
+                container_name=container_name, lease_id=host_lease.lease_id
+            )
             await self._run(
                 "docker", "stop", "--time", "20", container_name, check=False
             )
@@ -2314,11 +2318,25 @@ class OmnigentOAuthHostRuntime:
                 )
             await self._run("docker", "rm", "-f", container_name, check=False)
         # Initialize the dedicated state volume as root before the actual host
-        # drops to UID/GID 1000.
-        await self._run(
+        # drops to UID/GID 1000. A killed Docker CLI can leave a created
+        # --rm container behind; reconcile the same lease before retrying.
+        await self._containers.remove_initializer(
+            container_name=container_name, lease_id=host_lease.lease_id
+        )
+        initializer_args = (
             "docker",
             "run",
             "--rm",
+            "--name",
+            initializer_container_name(container_name),
+            "--label",
+            "moonmind.kind=omnigent-oauth-host",
+            "--label",
+            f"moonmind.host_lease_id={host_lease.lease_id}",
+            "--label",
+            f"moonmind.provider_profile_id={binding.provider_profile_id}",
+            "--label",
+            f"moonmind.credential_generation={host_lease.credential_generation}",
             "--user",
             "0:0",
             "--network",
@@ -2351,6 +2369,20 @@ class OmnigentOAuthHostRuntime:
             "/opt/moonmind/init-oauth-host.sh",
             host_image_ref,
         )
+        try:
+            await self._run(*initializer_args)
+        except BaseException:
+            try:
+                await self._containers.remove_initializer(
+                    container_name=container_name, lease_id=host_lease.lease_id
+                )
+            except Exception:
+                # The durable host lease and labels leave this consumer to the
+                # janitor. Never replace the original launch/cancellation error.
+                logger.warning(
+                    "OAuth host initializer cleanup remains pending", exc_info=True
+                )
+            raise
         labels = {
             "moonmind.kind": "omnigent-oauth-host",
             "moonmind.provider_profile_id": binding.provider_profile_id,
