@@ -514,7 +514,27 @@ class ManagedRuntimeWorkspaceJanitor:
             quarantine = f".gc-{uuid.uuid4()}-{path.name}"
             os.rename(path.name, quarantine, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             if stat.S_ISDIR(info.st_mode):
-                shutil.rmtree(quarantine, dir_fd=parent_fd)
+                try:
+                    shutil.rmtree(quarantine, dir_fd=parent_fd)
+                except OSError:
+                    # Retry transient traversal failures while the same parent
+                    # remains pinned. Never touch a recreated canonical path.
+                    try:
+                        shutil.rmtree(quarantine, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        # The quarantine may already be gone; still report the
+                        # initial deletion error below.
+                        pass
+                    except OSError as retry_error:
+                        logger.warning(
+                            "Quarantine cleanup retry failed for %s/%s: %s",
+                            path.parent,
+                            quarantine,
+                            retry_error,
+                        )
+                    # Preserve the original failure in the structured result,
+                    # including when the best-effort cleanup succeeded.
+                    raise
             else:
                 os.unlink(quarantine, dir_fd=parent_fd)
         return estimated

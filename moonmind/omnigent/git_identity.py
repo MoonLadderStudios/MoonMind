@@ -163,7 +163,8 @@ def ensure_workspace_git_identity(
     existing owner.
 
     Returns True when an identity was (re)applied, False when the workspace
-    is not a Git checkout.
+    is not a Git checkout. Errors after recognizing a checkout propagate so
+    preparation cannot complete without applying the required identity.
     """
 
     name, email = resolve_git_identity()
@@ -173,25 +174,20 @@ def ensure_workspace_git_identity(
         return False
     config = git_dir / "config"
     try:
-        try:
-            existing = (
-                read_regular_file(config, limit=1024 * 1024)
-                .decode("utf-8")
-                .splitlines()
+        existing = (
+            read_regular_file(config, limit=1024 * 1024).decode("utf-8").splitlines()
+        )
+    except FileNotFoundError:
+        existing = []
+    updated = _write_user_identity(existing, name, email)
+    atomic_write_text(config, "\n".join(updated) + "\n")
+    if runtime_uid is not None and runtime_gid is not None:
+        with open_directory(config.parent) as parent_fd:
+            os.chown(
+                config.name,
+                runtime_uid,
+                runtime_gid,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
             )
-        except FileNotFoundError:
-            existing = []
-        updated = _write_user_identity(existing, name, email)
-        atomic_write_text(config, "\n".join(updated) + "\n")
-        if runtime_uid is not None and runtime_gid is not None:
-            with open_directory(config.parent) as parent_fd:
-                os.chown(
-                    config.name,
-                    runtime_uid,
-                    runtime_gid,
-                    dir_fd=parent_fd,
-                    follow_symlinks=False,
-                )
-    except (OSError, UnicodeError):
-        return False
     return True

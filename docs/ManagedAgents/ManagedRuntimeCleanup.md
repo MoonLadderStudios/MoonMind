@@ -76,7 +76,7 @@ Those systems may adopt the same cleanup-catalog shape later, but they remain se
 3. **Shared-checkout protection.** A workflow/correlation-key workspace can be shared by multiple child runs; it must survive until every owner is terminal and past retention.
 4. **Hot-path restraint.** Session termination and run completion should clean live runtime resources, not perform broad retained-state garbage collection.
 5. **Protective working default.** Retained-state cleanup runs automatically and destructively after retention; dry-run remains an explicit diagnostic override with actionable skip reasons.
-6. **Fail closed.** Missing stores, corrupt records, unsafe paths, symlinks, and ambiguous ownership must prevent deletion. Candidate discovery opens cleanup roots without following links; quarantine rename and deletion use the same pinned parent descriptor. Failed recursive cleanup is reported and preserves any remaining quarantine contents.
+6. **Fail closed.** Missing stores, corrupt records, unsafe paths, symlinks, and ambiguous ownership must prevent deletion. Candidate discovery opens cleanup roots without following links; quarantine rename and deletion use the same pinned parent descriptor. Failed recursive cleanup gets one bounded cleanup attempt through that descriptor and still reports the original failure. If recovery also fails, remaining quarantine contents are preserved with a diagnostic identifying the quarantine and retry error.
 7. **Idempotent operations.** Cleanup may run repeatedly and concurrently with lifecycle reconciliation without corrupting active execution state.
 8. **Operator visibility.** Each cleanup pass should report scanned, eligible, skipped, deleted, errored, and dry-run counts.
 
@@ -567,6 +567,12 @@ Use a two-phase filesystem protocol:
 8. Emit structured pass results.
 
 The rename step narrows races: a newly launched run will recreate or use the canonical path, not a partially deleted tree.
+If recursive deletion raises a filesystem error, the janitor makes one more
+best-effort descriptor-safe attempt on that quarantine name before releasing
+the parent descriptor. It reports the original error even if recovery succeeds.
+A failed retry logs the quarantine path and retry error while preserving any
+remaining contents. Recovery never renames over or deletes a recreated canonical
+workspace, and never follows a replaced parent or quarantine symlink.
 An owner record can outlive its workspace path. An already absent candidate is
 reported separately and does not consume the path or byte deletion budget.
 The second scan obtains fresh Docker references for each deletion. If a
