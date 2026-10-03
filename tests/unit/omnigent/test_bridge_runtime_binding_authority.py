@@ -170,9 +170,9 @@ async def test_plan_backed_chat_denies_mismatched_runtime_authority(store, misma
 @pytest.mark.asyncio
 async def test_plan_backed_chat_denies_replaced_execution_acquisition(store):
     row, plan, bindings, scope = await _seed_plan_chat(store)
-    await bindings.create_initial(
-        execution_plan_ref=plan.planRef,
-        execution_scope_ref=scope,
+    current = await bindings.get_current_state(plan.planRef, scope)
+    await bindings.reconcile_provider_leases(
+        current.binding.runtimeBindingRef,
         provider_leases={
             "primary-model": {
                 "providerProfileRef": ZEN_PROFILE,
@@ -181,6 +181,8 @@ async def test_plan_backed_chat_denies_replaced_execution_acquisition(store):
                 "credentialRuntimeRef": "credential-runtime:replacement",
             }
         },
+        expected_revision=current.revision,
+        expected_fencing_generation=current.fencing_generation,
     )
 
     resolution = await store.resolve_chat_binding(workflow_id=row.moonmind_workflow_id)
