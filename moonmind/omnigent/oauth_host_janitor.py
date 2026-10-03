@@ -10,6 +10,9 @@ from moonmind.omnigent.oauth_host_runtime import (
     OmnigentEgressEvidenceRequestIdentity,
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.harness_platform.runtime_binding import (
+    runtime_binding_execution_scope,
+)
 from moonmind.omnigent.oauth_hosts import (
     CLEANUP_CLAIMABLE_HOST_STATES,
     OmnigentOAuthHostRepository,
@@ -59,25 +62,35 @@ class OmnigentOAuthHostJanitor:
             lease.lease_id
         )
         if state is None:
-            execution_scope_ref = str(
-                getattr(lease, "holder_workflow_id", None) or ""
-            ).strip()
-            if execution_scope_ref and self._control_plane_store is not None:
-                async with self._control_plane_store.transaction() as repositories:
-                    session = await repositories.sessions.get(
-                        execution_scope_ref
-                    )
-                if session is not None:
-                    execution_scope_ref = str(
-                        session.moonmind_workflow_id or ""
-                    ).strip()
+            idempotency_key = str(getattr(lease, "idempotency_key", None) or "")
             current = (
                 await self._runtime_binding_store.get_current_state_for_execution_scope(
-                    execution_scope_ref
+                    runtime_binding_execution_scope(idempotency_key)
                 )
-                if execution_scope_ref
+                if idempotency_key
                 else None
             )
+            if current is None:
+                # Retained bindings written before execution-scoped authority
+                # still use the parent workflow. Prefer the exact new scope so
+                # an older step's binding cannot fence this step's cleanup.
+                execution_scope_ref = str(
+                    getattr(lease, "holder_workflow_id", None) or ""
+                ).strip()
+                if execution_scope_ref and self._control_plane_store is not None:
+                    async with self._control_plane_store.transaction() as repositories:
+                        session = await repositories.sessions.get(execution_scope_ref)
+                    if session is not None:
+                        execution_scope_ref = str(
+                            session.moonmind_workflow_id or ""
+                        ).strip()
+                current = (
+                    await self._runtime_binding_store.get_current_state_for_execution_scope(
+                        execution_scope_ref
+                    )
+                    if execution_scope_ref
+                    else None
+                )
             if current is not None:
                 runtime = current.binding
                 if (
