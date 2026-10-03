@@ -129,6 +129,7 @@ with workflow.unsafe.imports_passed_through():
         build_effective_workflow_skill_selectors,
     )
     from moonmind.workflows.executions.repository_contract import (
+        repository_branch_from_value,
         repository_name_from_value,
     )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
@@ -23751,25 +23752,42 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         if base_override and base_override != starting_branch
                         else None
                     )
+                    expected_repository = (
+                        self._repo
+                        or parameters.get("repository")
+                        or parameters.get("repo")
+                        or ws.get("repository")
+                        or ws.get("repo")
+                        or ""
+                    )
+                    merge_target_branch = effective_base or starting_branch
+                    # Retained histories keep both initial and continuation
+                    # arguments; new calls project the admitted target once.
+                    if workflow.patched("jules-merge-canonical-authority-v1"):
+                        repository_target = ws.get("repositoryTarget")
+                        expected_repository = repository_name_from_value(
+                            repository_target
+                            if repository_target is not None
+                            else expected_repository,
+                            provider="git",
+                        )
+                        merge_target_branch = (
+                            base_override
+                            or ws.get("startingBranch")
+                            or ws.get("branch")
+                            or repository_branch_from_value(repository_target)
+                            or "main"
+                        )
 
                     self._get_logger().info(
                         "Jules branch-publish: merging PR %s (base=%s)",
                         pr_url,
-                        effective_base or starting_branch,
+                        merge_target_branch,
                     )
                     merge_payload = {"pr_url": pr_url}
                     if workflow.patched("jules-merge-target-authority-v1"):
-                        merge_payload["expected_repository"] = (
-                            self._repo
-                            or parameters.get("repository")
-                            or parameters.get("repo")
-                            or ws.get("repository")
-                            or ws.get("repo")
-                            or ""
-                        )
-                        merge_payload["target_branch"] = (
-                            effective_base or starting_branch
-                        )
+                        merge_payload["expected_repository"] = expected_repository
+                        merge_payload["target_branch"] = merge_target_branch
                     elif effective_base:
                         merge_payload["target_branch"] = effective_base
 
@@ -23789,10 +23807,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             # summary-text fallback into fresh merge authority.
                             "pr_url": self._get_from_result(fetch_result, "external_url")
                             or self._get_from_result(fetch_result, "url") or "",
-                            "expected_repository": self._repo
-                            or parameters.get("repository") or parameters.get("repo")
-                            or ws.get("repository") or ws.get("repo") or "",
-                            "target_branch": effective_base or starting_branch,
+                            "expected_repository": expected_repository,
+                            "target_branch": merge_target_branch,
                         },
                         execute_merge=lambda payload: workflow.execute_activity(
                             merge_route.activity_type, payload,

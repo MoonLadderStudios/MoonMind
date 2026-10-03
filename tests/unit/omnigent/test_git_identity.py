@@ -188,6 +188,18 @@ def test_ensure_workspace_git_identity_propagates_preparation_errors(
         assert '"Deployment Operator"' in config.read_text()
 
 
+def test_identity_preparation_propagates_unreadable_checkout_config(tmp_path):
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+    config = git_dir / "config"
+    config.write_bytes(b"[user]\n\tname = \xff\n")
+
+    with pytest.raises(UnicodeDecodeError):
+        ensure_workspace_git_identity(tmp_path, runtime_uid=None, runtime_gid=None)
+    assert config.read_bytes() == b"[user]\n\tname = \xff\n"
+
+
 def test_ensure_workspace_git_identity_skips_non_git_directories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

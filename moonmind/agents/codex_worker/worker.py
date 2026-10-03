@@ -105,6 +105,29 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 _CONTAINER_CREATE_RESPONSE_LIMIT = 1024 * 1024
+# Deployment-owned process/toolchain settings also needed by repository
+# verification. This positive projection excludes credential/service settings;
+# arbitrary repository flags require an explicit non-secret declaration owner.
+_WORKER_TOOLCHAIN_ENV_KEYS = frozenset(
+    {
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+        "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",
+        "SYSTEMROOT", "COMSPEC", "PATHEXT", "WINDIR",
+        "VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME", "PYTHONUTF8",
+        "PYTHONIOENCODING", "PYTEST_ADDOPTS", "PYTEST_XDIST_AUTO_NUM_WORKERS",
+        "JAVA_HOME", "JDK_HOME", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS",
+        "_JAVA_OPTIONS", "MAVEN_HOME", "M2_HOME", "MAVEN_OPTS",
+        "GRADLE_USER_HOME", "GRADLE_OPTS", "NODE_OPTIONS", "NODE_PATH",
+        "CC", "CXX", "CPP", "AR", "AS", "LD", "FC", "RANLIB", "STRIP",
+        "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "CPATH",
+        "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH",
+        "PKG_CONFIG", "PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR",
+        "CMAKE_PREFIX_PATH", "CMAKE_TOOLCHAIN_FILE", "CI",
+        "MOONMIND_FORCE_LOCAL_TESTS", "MOONMIND_PYTEST_DURATIONS",
+        "MOONMIND_PYTEST_JUNITXML", "MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP",
+        "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS",
+    }
+)
 _FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _SECRET_LIKE_METADATA_PATTERN = re.compile(
     r"""(?ix)
@@ -5315,24 +5338,12 @@ class CodexWorker:
         # Repository tests need their toolchain, never publisher credentials
         # or the worker's service secrets. The repository execution boundary is
         # still responsible for filesystem/network isolation.
-        verification_keys = {
-            "PATH",
-            "HOME",
-            "LANG",
-            "LC_ALL",
-            "TZ",
-            "TMPDIR",
-            "TMP",
-            "TEMP",
-            "VIRTUAL_ENV",
-            "PYTHONPATH",
-            "PYTHONHOME",
-        }
-        verification_env = {
-            key: value
-            for key, value in (prepared.repo_command_env or os.environ).items()
-            if key in verification_keys
-        }
+        verification_source = (
+            prepared.repo_command_env
+            if prepared.repo_command_env is not None
+            else environ
+        )
+        verification_env = self._project_toolchain_environment(verification_source)
         try:
             await self._run_stage_command(
                 command,
@@ -10920,35 +10931,26 @@ class CodexWorker:
         return (None, "none")
 
     @staticmethod
+    def _project_toolchain_environment(source: Mapping[str, str]) -> dict[str, str]:
+        """Carry declared toolchain settings without selecting ambient authority."""
+        return {
+            key: value for key, value in source.items()
+            if key in _WORKER_TOOLCHAIN_ENV_KEYS
+        }
+
+    @staticmethod
     def _build_command_env(
         token: str | None,
         *,
         git_user_name: str | None = None,
         git_user_email: str | None = None,
     ) -> dict[str, str] | None:
-        inherited_keys = (
-            "PATH",
-            "HOME",
-            "USER",
-            "LOGNAME",
-            "TMPDIR",
-            "TMP",
-            "TEMP",
-            "LANG",
-            "LC_ALL",
-            "LC_CTYPE",
-            "SHELL",
-            "SSH_AUTH_SOCK",
-            "SYSTEMROOT",
-            "COMSPEC",
-            "PATHEXT",
-            "WINDIR",
-        )
-        command_env: dict[str, str] = {}
-        for key in inherited_keys:
-            value = environ.get(key)
-            if value:
-                command_env[key] = value
+        command_env = CodexWorker._project_toolchain_environment(environ)
+        # Git acquisition may need the selected host's SSH agent; repository
+        # verification does not inherit that authentication channel.
+        ssh_auth_sock = environ.get("SSH_AUTH_SOCK")
+        if ssh_auth_sock:
+            command_env["SSH_AUTH_SOCK"] = ssh_auth_sock
         configured = False
 
         if token:
