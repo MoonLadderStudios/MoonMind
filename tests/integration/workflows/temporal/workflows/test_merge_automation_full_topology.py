@@ -441,6 +441,11 @@ async def test_real_three_workflow_topology_requests_review_then_merges(
                         "baseBranch": "main",
                     },
                     "mergeAutomationConfig": {
+                        "gate": {
+                            "github": {
+                                "automatedReview": "required" if scenario == "review" else "disabled"
+                            }
+                        },
                         "timeouts": {"fallbackPollSeconds": 2},
                         "reviewLoop": {
                             "enabled": scenario == "review",

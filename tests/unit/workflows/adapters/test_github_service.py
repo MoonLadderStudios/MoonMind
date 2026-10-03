@@ -1117,6 +1117,94 @@ async def test_evaluate_pull_request_readiness_reports_checks_permission_missing
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("review_state", ["pending", "complete", "unavailable", "disabled"])
+@pytest.mark.parametrize("known_failure", [True, False])
+async def test_failed_and_queued_checks_preserve_required_review_evidence(
+    monkeypatch, review_state, known_failure
+):
+    from moonmind.workflows.temporal.workflows.merge_gate import classify_readiness
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    requested_urls = []
+
+    async def get(url, **_kwargs):
+        requested_urls.append(url)
+        if url.endswith("/pulls/341"):
+            return _mock_get_response(
+                200, {"state": "open", "head": {"sha": "abc123"}}
+            )
+        if "/commits/abc123/status" in url:
+            return _mock_get_response(200, {"state": "pending", "statuses": []})
+        if "/commits/abc123/check-runs" in url:
+            return _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {
+                            "name": "Build",
+                            "status": "completed",
+                            "conclusion": "failure" if known_failure else "success",
+                        },
+                        {"name": "CI Gate", "status": "queued", "conclusion": None},
+                    ]
+                },
+            )
+        if url.endswith("/reviews"):
+            if review_state == "unavailable":
+                return _mock_get_response(503, {})
+            return _mock_get_response(
+                200, [{"state": "APPROVED"}] if review_state == "complete" else []
+            )
+        if "/issues/341/reactions" in url:
+            return _mock_get_response(200, [])
+        raise AssertionError(url)
+
+    client = AsyncMock()
+    client.get = get
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={
+                "checks": "required",
+                "automatedReview": "disabled" if review_state == "disabled" else "required",
+            },
+            review_loop_enabled=False,
+        )
+
+    evidence = classify_readiness(
+        result.model_dump(by_alias=True), tracked_head_sha="abc123"
+    )
+    assert result.checks_complete is False
+    assert result.checks_passing is False
+    assert any(url.endswith("/reviews") for url in requested_urls) is (
+        known_failure and review_state != "disabled"
+    )
+    assert result.automated_review_complete is (
+        {
+            "pending": False,
+            "complete": True,
+            "unavailable": None,
+            "disabled": None,
+        }[review_state]
+        if known_failure else None
+    )
+    assert evidence.ready is (known_failure and review_state in {"complete", "disabled"})
+    if not known_failure:
+        assert {blocker.kind for blocker in evidence.blockers} == {"checks_running"}
+    elif review_state == "pending":
+        assert {blocker.kind for blocker in evidence.blockers} == {"automated_review_pending"}
+    elif review_state == "unavailable":
+        assert {blocker.kind for blocker in evidence.blockers} == {"external_state_unavailable"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "protected,status_state,expected_ready",
     [
