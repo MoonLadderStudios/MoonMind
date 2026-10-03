@@ -120,6 +120,60 @@ def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("evaluation", "enabled"),
+    [
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": "readiness-1"}, True),
+        ({"actionableCiFailuresVersion": "v1"}, False),
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": ""}, False),
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": " "}, False),
+        ({"actionableCiFailuresVersion": "v1", "readinessObservationId": 1}, False),
+        ({"actionableCiFailuresVersion": "v0"}, False),
+        ({"actionableCiFailuresVersion": "v2"}, False),
+        ({"actionableCiFailuresVersion": True}, False),
+        ({"actionableCiFailuresVersion": 1}, False),
+        ({"actionableCiFailuresVersion": None}, False),
+        ({"headSha": "abc123"}, False),
+        (None, False),
+        ([], False),
+    ],
+)
+@pytest.mark.parametrize("patch_enabled", [False, True])
+def test_retained_gate_uses_recorded_readiness_capability(
+    monkeypatch: pytest.MonkeyPatch, evaluation: Any, enabled: bool, patch_enabled: bool
+) -> None:
+    gate = MoonMindMergeAutomationWorkflow()
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", lambda _: patch_enabled)
+
+    assert gate._actionable_ci_failures_enabled(evaluation) is (enabled and patch_enabled)
+    # A later old producer must not inherit authority from a prior observation.
+    assert gate._actionable_ci_failures_enabled({}) is False
+
+
+def test_readiness_observations_have_independent_replay_decisions(monkeypatch):
+    decisions: dict[str, bool] = {}
+    seen_patches: list[str] = []
+
+    def patched(patch_id: str) -> bool:
+        seen_patches.append(patch_id)
+        # The SDK caches absence for the old observation; a new Activity
+        # schedules a different observation and can take the new branch.
+        if patch_id not in decisions:
+            decisions[patch_id] = bool(decisions)
+        return decisions[patch_id]
+
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", patched)
+    gate = MoonMindMergeAutomationWorkflow()
+    old = {"actionableCiFailuresVersion": "v1", "readinessObservationId": "activity-7"}
+    fresh = {"actionableCiFailuresVersion": "v1", "readinessObservationId": "activity-12"}
+
+    assert gate._actionable_ci_failures_enabled(old) is False
+    assert gate._actionable_ci_failures_enabled(fresh) is True
+    assert gate._actionable_ci_failures_enabled(old) is False
+    assert len(set(seen_patches)) == 2
+    assert seen_patches[0] == seen_patches[2]
+
+
 def test_merge_automation_workflow_child_task_queue_is_replay_patched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1048,6 +1102,112 @@ async def test_merge_automation_launches_resolver_when_checks_are_failing_but_co
     assert child_calls == 1
     assert result["status"] == "merged"
     assert result["blockers"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capable_producer", [True, False])
+async def test_merge_automation_dispatches_known_failure_before_queued_check(
+    monkeypatch: pytest.MonkeyPatch, capable_producer: bool
+) -> None:
+    gate = MoonMindMergeAutomationWorkflow()
+    calls: list[str] = []
+    initial_evidence = {
+        "headSha": "abc123",
+        "ready": False,
+        "pullRequestOpen": True,
+        "checksComplete": False,
+        "checksPassing": False,
+        "automatedReviewComplete": True,
+        "blockers": [
+            {"kind": "checks_running", "summary": "Downstream CI Gate is queued."},
+            {"kind": "checks_failed", "summary": "Build completed with a failure."},
+        ],
+    }
+    if capable_producer:
+        initial_evidence["actionableCiFailuresVersion"] = "v1"
+        initial_evidence["readinessObservationId"] = "readiness-1"
+
+    async def evaluate(activity_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        calls.append("evaluate")
+        if calls == ["evaluate"]:
+            return initial_evidence
+        return {**initial_evidence, "checksComplete": True, "blockers": initial_evidence["blockers"][1:]}
+
+    async def wait(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("wait")
+
+    async def resolve(workflow_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.UserWorkflow"
+        calls.append("resolve")
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", lambda patch_id: (
+        patch_id != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+    ))
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", evaluate)
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_child_workflow", resolve)
+    monkeypatch.setattr(merge_automation_module.workflow, "wait_condition", wait)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _: None)
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_search_attributes", lambda _: None)
+
+    result = await gate.run(_payload())
+
+    assert calls == (["evaluate", "resolve"] if capable_producer else ["evaluate", "wait", "evaluate", "resolve"])
+    assert result["status"] == "merged"
+
+
+@pytest.mark.asyncio
+async def test_new_gate_waits_for_review_capable_activity_during_worker_rollout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = MoonMindMergeAutomationWorkflow()
+    calls: list[str] = []
+    shared_evidence = {
+        "headSha": "abc123",
+        "ready": False,
+        "pullRequestOpen": True,
+        "checksComplete": False,
+        "checksPassing": False,
+        "blockers": [{"kind": "checks_failed"}, {"kind": "checks_running"}],
+    }
+    observations = iter([
+        # An older Activity skips review in this failed-plus-queued path.
+        {**shared_evidence, "automatedReviewComplete": None},
+        {**shared_evidence, "actionableCiFailuresVersion": "v1", "readinessObservationId": "readiness-2", "automatedReviewComplete": False},
+        {**shared_evidence, "actionableCiFailuresVersion": "v1", "readinessObservationId": "readiness-3", "automatedReviewComplete": True},
+    ])
+
+    async def evaluate(activity_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        calls.append("evaluate")
+        return next(observations)
+
+    async def wait(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("wait")
+
+    async def resolve(workflow_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.UserWorkflow"
+        calls.append("resolve")
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", lambda patch_id: (
+        patch_id != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+    ))
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", evaluate)
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_child_workflow", resolve)
+    monkeypatch.setattr(merge_automation_module.workflow, "wait_condition", wait)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _: None)
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_search_attributes", lambda _: None)
+
+    result = await gate.run(_payload())
+
+    assert calls == ["evaluate", "wait", "evaluate", "wait", "evaluate", "resolve"]
+    assert result["status"] == "merged"
+    assert len(result["resolverChildWorkflowIds"]) == 1
+
 
 @pytest.mark.asyncio
 async def test_merge_automation_launches_resolver_for_merge_conflicts(

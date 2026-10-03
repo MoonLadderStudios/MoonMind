@@ -206,6 +206,30 @@ Use initializing, awaiting_external, executing, finalizing, completed, failed, a
 
 Load admitted context, evaluate external scheduling readiness, wait by signal/bounded timer when necessary, start one deterministically identified resolver child, await it, validate its disposition/evidence, then complete required effects or return to the gate. Child acceptance/process exit is not completion of the PR objective.
 
+An observed completed CI failure admits the resolver even while other checks are
+queued or running. A failed build must not wait for its queued downstream CI Gate
+before `pr-resolver` can select `fix-ci` or reconcile an infrastructure failure.
+Incomplete checks with no confirmed failure continue to wait. Raw check evidence
+remains incomplete and failing; resolver admission does not certify merge readiness.
+Current-head, policy, unavailable-evidence, Jira, and active automated-review
+barriers still apply. The changed timer-versus-child decision requires producer
+capability and a Temporal replay patch for that recorded observation, preserving
+older waits during replay even when Activity workers upgrade first.
+
+Retained gates keep the earlier wait decision while replaying old observations.
+After upgrading the workflow and readiness Activity workers, their next ordinary
+event or fallback poll reads fresh readiness evidence automatically. The Activity records
+`actionableCiFailuresVersion: "v1"` and `readinessObservationId` from the scheduled
+Activity ID alongside the check, configured review, and Jira evidence. The
+workflow records a separate admission patch decision for each observation. An
+observation already consumed by an older worker retains its earlier wait; the
+next poll has a fresh Activity ID and adopts the failure-aware rule automatically.
+Older observations without both fields keep their historical behavior. This
+automatic migration
+preserves the saved head, resolver attempts, review state, and deadlines, and
+still checks every other readiness barrier before dispatching a resolver. It
+does not repeat publication or merge effects or require an operator signal.
+
 ## 11.3 Automated review loop
 
 ### 11.3.1 Purpose
@@ -275,7 +299,15 @@ A no-op fix pass is successful only when the latest required review covers the c
 
 External scheduling reads cover PR state/current head, reported/running checks, configured review completion, and optional Jira state. These compact observations determine whether to launch the resolver, not permission to merge.
 
-Completed failing checks and merge conflicts are resolver-actionable. Once required check reporting is complete and no relevant checks are running, failing results can launch remediation rather than leave the gate waiting indefinitely. A merge conflict does not skip required check observation or configured automated-review completion. Unavailable evidence retains its blocker; disabled gates and the active-request review-loop contract keep their existing semantics.
+Confirmed failing checks and merge conflicts are resolver-actionable. A completed
+failure can launch remediation while other checks remain queued or running;
+incomplete checks without a confirmed failure keep waiting. With the review loop
+disabled, required automated review is still observed and must complete before
+that resolver dispatch, including when a failed build has a queued downstream
+check. A merge conflict
+does not skip required check observation or configured automated-review
+completion. Unavailable evidence retains its blocker; disabled gates and the
+active-request review-loop contract keep their existing semantics.
 
 ### 12.2 Gate semantics
 

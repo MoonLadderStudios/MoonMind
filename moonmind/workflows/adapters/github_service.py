@@ -1988,11 +1988,16 @@ class GitHubService:
                 checks_passing = check_evidence["passing"]
                 blockers.extend(check_evidence["blockers"])
 
+            review_allowed_blockers = {"merge_conflict", "checks_failed"}
+            if any(blocker.get("kind") == "checks_failed" for blocker in blockers):
+                # A known failure can admit remediation before queued checks
+                # finish, so its required review evidence must be read now.
+                review_allowed_blockers.add("checks_running")
             if pr_merged is not True and (
                 (
                     review_required
                     and not any(
-                        blocker.get("kind") not in {"merge_conflict", "checks_failed"}
+                        blocker.get("kind") not in review_allowed_blockers
                         for blocker in blockers
                     )
                 )
