@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     DURABLE_LEASE_GRANT_PATCH,
     DURABLE_RELEASE_WAKEUP_PATCH,
     HANDLERS_AWAIT_RESTORE_PATCH,
+    LEASE_CLEANUP_REDRIVE_PATCH,
     LEASE_TRANSITION_CONTRACT_PATCH,
     VERIFY_PENDING_REQUESTS_PATCH,
     MoonMindProviderProfileManagerWorkflow,
@@ -53,7 +54,12 @@ def _manager_ports(wf: MoonMindProviderProfileManagerWorkflow) -> None:
     wf._persist_lease_grant = AsyncMock(return_value=True)
 
 
-def _runtime(mock_workflow, *, wakeup_enabled: bool) -> None:
+def _runtime(
+    mock_workflow,
+    *,
+    wakeup_enabled: bool,
+    additional_patches: set[str] | None = None,
+) -> None:
     enabled = {
         DB_LEASE_PERSISTENCE_PATCH,
         DURABLE_LEASE_GRANT_PATCH,
@@ -63,6 +69,7 @@ def _runtime(mock_workflow, *, wakeup_enabled: bool) -> None:
     }
     if wakeup_enabled:
         enabled.add(DURABLE_RELEASE_WAKEUP_PATCH)
+    enabled.update(additional_patches or ())
     mock_workflow.patched.side_effect = lambda marker: marker in enabled
     mock_workflow.now.return_value = NOW
     mock_workflow.info.return_value = SimpleNamespace(
@@ -153,7 +160,7 @@ async def test_release_finishing_after_initial_wakeup_drains_queued_request(
             assert wf._profiles[PROFILE_ID].current_leases == ["first-run"]
             assert assigned == []
             allow_release.set()
-            await release_task
+            await asyncio.wait_for(release_task, timeout=5)
         if not predicate():
             periodic_timeouts += 1
             assert periodic_timeouts == 1
@@ -168,7 +175,7 @@ async def test_release_finishing_after_initial_wakeup_drains_queued_request(
         _runtime(mock_workflow, wakeup_enabled=wakeup_enabled)
         mock_workflow.wait_condition.side_effect = wait_condition
         await wf.run(_run_input(held=True, waiting=True))
-        await release_task
+        await asyncio.wait_for(release_task, timeout=5)
 
     assert assigned == ["next-run"]
     assert wf._profiles[PROFILE_ID].current_leases == ["next-run"]
@@ -217,9 +224,81 @@ async def test_only_confirmed_durable_release_wakes_after_persistence(
         assert wf._profiles[PROFILE_ID].available_slots == 0
         assert wf._has_new_events is False
         allow_release.set()
-        await release_task
+        await asyncio.wait_for(release_task, timeout=5)
 
     released = outcome in {"released", "already_released"}
     assert wf._profiles[PROFILE_ID].available_slots == int(released)
     assert wf._has_new_events is (wakeup_enabled and released)
     assert bool(wf._unresolved_releases) is (not released)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wakeup_enabled", [False, True], ids=["retained", "new"])
+@pytest.mark.parametrize("terminal_owner", [False, True], ids=["live", "terminal"])
+@pytest.mark.parametrize("external_request", [False, True], ids=["idle", "new-request"])
+async def test_unchanged_cleanup_redelivery_waits_for_periodic_retry(
+    wakeup_enabled: bool,
+    terminal_owner: bool,
+    external_request: bool,
+) -> None:
+    """Re-acknowledging a held cleanup claim cannot drive an immediate loop."""
+    wf = MoonMindProviderProfileManagerWorkflow()
+    _manager_ports(wf)
+    wf._signal_slot_assigned = AsyncMock()
+    periodic_waits = 0
+    immediate_wakeups = 0
+
+    async def acknowledge_cleanup(*_args, **_kwargs) -> str:
+        if external_request and not wf._event_count:
+            await wf.request_slot(
+                {"requester_workflow_id": "newer-run", "runtime_id": "codex_cli"}
+            )
+        return "cleanup_requested"
+
+    wf._request_lease_cleanup = AsyncMock(side_effect=acknowledge_cleanup)
+
+    async def verify_owner(**_kwargs) -> None:
+        if terminal_owner:
+            await wf._reclaim_terminal_leases_durably(
+                {"first-run": {"running": False, "status": "COMPLETED"}}
+            )
+
+    async def wait_condition(predicate, timeout=None) -> None:
+        nonlocal periodic_waits, immediate_wakeups
+        if predicate():
+            immediate_wakeups += 1
+            assert (
+                wakeup_enabled and external_request and immediate_wakeups == 1
+            ), "unchanged cleanup must wait instead of self-waking"
+            return
+        periodic_waits += 1
+        wf._shutdown_requested = True
+
+    wf._verify_active_workflows = AsyncMock(side_effect=verify_owner)
+    payload = _run_input(held=True, waiting=True)
+    payload["cleanup_requested_leases"] = ["first-run"]
+    payload["cleanup_request_reasons"] = {"first-run": "owner_terminal"}
+    with patch(
+        "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+    ) as mock_workflow:
+        _runtime(
+            mock_workflow,
+            wakeup_enabled=wakeup_enabled,
+            additional_patches={LEASE_CLEANUP_REDRIVE_PATCH},
+        )
+        mock_workflow.wait_condition.side_effect = wait_condition
+        await wf.run(payload)
+
+    assert periodic_waits == 1
+    assert immediate_wakeups == int(wakeup_enabled and external_request)
+    assert wf._profiles[PROFILE_ID].current_leases == ["first-run"]
+    assert wf._cleanup_requested_leases == {"first-run"}
+    passes = 1 + immediate_wakeups
+    assert wf._cleanup_delivery_attempts["first-run"] == passes
+    assert wf._request_lease_cleanup.await_count == passes * (
+        2 if terminal_owner else 1
+    )
+    assert [request.requester_workflow_id for request in wf._pending_requests] == (
+        ["next-run", "newer-run"] if external_request else ["next-run"]
+    )
+    wf._signal_slot_assigned.assert_not_awaited()

@@ -1373,6 +1373,8 @@ returned capacity to queued requests. It consumes its wakeup before awaited
 loop work so signals received during persistence remain pending for the next
 pass. The separate `provider-profile-manager-durable-release-wakeup-v1` marker
 preserves the timer ordering in retained manager histories.
+Acknowledgements of an unchanged cleanup claim wait for the periodic retry;
+only new cleanup obligations or confirmed releases request another pass.
 
 The UI and parent workflow should clearly indicate:
 

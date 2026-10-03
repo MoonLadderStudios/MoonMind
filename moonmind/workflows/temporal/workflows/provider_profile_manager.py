@@ -4907,7 +4907,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 self._cleanup_delivery_attempts[lease_id] = int(
                     self._cleanup_delivery_attempts.get(lease_id, 0)
                 ) + 1
-                self._has_new_events = True
+                # This acknowledges the same outstanding claim without
+                # returning capacity. Waking another pass would redeliver it
+                # continuously instead of waiting for the periodic retry.
+                if not self._durable_release_wakeup:
+                    self._has_new_events = True
                 continue
             if outcome == LeaseTransitionOutcome.ALREADY_RELEASED.value:
                 # A verified release tombstoned the row while this pass was
@@ -5503,10 +5507,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 reason="owner_terminal",
             )
             if outcome == LeaseTransitionOutcome.CLEANUP_REQUESTED.value:
+                newly_requested = lease_id not in self._cleanup_requested_leases
                 self._cleanup_requested_leases.add(lease_id)
                 self._cleanup_request_reasons[lease_id] = "owner_terminal"
                 self._cleanup_delivery_attempts.setdefault(lease_id, 0)
-                self._has_new_events = True
+                if newly_requested or not self._durable_release_wakeup:
+                    self._has_new_events = True
                 self._get_logger().warning(
                     "Requested resource cleanup for the terminal-owner lease "
                     "%s on profile %s (status=%s, consumer=%s); its slot "
