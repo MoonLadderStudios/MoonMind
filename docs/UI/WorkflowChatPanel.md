@@ -128,6 +128,13 @@ These are local presentation states, not new persisted Workflow or provider-sess
 
 The Workflow Detail API exposes one authoritative binding for the session that the Chat route opens.
 
+For plan-backed sessions, chat authority resolves the current runtime binding
+through the bridge's recorded host lease and verifies its execution plan and
+digest, acquired provider authority, host, runner, provider session, and chat
+binding. Executions sharing an immutable plan retain independent chat authority.
+Active legacy parent-scoped bindings use the same host-lease lookup, and
+replacement acquisitions invalidate the previous session's write authority.
+
 Representative browser-safe projection:
 
 ```ts

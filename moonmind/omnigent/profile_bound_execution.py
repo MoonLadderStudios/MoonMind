@@ -70,6 +70,9 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.harness_platform.runtime_binding import (
+    runtime_binding_execution_scope,
+)
 from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
@@ -1186,21 +1189,45 @@ class OmnigentProfileBoundExecutionCoordinator:
                 runtime_binding_store = DbRuntimeBindingStore(
                     self._session_factory
                 )
+                provider_authority = {
+                    "primary-model": {
+                        "providerProfileRef": profile_id,
+                        "providerLeaseRef": provider_lease.lease_id,
+                        "credentialGeneration": profile.credential_generation,
+                        "credentialRuntimeRef": (
+                            "credential://provider-profile/"
+                            f"{profile_id}/generation/"
+                            f"{profile.credential_generation}"
+                        ),
+                    }
+                }
+                execution_scope_ref = runtime_binding_execution_scope(
+                    request.idempotency_key
+                )
+                current = await runtime_binding_store.get_current_state(
+                    recorded_plan.planRef, execution_scope_ref
+                )
+                if current is None:
+                    legacy = await runtime_binding_store.get_current_state(
+                        recorded_plan.planRef, workflow_id
+                    )
+                    if (
+                        legacy is not None
+                        and legacy.state != "cleanup_complete"
+                        and {
+                            slot: lease.model_dump(mode="json", by_alias=True)
+                            for slot, lease in legacy.binding.providerLeases.items()
+                        }
+                        == provider_authority
+                    ):
+                        # Keep an existing live acquisition's digest and fence
+                        # through the scope transition. New steps never reopen
+                        # a cleaned parent binding or adopt another lease.
+                        execution_scope_ref = workflow_id
                 runtime_binding = await runtime_binding_store.create_initial(
                     execution_plan_ref=recorded_plan.planRef,
-                    execution_scope_ref=workflow_id,
-                    provider_leases={
-                        "primary-model": {
-                            "providerProfileRef": profile_id,
-                            "providerLeaseRef": provider_lease.lease_id,
-                            "credentialGeneration": profile.credential_generation,
-                            "credentialRuntimeRef": (
-                                "credential://provider-profile/"
-                                f"{profile_id}/generation/"
-                                f"{profile.credential_generation}"
-                            ),
-                        }
-                    },
+                    execution_scope_ref=execution_scope_ref,
+                    provider_leases=provider_authority,
                 )
                 runtime_binding_ref = runtime_binding.runtimeBindingRef
             current_stage = "host_binding_resolution"
