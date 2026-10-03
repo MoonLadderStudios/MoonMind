@@ -17,7 +17,11 @@ from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_pol
 
 def test_every_registered_runtime_descriptor_is_valid_and_versioned() -> None:
     assert RUNTIME_EXECUTION_CAPABILITIES.runtime_ids == (
-        "claude_code", "codex_cli", "codex_cloud", "jules", "omnigent", "openclaw"
+        "claude_code",
+        "codex_cli",
+        "jules",
+        "omnigent",
+        "openclaw",
     )
     for runtime_id in RUNTIME_EXECUTION_CAPABILITIES.runtime_ids:
         descriptor = resolve_runtime_execution_capabilities(runtime_id)
@@ -186,3 +190,8 @@ def test_v3_rejects_workspace_plane_contract_drift(
     snapshot[field] = value
     with pytest.raises(ValidationError, match="contradicts workspace state"):
         RuntimeExecutionCapabilities.model_validate(snapshot)
+
+
+def test_removed_cloud_has_no_live_capability_or_terminal_contract():
+    with pytest.raises(RuntimeCapabilityError, match="unknown agent runtime"):
+        resolve_runtime_execution_capabilities("codex_cloud")

@@ -299,6 +299,11 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
 
     initial_parameters = copy.deepcopy(dict(initial_parameters))
     try:
+        from moonmind.workflows.executions.execution_contract import (
+            validate_workflow_runtime_targets,
+        )
+
+        validate_workflow_runtime_targets(initial_parameters)
         reject_retired_vector_fields(
             initial_parameters, field_path="target.initialParameters"
         )
@@ -543,7 +548,15 @@ class RecurringWorkflowsService:
                 "register or launch manifest ingest workflows."
             )
 
+        from moonmind.workflows.executions.execution_contract import (
+            validate_workflow_runtime_targets,
+        )
+
         initial_parameters = dict(target_payload.get("initialParameters") or {})
+        try:
+            validate_workflow_runtime_targets(initial_parameters)
+        except WorkflowContractError as exc:
+            raise RecurringWorkflowValidationError(str(exc)) from exc
         system_payload = initial_parameters.get("system")
         system = dict(system_payload) if isinstance(system_payload, Mapping) else {}
         recurrence = dict(system.get("recurrence") or {})
@@ -1880,45 +1893,30 @@ class RecurringWorkflowsService:
 
         for dfn in definitions:
             try:
-                # MoonLadderStudios/MoonMind#4192: retired ManifestIngest
-                # cutover. An upgraded database may still hold an enabled
-                # definition targeting the retired workflow type. Never
-                # (re)create or update its Temporal action: pause the
-                # existing Temporal Schedule producer so it stops firing
-                # new runs for an unregistered type, then skip normal
-                # reconciliation for this definition.
+                # #4644: the existing reconciler closes unsupported producers
+                # without deleting their saved targets or recreating schedules.
                 try:
-                    raw_target = (
-                        dict(dfn.target)
-                        if isinstance(dfn.target, Mapping)
-                        else {}
+                    _normalize_target(
+                        dfn.target if isinstance(dfn.target, Mapping) else {}
                     )
-                    raw_workflow_type = str(
-                        raw_target.get("workflowType")
-                        or raw_target.get("workflow_type")
-                        or ""
-                    ).strip()
-                except Exception:
-                    raw_workflow_type = ""
-                if raw_workflow_type == "MoonMind.ManifestIngest":
+                except RecurringWorkflowValidationError as exc:
                     try:
-                        await self._adapter.pause_schedule(
-                            definition_id=dfn.id
-                        )
-                        reconciled += 1
+                        await self._adapter.pause_schedule(definition_id=dfn.id)
                     except ScheduleNotFoundError:
                         logger.info(
-                            "Retired ManifestIngest schedule already absent "
-                            "for %s",
-                            dfn.id,
+                            "Unsupported schedule already absent for %s", dfn.id
                         )
-                    except ScheduleAdapterError as exc:
+                    except ScheduleAdapterError as pause_error:
                         logger.warning(
-                            "Failed to pause retired ManifestIngest schedule "
-                            "for %s: %s",
+                            "Failed to pause unsupported schedule for %s: %s",
                             dfn.id,
-                            exc,
+                            pause_error,
                         )
+                        continue
+                    dfn.enabled = False
+                    await self._session.commit()
+                    logger.warning("Paused unsupported schedule %s: %s", dfn.id, exc)
+                    reconciled += 1
                     continue
 
                 policy_src = dfn.policy if isinstance(dfn.policy, Mapping) else None

@@ -98,6 +98,20 @@ describe('resolveDefaultRuntimeId', () => {
 });
 
 describe('runtimeOptionGroups', () => {
+  it('keeps the supported legacy Jules identity available for restored drafts', () => {
+    const groups = runtimeOptionGroups(['jules_api']);
+    expect(groups.recommended).toEqual([
+      {
+        runtimeId: 'jules_api',
+        label: 'Jules',
+        compatibilityPath: false,
+        available: true,
+      },
+    ]);
+    expect(runtimeUnavailableReason('jules_api')).toBeNull();
+    expect(formatRuntimeLabel('jules_api')).toBe('Jules');
+  });
+
   it('labels direct paths as compatibility options rather than equal defaults', () => {
     const groups = runtimeOptionGroups(
       ['omnigent', 'codex_cli', 'claude_code'],
@@ -233,3 +247,12 @@ describe('formatRolloutStateLabel', () => {
      expect(groups.compatibility).toEqual([]);
    }
  });
+
+
+describe('removed and unknown authoring targets (#4644)', () => {
+  it.each([undefined, promotedCatalog, { targets: [target({ runtimeId: 'codex_cloud' })] }])('never offers Cloud from an old boot catalog or fallback', (catalog) => {
+    const groups = runtimeOptionGroups(['codex_cloud', 'codex_cli', 'omnigent'], catalog);
+    expect([...groups.recommended, ...groups.compatibility, ...groups.unavailable].some((row) => row.runtimeId === 'codex_cloud')).toBe(false);
+    expect(runtimeUnavailableReason('codex_cloud', catalog)).toMatch(/unsupported.*explicit|explicit.*supported/i);
+  });
+});

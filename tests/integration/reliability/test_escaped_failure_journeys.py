@@ -25,6 +25,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import (
@@ -6579,8 +6580,11 @@ async def test_remediation_loop_attempts_inherit_the_runs_resolved_runtime(
 
     # The escaped incident routed the sentinel into external adapter resolution,
     # which no provider can satisfy. Keep that boundary failing loudly.
-    with pytest.raises(ValueError, match=expected["rejectedDispatchError"]):
+    with pytest.raises(
+        ApplicationError, match=expected["rejectedDispatchError"]
+    ) as rejected:
         await agent_run_module.resolve_adapter_metadata(expected["rejectedAgentId"])
+    assert rejected.value.non_retryable is True
 
 
 async def test_remediation_attempt_receives_authoritative_verifier_evidence(

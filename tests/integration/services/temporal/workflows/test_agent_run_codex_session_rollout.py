@@ -134,12 +134,27 @@ async def mock_cancel(request: dict[str, Any]) -> dict[str, Any]:
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list(request: dict[str, Any]) -> dict[str, Any]:
     runtime_id = str(request.get("runtime_id") or "codex_cli").strip() or "codex_cli"
+    from moonmind.provider_profiles.isolation_policy import derive_isolation_policy
+
+    isolation = derive_isolation_policy(
+        runtime_id=runtime_id,
+        provider_id="openai",
+        authentication_method="oauth",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+    )
+    assert isolation is not None
     return {
         "profiles": [
             {
                 "profile_id": "default-managed",
                 "runtime_id": runtime_id,
                 "provider_id": "openai",
+                "credential_source": "oauth_volume",
+                "runtime_materialization_mode": "oauth_home",
+                "auth_state": "connected",
+                "last_auth_method": "oauth",
+                "clear_env_keys": list(isolation.keys),
                 "auth_mode": "volume",
                 "volume_ref": "test-volume",
                 "volume_mount_path": "/tmp/auth",
@@ -173,6 +188,20 @@ async def mock_provider_profile_reset_manager(
         "reset": True,
         "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'codex_cli')}",
     }
+
+
+@_activity.defn(name="provider_profile.manager_state")
+async def mock_provider_profile_manager_state(
+    request: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "running": True,
+        "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'codex_cli')}",
+        "status": "RUNNING",
+        "inspection_succeeded": True,
+        "requester_pending": True,
+    }
+
 
 class FakeCodexSessionController:
     async def launch_session(self, request: Any) -> CodexManagedSessionHandle:
@@ -425,6 +454,7 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                     mock_provider_profile_list,
                     mock_provider_profile_ensure_manager,
                     mock_provider_profile_reset_manager,
+                    mock_provider_profile_manager_state,
                 ],
             ):
                 async with Worker(
@@ -466,7 +496,10 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                         legacy_request.idempotency_key = "idem-codex-rollout-legacy"
 
                         def patched_without_bridge_activity(patch_id: str) -> bool:
-                            if patch_id == agent_run_module.MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID:
+                            if patch_id in {
+                                agent_run_module.MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID,
+                                "agent-run-supported-runtime-admission-v1",
+                            }:
                                 return False
                             return original_patched(patch_id)
 

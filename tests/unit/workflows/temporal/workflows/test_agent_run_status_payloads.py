@@ -269,7 +269,7 @@ def test_intervention_result_uses_terminal_operator_review_metadata() -> None:
     workflow_instance.run_id = "run-1"
     request = AgentExecutionRequest(
         agentKind="external",
-        agentId="codex_cloud",
+        agentId="openclaw",
         correlationId="run-1",
         idempotencyKey="run-1:step-1",
     )

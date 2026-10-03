@@ -364,3 +364,48 @@ Permanent candidate/retained fleets, promotion qualification, and independent sc
 ## 21. Summary
 
 Reliable updates come from a small operation with one owner, ordinary Compose behavior, preserved intent, bounded recovery, and readable evidence. Tests and documentation follow the supported outcome. They must not force the implementation to reconstruct the complicated release system this design replaces.
+
+## Codex Cloud removal upgrade (#4644)
+
+The removal release has no Codex Cloud adapter, settings, activity handlers, or
+reactivation switch. Normal Codex, including `codex-native` through Omnigent,
+continues through its existing Provider Profile and authentication authorities.
+Leftover `CODEX_CLOUD_*` environment values are ignored. History, saved results,
+logs, patches, and artifact downloads preserve their original identities.
+
+Before applying this release to an existing deployment, use its existing
+execution/Temporal inventory and schedule controls to identify `codex_cloud`
+runs and integration bindings, saved profiles/configurations, queued starts,
+and parent/child plans that can still dispatch Cloud. Inspect step targets as
+well as the workflow's top-level target; source inspection is not a live
+inventory. Pause affected recurring schedules and prevent new submissions
+through the installed release's existing admission controls. Preserve every
+saved input and output. After upgrade, the existing schedule reconciler pauses
+unsupported targets without rewriting their inputs. Unsupported configurations
+remain readable and require
+an explicitly selected supported replacement for new execution.
+
+Drain admitted Cloud work on the installed release before recreating its
+workers. Bound this drain by the run's existing execution budget. If consumers
+remain at that boundary, retain the installed workers and recoverable artifacts
+and stop this update attempt. An existing, separately authorized cancellation
+or termination may complete the transition; record requested and confirmed
+outcomes separately, and never claim a remote task was cancelled from a local
+request alone. Do not silently cancel healthy work or remove handlers under an
+outstanding activity. Completion means no outstanding Cloud activities, retries,
+or parents/children that can issue another Cloud command, and affected schedules
+are paused or explicitly revised. There is no permanent compatibility worker
+or cross-deployment coordinator.
+
+New queued/indirect requests fail as unsupported before launch, including saved
+schedule inputs and plan nodes. Reset/rerun/resume is new executable admission,
+so removed targets require explicit replacement while original attempts and
+capability snapshots remain unchanged. A closed historical execution can start a
+fresh rerun with an explicitly selected supported target; its original integration
+monitoring metadata stays with the source attempt and is not the new binding.
+Workflow patch markers preserve recorded
+command sequences; they do not authorize replaying an old history into a new
+Cloud activity. Affected histories needing execution stay with the installed
+release until the bounded transition is complete. Repository acceptance uses
+automated saved-input/history fixtures; actual deployment inventory and changes
+remain part of the separately authorized update operation.

@@ -212,8 +212,10 @@ def _visibility_runtime_from_parameters(
         parameters.get("target_runtime"),
         task_runtime.get("mode"),
         task_runtime.get("targetRuntime"),
+        task_runtime.get("target_runtime"),
         runtime_payload.get("mode"),
         runtime_payload.get("targetRuntime"),
+        runtime_payload.get("target_runtime"),
     )
 
 
@@ -2139,6 +2141,18 @@ class TemporalExecutionService:
             owner_id=owner_id,
             owner_type=owner_type,
         )
+        if idempotency_key:
+            existing = await self._find_by_create_idempotency(
+                idempotency_key=idempotency_key,
+                owner_id=owner,
+                owner_type=owner_type_enum,
+                workflow_type=workflow_type_enum,
+            )
+            if existing is not None:
+                return await self._sync_projection_best_effort(existing)
+
+        self._validate_execution_targets(initial_parameters or {})
+
         if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
             # Stale-code admission gate (MoonLadderStudios/MoonMind#4224): do
             # not admit new UserWorkflows on a task queue served only by stale
@@ -2249,16 +2263,6 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Unsupported failurePolicy '{failure_policy}'. Supported values: {supported}"
             )
-
-        if idempotency_key:
-            existing = await self._find_by_create_idempotency(
-                idempotency_key=idempotency_key,
-                owner_id=owner,
-                owner_type=owner_type_enum,
-                workflow_type=workflow_type_enum,
-            )
-            if existing is not None:
-                return await self._sync_projection_best_effort(existing)
 
         params = dict(initial_parameters or {})
         if failure_policy is not None:
@@ -3012,10 +3016,18 @@ class TemporalExecutionService:
             if isinstance(cached, dict):
                 return dict(cached)
 
-        if update_name == "RequestRerun" and record.state not in TERMINAL_STATES:
+        if update_name == "RequestRerun":
+            if (
+                record.state not in TERMINAL_STATES
+                and self._integration_state(record) is not None
+            ):
+                self._require_integration_state(record)
             rerun_parameters = dict(record.parameters or {})
             if parameters_patch:
                 rerun_parameters.update(parameters_patch)
+            self._validate_rerun_execution_targets(record, rerun_parameters)
+
+        if update_name == "RequestRerun" and record.state not in TERMINAL_STATES:
             await self.validate_exact_rerun_execution_plan(
                 parameters=rerun_parameters,
             )
@@ -3205,6 +3217,16 @@ class TemporalExecutionService:
                 f"Unsupported signal name: {signal_name}"
             )
         record = await self._require_source_execution(workflow_id)
+        if signal_name == "Resume":
+            self._validate_execution_targets(record.parameters or {})
+            if self._integration_state(record) is not None:
+                self._require_integration_state(record)
+        if (
+            signal_name == "ExternalEvent"
+            and self._integration_state(record) is not None
+        ):
+            if record.state not in TERMINAL_STATES:
+                self._require_integration_state(record)
 
         if signal_name in {
             "Pause",
@@ -3429,6 +3451,45 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         return await self._sync_projection_best_effort(record)
 
+    @staticmethod
+    def _validate_execution_targets(parameters: Mapping[str, Any]) -> None:
+        from moonmind.workflows.executions.execution_contract import (
+            validate_workflow_runtime_targets,
+        )
+
+        try:
+            validate_workflow_runtime_targets(parameters)
+        except ValueError as exc:
+            raise TemporalExecutionValidationError(str(exc)) from exc
+
+    def _supported_integration_name(self, raw: str) -> str:
+        normalized = self._normalize_integration_name(raw)
+        try:
+            capabilities = resolve_runtime_execution_capabilities(normalized)
+            if capabilities.runtime_family != "external_provider":
+                raise ValueError("integration must name an external agent")
+        except ValueError as exc:
+            raise TemporalExecutionValidationError(
+                f"Unsupported integration target {raw!r}: {exc}"
+            ) from exc
+        return normalized
+
+    def _validate_rerun_execution_targets(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        self._validate_execution_targets(parameters)
+        # Fresh admission uses the resulting authored runtime. Historical
+        # monitoring state is not the new execution's integration binding.
+        # A source with only an old binding still needs an explicit replacement
+        # rather than silently selecting the default runtime.
+        if (
+            self._integration_state(record) is not None
+            and _visibility_runtime_from_parameters(parameters) is None
+        ):
+            self._require_integration_state(record)
+
     async def configure_integration_monitoring(
         self,
         *,
@@ -3445,6 +3506,7 @@ class TemporalExecutionService:
         provider_summary: dict[str, Any] | None,
         result_refs: list[str] | None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        integration_name = self._supported_integration_name(integration_name)
         record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
 
@@ -3674,6 +3736,8 @@ class TemporalExecutionService:
                 f"Integration callback target for '{integration_name}' was not found"
             )
         record = await self.describe_execution(correlation.workflow_id)
+        if record.state not in TERMINAL_STATES:
+            self._supported_integration_name(integration_name)
         return correlation, record
 
     async def _require_processable_graceful_cancellation(self, workflow_id: str) -> bool:
@@ -4657,12 +4721,14 @@ class TemporalExecutionService:
             "runId": record.run_id,
         }
         params["rerunSource"] = rerun_source
+        self._validate_rerun_execution_targets(record, params)
         if has_unexpanded_task_template(params):
             params = await expand_preset_for_child_run(
                 session=self._session,
                 initial_parameters=params,
                 allow_goal_schedule=False,
             )
+        self._validate_execution_targets(params)
         await self.validate_exact_rerun_execution_plan(parameters=params)
         await self.validate_exact_rerun_skill_snapshot(
             source_record=record,
@@ -5955,6 +6021,7 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "Execution is not configured for integration monitoring."
             )
+        self._supported_integration_name(str(state.get("integration_name") or ""))
         return state
 
     def _parse_integration_status(self, raw: str) -> str:

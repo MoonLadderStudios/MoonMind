@@ -23,6 +23,7 @@ from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
+    DEFAULT_ACTIVITY_CATALOG,
     _SLOT_WAIT_TIMEOUT_SECONDS,
 )
 
@@ -30,6 +31,27 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 # time-skipping workflow tests consistently exceed CI timeout thresholds.
 # These tests remain available for local development verification only.
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+
+
+@pytest.fixture(autouse=True)
+def _register_test_agent_capabilities(monkeypatch):
+    """Register the generic lifecycle fake without enabling an unknown product runtime."""
+    from moonmind.workflows.executions.runtime_capabilities import (
+        RUNTIME_EXECUTION_CAPABILITIES,
+        resolve_runtime_execution_capabilities,
+    )
+
+    supported = resolve_runtime_execution_capabilities("claude_code")
+    fake = supported.model_copy(
+        update={
+            "runtime_id": "test_agent",
+            "agent_identity": supported.agent_identity.model_copy(
+                update={"agent_id": "test_agent"}
+            ),
+        }
+    )
+    monkeypatch.setitem(RUNTIME_EXECUTION_CAPABILITIES._descriptors, "test_agent", fake)
+
 
 # Local mock activities that simulate the catalog-routed activities
 # (the standalone stubs were removed in favor of catalog routing).
@@ -79,11 +101,27 @@ async def mock_cancel(request: dict) -> AgentRunStatus:
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list(request: dict) -> dict:
     """Return managed profiles for exact-profile and selector routing tests."""
-    runtime_id = request.get("runtime_id", "test-agent")
+    runtime_id = request.get("runtime_id", "test_agent")
+    from moonmind.provider_profiles.isolation_policy import derive_isolation_policy
+
+    provider_id = "anthropic" if runtime_id == "claude_code" else "openai"
+    isolation = derive_isolation_policy(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        authentication_method="oauth",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+    )
     profiles = [
         {
             "profile_id": "default-managed",
             "runtime_id": runtime_id,
+            "provider_id": provider_id,
+            "credential_source": "oauth_volume",
+            "runtime_materialization_mode": "oauth_home",
+            "auth_state": "connected",
+            "last_auth_method": "oauth",
+            "clear_env_keys": list(isolation.keys) if isolation is not None else [],
             "auth_mode": "volume",
             "volume_ref": "test-volume",
             "volume_mount_path": "/tmp/auth",
@@ -229,6 +267,7 @@ _managed_status_mode = "default"
 _managed_status_poll_count = 0
 _managed_fetch_result_count = 0
 
+
 @_activity.defn(name="agent_runtime.launch")
 async def mock_agent_runtime_launch(request: dict) -> dict:
     """Simulate launching a managed agent container."""
@@ -236,8 +275,9 @@ async def mock_agent_runtime_launch(request: dict) -> dict:
     return {
         "container_id": "test-container-001",
         "status": "running",
-        "agent_id": request.get("agent_id", "test-agent"),
+        "agent_id": request.get("agent_id", "test_agent"),
     }
+
 
 @_activity.defn(name="agent_runtime.build_launch_context")
 async def mock_agent_runtime_build_launch_context(request: dict) -> dict:
@@ -249,6 +289,7 @@ async def mock_agent_runtime_build_launch_context(request: dict) -> dict:
         "passthrough_env_keys": [],
         "env_keys_count": 0,
     }
+
 
 @_activity.defn(name="agent_runtime.status")
 async def mock_agent_runtime_status(request: dict) -> dict:
@@ -569,6 +610,14 @@ class TestAgentRunParent:
         self.state_changes.append({"state": new_state, "reason": reason})
 
     @workflow.signal
+    def agent_run_progress(self, payload: dict) -> None:
+        # Current histories use the typed progress projection; retain assertions
+        # on the parent-visible state and explanation across both transports.
+        self.state_changes.append(
+            {"state": payload["state"], "reason": payload.get("summary", "")}
+        )
+
+    @workflow.signal
     def profile_assigned(self, payload: dict) -> None:
         self.profile_assignments.append(dict(payload))
 
@@ -665,22 +714,18 @@ class RuntimeUpdateProviderProfileManager:
                 await workflow.sleep(1)
                 continue
             self.pending_requests.pop(0)
-            handle = workflow.get_external_workflow_handle(
-                req["requester_workflow_id"]
-            )
-            assigned_profile_id = (
-                req.get("execution_profile_ref")
-                or (
-                    "default-managed"
-                    if self.assignable_profile_id == "*"
-                    else self.assignable_profile_id
-                )
+            handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
+            assigned_profile_id = req.get("execution_profile_ref") or (
+                "default-managed"
+                if self.assignable_profile_id == "*"
+                else self.assignable_profile_id
             )
             await handle.signal(
                 "slot_assigned",
                 {"profile_id": assigned_profile_id},
             )
             await workflow.sleep(3600)
+
 
 @_activity.defn(name="agent_runtime.status")
 async def mock_agent_runtime_status_rate_limited(request: dict) -> dict:
@@ -691,6 +736,7 @@ async def mock_agent_runtime_status_rate_limited(request: dict) -> dict:
         "status": "failed",
     }
 
+
 @_activity.defn(name="agent_runtime.fetch_result")
 async def mock_agent_runtime_fetch_result_rate_limited(request: dict) -> dict:
     return {
@@ -699,107 +745,154 @@ async def mock_agent_runtime_fetch_result_rate_limited(request: dict) -> dict:
         "providerErrorCode": "429",
     }
 
+
 @pytest.mark.asyncio
 async def test_agent_run_workflow():
     _managed_launch_requests.clear()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         # Main agent-run worker.
-        async with Worker(
-            env.client,
-            task_queue="agent-run-task-queue",
-            workflows=[MoonMindAgentRun, MockProviderProfileManager],
-            activities=_COMMON_AGENT_RUN_ACTIVITIES,
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue",
+                workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "provider_profile.list"
+                ).task_queue,
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.launch"
+                ).task_queue,
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
         ):
-                request = AgentExecutionRequest(
-                    agent_kind="managed",
-                    agent_id="test-agent",
-                    execution_profile_ref="default-managed",
-                    correlation_id="corr-1",
-                    idempotency_key="idem-1",
-                )
-            
-                # Start dummy manager
-                runtime_mapping = {"claude_code": "claude_code", "claude": "claude_code", "codex": "codex_cli"}
-                runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"provider-profile-manager:{runtime_id}"
-                await env.client.start_workflow(
-                    MockProviderProfileManager.run,
-                    {"runtime_id": request.agent_id},
-                    id=manager_id,
-                    task_queue="agent-run-task-queue",
-                )
-            
-                # Start workflow
-                handle = await env.client.start_workflow(
-                    MoonMindAgentRun.run,
-                    request,
-                    id="test-workflow-1",
-                    task_queue="agent-run-task-queue",
-                )
-            
-                # Signal completion
-                result_payload = {"summary": "Success"}
-                await handle.signal(MoonMindAgentRun.completion_signal, result_payload)
-            
-                result = await handle.result()
-            
-                assert isinstance(result, AgentRunResult)
-                assert result.summary == "Success"
+            request = AgentExecutionRequest(
+                agent_kind="managed",
+                agent_id="claude_code",
+                execution_profile_ref="default-managed",
+                correlation_id="corr-1",
+                idempotency_key="idem-1",
+            )
+
+            # Start dummy manager
+            runtime_mapping = {
+                "claude_code": "claude_code",
+                "claude": "claude_code",
+                "codex": "codex_cli",
+            }
+            runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+            manager_id = f"provider-profile-manager:{runtime_id}"
+            await env.client.start_workflow(
+                MockProviderProfileManager.run,
+                {"runtime_id": request.agent_id},
+                id=manager_id,
+                task_queue="agent-run-task-queue",
+            )
+
+            # Start workflow
+            handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                request,
+                id="test-workflow-1",
+                task_queue="agent-run-task-queue",
+            )
+
+            # Signal completion
+            result_payload = {"summary": "Success"}
+            await handle.signal(MoonMindAgentRun.completion_signal, result_payload)
+
+            result = await asyncio.wait_for(handle.result(), timeout=15)
+
+            assert isinstance(result, AgentRunResult)
+            assert result.summary == "Success"
+
 
 async def test_agent_run_workflow_cancellation():
     _managed_launch_requests.clear()
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue="agent-run-task-queue",
-            workflows=[MoonMindAgentRun, MockProviderProfileManager],
-            activities=_COMMON_AGENT_RUN_ACTIVITIES,
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue",
+                workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "provider_profile.list"
+                ).task_queue,
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.launch"
+                ).task_queue,
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
         ):
-                request = AgentExecutionRequest(
-                    agent_kind="managed",
-                    agent_id="test-agent",
-                    execution_profile_ref="default-managed",
-                    correlation_id="corr-1",
-                    idempotency_key="idem-1",
-                )
-            
-                # Start dummy manager
-                runtime_mapping = {"claude_code": "claude_code", "claude": "claude_code", "codex": "codex_cli"}
-                runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"provider-profile-manager:{runtime_id}"
-                await env.client.start_workflow(
-                    MockProviderProfileManager.run,
-                    {"runtime_id": request.agent_id, "assign_slots": False},
-                    id=manager_id,
-                    task_queue="agent-run-task-queue",
-                )
-            
-                handle = await env.client.start_workflow(
-                    MoonMindAgentRun.run,
-                    request,
-                    id="test-workflow-cancel",
-                    task_queue="agent-run-task-queue",
-                )
-            
-                # Cancel the workflow while it's waiting
-                await handle.cancel()
-            
-                with pytest.raises(WorkflowFailureError) as exc_info:
-                    await handle.result()
-            
-                # Verifies that workflow was cancelled. Check the full exception chain
-                # since the top-level message may be generic.
-                exc_str = str(exc_info.value).lower()
-                cause_str = str(exc_info.value.__cause__).lower() if exc_info.value.__cause__ else ""
-                assert "cancel" in exc_str or "cancel" in cause_str or isinstance(
-                    exc_info.value.__cause__, asyncio.CancelledError
-                )
+            request = AgentExecutionRequest(
+                agent_kind="managed",
+                agent_id="claude_code",
+                execution_profile_ref="default-managed",
+                correlation_id="corr-1",
+                idempotency_key="idem-1",
+            )
+
+            # Start dummy manager
+            runtime_mapping = {
+                "claude_code": "claude_code",
+                "claude": "claude_code",
+                "codex": "codex_cli",
+            }
+            runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+            manager_id = f"provider-profile-manager:{runtime_id}"
+            await env.client.start_workflow(
+                MockProviderProfileManager.run,
+                {"runtime_id": request.agent_id, "assign_slots": False},
+                id=manager_id,
+                task_queue="agent-run-task-queue",
+            )
+
+            handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                request,
+                id="test-workflow-cancel",
+                task_queue="agent-run-task-queue",
+            )
+
+            # Cancel the workflow while it's waiting
+            await handle.cancel()
+
+            with pytest.raises(WorkflowFailureError) as exc_info:
+                await asyncio.wait_for(handle.result(), timeout=15)
+
+            # Verifies that workflow was cancelled. Check the full exception chain
+            # since the top-level message may be generic.
+            exc_str = str(exc_info.value).lower()
+            cause_str = (
+                str(exc_info.value.__cause__).lower()
+                if exc_info.value.__cause__
+                else ""
+            )
+            assert (
+                "cancel" in exc_str
+                or "cancel" in cause_str
+                or isinstance(exc_info.value.__cause__, asyncio.CancelledError)
+            )
 
 
-async def test_slot_wait_preserves_durable_request_when_manager_inspection_is_ambiguous(
-):
+async def test_slot_wait_preserves_durable_request_when_manager_inspection_is_ambiguous():
     """A busy manager query must not trigger ensure/re-request amplification."""
     global _provider_profile_ensure_manager_count
     global _provider_profile_manager_state_count
@@ -1551,6 +1644,7 @@ async def test_managed_agent_model_update_keeps_simultaneously_assigned_slot():
             result = await child_handle.result()
             assert result.summary == "completed after model update"
 
+
 @pytest.mark.asyncio
 async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histories():
     _managed_launch_requests.clear()
@@ -1559,63 +1653,73 @@ async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histori
         async with Worker(
             env.client,
             task_queue="agent-run-task-queue",
-            workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
+            workflows=[
+                MoonMindAgentRun,
+                MockProviderProfileManager,
+                TestAgentRunParent,
+            ],
             activities=_COMMON_AGENT_RUN_ACTIVITIES,
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-                request = AgentExecutionRequest(
-                    agent_kind="managed",
-                    agent_id="test-agent",
-                    execution_profile_ref="default-managed",
-                    correlation_id="corr-parent-bind",
-                    idempotency_key="idem-parent-bind",
-                )
+            request = AgentExecutionRequest(
+                agent_kind="managed",
+                agent_id="test_agent",
+                execution_profile_ref="default-managed",
+                correlation_id="corr-parent-bind",
+                idempotency_key="idem-parent-bind",
+            )
 
-                manager_id = "provider-profile-manager:test-agent"
-                await env.client.start_workflow(
-                    MockProviderProfileManager.run,
-                    {"runtime_id": "test-agent"},
-                    id=manager_id,
-                    task_queue="agent-run-task-queue",
-                )
+            manager_id = "provider-profile-manager:test_agent"
+            await env.client.start_workflow(
+                MockProviderProfileManager.run,
+                {"runtime_id": "test_agent"},
+                id=manager_id,
+                task_queue="agent-run-task-queue",
+            )
 
-                parent_handle = await env.client.start_workflow(
-                    TestAgentRunParent.run,
-                    request,
-                    id="test-parent-managed-binding",
-                    task_queue="agent-run-task-queue",
-                )
-                child_handle = env.client.get_workflow_handle(
-                    "test-parent-managed-binding:child"
-                )
+            parent_handle = await env.client.start_workflow(
+                TestAgentRunParent.run,
+                request,
+                id="test-parent-managed-binding",
+                task_queue="agent-run-task-queue",
+            )
+            child_handle = env.client.get_workflow_handle(
+                "test-parent-managed-binding:child"
+            )
 
-                for _ in range(30):
-                    if _managed_launch_requests:
-                        break
-                    await asyncio.sleep(0.1)
+            for _ in range(30):
+                if _managed_launch_requests:
+                    break
+                await asyncio.sleep(0.1)
 
-                assert _managed_launch_requests, "managed launch activity was not invoked"
-                assert _managed_launch_requests[-1]["workflow_id"] == "test-parent-managed-binding"
+            assert _managed_launch_requests, "managed launch activity was not invoked"
+            assert (
+                _managed_launch_requests[-1]["workflow_id"]
+                == "test-parent-managed-binding"
+            )
 
-                await child_handle.signal(
-                    MoonMindAgentRun.completion_signal,
-                    {"summary": "Success"},
-                )
+            await child_handle.signal(
+                MoonMindAgentRun.completion_signal,
+                {"summary": "Success"},
+            )
 
-                result = await parent_handle.result()
+            result = await parent_handle.result()
 
-                assert isinstance(result, AgentRunResult)
-                assert result.summary == "Success"
+            assert isinstance(result, AgentRunResult)
+            assert result.summary == "Success"
+
 
 # --- External agent workflow path ---
 
 # Track activity calls for external-agent verification.
 _external_activity_calls: list[str] = []
 
+
 @_activity.defn(name="integration.resolve_adapter_metadata")
 async def mock_resolve_adapter_metadata(agent_id: str) -> dict:
     _external_activity_calls.append(f"resolve_metadata:{agent_id}")
     return {"agent_id": agent_id, "execution_style": "polling"}
+
 
 @_activity.defn(name="integration.jules.start")
 async def mock_jules_start(request: dict) -> dict:
@@ -1644,7 +1748,7 @@ async def mock_jules_status(request: dict) -> dict:
 
     global _status_poll_count
     _status_poll_count += 1
-    run_id = request.get("external_id", "unknown")
+    run_id = _request_get(request, "runId", "run_id", "external_id", default="unknown")
     _external_activity_calls.append(f"status:{_status_poll_count}")
     if _status_poll_count >= 2:
         return {
@@ -1670,15 +1774,18 @@ async def mock_jules_status(request: dict) -> dict:
         },
     }
 
+
 @_activity.defn(name="integration.jules.fetch_result")
 async def mock_jules_fetch_result(request: dict) -> dict:
-    run_id = request.get("external_id", "unknown")
+    run_id = _request_get(request, "runId", "run_id", "external_id", default="unknown")
+    assert run_id == "jules-task-001", repr(request)
     _external_activity_calls.append("fetch_result")
     return {
         "outputRefs": [],
         "summary": f"Jules task {run_id} completed successfully.",
         "metadata": {"normalizedStatus": "completed"},
     }
+
 
 @_activity.defn(name="integration.jules.cancel")
 async def mock_jules_cancel(request: dict) -> dict:
@@ -1695,16 +1802,18 @@ async def mock_jules_cancel(request: dict) -> dict:
         "metadata": {"cancelAccepted": False, "unsupported": True},
     }
 
-_codex_cloud_status_mode = "feedback"
-_codex_cloud_status_poll_count = 0
 
-@_activity.defn(name="integration.codex_cloud.start")
-async def mock_codex_cloud_start(request: dict) -> dict:
-    _external_activity_calls.append("codex_cloud_start")
+_resilient_jules_status_mode = "feedback"
+_resilient_jules_status_poll_count = 0
+
+
+@_activity.defn(name="integration.jules.start")
+async def mock_resilient_jules_start(request: dict) -> dict:
+    _external_activity_calls.append("resilient_jules_start")
     return {
-        "runId": "codex-cloud-task-001",
+        "runId": "jules-resiliency-task-001",
         "agentKind": "external",
-        "agentId": "codex_cloud",
+        "agentId": "jules",
         "status": "running",
         "startedAt": datetime.now(tz=UTC).isoformat(),
         "pollHintSeconds": 1,
@@ -1714,24 +1823,23 @@ async def mock_codex_cloud_start(request: dict) -> dict:
         },
     }
 
-@_activity.defn(name="integration.codex_cloud.status")
-async def mock_codex_cloud_status(request: dict) -> dict:
-    global _codex_cloud_status_poll_count
-    _codex_cloud_status_poll_count += 1
+
+@_activity.defn(name="integration.jules.status")
+async def mock_resilient_jules_status(request: dict) -> dict:
+    global _resilient_jules_status_poll_count
+    _resilient_jules_status_poll_count += 1
     _external_activity_calls.append(
-        f"codex_cloud_status:{_codex_cloud_status_poll_count}"
+        f"resilient_jules_status:{_resilient_jules_status_poll_count}"
     )
     status = (
-        "awaiting_feedback"
-        if _codex_cloud_status_mode == "feedback"
-        else "running"
+        "awaiting_feedback" if _resilient_jules_status_mode == "feedback" else "running"
     )
     return {
         "runId": request.get("runId")
         or request.get("run_id")
-        or "codex-cloud-task-001",
+        or "jules-resiliency-task-001",
         "agentKind": "external",
-        "agentId": "codex_cloud",
+        "agentId": "jules",
         "status": status,
         "metadata": {
             "providerStatus": status,
@@ -1739,26 +1847,43 @@ async def mock_codex_cloud_status(request: dict) -> dict:
         },
     }
 
-@_activity.defn(name="integration.codex_cloud.fetch_result")
-async def mock_codex_cloud_fetch_result(request: dict) -> dict:
-    _external_activity_calls.append("codex_cloud_fetch_result")
+
+@_activity.defn(name="integration.jules.fetch_result")
+async def mock_resilient_jules_fetch_result(request: dict) -> dict:
+    _external_activity_calls.append("resilient_jules_fetch_result")
     return {
-        "summary": "Codex Cloud completed unexpectedly.",
+        "summary": "Jules completed unexpectedly.",
         "metadata": {"normalizedStatus": "completed"},
     }
 
-@_activity.defn(name="integration.codex_cloud.cancel")
-async def mock_codex_cloud_cancel(request: dict) -> dict:
+
+@_activity.defn(name="integration.jules.cancel")
+async def mock_resilient_jules_cancel(request: dict) -> dict:
     return {
         "runId": request.get("runId")
         or request.get("run_id")
-        or "codex-cloud-task-001",
+        or "jules-resiliency-task-001",
         "agentKind": "external",
-        "agentId": "codex_cloud",
+        "agentId": "jules",
         "status": "cancelled",
     }
 
-async def _run_codex_cloud_parent_for_resiliency_test(
+
+@_activity.defn(name="integration.jules.list_activities")
+async def mock_jules_list_activities(request: dict) -> dict:
+    return {
+        "activityId": "feedback-question",
+        "latestAgentQuestion": "Please clarify the task.",
+    }
+
+
+@_activity.defn(name="integration.jules.get_auto_answer_config")
+async def mock_jules_auto_answer_config(_request: list) -> dict:
+    # This journey exercises operator escalation with the supported opt-out.
+    return {"enabled": False, "max_answers": 3}
+
+
+async def _run_resilient_jules_parent_for_resiliency_test(
     *,
     workflow_id: str,
 ) -> tuple[AgentRunResult, dict[str, Any]]:
@@ -1772,22 +1897,30 @@ async def _run_codex_cloud_parent_for_resiliency_test(
             ),
             Worker(
                 env.client,
-                task_queue="mm.workflow",
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "integration.resolve_adapter_metadata"
+                ).task_queue,
                 activities=[mock_resolve_adapter_metadata],
             ),
             Worker(
                 env.client,
-                task_queue="mm.activity.integrations",
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "integration.jules.start"
+                ).task_queue,
                 activities=[
-                    mock_codex_cloud_start,
-                    mock_codex_cloud_status,
-                    mock_codex_cloud_fetch_result,
-                    mock_codex_cloud_cancel,
+                    mock_resilient_jules_start,
+                    mock_resilient_jules_status,
+                    mock_resilient_jules_fetch_result,
+                    mock_resilient_jules_cancel,
+                    mock_jules_list_activities,
+                    mock_jules_auto_answer_config,
                 ],
             ),
             Worker(
                 env.client,
-                task_queue="mm.activity.agent_runtime",
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.publish_artifacts"
+                ).task_queue,
                 activities=[mock_publish_artifacts],
             ),
         ):
@@ -1795,8 +1928,8 @@ async def _run_codex_cloud_parent_for_resiliency_test(
                 TestAgentRunParent.run,
                 AgentExecutionRequest(
                     agent_kind="external",
-                    agent_id="codex_cloud",
-                    execution_profile_ref="profile:codex-cloud-default",
+                    agent_id="jules",
+                    execution_profile_ref="default-managed",
                     correlation_id=f"{workflow_id}:corr",
                     idempotency_key=f"{workflow_id}:idem",
                 ),
@@ -1809,43 +1942,47 @@ async def _run_codex_cloud_parent_for_resiliency_test(
                 raise AssertionError(
                     "AgentRun resiliency test timed out; "
                     f"calls={_external_activity_calls}, "
-                    f"status_polls={_codex_cloud_status_poll_count}"
+                    f"status_polls={_resilient_jules_status_poll_count}"
                 ) from exc
             parent_state = await parent_handle.query(TestAgentRunParent.get_state)
             return result, parent_state
 
+
 @pytest.mark.asyncio
 async def test_agent_run_escalates_external_feedback_request_to_parent_intervention():
-    global _codex_cloud_status_mode, _codex_cloud_status_poll_count
-    _codex_cloud_status_mode = "feedback"
-    _codex_cloud_status_poll_count = 0
+    global _resilient_jules_status_mode, _resilient_jules_status_poll_count
+    _resilient_jules_status_mode = "feedback"
+    _resilient_jules_status_poll_count = 0
     _external_activity_calls.clear()
 
-    result, parent_state = await _run_codex_cloud_parent_for_resiliency_test(
-        workflow_id="test-parent-codex-cloud-feedback",
+    result, parent_state = await _run_resilient_jules_parent_for_resiliency_test(
+        workflow_id="test-parent-jules-resiliency-feedback",
     )
 
     assert result.provider_error_code == "intervention_requested"
     assert result.metadata["reason"] == "agent_requested_feedback"
     assert result.metadata["status"] == "intervention_requested"
-    assert result.metadata["resiliencyPolicy"]["runtime"] == "codex_cloud"
+    assert result.metadata["resiliencyPolicy"]["runtime"] == "jules"
     assert any(
         change["state"] == "intervention_requested"
         and "feedback" in change["reason"].lower()
         for change in parent_state["state_changes"]
     )
-    assert "codex_cloud_fetch_result" not in _external_activity_calls
+    assert "resilient_jules_fetch_result" not in _external_activity_calls
+
 
 @pytest.mark.asyncio
 async def test_agent_run_escalates_external_no_progress_to_parent_intervention(
     monkeypatch,
 ):
-    global _codex_cloud_status_mode, _codex_cloud_status_poll_count
-    _codex_cloud_status_mode = "stagnant"
-    _codex_cloud_status_poll_count = 0
+    global _resilient_jules_status_mode, _resilient_jules_status_poll_count
+    _resilient_jules_status_mode = "stagnant"
+    _resilient_jules_status_poll_count = 0
     _external_activity_calls.clear()
 
-    def test_policy(request: AgentExecutionRequest) -> dict[str, Any]:
+    def test_policy(
+        request: AgentExecutionRequest, **_policy_options: Any
+    ) -> dict[str, Any]:
         return {
             "runtime": request.agent_id,
             "noProgressTimeoutSeconds": 1,
@@ -1859,11 +1996,11 @@ async def test_agent_run_escalates_external_no_progress_to_parent_intervention(
         staticmethod(test_policy),
     )
 
-    result, parent_state = await _run_codex_cloud_parent_for_resiliency_test(
-        workflow_id="test-parent-codex-cloud-no-progress",
+    result, parent_state = await _run_resilient_jules_parent_for_resiliency_test(
+        workflow_id="test-parent-jules-resiliency-no-progress",
     )
 
-    assert _codex_cloud_status_poll_count >= 2
+    assert _resilient_jules_status_poll_count >= 2
     assert result.provider_error_code == "intervention_requested"
     assert result.metadata["reason"] == "stuck_no_progress"
     assert result.metadata["status"] == "intervention_requested"
@@ -1876,7 +2013,8 @@ async def test_agent_run_escalates_external_no_progress_to_parent_intervention(
         and "no observable progress" in change["reason"].lower()
         for change in parent_state["state_changes"]
     )
-    assert "codex_cloud_fetch_result" not in _external_activity_calls
+    assert "resilient_jules_fetch_result" not in _external_activity_calls
+
 
 @pytest.mark.asyncio
 async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
@@ -2178,10 +2316,7 @@ async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
                 assert _managed_cancel_count >= 1, debug_state
                 assert _managed_fetch_result_count >= 2, debug_state
                 assert manager_state["cooldown_reports"], debug_state
-                assert (
-                    manager_state["cooldown_reports"][-1]["cooldown_seconds"]
-                    == 900
-                )
+                assert manager_state["cooldown_reports"][-1]["cooldown_seconds"] == 900
                 assert not any(
                     change["state"] == "intervention_requested"
                     for change in parent_state["state_changes"]
@@ -2198,6 +2333,7 @@ async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
     finally:
         _managed_status_mode = "default"
         _managed_cancel_count = 0
+
 
 @pytest.mark.asyncio
 async def test_agent_run_external_agent_workflow():
@@ -2217,57 +2353,74 @@ async def test_agent_run_external_agent_workflow():
         ):
             # Integrations worker: hosts integration.* activities on
             # mm.activity.integrations, matching production fleet separation.
-            async with Worker(
-                env.client,
-                task_queue="mm.activity.integrations",
-                activities=[
-                    mock_jules_start,
-                    mock_jules_status,
-                    mock_jules_fetch_result,
-                    mock_jules_cancel,
-                ],
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "integration.resolve_adapter_metadata"
+                    ).task_queue,
+                    activities=[mock_resolve_adapter_metadata],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.integrations",
+                    activities=[
+                        mock_jules_start,
+                        mock_jules_status,
+                        mock_jules_fetch_result,
+                        mock_jules_cancel,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.publish_artifacts"
+                    ).task_queue,
+                    activities=[mock_publish_artifacts],
+                ),
             ):
-                    request = AgentExecutionRequest(
-                        agent_kind="external",
-                        agent_id="jules",
-                        execution_profile_ref="profile:jules-default",
-                        correlation_id="corr-ext-1",
-                        idempotency_key="idem-ext-1",
-                        parameters={
-                            "title": "External Test",
-                            "description": "Integration test for external agent workflow",
-                        },
-                    )
+                request = AgentExecutionRequest(
+                    agent_kind="external",
+                    agent_id="jules",
+                    execution_profile_ref="profile:jules-default",
+                    correlation_id="corr-ext-1",
+                    idempotency_key="idem-ext-1",
+                    parameters={
+                        "title": "External Test",
+                        "description": "Integration test for external agent workflow",
+                    },
+                )
 
-                    handle = await env.client.start_workflow(
-                        MoonMindAgentRun.run,
-                        request,
-                        id="test-workflow-external-1",
-                        task_queue="agent-run-task-queue",
-                    )
+                handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    request,
+                    id="test-workflow-external-1",
+                    task_queue="agent-run-task-queue",
+                )
 
-                    result = await handle.result()
+                result = await handle.result()
 
-                    assert isinstance(result, AgentRunResult)
-                    assert result.summary is not None
-                    assert "jules-task-001" in result.summary
+                assert isinstance(result, AgentRunResult)
+                assert result.summary is not None
+                assert "jules-task-001" in result.summary
 
-                    # Verify activities were called in the correct order.
-                    # Only the resolve_metadata (1 hop) path is used now.
-                    assert "resolve_metadata:jules" in _external_activity_calls, (
-                        f"Expected resolve_metadata:jules in {_external_activity_calls}"
-                    )
-                    meta_idx = _external_activity_calls.index("resolve_metadata:jules")
-                    start_idx = _external_activity_calls.index("start")
-                    fetch_idx = _external_activity_calls.index("fetch_result")
-                    assert meta_idx < start_idx < fetch_idx, (
-                        f"Expected resolve_metadata < start < fetch_result, got {_external_activity_calls}"
-                    )
-                    # At least one status poll should have happened between start and fetch_result.
-                    assert any(
-                        c.startswith("status:")
-                        for c in _external_activity_calls[start_idx:fetch_idx]
-                    )
+                # Verify activities were called in the correct order.
+                # Only the resolve_metadata (1 hop) path is used now.
+                assert (
+                    "resolve_metadata:jules" in _external_activity_calls
+                ), f"Expected resolve_metadata:jules in {_external_activity_calls}"
+                meta_idx = _external_activity_calls.index("resolve_metadata:jules")
+                start_idx = _external_activity_calls.index("start")
+                fetch_idx = _external_activity_calls.index("fetch_result")
+                assert (
+                    meta_idx < start_idx < fetch_idx
+                ), f"Expected resolve_metadata < start < fetch_result, got {_external_activity_calls}"
+                # At least one status poll should have happened between start and fetch_result.
+                assert any(
+                    c.startswith("status:")
+                    for c in _external_activity_calls[start_idx:fetch_idx]
+                )
+
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(
@@ -2307,65 +2460,71 @@ async def test_cancellation_releases_provider_profile_slot():
             activities=_COMMON_AGENT_RUN_ACTIVITIES,
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-                request = AgentExecutionRequest(
-                    agent_kind="managed",
-                    agent_id="test-agent",
-                    execution_profile_ref="default-managed",
-                    correlation_id="corr-cancel-slot",
-                    idempotency_key="idem-cancel-slot",
-                )
+            request = AgentExecutionRequest(
+                agent_kind="managed",
+                agent_id="test_agent",
+                execution_profile_ref="default-managed",
+                correlation_id="corr-cancel-slot",
+                idempotency_key="idem-cancel-slot",
+            )
 
-                # Start dummy manager that assigns slots
-                runtime_mapping = {"claude_code": "claude_code", "claude": "claude_code", "codex": "codex_cli"}
-                runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"provider-profile-manager:{runtime_id}"
-                manager_handle = await env.client.start_workflow(
-                    MockProviderProfileManager.run,
-                    {"runtime_id": request.agent_id, "assign_slots": True},
-                    id=manager_id,
-                    task_queue="agent-run-task-queue",
-                )
+            # Start dummy manager that assigns slots
+            runtime_mapping = {
+                "claude_code": "claude_code",
+                "claude": "claude_code",
+                "codex": "codex_cli",
+            }
+            runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+            manager_id = f"provider-profile-manager:{runtime_id}"
+            manager_handle = await env.client.start_workflow(
+                MockProviderProfileManager.run,
+                {"runtime_id": request.agent_id, "assign_slots": True},
+                id=manager_id,
+                task_queue="agent-run-task-queue",
+            )
 
-                # Give the manager time to start
-                await asyncio.sleep(0.1)
+            # Give the manager time to start
+            await asyncio.sleep(0.1)
 
-                # Start AgentRun workflow
-                agent_handle = await env.client.start_workflow(
-                    MoonMindAgentRun.run,
-                    request,
-                    id="test-workflow-cancel-slot",
-                    task_queue="agent-run-task-queue",
-                )
+            # Start AgentRun workflow
+            agent_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                request,
+                id="test-workflow-cancel-slot",
+                task_queue="agent-run-task-queue",
+            )
 
-                # Wait for the AgentRun to acquire a slot (it will be waiting for slot_assigned signal)
-                # The manager should have assigned the slot by now
-                await asyncio.sleep(0.5)
+            # Wait for the AgentRun to acquire a slot (it will be waiting for slot_assigned signal)
+            # The manager should have assigned the slot by now
+            await asyncio.sleep(0.5)
 
-                # Verify the manager holds the lease
-                manager_state_before = await manager_handle.query("get_state")
-                assert "default-managed" in manager_state_before.get("leases", {}), (
-                    f"Expected manager to hold slot before cancellation, state={manager_state_before}"
-                )
+            # Verify the manager holds the lease
+            manager_state_before = await manager_handle.query("get_state")
+            assert "default-managed" in manager_state_before.get(
+                "leases", {}
+            ), f"Expected manager to hold slot before cancellation, state={manager_state_before}"
 
-                # Cancel the AgentRun workflow while it's waiting for slot assignment or running
-                await agent_handle.cancel()
+            # Cancel the AgentRun workflow while it's waiting for slot assignment or running
+            await agent_handle.cancel()
 
-                # Wait for cancellation to be processed
-                await asyncio.sleep(0.5)
+            # Wait for cancellation to be processed
+            await asyncio.sleep(0.5)
 
-                # Query manager state after cancellation
-                try:
-                    manager_state_after = await manager_handle.query("get_state")
-                except Exception:
-                    # Manager might have shut down; check if slot is released via direct query
-                    manager_state_after = {"leases": {}}
+            # Query manager state after cancellation
+            try:
+                manager_state_after = await manager_handle.query("get_state")
+            except Exception:
+                # Manager might have shut down; check if slot is released via direct query
+                manager_state_after = {"leases": {}}
 
-                # The slot should be released after cancellation
-                # This assertion will FAIL initially (documenting the bug)
-                assert "default-managed" not in manager_state_after.get("leases", {}) or \
-                       manager_state_after.get("leases", {}).get("default-managed") != "test-workflow-cancel-slot", (
-                    f"Slot was NOT released after cancellation. Manager state: {manager_state_after}"
-                )
+            # The slot should be released after cancellation
+            # This assertion will FAIL initially (documenting the bug)
+            assert (
+                "default-managed" not in manager_state_after.get("leases", {})
+                or manager_state_after.get("leases", {}).get("default-managed")
+                != "test-workflow-cancel-slot"
+            ), f"Slot was NOT released after cancellation. Manager state: {manager_state_after}"
+
 
 # ── OpenRouter-specific integration tests (Phase 2) ──
 
@@ -2872,14 +3031,65 @@ async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled(
 
                 await asyncio.sleep(0.5)
 
-                manager_state = await manager_handle.query(MockProviderProfileManager.get_state)
+                manager_state = await manager_handle.query(
+                    MockProviderProfileManager.get_state
+                )
 
                 # The manager should have resolved to the low-priority profile
-                assert "test-openrouter-low-priority" in manager_state.get("resolved_profiles", []), (
-                    f"Expected routing to resolve to low-priority profile when high is disabled, resolved={manager_state['resolved_profiles']}"
-                )
+                assert "test-openrouter-low-priority" in manager_state.get(
+                    "resolved_profiles", []
+                ), f"Expected routing to resolve to low-priority profile when high is disabled, resolved={manager_state['resolved_profiles']}"
 
                 # Cancel the run
                 await agent_handle.cancel()
         finally:
             test_module.mock_provider_profile_list = original_mock
+
+
+@pytest.mark.asyncio
+async def test_removed_external_agent_fails_without_registered_cloud_activities():
+    """#4644: a queued old target terminates before capacity, paid work or retry."""
+    from temporalio.client import WorkflowFailureError
+    from uuid import uuid4
+    from temporalio.api.enums.v1 import EventType
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="codex_cloud",
+        executionProfileRef="saved-cloud-profile",
+        correlationId="original-cloud-correlation",
+        idempotencyKey="original-cloud-request",
+        inputRefs=["saved-input"],
+        parameters={"model": "saved-model", "effort": "high"},
+    )
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="removed-target-test",
+            workflows=[MoonMindAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                request,
+                id=f"removed-target-{uuid4()}",
+                task_queue="removed-target-test",
+            )
+            with pytest.raises(WorkflowFailureError) as error:
+                await asyncio.wait_for(handle.result(), timeout=15)
+            assert error.value.cause.non_retryable
+            history = await handle.fetch_history()
+            assert not any(
+                event.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
+                for event in history.events
+            )
+            started = history.events[0].workflow_execution_started_event_attributes
+            decoded = (
+                await env.client.data_converter.decode(
+                    started.input.payloads, [AgentExecutionRequest]
+                )
+            )[0]
+            assert decoded.model_dump() == request.model_dump()
+    await Replayer(
+        workflows=[MoonMindAgentRun], workflow_runner=UnsandboxedWorkflowRunner()
+    ).replay_workflow(history)

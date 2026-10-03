@@ -29,7 +29,6 @@ This document covers:
 This document is for providers that MoonMind does **not** run locally, such as:
 
 - Jules
-- Codex Cloud
 - future BYOA-style delegated agents
 
 This document does **not** cover:

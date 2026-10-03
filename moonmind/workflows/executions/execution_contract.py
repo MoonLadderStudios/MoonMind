@@ -40,20 +40,16 @@ from .repository_contract import (
     derive_repository_capabilities,
     decode_legacy_repository_history_v1,
 )
+from .runtime_capabilities import RUNTIME_EXECUTION_CAPABILITIES
+
 # One canonical default. The runtime-provider rollout policy owns which target
 # that runtime resolves to (MoonLadderStudios/MoonMind#3833); no surface may
 # reconstruct a separate default from a literal or an environment variable.
 from .runtime_defaults import DEFAULT_WORKFLOW_RUNTIME, normalize_runtime_id
-SUPPORTED_RUNTIME_MODES = {
-    "codex",
-    "codex_cli",
-    "codex_cloud",
-    "claude",
-    "claude_code",
-    "jules",
-    "omnigent",
-    "universal",
-}
+
+SUPPORTED_RUNTIME_MODES = {"codex", "claude", "universal"} | set(
+    RUNTIME_EXECUTION_CAPABILITIES.runtime_ids
+)
 SUPPORTED_EXECUTION_RUNTIMES = {
     "codex",
     "codex_cli",
@@ -694,6 +690,37 @@ def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
     return canonical
 
 
+def validate_workflow_runtime_targets(payload: Mapping[str, Any]) -> None:
+    """Validate new execution targets without altering saved authored content.
+
+    History decoding does not call this boundary. New submissions, plan dispatch,
+    and fresh schedule/rerun admissions share the existing supported modes.
+    """
+
+    def validate(node: Mapping[str, Any], path: str) -> None:
+        for key in ("targetRuntime", "target_runtime"):
+            if key in node:
+                _normalize_runtime_value(node[key], field_name=f"{path}.{key}")
+        runtime = node.get("runtime")
+        if isinstance(runtime, Mapping):
+            for key in ("mode", "targetRuntime", "target_runtime"):
+                if key in runtime:
+                    _normalize_runtime_value(
+                        runtime[key], field_name=f"{path}.runtime.{key}"
+                    )
+        steps = node.get("steps")
+        if isinstance(steps, (list, tuple)):
+            for index, step in enumerate(steps):
+                if isinstance(step, Mapping):
+                    validate(step, f"{path}.steps[{index}]")
+
+    validate(payload, "payload")
+    for key in ("workflow", "task"):
+        node = payload.get(key)
+        if isinstance(node, Mapping):
+            validate(node, f"payload.{key}")
+
+
 def _raw_instruction_string(value: object) -> str:
     if value is None:
         return ""
@@ -728,7 +755,7 @@ def _runtime_supports_slash_passthrough(runtime_mode: str | None) -> bool:
 def build_runtime_command_preview_config() -> dict[str, Any]:
     """Return browser-safe slash-command preview capabilities and hints."""
 
-    runtime_ids = sorted(_SLASH_COMMAND_PASSTHROUGH_RUNTIMES | {"codex_cloud"})
+    runtime_ids = sorted(_SLASH_COMMAND_PASSTHROUGH_RUNTIMES)
     runtimes: dict[str, dict[str, Any]] = {}
     for runtime_id in runtime_ids:
         supports_passthrough = _runtime_supports_slash_passthrough(runtime_id)
@@ -2737,6 +2764,7 @@ def build_canonical_workflow_view(
     """Return a canonical task-view payload for queue processing."""
 
     source = dict(payload or {})
+    validate_workflow_runtime_targets(source)
     normalized_type = _clean_str(job_type)
     resolved_default_runtime = _normalize_runtime_value(
         default_runtime, field_name="default runtime"
@@ -3342,6 +3370,7 @@ __all__ = [
     "build_runtime_command_preview_config",
     "build_workflow_stage_plan",
     "build_canonical_workflow_view",
+    "validate_workflow_runtime_targets",
     "decode_recorded_legacy_workflow_history_v1",
     "allows_repository_publish_for_skill_context",
     "has_attachment_mutation_fields",

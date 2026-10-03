@@ -6,7 +6,7 @@ Last updated: 2026-06-30
 
 This document defines MoonMind's Temporal Visibility query model and the custom Search Attribute budget we use for workflow-list, dashboard, and operational views.
 
-It is intentionally provider-neutral. External integrations such as Omnigent, Jules, Codex Cloud, OpenClaw, or future execution substrates must not add provider-specific indexed fields unless the dimension is promoted to a generic MoonMind query concept first.
+It is intentionally provider-neutral. External integrations such as Omnigent, Jules, OpenClaw, or future execution substrates must not add provider-specific indexed fields unless the dimension is promoted to a generic MoonMind query concept first.
 
 ---
 
@@ -174,7 +174,7 @@ Rules:
 |---|---:|---:|---|---|
 | `mm_repo` | Keyword | No | Repo-scoped executions when filtering is needed | Stable bounded repo identifier. |
 | `mm_integration` | Keyword | No | Integration-centric execution where filtering is useful | Examples: `jules`, `github`, `openclaw`, `omnigent`. |
-| `mm_target_runtime` | KeywordList | No | Workflow start path when canonical runtime is known; workflow lifecycle logic if it resolves later | One-item list containing canonical runtime ID such as `codex_cli`, `claude_code`, `codex_cloud`, `jules`, or a generic provider-backed runtime id. Never a display label, model, profile name, prompt, or free text. |
+| `mm_target_runtime` | KeywordList | No | Workflow start path when canonical runtime is known; workflow lifecycle logic if it resolves later | One-item list containing canonical runtime ID such as `codex_cli`, `claude_code`, `jules`, or a generic provider-backed runtime id. Never a display label, model, profile name, prompt, or free text. |
 | `mm_target_skill` | KeywordList | No | Workflow start path when primary skill is known; workflow lifecycle logic if it resolves later | One-item list containing singular primary skill slug/name/id used by `targetSkill`; future multi-skill faceting requires a separate explicitly documented attribute. |
 | `mm_scheduled_for` | Datetime | No | Delayed start / schedule-backed execution | Queryable expected start time. |
 | `mm_title` | KeywordList | No | Workflow start/lifecycle title materialization | Tokenized title word search. Verify materialization before relying on this filter. |
@@ -297,7 +297,6 @@ mm_omnigent_agent_id
 mm_omnigent_host_type
 mm_omnigent_harness
 mm_jules_session_id
-mm_codex_cloud_thread_id
 mm_external_provider_run_id
 ```
 

@@ -12,5 +12,5 @@
   "model": "gpt-5.6-sol",
   "effort": "high",
   "rejectedAgentId": "auto",
-  "rejectedDispatchError": "No external adapter registered for agent_id='auto'"
+  "rejectedDispatchError": "unknown agent runtime capability 'auto'"
 }
