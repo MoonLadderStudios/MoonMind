@@ -120,6 +120,31 @@ def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("payload", "enabled"),
+    [
+        ({"schemaVersion": "merge-automation-reconcile/v1", "action": "reconcile_known_ci_failure"}, True),
+        ({"schemaVersion": "unknown/v1", "action": "reconcile_known_ci_failure"}, False),
+        ({"schemaVersion": "merge-automation-reconcile/v1", "action": "other"}, False),
+        ({"action": "reconcile_known_ci_failure"}, False),
+        ({"schemaVersion": "merge-automation-reconcile/v1"}, False),
+        ({"source": "github", "event_type": "check_run"}, False),
+        (None, False),
+        ([], False),
+    ],
+)
+def test_retained_gate_requires_versioned_readiness_reconciliation(
+    monkeypatch: pytest.MonkeyPatch, payload: Any, enabled: bool
+) -> None:
+    gate = MoonMindMergeAutomationWorkflow()
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", lambda _: False)
+
+    gate.external_event(payload)
+
+    assert gate._actionable_ci_failures_enabled() is enabled
+    assert gate._external_event_count == 1
+
+
 def test_merge_automation_workflow_child_task_queue_is_replay_patched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1048,6 +1073,57 @@ async def test_merge_automation_launches_resolver_when_checks_are_failing_but_co
     assert child_calls == 1
     assert result["status"] == "merged"
     assert result["blockers"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_history", [True, False])
+async def test_merge_automation_dispatches_known_failure_before_queued_check(
+    monkeypatch: pytest.MonkeyPatch, new_history: bool
+) -> None:
+    gate = MoonMindMergeAutomationWorkflow()
+    calls: list[str] = []
+    initial_evidence = {
+        "headSha": "abc123",
+        "ready": False,
+        "pullRequestOpen": True,
+        "checksComplete": False,
+        "checksPassing": False,
+        "blockers": [
+            {"kind": "checks_running", "summary": "Downstream CI Gate is queued."},
+            {"kind": "checks_failed", "summary": "Build completed with a failure."},
+        ],
+    }
+
+    async def evaluate(activity_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        calls.append("evaluate")
+        if calls == ["evaluate"]:
+            return initial_evidence
+        return {**initial_evidence, "checksComplete": True, "blockers": initial_evidence["blockers"][1:]}
+
+    async def wait(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("wait")
+
+    async def resolve(workflow_type: str, _payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.UserWorkflow"
+        calls.append("resolve")
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", lambda patch_id: (
+        patch_id != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+        and (new_history or patch_id != "merge-automation-actionable-ci-failure-v1")
+    ))
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", evaluate)
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_child_workflow", resolve)
+    monkeypatch.setattr(merge_automation_module.workflow, "wait_condition", wait)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _: None)
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_search_attributes", lambda _: None)
+
+    result = await gate.run(_payload())
+
+    assert calls == (["evaluate", "resolve"] if new_history else ["evaluate", "wait", "evaluate", "resolve"])
+    assert result["status"] == "merged"
 
 @pytest.mark.asyncio
 async def test_merge_automation_launches_resolver_for_merge_conflicts(
