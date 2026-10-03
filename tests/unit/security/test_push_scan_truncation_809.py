@@ -91,7 +91,7 @@ async def test_push_scan_preserves_nul_delimited_pathnames(monkeypatch, tmp_path
         if args[:2] == ["diff", "--name-only"]:
             assert "-z" in args
             return _nul_files("we\nird.py", "plain.py")
-        if "--" in args:
+        if args[0] == "diff" and "--" in args:
             seen_pathspecs.append(args[-1])
         return "+hello\n"
 

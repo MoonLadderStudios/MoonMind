@@ -23,30 +23,31 @@ from moonmind.omnigent.execution_profiles import validate_effective_launch_snaps
 from moonmind.omnigent.git_identity import ensure_workspace_git_identity
 from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
-from moonmind.omnigent.mounted_tool_preflight import (
-    MountedToolPreflightError,
-    preflight_mounted_tools,
-)
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_services.launcher import docker_attachment_mount
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
+    initializer_container_name,
 )
-from moonmind.omnigent.host_services.launcher import docker_attachment_mount
-from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
 from moonmind.omnigent.host_services.registration import (
     HOST_REGISTRATION_ATTEMPTS,
     HOST_REGISTRATION_INTERVAL_SECONDS,
+)
+from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
+from moonmind.omnigent.mounted_tool_preflight import (
+    MountedToolPreflightError,
+    preflight_mounted_tools,
 )
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
     deterministic_host_container_name,
     validate_preflight_result,
 )
-from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.omnigent.repository_sources import (
     RepositorySourceError,
     normalize_repository_source,
 )
+from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
     LoreRepositoryProviderAdapter,
@@ -270,6 +271,7 @@ _RUNTIME_ADAPTERS = {
         "compose_service": "omnigent-host-codex",
         "start_script": "/opt/moonmind/start-codex-oauth-host.sh",
         "generation_env": "CODEX_CREDENTIAL_GENERATION",
+        "volume_env": "CODEX_VOLUME_NAME",
         "login_command": ("codex", "login", "status"),
         "env": (
             "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF=codex-oauth-home@1",
@@ -287,6 +289,7 @@ _RUNTIME_ADAPTERS = {
         "compose_service": "omnigent-host-claude",
         "start_script": "/opt/moonmind/start-claude-oauth-host.sh",
         "generation_env": "CLAUDE_CREDENTIAL_GENERATION",
+        "volume_env": "CLAUDE_VOLUME_NAME",
         "login_command": ("claude", "auth", "status"),
         "env": (
             "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF=claude-oauth-home@1",
@@ -910,10 +913,12 @@ class OmnigentOAuthHostRuntime:
                     await self._compose_static_exec_check(
                         binding=binding,
                         env=static_compose_env,
+                        container_name=attachment_identity,
                     )
                 except Exception as exc:
-                    # The failing probe is the Skill-projection gate; the
-                    # service already passed Compose launch admission above.
+                    # The mount/projection check failed after Compose launch
+                    # admission. Preserve its original diagnostic and cleanup
+                    # authority while classifying any enrollment wait.
                     self._raise_static_enrollment_failure(
                         binding=binding,
                         host_lease=host_lease,
@@ -2088,6 +2093,9 @@ class OmnigentOAuthHostRuntime:
                 await self.assert_container_owned(
                     container_name=container_name, lease_id=host_lease.lease_id
                 )
+            await self._containers.remove_initializer(
+                container_name=container_name, lease_id=host_lease.lease_id
+            )
             await self._run(
                 "docker", "stop", "--time", "20", container_name, check=False
             )
@@ -2314,11 +2322,25 @@ class OmnigentOAuthHostRuntime:
                 )
             await self._run("docker", "rm", "-f", container_name, check=False)
         # Initialize the dedicated state volume as root before the actual host
-        # drops to UID/GID 1000.
-        await self._run(
+        # drops to UID/GID 1000. A killed Docker CLI can leave a created
+        # --rm container behind; reconcile the same lease before retrying.
+        await self._containers.remove_initializer(
+            container_name=container_name, lease_id=host_lease.lease_id
+        )
+        initializer_args = (
             "docker",
             "run",
             "--rm",
+            "--name",
+            initializer_container_name(container_name),
+            "--label",
+            "moonmind.kind=omnigent-oauth-host",
+            "--label",
+            f"moonmind.host_lease_id={host_lease.lease_id}",
+            "--label",
+            f"moonmind.provider_profile_id={binding.provider_profile_id}",
+            "--label",
+            f"moonmind.credential_generation={host_lease.credential_generation}",
             "--user",
             "0:0",
             "--network",
@@ -2351,6 +2373,20 @@ class OmnigentOAuthHostRuntime:
             "/opt/moonmind/init-oauth-host.sh",
             host_image_ref,
         )
+        try:
+            await self._run(*initializer_args)
+        except BaseException:
+            try:
+                await self._containers.remove_initializer(
+                    container_name=container_name, lease_id=host_lease.lease_id
+                )
+            except Exception:
+                # The durable host lease and labels leave this consumer to the
+                # janitor. Never replace the original launch/cancellation error.
+                logger.warning(
+                    "OAuth host initializer cleanup remains pending", exc_info=True
+                )
+            raise
         labels = {
             "moonmind.kind": "omnigent-oauth-host",
             "moonmind.provider_profile_id": binding.provider_profile_id,
@@ -3976,10 +4012,9 @@ class OmnigentOAuthHostRuntime:
             )
             adapter = self._runtime_adapter(binding)
             child_env[str(adapter["generation_env"])] = str(generation)
-            if binding.credential_mount_ref.auth_volume_ref.runtime_id == "claude_code":
-                child_env["CLAUDE_VOLUME_NAME"] = (
-                    binding.credential_mount_ref.auth_volume_ref.volume_ref
-                )
+            child_env[str(adapter["volume_env"])] = (
+                binding.credential_mount_ref.auth_volume_ref.volume_ref
+            )
         if skill_projection is not None:
             child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
         if effective_launch is not None:
@@ -4069,12 +4104,60 @@ class OmnigentOAuthHostRuntime:
         *,
         binding: OmnigentOAuthHostBinding | None = None,
         env: Mapping[str, str] | None = None,
+        container_name: str | None = None,
     ) -> None:
         adapter = (
             self._runtime_adapter(binding)
             if binding is not None
             else _RUNTIME_ADAPTERS["codex_cli"]
         )
+        if binding is not None:
+            # Read actual Docker state, not the requested binding or staged
+            # generation: an existing static host can retain another profile's
+            # OAuth volume. Probe the same observed container after attestation.
+            if not container_name:
+                raise OmnigentOAuthHostError(
+                    "static OAuth host identity is missing",
+                    code=HostPreflightFailure.BINDING_MISMATCH.value,
+                )
+            home = str(adapter["home"])
+            expected_volume = binding.credential_mount_ref.auth_volume_ref.volume_ref
+            # The shared command runner redacts OAuth paths from stdout.
+            # Compare inside Docker, as the generic credential attestor does,
+            # and retain only a bounded verdict. Every credential-subtree
+            # mount contributes a token, so missing, duplicate, and shadowing
+            # mounts cannot masquerade as one selected writable home.
+            subtree = home + "/"
+            template = (
+                "{{range .Mounts}}"
+                f"{{{{if or (eq .Destination {json.dumps(home)}) "
+                f"(and (ge (len .Destination) {len(subtree)}) "
+                f"(eq (slice .Destination 0 {len(subtree)}) {json.dumps(subtree)}))}}}}"
+                f'{{{{if and (eq .Type "volume") '
+                f"(eq .Name {json.dumps(expected_volume)}) "
+                f"(eq .Destination {json.dumps(home)}) (eq .RW true)}}}}"
+                "valid{{else}}invalid{{end}}{{end}}{{end}}"
+            )
+            code, output, _error = await self._run(
+                "docker",
+                "inspect",
+                "--format",
+                template,
+                container_name,
+                check=False,
+            )
+            if code != 0 or output.strip() != "valid":
+                raise OmnigentOAuthHostError(
+                    "static OAuth host does not mount the selected profile credential volume",
+                    code=HostPreflightFailure.BINDING_MISMATCH.value,
+                )
+            await self._run(
+                "docker",
+                "exec",
+                container_name,
+                "/opt/moonmind/check-runner-projections.sh",
+            )
+            return
         await self._run(
             *self._deployment_compose_command(),
             "--profile",

@@ -312,9 +312,9 @@ MoonMind handles branch publication with a post-completion flow:
 
 1. Jules creates a PR using `AUTO_CREATE_PR`
 2. MoonMind waits for terminal completion
-3. MoonMind fetches the Jules result and extracts the PR URL
-4. MoonMind verifies or corrects the PR base so it targets the authored `branch` when the provider result does not already do so
-5. MoonMind merges the PR through `repo.merge_pr`
+3. MoonMind fetches the structured Jules result PR URL; free-form summaries cannot supply merge authority
+4. MoonMind rejects a PR outside the workflow's authored repository before any GitHub request, then verifies or corrects the PR base so it targets the authored `branch` when the provider result does not already do so
+5. MoonMind merges the PR through `repo.merge_pr`, with the verified GitHub head SHA as the merge precondition
 
 This lets MoonMind support:
 
@@ -345,6 +345,10 @@ That means these failures must prevent a successful branch-publication outcome:
 - transport failure prevented the post-run publish phase from completing
 
 Jules provider success is not enough on its own for MoonMind-owned branch publication success.
+
+The merge activity requires the workflow-owned repository and target branch, including the normal default branch. It does not derive either from provider output. Both the initial request and continuation project the repository name from the canonical Git `workspaceSpec.repositoryTarget`, falling back to legacy `repository` or `repo` inputs when that target is absent or null. The branch comes from an explicit `targetBranch` in request parameters or workspace inputs, then the repository target's branch, then legacy `startingBranch` or `branch` with `main` as the default. Its first bound call is read-only and returns the candidate head SHA into Temporal history; a separate call carries that recorded SHA into mutation. A retry cannot select a newer head. A retarget is verified before merging, and a changed head or wrong base fails publication. GitHub's merge endpoint provides a head-SHA precondition but no atomic base-branch precondition, so concurrent external retargeting after verification remains a provider-API limitation.
+
+Historical completed activity results remain replayable without another merge. Canonical repository and branch projection has its own Temporal patch so already-recorded initial and continuation payloads retain their original authority. Pending pre-binding calls return `merge_authority_required` without GitHub access. A separately patched workflow continuation supplies the original repository and branch from recorded workflow inputs, resolves the candidate, and resumes publication. Missing or mismatched authority still fails without mutation. Already-merged PRs are reconciled against the authored branch and, when recorded, the candidate head; this preserves success after a lost activity acknowledgement rather than attempting another merge.
 
 ---
 

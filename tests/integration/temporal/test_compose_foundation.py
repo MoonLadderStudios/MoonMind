@@ -1289,3 +1289,61 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
     assert config["admins"] == []
     assert config["allowed_domains"] == []
     assert "sandbox" not in config
+
+
+def test_generic_host_uses_explicit_credential_environment():
+    host = _load_compose()["services"]["omnigent-host"]
+    assert "env_file" not in host
+    environment = host["environment"]
+    for key in ("OMNIGENT_HOST_ID", "OMNIGENT_HOST_NAME", "OMNIGENT_HOST_TOKEN",
+                "OMNIGENT_DATA_DIR", "OMNIGENT_CONFIG_HOME", "DATABRICKS_TOKEN"):
+        # Absent optional values must remain absent in rendered Compose. In
+        # particular, upstream treats an empty host UUID as explicitly invalid.
+        assert key in environment and environment[key] is None
+    for key in ("POSTGRES_PASSWORD", "JWT_SECRET_KEY", "ENCRYPTION_MASTER_KEY",
+                "OMNIGENT_ACCOUNTS_COOKIE_SECRET", "OMNIGENT_OIDC_CLIENT_SECRET"):
+        assert key not in environment
+    assert "omnigent-host-state:/root/.omnigent" in host["volumes"]
+
+
+@pytest.mark.parametrize("identity", [
+    {},
+    {"OMNIGENT_HOST_ID": "11111111-1111-4111-8111-111111111111", "OMNIGENT_HOST_NAME": "Existing host"},
+    {"OMNIGENT_HOST_ID": "11111111-1111-4111-8111-111111111111"},
+])
+def test_generic_host_render_keeps_supported_credentials_only(tmp_path, identity):
+    _require_docker_compose()
+    compose_path = tmp_path / "compose.yaml"
+    compose_path.write_text((REPO_ROOT / "docker-compose.yaml").read_text())
+    values = {
+        "POSTGRES_PASSWORD": "database-sentinel",
+        "JWT_SECRET_KEY": "signing-sentinel",
+        "ENCRYPTION_MASTER_KEY": "encryption-sentinel",
+        "OMNIGENT_ACCOUNTS_COOKIE_SECRET": "server-cookie-sentinel",
+        "OPENAI_API_KEY": "provider-sentinel",
+        "OMNIGENT_HOST_TOKEN": "host-launch-sentinel",
+        "DATABRICKS_TOKEN": "databricks-sentinel",
+        "OMNIGENT_DATA_DIR": "/root/.omnigent",
+        **identity,
+    }
+    env_file = tmp_path / ".env"
+    env_file.write_text("\n".join(f'{key}="{value}"' for key, value in values.items()) + "\n")
+    result = subprocess.run(
+        ["docker", "compose", "--project-directory", str(tmp_path),
+         "--env-file", str(env_file), "-f", str(compose_path),
+         "--profile", "omnigent-host", "config", "--format", "json"],
+        capture_output=True, text=True, check=False,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)},
+    )
+    assert result.returncode == 0, result.stderr
+    host = json.loads(result.stdout)["services"]["omnigent-host"]
+    env = host["environment"]
+    for key in ("OPENAI_API_KEY", "OMNIGENT_HOST_TOKEN", "DATABRICKS_TOKEN", "OMNIGENT_DATA_DIR"):
+        assert env[key] == values[key]
+    for key in ("OMNIGENT_HOST_ID", "OMNIGENT_HOST_NAME"):
+        if key in identity:
+            assert env[key] == identity[key]
+        else:
+            assert env.get(key) is None
+    for key in ("POSTGRES_PASSWORD", "JWT_SECRET_KEY", "ENCRYPTION_MASTER_KEY", "OMNIGENT_ACCOUNTS_COOKIE_SECRET"):
+        assert key not in env

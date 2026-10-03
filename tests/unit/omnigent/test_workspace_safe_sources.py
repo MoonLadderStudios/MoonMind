@@ -1772,3 +1772,86 @@ async def test_attachment_reconciliation_preserves_inputs_until_replacement_is_a
     assert not nested.exists()
     assert outside.read_text() == "unrelated work"
     assert [p.read_bytes() for p in old_path.parent.iterdir()] == [b"current brief"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("digest", [None, "sha256:" + "0" * 64])
+async def test_legacy_grant_cannot_forge_cross_workflow_access(tmp_path, digest):
+    workspace_id = "legacy-owner-workspace"
+    _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
+    grant = {
+        "workspaceId": workspace_id,
+        "ownerWorkflowId": "owner-wf",
+        "ownerStepExecutionId": "owner-st",
+        "generation": 9999,
+        "mode": "read_only",
+    }
+    if digest:
+        grant["grantDigest"] = digest
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    with pytest.raises(HarnessPlatformError, match="server-issued"):
+        await materializer.materialize(
+            _request(
+                {"workspaceSource": {"existingWorkspaceGrant": grant}},
+                workflow_id="reader-wf",
+                step_id="reader-st",
+            ),
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    assert (
+        ExistingWorkspaceGrantLedger(store.store_root).admitted_generation(workspace_id)
+        is None
+    )
+    assert store.read_readiness(workspace_id) is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_grant_can_resume_same_durable_workspace_owner(tmp_path):
+    workspace_id = "legacy-owner-workspace"
+    _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
+    grant = {
+        "workspaceId": workspace_id,
+        "ownerWorkflowId": "owner-wf",
+        "ownerStepExecutionId": "owner-st",
+        "generation": 1,
+        "mode": "exclusive",
+    }
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    result = await materializer.materialize(
+        _request(
+            {"workspaceSource": {"existingWorkspaceGrant": grant}},
+            workflow_id="owner-wf",
+            step_id="continued-st",
+        ),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+    assert result["accessMode"] == "read-write"
+
+
+@pytest.mark.asyncio
+async def test_signed_grant_must_name_recorded_owner_step(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
+    workspace_id = "owned-workspace"
+    _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
+    spec = _grant_spec(workspace_id, owner=("owner-wf", "wrong-st"), grantee="owner-wf")
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    with pytest.raises(HarnessPlatformError, match="owner step"):
+        await materializer.materialize(
+            _request(spec, workflow_id="owner-wf", step_id="target-st"),
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    assert (
+        ExistingWorkspaceGrantLedger(store.store_root).admitted_generation(workspace_id)
+        is None
+    )

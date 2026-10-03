@@ -708,6 +708,23 @@ as successful publication.
 
 Direct managed runtimes receive a workflow-scoped workspace and artifact area, runtime-specific credential materialization, immutable Skill projection, and bounded temporary state. Runtime-owned environment values take precedence over untrusted passthrough values.
 
+Worker-side reads of session state, log spools, canary markers, and Git identity
+configuration reject symlink ancestors and non-regular endpoints. JSON and config
+reads are bounded. Support files and identity changes replace a fresh inode in a
+pinned parent directory, preventing symlink and hardlink redirection. Skill
+adapter creation and cleanup use the same directory boundary. Invalid canary
+markers are not published as artifacts. Container-task environment values are
+passed only as Docker container settings; they never change the worker Docker
+process environment, executable search path, loader, or daemon selection.
+
+Direct-runtime launches inherit only standard execution context (paths, login,
+locale, temporary directories, proxy and TLS configuration) and `MOONMIND_URL`.
+Provider credentials and settings are materialized from the selected profile;
+worker database, signing, cloud, and unrelated environment values are not
+forwarded. Root-launched Claude processes use native pre-exec UID/GID changes,
+with supplementary groups cleared, before profile environment values can affect
+the executable or dynamic loader.
+
 Managed sessions and profile-bound Omnigent hosts whose normalized
 `requiredCapabilities` include `execution.fanout` receive a separate short-lived
 execution fan-out bearer after policy authorization. The requirement is derived

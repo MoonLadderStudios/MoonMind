@@ -178,6 +178,8 @@ class OidcProviderConfig:
     metadata_ttl_seconds: float = _DEFAULT_METADATA_TTL_SECONDS
     jwks_ttl_seconds: float = _DEFAULT_JWKS_TTL_SECONDS
     end_session_endpoint: str = ""
+    require_mfa: bool = False
+    mfa_acr_values: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.issuer or not self.client_id or not self.client_secret:
@@ -248,6 +250,8 @@ def resolve_oidc_config(
     end_session_endpoint: str = "",
     scopes: str = _DEFAULT_SCOPES,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    require_mfa: bool = False,
+    mfa_acr_values: tuple[str, ...] = (),
 ) -> OidcProviderConfig:
     """Build a validated provider config from explicit inputs.
 
@@ -288,6 +292,8 @@ def resolve_oidc_config(
         scopes=(scopes or _DEFAULT_SCOPES).strip() or _DEFAULT_SCOPES,
         timeout_seconds=float(timeout_seconds),
         end_session_endpoint=(end_session_endpoint or "").strip(),
+        require_mfa=require_mfa,
+        mfa_acr_values=mfa_acr_values,
     )
 
 
@@ -706,6 +712,12 @@ def validate_id_token(
     if iat > moment + leeway_seconds:
         raise OidcLoginError("auth_invalid", "token issued in the future")
     _ = discovery  # endpoint set already scope-checked at fetch time
+    # Both public callback paths must enforce the same operator MFA policy
+    # before identity resolution or session issuance.
+    from moonmind.security.advanced_identity_4124 import _has_mfa_evidence
+
+    if config.require_mfa and not _has_mfa_evidence(claims, config=config):
+        raise OidcLoginError("auth_invalid", "required MFA evidence missing")
     return dict(claims)
 
 

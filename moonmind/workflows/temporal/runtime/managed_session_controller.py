@@ -15,10 +15,11 @@ import shutil
 import stat
 import tempfile
 import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from moonmind.auth.github_credentials import GitHubCredentialSource
@@ -58,16 +59,22 @@ from moonmind.security.execution_fanout_capabilities import (
     require_execution_fanout_authorization,
 )
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
+from moonmind.utils.workspace_paths import (
+    atomic_write_text,
+    ensure_directory,
+    open_directory,
+    read_regular_file,
+)
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
-from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.workflows.executions.repository_contract import (
     DEFAULT_GIT_CONNECTION_REF,
     REPOSITORY_CREDENTIAL_UNAVAILABLE,
     RepositoryContractError,
     compile_repository_target,
 )
+from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     GHCR_REGISTRY,
     resolve_ghcr_pull_credentials_for_launch,
@@ -75,13 +82,13 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     resolve_selected_github_credential_for_launch,
 )
 
+from .git_auth import build_github_token_git_environment
 from .github_auth_broker import (
     GitHubAuthBrokerManager,
     build_github_socket_path,
     render_gh_wrapper_script,
     render_git_credential_helper_script,
 )
-from .git_auth import build_github_token_git_environment
 from .managed_session_observability import ManagedSessionObservabilityBridge
 from .managed_session_store import (
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -382,6 +389,10 @@ async def _default_command_runner(
     )
 
 def _normalize_absolute_posix_path(value: str, *, field_name: str) -> PurePosixPath:
+    # These paths also enter Docker's comma-delimited --mount syntax. They
+    # must remain one value, rather than introducing another mount option.
+    if any(character in value for character in (",", "\x00", "\r", "\n", '"')):
+        raise RuntimeError(f"{field_name} contains unsafe mount path characters")
     normalized = PurePosixPath(posixpath.normpath(value))
     if not normalized.is_absolute():
         raise RuntimeError(f"{field_name} must be an absolute path: {value}")
@@ -932,6 +943,8 @@ class DockerCodexManagedSessionController:
             field_name="workspace_root",
         )
         candidate = _normalize_absolute_posix_path(value, field_name=field_name)
+        if candidate == workspace_root:
+            raise RuntimeError(f"{field_name} must name a child of workspace_root")
         try:
             candidate.relative_to(workspace_root)
         except ValueError as exc:
@@ -1078,9 +1091,7 @@ class DockerCodexManagedSessionController:
 
     @staticmethod
     def _write_executable_script(path: Path, content: str) -> str:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        path.chmod(0o700)
+        atomic_write_text(path, content, mode=0o700)
         return str(path)
 
     @staticmethod
@@ -1118,8 +1129,8 @@ class DockerCodexManagedSessionController:
             git_helper_path,
         ]
 
-        support_root.mkdir(parents=True, exist_ok=True)
-        bin_dir.mkdir(parents=True, exist_ok=True)
+        ensure_directory(support_root)
+        ensure_directory(bin_dir)
         cls._write_executable_script(
             git_helper_path,
             cls._render_git_credential_helper_script(socket_path=github_socket_path),
@@ -1157,8 +1168,7 @@ class DockerCodexManagedSessionController:
                 f"\thelper = !{shlex.quote(str(git_helper_path))}\n",
             ]
         )
-        git_config_path.write_text("".join(git_config_lines), encoding="utf-8")
-        git_config_path.chmod(0o600)
+        atomic_write_text(git_config_path, "".join(git_config_lines))
 
         existing_path = str(session_environment.get("PATH") or "").strip()
         system_paths = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1173,16 +1183,17 @@ class DockerCodexManagedSessionController:
         repo_git_config_path = Path(workspace_path) / ".git" / "config"
         if repo_git_config_path.exists():
             marker = "# moonmind-credential-helper"
-            existing_config = repo_git_config_path.read_text(encoding="utf-8")
+            existing_config = read_regular_file(
+                repo_git_config_path, limit=1024 * 1024
+            ).decode("utf-8")
             if marker not in existing_config:
                 credential_section = (
                     f"\n{marker}\n"
                     "[credential]\n"
                     f"\thelper = !{shlex.quote(str(git_helper_path))}\n"
                 )
-                repo_git_config_path.write_text(
-                    existing_config + credential_section,
-                    encoding="utf-8",
+                atomic_write_text(
+                    repo_git_config_path, existing_config + credential_section
                 )
                 touched_paths.append(repo_git_config_path)
 
@@ -2022,12 +2033,14 @@ class DockerCodexManagedSessionController:
 
     @staticmethod
     def _chown_path(path: Path) -> None:
-        os.chown(
-            path,
-            _MANAGED_SESSION_CONTAINER_UID,
-            _MANAGED_SESSION_CONTAINER_GID,
-            follow_symlinks=False,
-        )
+        with open_directory(path.parent) as parent_fd:
+            os.chown(
+                path.name,
+                _MANAGED_SESSION_CONTAINER_UID,
+                _MANAGED_SESSION_CONTAINER_GID,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
 
     async def _invoke_json(
         self,
@@ -2157,8 +2170,8 @@ class DockerCodexManagedSessionController:
         if not state_path.is_file():
             return None
         try:
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(read_regular_file(state_path, limit=1024 * 1024))
+        except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         return payload if isinstance(payload, dict) else None
 

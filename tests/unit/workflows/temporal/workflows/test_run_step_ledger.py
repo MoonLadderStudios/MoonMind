@@ -2245,8 +2245,6 @@ def test_run_promotes_omnigent_context_pack_ref_into_manifest_context(
     ]["initialContextPackRef"] == "artifact://context/input.context-pack.json"
 
 
-
-
 def test_run_waiting_state_captures_child_workflow_lineage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6502,3 +6500,97 @@ def test_verifier_contradiction_validation_preserves_recorded_payloads(
     assert (transition.routing_disposition == "exit_remediation_loop") is (
         not patch_enabled
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary_enabled", [False, True])
+@pytest.mark.parametrize(
+    "failure_mode,dependent",
+    [("FAIL_FAST", False), ("CONTINUE", False), ("CONTINUE", True)],
+)
+async def test_workspace_launch_block_preserves_plan_failure_policy(
+    monkeypatch, boundary_enabled, failure_mode, dependent
+):
+    from unittest.mock import AsyncMock
+
+    _configure_workflow_runtime(monkeypatch)
+    parent = MoonMindRunWorkflow()
+    parent._owner_id = "owner-1"
+    plan = _approval_policy_plan_payload()
+    plan["policy"]["failure_mode"] = failure_mode
+    plan["policy"]["approval_policy"]["enabled"] = False
+    plan["nodes"] = [
+        {
+            "id": name,
+            "tool": {"type": "agent_runtime", "name": "codex_cli"},
+            "inputs": {"instructions": name},
+            "options": {},
+        }
+        for name in ("blocked", "later")
+    ]
+    plan["edges"] = [{"from": "blocked", "to": "later"}] if dependent else []
+    children = []
+    original_workspace = parent._step_execution_workspace
+
+    def workspace(logical_step_id, **kwargs):
+        payload = original_workspace(logical_step_id, **kwargs)
+        if logical_step_id == "blocked":
+            payload.update(
+                evidenceAccepted=False,
+                rejectionReason="missing_required_checkpoint_evidence",
+            )
+        return payload
+
+    async def activity(name, payload=None, **kwargs):
+        if name == "agent_skill.resolve":
+            return _empty_skill_resolution()
+        if name == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
+        if name == "provider_profile.list":
+            return {"profiles": []}
+        if name == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
+        if name == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
+        raise AssertionError(name)
+
+    async def typed(name, payload, **kwargs):
+        assert name == "artifact.read"
+        assert payload.artifact_ref == "art_plan_1"
+        return json.dumps(plan).encode()
+
+    async def child(name, request, **kwargs):
+        children.append(kwargs["id"])
+        return {
+            "summary": "Independent work complete",
+            "metadata": {},
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(parent, "_step_execution_workspace", workspace)
+    monkeypatch.setattr(
+        parent,
+        "_write_json_artifact",
+        AsyncMock(return_value="artifact://test/evidence"),
+    )
+    monkeypatch.setattr(run_module.workflow, "execute_activity", activity)
+    monkeypatch.setattr(run_module.workflow, "execute_child_workflow", child)
+    monkeypatch.setattr(run_module, "execute_typed_activity", typed)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda marker: (
+            boundary_enabled
+            if marker == "run-workspace-block-failure-policy-v1"
+            else True
+        ),
+    )
+    if boundary_enabled and failure_mode == "FAIL_FAST":
+        with pytest.raises(ValueError, match="Workspace policy rejected before launch"):
+            await parent._run_execution_stage(parameters={}, plan_ref="art_plan_1")
+    else:
+        await parent._run_execution_stage(parameters={}, plan_ref="art_plan_1")
+    assert len(children) == (
+        0 if dependent or (boundary_enabled and failure_mode == "FAIL_FAST") else 1
+    )
+    assert parent.get_step_ledger()["steps"][0]["status"] == "failed"

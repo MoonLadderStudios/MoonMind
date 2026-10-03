@@ -4,11 +4,14 @@ import io
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -40,15 +43,22 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
     validate_restore_material,
 )
-from moonmind.omnigent.execute import (
-    OmnigentSameSessionContinuationRequired,
-    OmnigentSessionStillRunningError,
+from moonmind.omnigent.codex_execution_decisions import (
+    bind_candidate_workspace,
+    bind_cold_restore_workspace_spec,
+    classify_launch_failure_evidence,
 )
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     adapt_provider_capabilities,
     resolve_bridge_row_capabilities,
 )
+from moonmind.omnigent.execute import (
+    OmnigentSameSessionContinuationRequired,
+    OmnigentSessionStillRunningError,
+)
+from moonmind.omnigent.execution_adapters import DbExecutionPolicyAuthority
+from moonmind.omnigent.execution_ports import ProviderProfileAuthority
 from moonmind.omnigent.execution_profiles import (
     compile_effective_launch,
     validate_effective_launch_snapshot,
@@ -57,9 +67,9 @@ from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.runtime_binding import (
     runtime_binding_execution_scope,
 )
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
@@ -68,22 +78,13 @@ from moonmind.omnigent.oauth_hosts import (
     validate_preflight_result,
 )
 from moonmind.omnigent.policies import compile_policy_snapshot
-from moonmind.omnigent.execution_adapters import DbExecutionPolicyAuthority
-from moonmind.omnigent.execution_ports import ProviderProfileAuthority
-from moonmind.omnigent.codex_execution_decisions import (
-    bind_candidate_workspace,
-    bind_cold_restore_workspace_spec,
-    classify_launch_failure_evidence,
-)
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
     _compile_persisted_effective_launch,
 )
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.omnigent.workspace_intent import compile_workspace_intent
-from moonmind.omnigent.workspace_publication import (
-    OmnigentWorkspacePublicationService,
-)
+from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
@@ -115,17 +116,17 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
-from moonmind.security.execution_fanout_capabilities import (
-    verify_execution_fanout_capability,
-)
 from moonmind.security.egress import (
     EGRESS_CONFIG_DIGEST,
     ENFORCER_IMPLEMENTATION,
-    EgressAttestation,
     OMNIGENT_EGRESS_PROFILE,
+    EgressAttestation,
 )
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
+)
+from moonmind.security.execution_fanout_capabilities import (
+    verify_execution_fanout_capability,
 )
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -404,7 +405,13 @@ async def test_remote_oauth_launch_reads_workspace_and_projections_from_volume(
     )
     runtime.container_exists = AsyncMock(return_value=False)
     runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
-    runtime._run = AsyncMock(return_value=(1, "", "container absent"))
+    runtime._run = AsyncMock(
+        side_effect=lambda *args, **_kwargs: (
+            (1, "", "container absent")
+            if args[:2] == ("docker", "inspect")
+            else (0, "", "")
+        )
+    )
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
@@ -426,7 +433,9 @@ async def test_remote_oauth_launch_reads_workspace_and_projections_from_volume(
         egress_attestation=_egress_attestation(),
     )
 
-    init, host = [call.args for call in runtime._run.await_args_list][1:]
+    commands = [call.args for call in runtime._run.await_args_list]
+    init = next(command for command in commands if "/opt/moonmind/init-oauth-host.sh" in command)
+    host = next(command for command in commands if command[:3] == ("docker", "run", "-d"))
 
     def projected_path(command, target, *, readonly):
         mounts = [
@@ -1613,6 +1622,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     }
 
     async def run(*args, **_kwargs):
+        if args[:2] == ("docker", "ps"):
+            return (0, "", "")  # No initializer survived the previous launch.
         if args[:3] == ("docker", "inspect", "--format"):
             template = args[3]
             if template == "{{.State.Running}}":
@@ -2015,14 +2026,13 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     runtime._discover_upstream_path = AsyncMock(
         return_value="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
     )
-    runtime._run = AsyncMock(
-        side_effect=[
-            (1, "", "no such container"),
-            (0, "", ""),
-            (0, "", ""),
-            (0, "", ""),
-        ]
-    )
+
+    async def run(*args, **_kwargs):
+        if args[:2] == ("docker", "inspect"):
+            return (1, "", "no such container")
+        return (0, "", "")
+
+    runtime._run = AsyncMock(side_effect=run)
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
@@ -2071,54 +2081,69 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     await runtime._launch_on_demand(**launch_kwargs)
 
     commands = [call.args for call in runtime._run.await_args_list]
-    _assert_shared_entrypoint_accepts_launch_credentials(commands[2], tmp_path)
-    assert commands[2][commands[2].index("--cpus") + 1] == "2.0"
+    initializer = next(
+        command for command in commands if "/opt/moonmind/init-oauth-host.sh" in command
+    )
+    host = next(
+        command for command in commands if command[:3] == ("docker", "run", "-d")
+    )
+    _assert_shared_entrypoint_accepts_launch_credentials(host, tmp_path)
+    assert host[host.index("--cpus") + 1] == "2.0"
     assert commands[0][:3] == ("docker", "inspect", "--format")
-    assert "/opt/moonmind/init-oauth-host.sh" in commands[1]
-    assert commands[2][:3] == ("docker", "run", "-d")
-    assert commands[2][commands[2].index("--hostname") + 1] == "mm-host-lease-1"
+    assert "/opt/moonmind/init-oauth-host.sh" in initializer
+    assert host[:3] == ("docker", "run", "-d")
+    assert host[host.index("--hostname") + 1] == "mm-host-lease-1"
     runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
-    assert commands[1][-1] == snapshot_image
+    assert initializer[-1] == snapshot_image
+    assert initializer[initializer.index("--name") + 1] == "mm-host-lease-1-init"
+    initializer_labels = {
+        initializer[index + 1]
+        for index, value in enumerate(initializer[:-1])
+        if value == "--label"
+    }
+    assert {
+        "moonmind.kind=omnigent-oauth-host",
+        "moonmind.host_lease_id=host-lease-1",
+        "moonmind.provider_profile_id=codex",
+        "moonmind.credential_generation=3",
+    } <= initializer_labels
     cap_additions = [
-        commands[1][index + 1]
-        for index, value in enumerate(commands[1][:-1])
+        initializer[index + 1]
+        for index, value in enumerate(initializer[:-1])
         if value == "--cap-add"
     ]
     assert cap_additions == ["CHOWN", "FOWNER"]
-    image_index = commands[2].index(snapshot_image)
-    assert commands[2][image_index - 2 : image_index] == (
+    image_index = host.index(snapshot_image)
+    assert host[image_index - 2 : image_index] == (
         "--entrypoint",
         "/usr/bin/env",
     )
-    assert commands[2][image_index + 1 : image_index + 3] == (
+    assert host[image_index + 1 : image_index + 3] == (
         "-u",
         "OPENAI_API_KEY",
     )
-    assert commands[2][-1] == "/opt/moonmind/start-codex-oauth-host.sh"
-    assert environment_image not in commands[1]
-    assert environment_image not in commands[2]
-    assert commands[1][commands[1].index("--user") + 1] == "0:0"
-    assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
+    assert host[-1] == "/opt/moonmind/start-codex-oauth-host.sh"
+    assert environment_image not in initializer
+    assert environment_image not in host
+    assert initializer[initializer.index("--user") + 1] == "0:0"
+    assert host[host.index("--workdir") + 1] == "/home/app"
     # MoonLadderStudios/MoonMind#4558: no tools-volume or profile mount
     # overlays hide the image-owned executables.
     assert not any(
         "/opt/moonmind-tools" in item and ("type=volume" in item or "type=bind" in item)
-        for item in commands[2]
+        for item in host
         if isinstance(item, str)
     )
     assert (
         f"type=bind,src={tmp_path / 'moonmind-execution.sh'},"
         "dst=/etc/profile.d/moonmind-execution.sh,readonly"
-    ) in commands[2]
-    assert "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills" in commands[2]
-    assert (
-        "MOONMIND_STEP_EXECUTION_ID=workflow:run:node-1:execution:1"
-        in commands[2]
-    )
-    assert "OMNIGENT_EXECUTION_TIMEOUT_SECONDS=5400" in commands[2]
-    assert "OMNIGENT_EXECUTION_TIMEOUT_OWNER=temporal_workflow" in commands[2]
-    assert "OMNIGENT_CAPTURE_OWNER=moonmind_bridge" in commands[2]
-    assert "OMNIGENT_CAPTURE_RETENTION_DAYS=30" in commands[2]
+    ) in host
+    assert "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills" in host
+    assert "MOONMIND_STEP_EXECUTION_ID=workflow:run:node-1:execution:1" in host
+    assert "OMNIGENT_EXECUTION_TIMEOUT_SECONDS=5400" in host
+    assert "OMNIGENT_EXECUTION_TIMEOUT_OWNER=temporal_workflow" in host
+    assert "OMNIGENT_CAPTURE_OWNER=moonmind_bridge" in host
+    assert "OMNIGENT_CAPTURE_RETENTION_DAYS=30" in host
     assert (
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
         "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
@@ -2126,38 +2151,33 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE,"
         "MOONMIND_CONTAINER_JOBS_MCP_URL,"
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE"
-    ) in commands[2]
+    ) in host
     assert (
         "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE="
         "/opt/moonmind/capabilities/container-jobs"
-    ) in commands[2]
+    ) in host
     assert (
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE="
         "/opt/moonmind/capabilities/execution-fanout"
-    ) in commands[2]
-    assert (
-        "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp/container"
-        in commands[2]
+    ) in host
+    assert "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp/container" in host
+    launch_environment = next(
+        call.kwargs["env"] for call in runtime._run.await_args_list if call.args == host
     )
-    launch_environment = runtime._run.await_args_list[2].kwargs["env"]
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in launch_environment
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in launch_environment
-    assert "NO_PROXY=localhost,127.0.0.1" in commands[2]
-    assert "no_proxy=localhost,127.0.0.1" in commands[2]
-    assert commands[2][commands[2].index("--stop-timeout") + 1] == "20"
+    assert "NO_PROXY=localhost,127.0.0.1" in host
+    assert "no_proxy=localhost,127.0.0.1" in host
+    assert host[host.index("--stop-timeout") + 1] == "20"
     assert (
         f"type=bind,src={tmp_path / 'skills'},dst=/opt/moonmind-skills,readonly"
-    ) in commands[2]
-    assert (
-        "type=volume,src=mm-host-lease-1-artifacts,dst=/artifacts"
-    ) in commands[2]
-    assert (
-        "type=volume,src=mm-host-lease-1-cache,dst=/home/app/.cache"
-    ) in commands[2]
+    ) in host
+    assert ("type=volume,src=mm-host-lease-1-artifacts,dst=/artifacts") in host
+    assert ("type=volume,src=mm-host-lease-1-cache,dst=/home/app/.cache") in host
     assert (
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
-    ) in commands[2]
+    ) in host
 
 
 def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
@@ -2301,7 +2321,11 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
     runtime.container_exists = AsyncMock(return_value=False)
     runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
     runtime._run = AsyncMock(
-        side_effect=[(1, "", "no such container"), (0, "", ""), (0, "", "")]
+        side_effect=lambda *args, **_kwargs: (
+            (1, "", "no such container")
+            if args[:2] == ("docker", "inspect")
+            else (0, "", "")
+        )
     )
     binding = OmnigentOAuthHostBinding(
         bindingRef="omnigent-oauth:claude",
@@ -2348,20 +2372,18 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
         egress_attestation=_egress_attestation(),
     )
 
-    init_command, launch_command = [
-        call.args for call in runtime._run.await_args_list
-    ][1:]
-    _assert_shared_entrypoint_accepts_launch_credentials(launch_command, tmp_path)
-    assert (
-        "type=volume,src=claude_auth_volume,dst=/home/app/.claude"
-        in init_command
+    commands = [call.args for call in runtime._run.await_args_list]
+    init_command = next(
+        command for command in commands if "/opt/moonmind/init-oauth-host.sh" in command
     )
+    launch_command = next(
+        command for command in commands if command[:3] == ("docker", "run", "-d")
+    )
+    _assert_shared_entrypoint_accepts_launch_credentials(launch_command, tmp_path)
+    assert "type=volume,src=claude_auth_volume,dst=/home/app/.claude" in init_command
     assert "/opt/moonmind/init-oauth-host.sh" in init_command
     assert "OAUTH_HOME=/home/app/.claude" in init_command
-    assert (
-        "type=volume,src=claude_auth_volume,dst=/home/app/.claude"
-        in launch_command
-    )
+    assert "type=volume,src=claude_auth_volume,dst=/home/app/.claude" in launch_command
     assert "CLAUDE_CONFIG_DIR=/home/app/.claude" in launch_command
     assert "CLAUDE_HOME=/home/app/.claude" in launch_command
     assert "CLAUDE_CREDENTIAL_GENERATION=4" in launch_command
@@ -2382,8 +2404,9 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_profile_bound_execution_heartbeats_host_lease_until_runner_finishes(
-) -> None:
+async def test_profile_bound_execution_heartbeats_host_lease_until_runner_finishes() -> (
+    None
+):
     heartbeat_observed = asyncio.Event()
 
     async def heartbeat_host_lease(lease_id: str, *, ttl_seconds: int):
@@ -2682,8 +2705,14 @@ async def test_stop_host_checks_stopped_container_ownership_before_removal(
 
 @pytest.mark.asyncio
 async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> None:
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
-    runtime._run = AsyncMock(return_value=(1, "", "not found"))
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path
+    )
+    runtime._run = AsyncMock(
+        side_effect=lambda *args, **_kwargs: (
+            (0, "", "") if args[:2] == ("docker", "ps") else (1, "", "not found")
+        )
+    )
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
@@ -5608,6 +5637,12 @@ async def _run_coordinator_failure_case(
         owner_mock.side_effect = fail_from_production_runtime
 
     async def run_cleanup_command(*args, **_kwargs):
+        if (
+            args[:3] == ("docker", "inspect", "--format")
+            and args[-1] == "container-1"
+            and args[3].startswith("{{range .Mounts}}")
+        ):
+            return 0, "valid", ""
         command = tuple(args[:3])
         if command[:2] == ("docker", "stop"):
             owners.calls.append("host_remove")
@@ -6175,6 +6210,7 @@ async def test_pre_host_cleanup_reporting_retries_and_preserves_diagnostics(
     monkeypatch, cleanup_recovers
 ):
     from sqlalchemy.exc import OperationalError
+
     from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
     from tests.unit.omnigent.test_generic_plane_n_way_concurrency import _zen_plan
 
@@ -7302,3 +7338,343 @@ async def test_static_attachment_identity_fails_when_container_is_absent(tmp_pat
             container_name=None,
         )
     assert excinfo.value.code == "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_id,provider,harness,volume_env,home", [
+    ("codex_cli", "openai", "codex-native", "CODEX_VOLUME_NAME", "/home/app/.codex"),
+    ("claude_code", "anthropic", "claude-native", "CLAUDE_VOLUME_NAME", "/home/app/.claude"),
+])
+async def test_static_compose_uses_selected_profile_oauth_volume(
+    tmp_path, monkeypatch, runtime_id, provider, harness, volume_env, home
+):
+    monkeypatch.setenv(volume_env, "other-profile-home")
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime._deployment_compose_command = lambda: ("docker", "compose")
+    binding = _binding()
+    binding = binding.model_copy(
+        update={
+            "harness": harness,
+            "credential_mount_ref": binding.credential_mount_ref.model_copy(
+                update={
+                    "target_path": home,
+                    "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(
+                        update={
+                            "runtime_id": runtime_id,
+                            "provider_id": provider,
+                            "volume_ref": "selected-profile-home",
+                        }
+                    ),
+                }
+            ),
+        }
+    )
+    await runtime._compose_static_check(binding=binding, workspace_source=tmp_path)
+    assert runtime._run.await_args.kwargs["env"][volume_env] == "selected-profile-home"
+
+
+@pytest.fixture
+def docker_mount_transport(tmp_path, monkeypatch):
+    """Exercise Docker's actual formatter against a hermetic inspect endpoint."""
+    docker_cli = shutil.which("docker")
+    if not docker_cli:
+        pytest.skip("Docker CLI is required for its Go-template formatter")
+    state = {"mounts": [], "status": 200, "commands": []}
+
+    class InspectHandler(BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            assert self.path.endswith("/_ping")
+            self.send_response(200)
+            self.send_header("API-Version", "1.99")
+            self.end_headers()
+
+        def do_GET(self):
+            if self.path.endswith("/containers/observed-host/json"):
+                payload = json.dumps(
+                    {"Id": "a" * 64, "Mounts": state["mounts"]}
+                ).encode()
+                status = state["status"]
+            elif self.path.endswith("/_ping"):
+                payload, status = b"OK", 200
+            else:
+                payload, status = b'{"message":"unknown test container"}', 404
+            self.send_response(status)
+            self.send_header("API-Version", "1.99")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), InspectHandler)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    config_dir = tmp_path / "docker-config"
+    config_dir.mkdir()
+    endpoint = f"tcp://127.0.0.1:{server.server_port}"
+    real_subprocess = asyncio.create_subprocess_exec
+
+    async def docker_transport(*argv, **kwargs):
+        state["commands"].append(argv)
+        if argv[:3] == ("docker", "inspect", "--format"):
+            assert argv[-1] == "observed-host"
+            # Explicit endpoint/config prevent discovery of the deployment
+            # daemon or credentials, while the real CLI evaluates the template.
+            child_env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("DOCKER_")
+            }
+            kwargs["env"] = child_env
+            return await real_subprocess(
+                docker_cli,
+                "--config",
+                str(config_dir),
+                "--host",
+                endpoint,
+                *argv[1:],
+                **kwargs,
+            )
+        assert argv == (
+            "docker",
+            "exec",
+            "observed-host",
+            "/opt/moonmind/check-runner-projections.sh",
+        )
+        return await real_subprocess(sys.executable, "-c", "", **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", docker_transport)
+    try:
+        yield state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime_id,provider,harness,home",
+    [
+        ("codex_cli", "openai", "codex-native", "/home/app/.codex"),
+        ("claude_code", "anthropic", "claude-native", "/home/app/.claude"),
+    ],
+)
+async def test_static_host_mount_probe_survives_runtime_output_redaction(
+    docker_mount_transport, runtime_id, provider, harness, home
+):
+    binding = _binding()
+    binding = binding.model_copy(
+        update={
+            "harness": harness,
+            "credential_mount_ref": binding.credential_mount_ref.model_copy(
+                update={
+                    "target_path": home,
+                    "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(
+                        update={"runtime_id": runtime_id, "provider_id": provider}
+                    ),
+                }
+            ),
+        }
+    )
+    docker_mount_transport["mounts"] = [
+        {
+            "Type": "volume",
+            "Name": binding.credential_mount_ref.auth_volume_ref.volume_ref,
+            "Destination": home,
+            "RW": True,
+        }
+    ]
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    # Observe the actual runner's redaction, then attest without bypassing it.
+    _, raw_mounts, _ = await runtime._run(
+        "docker", "inspect", "--format", "{{json .Mounts}}", "observed-host"
+    )
+    assert home not in raw_mounts
+    assert "[REDACTED_AUTH_PATH]" in raw_mounts
+    docker_mount_transport["commands"].clear()
+
+    await runtime._compose_static_exec_check(
+        binding=binding, container_name="observed-host"
+    )
+
+    commands = docker_mount_transport["commands"]
+    assert len(commands) == 2
+    assert "{{json" not in commands[0][3]
+    assert commands[0][-1] == commands[1][2] == "observed-host"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mounts,allowed",
+    [
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ],
+            True,
+            id="selected-home",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "another-profile",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ],
+            False,
+            id="substituted-profile",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "bind",
+                    "Source": "/unrelated",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ],
+            False,
+            id="bind",
+        ),
+        pytest.param([], False, id="missing"),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                },
+                {
+                    "Type": "bind",
+                    "Source": "/unrelated",
+                    "Destination": "/home/app/.codex/auth.json",
+                    "RW": True,
+                },
+            ],
+            False,
+            id="nested",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                }
+            ]
+            * 2,
+            False,
+            id="duplicate",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": False,
+                }
+            ],
+            False,
+            id="read-only",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": "true",
+                }
+            ],
+            False,
+            id="malformed",
+        ),
+        pytest.param(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "codex_auth_volume",
+                    "Destination": "/home/app/.codex",
+                    "RW": True,
+                },
+                {"Type": "volume", "Name": "other", "Destination": "/tmp", "RW": True},
+                {
+                    "Type": "volume",
+                    "Name": "other",
+                    "Destination": "/home/app/.codex-other",
+                    "RW": True,
+                },
+            ],
+            True,
+            id="unrelated-short-and-sibling-mounts",
+        ),
+    ],
+)
+async def test_static_host_probe_attests_actual_oauth_volume(
+    docker_mount_transport, mounts, allowed
+):
+    docker_mount_transport["mounts"] = mounts
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    if allowed:
+        await runtime._compose_static_exec_check(
+            binding=_binding(), container_name="observed-host"
+        )
+        assert len(docker_mount_transport["commands"]) == 2
+    else:
+        with pytest.raises(OmnigentOAuthHostError) as caught:
+            await runtime._compose_static_exec_check(
+                binding=_binding(), container_name="observed-host"
+            )
+        assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
+        assert len(docker_mount_transport["commands"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_static_host_probe_rejects_failed_inspection(docker_mount_transport):
+    docker_mount_transport["status"] = 500
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    with pytest.raises(OmnigentOAuthHostError) as caught:
+        await runtime._compose_static_exec_check(
+            binding=_binding(), container_name="observed-host"
+        )
+    assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
+    assert len(docker_mount_transport["commands"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code,output",
+    [
+        (0, ""),
+        (0, "{}"),
+        (0, "invalid"),
+        (0, "validinvalid"),
+        (0, "validvalid"),
+        (1, "valid"),
+    ],
+)
+async def test_static_host_probe_rejects_invalid_mount_verdict(code, output):
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(return_value=(code, output, ""))
+    with pytest.raises(OmnigentOAuthHostError) as caught:
+        await runtime._compose_static_exec_check(
+            binding=_binding(), container_name="observed-host"
+        )
+    assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
+    assert runtime._run.await_count == 1

@@ -127,8 +127,10 @@ async def materialize_run_skill_snapshot(
     when projection is safe (see ``§14.4`` and ``§14.7`` collision policy).
     """
 
-    workspace = Path(workspace_path).expanduser().resolve()
-    root = Path(run_root).expanduser().resolve()
+    # Retain the caller's lexical roots: the materializer rejects symlinked
+    # parents rather than treating their resolved targets as new authority.
+    workspace = Path(workspace_path).expanduser().absolute()
+    root = Path(run_root).expanduser().absolute()
     backing_root = root / "runtime" / "skills_active" / resolved_skillset.snapshot_id
     source_preservation_root = root / "runtime" / "skill_sources" / "repo_agents_skills"
     if not project_adapter_aliases:

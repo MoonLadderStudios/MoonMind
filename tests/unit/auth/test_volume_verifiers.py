@@ -285,8 +285,8 @@ class TestVerifyVolumeCredentials:
         assert "found" not in result
         assert "missing" not in result
         docker_args = exec_mock.call_args.args
-        assert "-v" in docker_args
-        assert "codex_auth_volume:/home/app/.codex:ro" in docker_args
+        assert "--mount" in docker_args
+        assert "type=volume,source=codex_auth_volume,target=/home/app/.codex,readonly" in docker_args
 
     @pytest.mark.asyncio
     async def test_codex_verification_rejects_malformed_auth_without_leaking_values(
@@ -348,7 +348,7 @@ class TestVerifyVolumeCredentials:
         assert result["credentials_missing_count"] == 2
         assert "credentials.json" not in repr(result)
         docker_args = exec_mock.call_args.args
-        assert "claude_auth_volume:/home/app/.claude:ro" in docker_args
+        assert "type=volume,source=claude_auth_volume,target=/home/app/.claude,readonly" in docker_args
         command = docker_args[-1]
         assert "/home/app/.claude/.credentials.json" in command
         assert "/home/app/.claude/credentials.json" in command
@@ -480,3 +480,13 @@ class TestVerifyVolumeCredentials:
         assert result["credentials_missing_count"] == 3
         assert "found" not in result
         assert "missing" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("volume_ref,mount_path", [("/etc", "/mnt/auth"), ("auth", "/mnt:rw")])
+async def test_volume_verifier_rejects_host_mounts_before_docker(volume_ref, mount_path):
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as docker:
+        result = await verify_volume_credentials("codex_cli", volume_ref, mount_path)
+    assert result["verified"] is False
+    assert result["reason"] == "invalid_volume_mount"
+    docker.assert_not_called()

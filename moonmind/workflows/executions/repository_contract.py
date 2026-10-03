@@ -272,6 +272,11 @@ class ResolvedRepositoryTarget(BaseModel):
     projection: RepositoryProjectionPolicy | None = None
 
 
+RepositoryOperation = Literal[
+    "read", "write", "branch_write", "lock", "review_request", "merge_request"
+]
+
+
 class RepositoryConnection(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
     schema_version: Literal["moonmind.repository-connection.v1"] = Field(
@@ -285,17 +290,9 @@ class RepositoryConnection(BaseModel):
     allowed_repository_ids: tuple[str, ...] = Field(
         default=(), alias="allowedRepositoryIds"
     )
-    allowed_operations: tuple[
-        Literal[
-            "read",
-            "write",
-            "branch_write",
-            "lock",
-            "review_request",
-            "merge_request",
-        ],
-        ...,
-    ] = Field(alias="allowedOperations")
+    allowed_operations: tuple[RepositoryOperation, ...] = Field(
+        alias="allowedOperations"
+    )
     client_policy: RepositoryClientPolicy = Field(alias="clientPolicy")
     projection: RepositoryProjectionPolicy | None = None
     merge_coordinator: RepositoryMergeCoordinatorPolicy | None = Field(

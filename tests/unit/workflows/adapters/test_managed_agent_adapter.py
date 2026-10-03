@@ -810,7 +810,7 @@ async def test_resolve_profile_selector_filters():
     ):
         await adapter.start(req5)
 
-async def test_start_uses_passthrough_keys_for_github_tokens(
+async def test_start_does_not_turn_ambient_github_tokens_into_profile_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profiles = [
@@ -873,7 +873,7 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
         if isinstance(profile_payload.get("passthroughEnvKeys"), list)
         else []
     )
-    assert passthrough_env_keys == ["GITHUB_TOKEN"]
+    assert passthrough_env_keys == []
     assert "GITHUB_TOKEN" not in env_overrides
     assert "OPENAI_API_KEY" not in env_overrides
 

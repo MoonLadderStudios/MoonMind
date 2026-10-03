@@ -133,3 +133,115 @@ async def test_spool_log_reader_without_since_starts_at_end_when_requested(tmp_p
 
     assert len(chunks) == 1
     assert chunks[0].sequence == 3
+
+
+@pytest.mark.parametrize("kind", ["leaf_link", "parent_link", "hardlink"])
+def test_spool_publisher_never_modifies_file_outside_workspace(tmp_path, kind):
+    import os
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "live_streams.spool"
+    victim.write_text("private contents\n")
+    workspace = tmp_path / "workspace"
+    if kind == "parent_link":
+        workspace.symlink_to(outside, target_is_directory=True)
+    else:
+        workspace.mkdir()
+        target = workspace / "live_streams.spool"
+        if kind == "hardlink":
+            os.link(victim, target)
+        else:
+            target.symlink_to(victim)
+    with pytest.raises(OSError):
+        publisher = SpoolLogPublisher(str(workspace))
+        publisher.publish(
+            LiveLogChunk(
+                sequence=1, stream="stdout", text="new", timestamp="0", offset=0
+            )
+        )
+    assert victim.read_text() == "private contents\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_link", [False, True])
+async def test_spool_reader_never_publishes_link_target(tmp_path, parent_link):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    SpoolLogPublisher(str(outside)).publish(
+        LiveLogChunk(
+            sequence=1,
+            stream="stdout",
+            text="private contents",
+            timestamp="0",
+            offset=0,
+        )
+    )
+    workspace = tmp_path / "workspace"
+    if parent_link:
+        workspace.symlink_to(outside, target_is_directory=True)
+    else:
+        workspace.mkdir()
+        (workspace / "live_streams.spool").symlink_to(outside / "live_streams.spool")
+    reader = SpoolLogReader(str(workspace))
+    reader.stop()
+    assert [chunk async for chunk in reader.follow()] == []
+
+
+def test_spool_append_is_pinned_when_parent_path_is_replaced(tmp_path, monkeypatch):
+    import os
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "live_streams.spool"
+    victim.write_text("private contents\n")
+    real_open = os.open
+
+    def replace_parent(path, flags, *args, **kwargs):
+        if path == "live_streams.spool" and "dir_fd" in kwargs:
+            workspace.rename(tmp_path / "detached")
+            workspace.symlink_to(outside, target_is_directory=True)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", replace_parent)
+    SpoolLogPublisher(str(workspace)).publish(
+        LiveLogChunk(sequence=1, stream="stdout", text="new", timestamp="0", offset=0)
+    )
+    assert victim.read_text() == "private contents\n"
+    assert (tmp_path / "detached" / "live_streams.spool").is_file()
+
+
+@pytest.mark.asyncio
+async def test_spool_reader_retains_partial_append_across_polls_and_restart(tmp_path):
+    chunk = LiveLogChunk(
+        sequence=1, stream="stdout", text="partial €", timestamp="0", offset=0
+    )
+    data = (chunk.model_dump_json(by_alias=True, exclude_none=True) + "\n").encode()
+    spool = tmp_path / "live_streams.spool"
+    split = data.index("€".encode()) + 1
+    spool.write_bytes(data[:split])
+    reader = SpoolLogReader(str(tmp_path))
+
+    async def consume():
+        async for result in reader.follow():
+            reader.stop()
+            return result
+        raise AssertionError("Spool reader stopped before yielding the appended chunk")
+
+    consuming = asyncio.create_task(consume())
+    await asyncio.sleep(0.06)
+    with spool.open("ab") as stream:
+        stream.write(data[split:])
+    assert (await asyncio.wait_for(consuming, timeout=2)).text == "partial €"
+    SpoolLogPublisher(str(tmp_path)).publish(
+        LiveLogChunk(
+            sequence=2, stream="stdout", text="resumed", timestamp="1", offset=9
+        )
+    )
+    restarted = SpoolLogReader(str(tmp_path))
+    restarted.stop()
+    assert [chunk.text async for chunk in restarted.follow(since_sequence=1)] == [
+        "resumed"
+    ]

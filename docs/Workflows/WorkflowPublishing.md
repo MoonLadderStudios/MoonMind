@@ -134,6 +134,13 @@ Context-bound inputs are resolved before required-field validation and expansion
 
 Binding declarations are semantic and type-checked as specified in [Input Schema Guidance](../Steps/InputSchemaGuidance.md). Never guess equivalence from a field name. An issue target, a comparison branch, a source repository, and a publication destination can represent genuinely distinct roles. Where such a distinction is supported, it is explicitly named, independently authorized, and not presented as a duplicate generic repository or branch control. Repository-independent and later-publication work retains the roles defined in [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md).
 
+For provider-discriminated repository targets, the runtime planner and managed
+workspace launcher derive the source repository and starting branch from that
+target, including Lore workspaces. Legacy repository/branch projections do not
+override readiness authority. New submissions reject conflicting `workflow.branch`
+or `workflow.startingBranch` copies. Recorded pinned-revision launches retain their
+separately recorded candidate and work-branch semantics.
+
 ### Branch Roles
 
 | Work | Meaning of branch context |
@@ -429,6 +436,19 @@ For managed Branch/PR work:
 > Prepare and commit the candidate as the declared step requires. Do not independently push or create a PR. The trusted publisher owns those effects and records their verified outcome.
 
 A provider-native runtime such as Jules can supply qualified publication mechanics through its adapter. The selected policy remains authoritative. A provider's automatic-PR feature cannot implement Branch by silently creating a PR, implement None by publishing, or manufacture evidence for an unsupported Skill-owned protocol. Provider-native outputs use the same exact-target/evidence requirements and never trigger duplicate local publishing. Unsupported combinations are rejected before execution; no new runtime-selection control or alternate billing route is introduced.
+
+### Host-side repository metadata
+
+Publication scan fetches terminate option parsing before remote/ref operands,
+and per-file scans disable external diff and text conversion. Managed publisher
+authentication uses the existing in-memory host-scoped helper without creating
+workspace-owned shims. Automatic repository verification excludes publisher
+credentials from its environment.
+
+These safeguards do not isolate Git against agent-writable hooks, configuration,
+or worker-readable files. That remaining trust boundary and the bounded reuse
+of existing runtime/trusted-candidate paths are tracked in
+[Host Git trust boundary follow-up](../tmp/GitWorkspaceTrustBoundaryFollowUp.md).
 
 ## 12. Historical Contracts and Reconstruction
 

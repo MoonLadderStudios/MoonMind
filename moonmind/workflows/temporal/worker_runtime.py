@@ -1768,6 +1768,13 @@ def _build_runtime_planner():
                 node_inputs[git_key] = git_val.strip()
         if authored_branch:
             node_inputs["branch"] = authored_branch
+        # Repository readiness and workspace creation share this authored target.
+        # Legacy projections cannot select a different starting branch.
+        target_branch = repository_branch_from_value(repository)
+        if target_branch:
+            node_inputs["branch"] = target_branch
+            if "startingBranch" in node_inputs:
+                node_inputs["startingBranch"] = target_branch
 
         if publish_mode_is_pr:
             # In the single authored branch model, ``branch`` is the PR base,

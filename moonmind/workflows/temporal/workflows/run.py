@@ -14,6 +14,7 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.workflows.temporal.jules_merge import continue_jules_merge
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
@@ -128,6 +129,7 @@ with workflow.unsafe.imports_passed_through():
         build_effective_workflow_skill_selectors,
     )
     from moonmind.workflows.executions.repository_contract import (
+        repository_branch_from_value,
         repository_name_from_value,
     )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
@@ -218,8 +220,13 @@ from moonmind.workflows.skills.approval_policy import (
 )
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_plan_contracts import REVIEW_VERDICTS
+from moonmind.workflows.skills.tool_definitions import (
+    validate_machine_tool_authority,
+    validate_tool_dispatch_authority,
+)
 from moonmind.workflows.skills.tool_registry import (
     ToolRegistrySnapshot,
+    compute_registry_digest,
     parse_tool_registry,
 )
 from moonmind.workflows.temporal.activity_catalog import (
@@ -536,6 +543,7 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termina
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
 RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
+RUN_WORKSPACE_BLOCK_FAILURE_POLICY_PATCH = "run-workspace-block-failure-policy-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = "run-jira-blocker-recheck-retry-floor-v1"
 RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_PATCH = (
@@ -557,6 +565,8 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
 )
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
+# Retained histories keep recorded commands; new dispatch validates artifact authority.
+RUN_TRUSTED_TOOL_REGISTRY_PATCH = "run-trusted-tool-registry-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
@@ -587,6 +597,7 @@ RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = "run-stop-on-publish-handoff-failure
 RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH = (
     "run-durable-publish-context-merge-handoff-v1"
 )
+RUN_MERGE_GATE_REPOSITORY_AUTHORITY_PATCH = "run-merge-gate-repository-authority-v1"
 RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v1"
 RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
@@ -754,6 +765,7 @@ RUN_OMNIGENT_SPLIT_SESSION_WORKSPACE_CHECKPOINT_PATCH = (
     "run-omnigent-split-session-workspace-checkpoint-v1"
 )
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
+RUN_TRUSTED_RUNTIME_CAPABILITIES_PATCH = "run-trusted-runtime-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
     "run-skip-no-publish-prepublication-checkpoint-v1"
@@ -777,6 +789,9 @@ RUN_OMNIGENT_GENERIC_AGENT_PROFILE_V2_PATCH = "run-omnigent-generic-agent-profil
 RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH = "run-omnigent-stock-agent-identity-v1"
 RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH = (
     "run-omnigent-execution-plan-ref-v1"
+)
+RUN_OMNIGENT_EXECUTION_PLAN_BINDING_AUTHORITY_PATCH = (
+    "run-omnigent-execution-plan-binding-authority-v1"
 )
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
@@ -816,6 +831,7 @@ RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
 )
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = "run-moonspec-verify-remediation-index-v1"
 RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
+RUN_MOONSPEC_TITLE_ROLE_SKILL_BOUNDARY_PATCH = "run-moonspec-title-role-skill-boundary-v1"
 RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH = (
     "run-moonspec-title-remediation-detection-v1"
 )
@@ -6398,26 +6414,30 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             capture_input["sourceIdentity"] = dict(source_identity)
         previous_capture = self._step_workspace_capture_inputs.get(logical_step_id, {})
         capabilities: RuntimeExecutionCapabilities | None = None
-        capability_snapshot = outputs.get("runtimeCapabilities") or outputs.get(
-            "runtime_capabilities"
-        )
-        if not isinstance(capability_snapshot, Mapping):
-            # Provider result projections intentionally omit routing inputs such
-            # as agentId. Preserve the workflow-owned capability decision made
-            # before launch so a session checkpoint kind cannot be mistaken for
-            # the independently materialized workspace checkpoint kind.
-            previous_capability_snapshot = previous_capture.get(
-                "runtimeCapabilities"
-            ) or previous_capture.get("runtime_capabilities")
-            if isinstance(previous_capability_snapshot, Mapping):
-                capability_snapshot = previous_capability_snapshot
         try:
             capability_policy_enabled = workflow.patched(
                 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH
             )
+            trusted_capabilities_enabled = workflow.patched(
+                RUN_TRUSTED_RUNTIME_CAPABILITIES_PATCH
+            )
         except workflow._NotInWorkflowEventLoopError:
             # Pure unit callers model newly started histories.
             capability_policy_enabled = True
+            trusted_capabilities_enabled = True
+        previous_capability_snapshot = previous_capture.get(
+            "runtimeCapabilities"
+        ) or previous_capture.get("runtime_capabilities")
+        if trusted_capabilities_enabled:
+            # Only the workflow's prelaunch decision owns capture authority.
+            # Plan inputs and runtime results cannot provide executable bindings.
+            capability_snapshot = previous_capability_snapshot
+        else:
+            capability_snapshot = outputs.get("runtimeCapabilities") or outputs.get(
+                "runtime_capabilities"
+            )
+            if not isinstance(capability_snapshot, Mapping):
+                capability_snapshot = previous_capability_snapshot
         if capability_policy_enabled:
             if isinstance(capability_snapshot, Mapping):
                 capabilities = RuntimeExecutionCapabilities.model_validate(
@@ -7423,13 +7443,36 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return ""
         node_inputs = self._node_inputs_mapping(node)
         title = str(node_inputs.get("title") or node.get("title") or "").strip().lower()
+        role = ""
+        expected_skill = ""
         if title.startswith("remediate verification gaps") or title.startswith(
             "remediate remaining gaps"
         ):
-            return "moonspec-remediation"
-        if title.startswith("verify remediation"):
-            return "moonspec-verification-gate"
-        return ""
+            role, expected_skill = "moonspec-remediation", "moonspec-implement"
+        elif title.startswith("verify remediation"):
+            role, expected_skill = "moonspec-verification-gate", "moonspec-verify"
+        if role and self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_TITLE_ROLE_SKILL_BOUNDARY_PATCH
+        ):
+            skill_node = node.get("skill")
+            selected_skill = (
+                str(
+                    node_inputs.get("selectedSkill")
+                    or node_inputs.get("skillId")
+                    or node_inputs.get("targetSkill")
+                    or (
+                        skill_node.get("id") or skill_node.get("name")
+                        if isinstance(skill_node, Mapping)
+                        else skill_node
+                    )
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
+            if selected_skill != expected_skill:
+                return ""
+        return role
 
     def _moonspec_step_role(self, node: Mapping[str, Any]) -> str:
         annotations = self._node_annotations_mapping(node)
@@ -12570,10 +12613,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 registry_payload,
                 error_message="registry snapshot must resolve to a JSON object",
             )
+            definitions = parse_tool_registry(registry_dict)
+            digest = str(plan_definition.metadata.registry_snapshot.digest)
+            if workflow.patched(RUN_TRUSTED_TOOL_REGISTRY_PATCH):
+                if compute_registry_digest(skills=definitions) != digest:
+                    raise ValueError(
+                        "Plan registry snapshot digest does not match its contents"
+                    )
+                for definition in definitions:
+                    validate_tool_dispatch_authority(definition)
             registry_snapshot = ToolRegistrySnapshot(
-                digest=str(plan_definition.metadata.registry_snapshot.digest),
+                digest=digest,
                 artifact_ref=registry_ref,
-                skills=parse_tool_registry(registry_dict),
+                skills=definitions,
             )
             return registry_snapshot
 
@@ -13540,6 +13592,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     elif tool_type == "skill":
                         snapshot = await load_registry_snapshot()
                         definition = snapshot.get_skill(name=tool_name)
+                        if workflow.patched(RUN_TRUSTED_TOOL_REGISTRY_PATCH):
+                            validate_machine_tool_authority(
+                                definition, parameters.get("executionPrincipal")
+                            )
                         route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(definition)
                         node_options = (
                             node.get("options")
@@ -13566,6 +13622,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 "workflow_id": workflow.info().workflow_id,
                                 "run_id": workflow.info().run_id,
                                 "node_id": node_id,
+                                **(
+                                    {
+                                        "execution_principal": parameters.get(
+                                            "executionPrincipal"
+                                        )
+                                    }
+                                    if workflow.patched(RUN_TRUSTED_TOOL_REGISTRY_PATCH)
+                                    else {}
+                                ),
                                 **(
                                     # Issue search checks this profile's
                                     # capacity before claiming work the run
@@ -14366,6 +14431,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 break
 
             if not accepted_execution:
+                if (
+                    workflow.patched(RUN_WORKSPACE_BLOCK_FAILURE_POLICY_PATCH)
+                    and failure_mode == "FAIL_FAST"
+                    and self._is_step_execution_launch_blocked(
+                        node_id, attempt=current_step_execution
+                    )
+                ):
+                    # The manifest has already persisted the failed attempt and
+                    # missing evidence. Honor the same plan failure policy as a
+                    # dispatched failure before considering another node.
+                    raise ValueError("Workspace policy rejected before launch.")
                 if gate_stop_requested:
                     self._plan_blocked_message = (
                         self._plan_blocked_message
@@ -20067,6 +20143,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         parsed = self._parse_github_pull_request_url(pull_request_url)
         if parsed is None:
             return None
+        if self._workflow_patch_enabled(RUN_MERGE_GATE_REPOSITORY_AUTHORITY_PATCH):
+            # Result text identifies a candidate, never a different repository
+            # or a PR number to reinterpret in the workflow's repository.
+            if (
+                not self._repo
+                or parsed["repo"].lower() != self._repo.lower()
+                or re.fullmatch(
+                    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*/?",
+                    str(pull_request_url).strip(),
+                    re.IGNORECASE,
+                )
+                is None
+            ):
+                raise ValueError(
+                    "Merge automation requires a canonical PR URL in the authored repository."
+                )
         repo = self._repo or parsed["repo"]
         normalized_head_sha = self._coerce_text(
             head_sha, max_chars=80
@@ -21443,6 +21535,35 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 context_value = node_inputs.get(context_key)
                 if context_value is not None:
                     parameters[context_key] = context_value
+        if agent_id == "omnigent" and self._workflow_patch_enabled(
+            RUN_OMNIGENT_EXECUTION_PLAN_BINDING_AUTHORITY_PATCH
+        ):
+            # Only admission owns the complete binding, including task-input
+            # and artifact evidence. Plan nodes and runtime.parameters may
+            # repeat that binding, but cannot replace, mint, or erase it.
+            # Check after model-selection parameter flattening as that is also
+            # authored input. Retained pre-patch histories keep their original
+            # AgentRun request shape.
+            admitted_binding = (workflow_parameters or {}).get(
+                "omnigentExecutionPlan"
+            )
+            for source_name, source in (
+                ("node.runtime", runtime_block),
+                ("node", node_inputs),
+                ("parameters", parameters),
+            ):
+                supplied_binding = source.get("omnigentExecutionPlan")
+                if supplied_binding is not None and (
+                    admitted_binding is None or supplied_binding != admitted_binding
+                ):
+                    raise ValueError(
+                        f"{source_name}.omnigentExecutionPlan conflicts with "
+                        "the admitted workflow execution plan"
+                    )
+            if admitted_binding is not None:
+                parameters["omnigentExecutionPlan"] = admitted_binding
+            else:
+                parameters.pop("omnigentExecutionPlan", None)
         if (
             agent_id == "omnigent"
             and self._workflow_patch_enabled(
@@ -23606,6 +23727,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 ) or self._get_from_result(fetch_result, "url")
                 # If external_url is the session URL, try to extract PR URL
                 # from the summary or output_refs text.
+                if (
+                    pr_url
+                    and workflow.patched("jules-merge-target-authority-v1")
+                    and not re.fullmatch(
+                        r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*/?",
+                        str(pr_url),
+                    )
+                ):
+                    pr_url = None
                 if pr_url and not _GITHUB_PR_URL_PATTERN.search(pr_url):
                     summary_text = self._get_from_result(fetch_result, "summary") or ""
                     pr_match = _GITHUB_PR_URL_PATTERN.search(summary_text)
@@ -23632,14 +23762,43 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         if base_override and base_override != starting_branch
                         else None
                     )
+                    expected_repository = (
+                        self._repo
+                        or parameters.get("repository")
+                        or parameters.get("repo")
+                        or ws.get("repository")
+                        or ws.get("repo")
+                        or ""
+                    )
+                    merge_target_branch = effective_base or starting_branch
+                    # Retained histories keep both initial and continuation
+                    # arguments; new calls project the admitted target once.
+                    if workflow.patched("jules-merge-canonical-authority-v1"):
+                        repository_target = ws.get("repositoryTarget")
+                        expected_repository = repository_name_from_value(
+                            repository_target
+                            if repository_target is not None
+                            else expected_repository,
+                            provider="git",
+                        )
+                        merge_target_branch = (
+                            base_override
+                            or ws.get("startingBranch")
+                            or ws.get("branch")
+                            or repository_branch_from_value(repository_target)
+                            or "main"
+                        )
 
                     self._get_logger().info(
                         "Jules branch-publish: merging PR %s (base=%s)",
                         pr_url,
-                        effective_base or starting_branch,
+                        merge_target_branch,
                     )
                     merge_payload = {"pr_url": pr_url}
-                    if effective_base:
+                    if workflow.patched("jules-merge-target-authority-v1"):
+                        merge_payload["expected_repository"] = expected_repository
+                        merge_payload["target_branch"] = merge_target_branch
+                    elif effective_base:
                         merge_payload["target_branch"] = effective_base
 
                     merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
@@ -23650,6 +23809,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         merge_payload,
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         **self._execute_kwargs_for_route(merge_route),
+                    )
+                    merge_result = await continue_jules_merge(
+                        merge_result,
+                        authored_payload={
+                            # A resumed legacy call must not promote the old
+                            # summary-text fallback into fresh merge authority.
+                            "pr_url": self._get_from_result(fetch_result, "external_url")
+                            or self._get_from_result(fetch_result, "url") or "",
+                            "expected_repository": expected_repository,
+                            "target_branch": merge_target_branch,
+                        },
+                        execute_merge=lambda payload: workflow.execute_activity(
+                            merge_route.activity_type, payload,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            **self._execute_kwargs_for_route(merge_route),
+                        ),
                     )
                     merged = self._get_from_result(merge_result, "merged")
                     merge_summary = self._get_from_result(merge_result, "summary") or ""

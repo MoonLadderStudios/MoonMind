@@ -15,6 +15,7 @@ vocabulary, never silently inspected or removed.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
@@ -28,6 +29,10 @@ HOST_LEASE_LABEL = "moonmind.host_lease_id"
 HOST_VOLUME_SUFFIXES = ("state", "artifacts", "cache")
 
 RuntimeCommand = Callable[..., Awaitable[tuple[int, str, str]]]
+
+
+def initializer_container_name(container_name: str) -> str:
+    return f"{container_name}-init"
 
 
 class LegacyOmnigentHostContainerService:
@@ -70,6 +75,46 @@ class LegacyOmnigentHostContainerService:
         )
         return result[0] == 0 and bool(result[1].strip())
 
+    async def remove_initializer(self, *, container_name: str, lease_id: str) -> None:
+        """Reconcile the lease's credential consumer before releasing its mounts."""
+
+        name = initializer_container_name(container_name)
+
+        async def present() -> bool:
+            code, output, _error = await self._run(
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"name=^/{re.escape(name)}$",
+                "--format",
+                "{{.Names}}",
+                check=False,
+            )
+            if code != 0:
+                raise OmnigentOAuthHostError(
+                    "OAuth host initializer presence could not be confirmed",
+                    code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+                )
+            return bool(output.strip())
+
+        if not await present():
+            return
+        owner = await self.managed_container_host_lease_ref(name)
+        if owner != lease_id:
+            if owner is None and not await present():
+                return  # A successful --rm exit raced the ownership probe.
+            raise OmnigentOAuthHostError(
+                "initializer does not belong to the current host lease",
+                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+            )
+        await self._run("docker", "rm", "-f", name, check=False)
+        if await present():
+            raise OmnigentOAuthHostError(
+                "OAuth host initializer cleanup could not be reconciled",
+                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+            )
+
     async def list_managed_containers(self) -> list[str]:
         result = await self._run(
             "docker",
@@ -85,9 +130,7 @@ class LegacyOmnigentHostContainerService:
             return []
         return [line.strip() for line in result[1].splitlines() if line.strip()]
 
-    async def managed_container_host_lease_ref(
-        self, container_name: str
-    ) -> str | None:
+    async def managed_container_host_lease_ref(self, container_name: str) -> str | None:
         """Return the durable lease identity carried by a managed container."""
 
         result = await self._run(
@@ -133,9 +176,7 @@ class LegacyOmnigentHostContainerService:
             f"{container_name}-{suffix}" for suffix in HOST_VOLUME_SUFFIXES
         )
         for volume_name in volume_names:
-            await self._run(
-                "docker", "volume", "rm", "-f", volume_name, check=False
-            )
+            await self._run("docker", "volume", "rm", "-f", volume_name, check=False)
         remaining_container = await self.container_present(container_name)
         remaining_volumes = [
             name for name in volume_names if await self.volume_present(name)
@@ -170,4 +211,5 @@ __all__ = [
     "HOST_OWNERSHIP_VALUE",
     "HOST_VOLUME_SUFFIXES",
     "LegacyOmnigentHostContainerService",
+    "initializer_container_name",
 ]

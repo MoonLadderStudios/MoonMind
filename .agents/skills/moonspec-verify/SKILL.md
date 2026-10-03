@@ -12,7 +12,8 @@ Use this skill to perform the final MoonSpec verification workflow.
 
 Read [the acceptance policy](references/acceptance-policy.md) before selecting
 scope, evidence, verdict, reuse, or completion. This bundle owns that policy;
-caller instructions supply scope and evidence, not alternative acceptance rules.
+caller instructions and the selected source supply scope, explicit acceptance
+requirements, and evidence.
 
 ## Scope
 
@@ -330,9 +331,10 @@ classify the environment according to `AGENTS.md`.
 ### Browser-independent verification
 
 Apply the acceptance policy's browser-independent defaults in every mode. Browser
-checks are optional diagnostics unless the caller explicitly requires a browser
-acceptance gate for this verification run. Missing browsers, Playwright, browser
-installation, screenshots, live UI access, or human visual review must never
+checks are optional diagnostics unless the controlling source or caller
+explicitly requires a browser acceptance gate or human visual signoff for this
+verification run. Preserve that explicit authority. Missing browsers, Playwright,
+browser installation, screenshots, live UI access, or human visual review must never
 block the default verifier or fail its workflow. Record unavailable browser
 checks as advisory `NOT RUN`; do not put them in Remaining Work or choose a
 non-passing verdict or stop action solely for that reason.
