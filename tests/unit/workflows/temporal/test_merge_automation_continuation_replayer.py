@@ -98,13 +98,25 @@ class _RecordedCIFailureResolver:
 
 @workflow.defn(name="MoonMind.MergeAutomation")
 class _PreActionableCIFailureGate(MoonMindMergeAutomationWorkflow):
-    def _actionable_ci_failures_enabled(self) -> bool:
-        # Record a pre-fix worker's wait without introducing the new marker.
+    def _actionable_ci_failures_enabled(self, evaluation: Any = None) -> bool:
+        # Record the pre-fix worker's decision for failed-and-queued CI.
         return False
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await super().run(payload)
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class _ReadinessFixtureResolver:
+    @workflow.run
+    async def run(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        return await workflow.execute_activity(
+            "qualification.merge_fixture",
+            {},
+            task_queue=workflow.info().task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
 
 
 def _payload(scenario: str) -> dict[str, Any]:
@@ -236,16 +248,19 @@ async def test_continuation_histories_replay_deterministically(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("actionable_ci_failure_patch", "explicit_failure"),
+    ("versioned_producer", "explicit_failure"),
     [(False, True), (True, True), (True, False)],
-    ids=["legacy-failed-and-queued", "failed-and-queued", "queued-only"],
+    ids=["old-producer-failed-and-queued", "v1-producer-failed-and-queued", "v1-producer-queued-only"],
 )
 async def test_incomplete_ci_histories_replay_deterministically(
     monkeypatch: pytest.MonkeyPatch,
-    actionable_ci_failure_patch: bool,
+    versioned_producer: bool,
     explicit_failure: bool,
 ) -> None:
-    should_wait = not (actionable_ci_failure_patch and explicit_failure)
+    should_wait = not (versioned_producer and explicit_failure)
+    version_evidence = (
+        {"actionableCiFailuresVersion": "v1"} if versioned_producer else {}
+    )
     readiness_calls = 0
     initial_blockers = [
         {
@@ -271,6 +286,7 @@ async def test_incomplete_ci_histories_replay_deterministically(
         readiness_calls += 1
         if readiness_calls == 1:
             return {
+                **version_evidence,
                 "headSha": "abcdef1",
                 "ready": False,
                 "pullRequestOpen": True,
@@ -281,6 +297,7 @@ async def test_incomplete_ci_histories_replay_deterministically(
             }
         if should_wait and readiness_calls == 2:
             return {
+                **version_evidence,
                 "headSha": "abcdef1",
                 "ready": False,
                 "pullRequestOpen": True,
@@ -290,6 +307,7 @@ async def test_incomplete_ci_histories_replay_deterministically(
                 "blockers": [{"kind": "checks_failed", "summary": "Tests failed"}],
             }
         return {
+            **version_evidence,
             "headSha": "fedcba2",
             "ready": False,
             "pullRequestOpen": False,
@@ -313,18 +331,6 @@ async def test_incomplete_ci_histories_replay_deterministically(
     monkeypatch.setattr(
         MoonMindMergeAutomationWorkflow, "_publish_visibility", lambda self: None
     )
-    original_patched = module.workflow.patched
-    if not actionable_ci_failure_patch:
-        # Omit the new marker to record the command sequence of an old worker.
-        monkeypatch.setattr(
-            module.workflow,
-            "patched",
-            lambda name: (
-                False
-                if name == module.MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH
-                else original_patched(name)
-            ),
-        )
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
     parent_queue = "mm-ci-failure-replay"
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -362,7 +368,7 @@ async def test_incomplete_ci_histories_replay_deterministically(
             handle = await env.client.start_workflow(
                 MoonMindMergeAutomationWorkflow.run,
                 _payload("ci_failure"),
-                id=f"mm-ci-failure-{actionable_ci_failure_patch}-{explicit_failure}",
+                id=f"mm-ci-failure-{versioned_producer}-{explicit_failure}",
                 task_queue=parent_queue,
                 execution_timeout=timedelta(minutes=2),
             )
@@ -386,6 +392,9 @@ async def test_incomplete_ci_histories_replay_deterministically(
     assert observations[0]["blockers"] == initial_blockers
     assert observations[0]["checksComplete"] is False
     assert observations[0]["checksPassing"] is False
+    assert observations[0].get("actionableCiFailuresVersion") == (
+        "v1" if versioned_producer else None
+    )
     assert observations[-1]["pullRequestMerged"] is True
     child_started = next(
         event.event_id
@@ -402,7 +411,6 @@ async def test_incomplete_ci_histories_replay_deterministically(
 
     # The current implementation must replay both histories without forcing
     # the new branch into an old history or changing its recorded wait timer.
-    monkeypatch.setattr(module.workflow, "patched", original_patched)
     await Replayer(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
@@ -410,56 +418,117 @@ async def test_incomplete_ci_histories_replay_deterministically(
 
 
 @pytest.mark.asyncio
-async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
+@pytest.mark.parametrize("review_state", ["complete", "pending", "unavailable"])
+async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgrade(
     monkeypatch: pytest.MonkeyPatch,
+    review_state: str,
 ) -> None:
-    ordinary_or_malformed_signals = [
-        {"source": "github", "event": "check_run"},
-        {"action": "reconcile_known_ci_failure"},
-        {
-            "schemaVersion": "merge-automation-reconcile/v1",
-            "action": "unknown",
-        },
-        {
-            "schemaVersion": "merge-automation-reconcile/v0",
-            "action": "reconcile_known_ci_failure",
-        },
-    ]
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    state = {"merged": False, "upgraded": False}
     readiness_requests: list[dict[str, Any]] = []
-    failed_observations = 2 + len(ordinary_or_malformed_signals)
+    producer_results: list[dict[str, Any]] = []
+    http_requests: list[str] = []
+    fresh_readiness = asyncio.Event()
+    integration_activities = TemporalIntegrationActivities()
+
+    def github_response(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.github.com"
+        assert request.method == "GET"
+        path = request.url.path
+        http_requests.append(path)
+        if path.endswith("/pulls/1209"):
+            body = {
+                "number": 1209,
+                "state": "closed" if state["merged"] else "open",
+                "merged": state["merged"],
+                "head": {"sha": "abcdef1", "ref": "feature"},
+                "base": {"sha": "base123", "ref": "main"},
+            }
+        elif path.endswith("/status"):
+            body = {"state": "success", "statuses": []}
+        elif path.endswith("/check-runs"):
+            body = {
+                "check_runs": [
+                    {
+                        "id": 1,
+                        "name": "required-tests",
+                        "status": "completed",
+                        "conclusion": "failure",
+                    },
+                    {
+                        "id": 2,
+                        "name": "downstream-tests",
+                        "status": "queued",
+                        "conclusion": None,
+                    },
+                ]
+            }
+        elif path.endswith("/branches/main"):
+            body = {"protected": False}
+        elif path.endswith("/reviews"):
+            if len(readiness_requests) <= 2 and review_state == "unavailable":
+                return httpx.Response(503, json={"message": "Review service unavailable"})
+            if len(readiness_requests) <= 2 and review_state == "pending":
+                body = []
+            else:
+                body = [
+                    {
+                        "id": 123,
+                        "state": "APPROVED",
+                        "user": {"login": "reviewer"},
+                        "submitted_at": "2026-10-03T00:00:00Z",
+                        "commit_id": "abcdef1",
+                    }
+                ]
+        elif path.endswith("/reactions"):
+            body = []
+        else:
+            raise AssertionError(f"Unexpected GitHub fixture request: {path}")
+        return httpx.Response(200, json=body)
+
+    transport = httpx.MockTransport(github_response)
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        GitHubService,
+        "resolve_github_token",
+        AsyncMock(return_value=("fixture-only", None)),
+    )
 
     @activity.defn(name="merge_automation.evaluate_readiness")
     async def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         readiness_requests.append(payload)
-        if len(readiness_requests) <= failed_observations:
-            return {
-                "headSha": "abcdef1",
-                "ready": False,
-                "pullRequestOpen": True,
-                "policyAllowed": True,
-                "checksComplete": False,
-                "checksPassing": False,
-                "blockers": [
-                    {
-                        "kind": "checks_failed",
-                        "summary": "Required test job failed",
-                        "source": "github",
-                    },
-                    {
-                        "kind": "checks_running",
-                        "summary": "Downstream test job is queued",
-                        "source": "github",
-                    },
-                ],
-            }
+        # Exercise the production producer and GitHub HTTP reader; only the
+        # version field is removed when recording a pre-deployment Activity.
+        evidence = await integration_activities.merge_automation_evaluate_readiness(payload)
+        if not state["upgraded"]:
+            evidence.pop("actionableCiFailuresVersion", None)
+        producer_results.append(dict(evidence))
+        if state["upgraded"]:
+            fresh_readiness.set()
+        return evidence
+
+    @activity.defn(name="qualification.merge_fixture")
+    async def merge_fixture(_payload: dict[str, Any]) -> dict[str, Any]:
+        assert producer_results[-1]["automatedReviewComplete"] is True
+        assert producer_results[-1]["checksComplete"] is False
+        assert producer_results[-1]["checksPassing"] is False
+        state["merged"] = True
         return {
+            "status": "success",
+            "mergeAutomationDisposition": "merged",
             "headSha": "abcdef1",
-            "ready": False,
-            "pullRequestOpen": False,
-            "pullRequestMerged": True,
-            "policyAllowed": True,
-            "checksComplete": True,
-            "checksPassing": True,
         }
 
     async def skip_artifact(
@@ -477,9 +546,6 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
         MoonMindMergeAutomationWorkflow, "_publish_visibility", lambda self: None
     )
     payload = _payload("legacy_ci_wait")
-    # Poll only on signals during the upgrade; no real-time timer race should
-    # release the old wait while its worker is stopped and recreated.
-    payload["mergeAutomationConfig"]["timeouts"]["fallbackPollSeconds"] = 3600
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
     parent_queue = "mm-ci-failure-upgrade"
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -504,11 +570,12 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
             Worker(
                 env.client,
                 task_queue=child_queue,
-                workflows=[_RecordedCIFailureResolver],
+                workflows=[_ReadinessFixtureResolver],
+                activities=[merge_fixture],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
         ):
-            async def wait_for_gate_timer(expected_count: int):
+            async def wait_for_old_timer():
                 try:
                     async with asyncio.timeout(10):
                         while True:
@@ -518,36 +585,21 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
                                     "start_child_workflow_execution_initiated_event_attributes"
                                 )
                                 for event in history.events
-                            ), "An ordinary signal must not opt an old gate into CI remediation"
-                            timer_count = sum(
+                            )
+                            if any(
                                 event.HasField("timer_started_event_attributes")
                                 for event in history.events
-                            )
-                            if timer_count >= expected_count:
+                            ):
                                 return history
                             await asyncio.sleep(0.01)
                 except TimeoutError as exc:
                     history = await handle.fetch_history()
                     recent_events = [
-                        {
-                            "id": event.event_id,
-                            "type": EventType.Name(event.event_type),
-                            "failure": (
-                                event.workflow_task_failed_event_attributes.failure.message
-                                if event.HasField("workflow_task_failed_event_attributes")
-                                else None
-                            ),
-                            "signal": (
-                                event.workflow_execution_signaled_event_attributes.signal_name
-                                if event.HasField("workflow_execution_signaled_event_attributes")
-                                else None
-                            ),
-                        }
+                        (event.event_id, EventType.Name(event.event_type))
                         for event in history.events[-20:]
                     ]
                     raise AssertionError(
-                        f"Expected timer {expected_count}; "
-                        f"readiness calls={len(readiness_requests)}; "
+                        f"Expected the old gate's timer; readiness calls={len(readiness_requests)}; "
                         f"recent events={recent_events}"
                     ) from exc
 
@@ -556,27 +608,21 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
                 task_queue=parent_queue,
                 workflows=[_PreActionableCIFailureGate],
                 workflow_runner=UnsandboxedWorkflowRunner(),
-                # The ephemeral server retains orphan sticky routing when the
-                # worker is replaced. Force normal-queue delivery and real
-                # history replay for every activation in this upgrade fixture.
+                # Every activation replays through the normal queue, avoiding
+                # orphaned sticky dispatch when the test replaces its worker.
                 max_cached_workflows=0,
             ):
                 handle = await env.client.start_workflow(
                     _PreActionableCIFailureGate.run,
                     payload,
-                    id="mm-open-legacy-ci-wait",
+                    id=f"mm-open-legacy-ci-wait-{review_state}",
                     task_queue=parent_queue,
-                    execution_timeout=timedelta(hours=2),
+                    execution_timeout=timedelta(minutes=2),
                 )
-                old_history = await wait_for_gate_timer(1)
-                assert (
-                    module.MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH
-                    not in old_history.to_json()
-                )
+                await wait_for_old_timer()
+                assert "actionableCiFailuresVersion" not in producer_results[0]
 
-            # A fresh worker replays the open history. The SDK remembers the
-            # absent patch as False; only explicit reconciliation may override
-            # that historical decision on a future signal-driven evaluation.
+            state["upgraded"] = True
             async with Worker(
                 env.client,
                 task_queue=parent_queue,
@@ -584,51 +630,65 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
                 workflow_runner=UnsandboxedWorkflowRunner(),
                 max_cached_workflows=0,
             ):
-                for timer_count, signal_payload in enumerate(
-                    ordinary_or_malformed_signals, start=2
-                ):
-                    await handle.signal(
-                        MoonMindMergeAutomationWorkflow.external_event, signal_payload
-                    )
-                    await wait_for_gate_timer(timer_count)
-
-            # Both requests are durably recorded before a worker can dispatch
-            # the resolver, so duplicate delivery cannot race terminal close.
-            for _ in range(2):
-                await handle.signal(
-                    MoonMindMergeAutomationWorkflow.external_event,
-                    {
-                        "schemaVersion": "merge-automation-reconcile/v1",
-                        "action": "reconcile_known_ci_failure",
-                    },
-                )
-            async with Worker(
-                env.client,
-                task_queue=parent_queue,
-                workflows=[MoonMindMergeAutomationWorkflow],
-                workflow_runner=UnsandboxedWorkflowRunner(),
-                max_cached_workflows=0,
-            ):
+                # The existing durable poll is sufficient: no operator signal
+                # or mutation of workflow history is needed after an upgrade.
+                await env.sleep(timedelta(seconds=2))
+                await asyncio.wait_for(fresh_readiness.wait(), timeout=10)
+                assert producer_results[1].get("actionableCiFailuresVersion") == "v1"
                 result = await asyncio.wait_for(handle.result(), timeout=30)
                 history = await handle.fetch_history()
+
+        observations = [
+            (await env.client.data_converter.decode(
+                event.activity_task_completed_event_attributes.result.payloads
+            ))[0]
+            for event in history.events
+            if event.HasField("activity_task_completed_event_attributes")
+            and event.activity_task_completed_event_attributes.result.payloads
+        ]
 
     assert result["status"] == "merged"
     assert result["cycles"] == 1
     assert result["latestHeadSha"] == "abcdef1"
     assert len(result["resolverChildWorkflowIds"]) == 1
-    assert len(readiness_requests) == failed_observations + 1
+    expected_timers = 1 if review_state == "complete" else 2
+    assert len(readiness_requests) == expected_timers + 2
     assert all(
         request["pullRequest"] == payload["pullRequest"]
         and request["mergeAutomationConfig"] == readiness_requests[0]["mergeAutomationConfig"]
         for request in readiness_requests
-    ), "Reconciliation must preserve the admitted PR and continuation budgets"
+    ), "Automatic recovery must preserve the admitted PR and continuation budgets"
+    assert "actionableCiFailuresVersion" not in observations[0]
+    assert observations[0]["checksComplete"] is False
+    assert observations[0]["checksPassing"] is False
+    assert {blocker["kind"] for blocker in observations[0]["blockers"]} >= {
+        "checks_failed", "checks_running"
+    }
+    assert producer_results[1]["actionableCiFailuresVersion"] == "v1"
+    if review_state != "complete":
+        assert producer_results[1]["automatedReviewComplete"] is (
+            False if review_state == "pending" else None
+        )
+        assert any(
+            blocker["kind"] == (
+                "automated_review_pending" if review_state == "pending" else "external_state_unavailable"
+            )
+            for blocker in producer_results[1]["blockers"]
+        )
+    assert producer_results[-1]["pullRequestMerged"] is True
     assert sum(
         event.HasField("timer_started_event_attributes") for event in history.events
-    ) == 1 + len(ordinary_or_malformed_signals)
+    ) == expected_timers
     assert sum(
         event.HasField("start_child_workflow_execution_initiated_event_attributes")
         for event in history.events
     ) == 1
+    assert not any(
+        event.HasField("workflow_execution_signaled_event_attributes")
+        for event in history.events
+    )
+    assert any(path.endswith("/reviews") for path in http_requests)
+    assert sum(path.endswith("/pulls/1209") for path in http_requests) == len(readiness_requests)
     await Replayer(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),

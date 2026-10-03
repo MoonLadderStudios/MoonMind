@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -1119,10 +1120,16 @@ async def test_evaluate_pull_request_readiness_reports_checks_permission_missing
 @pytest.mark.asyncio
 @pytest.mark.parametrize("review_state", ["pending", "complete", "unavailable", "disabled"])
 @pytest.mark.parametrize("known_failure", [True, False])
-async def test_failed_and_queued_checks_preserve_required_review_evidence(
+async def test_readiness_activity_preserves_required_review_for_retained_gate(
     monkeypatch, review_state, known_failure
 ):
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+    from moonmind.workflows.temporal.workflows import merge_automation as module
     from moonmind.workflows.temporal.workflows.merge_gate import classify_readiness
+
+    monkeypatch.setattr(module.workflow, "patched", lambda _: False)
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     requested_urls = []
@@ -1167,26 +1174,33 @@ async def test_failed_and_queued_checks_preserve_required_review_evidence(
         "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
         return_value=client,
     ):
-        result = await GitHubService().evaluate_pull_request_readiness(
-            repo="owner/repo",
-            pr_number=341,
-            head_sha="abc123",
-            policy={
-                "checks": "required",
-                "automatedReview": "disabled" if review_state == "disabled" else "required",
+        result = await TemporalIntegrationActivities.merge_automation_evaluate_readiness(
+            SimpleNamespace(),
+            {
+                "pullRequest": {"repo": "owner/repo", "number": 341, "headSha": "abc123"},
+                "mergeAutomationConfig": {
+                    "gate": {"github": {
+                        "checks": "required",
+                        "automatedReview": "disabled" if review_state == "disabled" else "required",
+                    }},
+                    "reviewLoop": {"enabled": False},
+                },
             },
-            review_loop_enabled=False,
         )
 
+    assert result["actionableCiFailuresVersion"] == "v1"
+    gate = module.MoonMindMergeAutomationWorkflow()
     evidence = classify_readiness(
-        result.model_dump(by_alias=True), tracked_head_sha="abc123"
+        result,
+        tracked_head_sha="abc123",
+        actionable_ci_failures=gate._actionable_ci_failures_enabled(result),
     )
-    assert result.checks_complete is False
-    assert result.checks_passing is False
+    assert result["checksComplete"] is False
+    assert result["checksPassing"] is False
     assert any(url.endswith("/reviews") for url in requested_urls) is (
         known_failure and review_state != "disabled"
     )
-    assert result.automated_review_complete is (
+    assert result["automatedReviewComplete"] is (
         {
             "pending": False,
             "complete": True,
@@ -1202,6 +1216,58 @@ async def test_failed_and_queued_checks_preserve_required_review_evidence(
         assert {blocker.kind for blocker in evidence.blockers} == {"automated_review_pending"}
     elif review_state == "unavailable":
         assert {blocker.kind for blocker in evidence.blockers} == {"external_state_unavailable"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("jira_allowed", [False, None])
+async def test_readiness_activity_capability_preserves_jira_barrier(
+    monkeypatch, jira_allowed
+):
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+    from moonmind.workflows.temporal.workflows import merge_automation as module
+    from moonmind.workflows.temporal.workflows.merge_gate import classify_readiness
+
+    github_result = PullRequestReadinessResult(
+        headSha="abc123",
+        pullRequestOpen=True,
+        checksComplete=False,
+        checksPassing=False,
+        automatedReviewComplete=True,
+        blockers=[{"kind": "checks_failed"}, {"kind": "checks_running"}],
+    )
+    monkeypatch.setattr(
+        GitHubService, "evaluate_pull_request_readiness",
+        AsyncMock(return_value=github_result),
+    )
+    monkeypatch.setattr(module.workflow, "patched", lambda _: False)
+    jira_blocker = {
+        "kind": "jira_status_pending" if jira_allowed is False else "external_state_unavailable",
+        "summary": "Jira status is pending or unavailable.",
+        "source": "jira",
+    }
+    jira_reader = AsyncMock(return_value=(jira_allowed, jira_blocker))
+
+    result = await TemporalIntegrationActivities.merge_automation_evaluate_readiness(
+        SimpleNamespace(_merge_gate_jira_status_allowed=jira_reader),
+        {
+            "pullRequest": {"repo": "owner/repo", "number": 341, "headSha": "abc123"},
+            "jiraIssueKey": "MM-341",
+            "mergeAutomationConfig": {"gate": {"jira": {"status": "required"}}},
+        },
+    )
+
+    jira_reader.assert_awaited_once_with("MM-341")
+    assert result["actionableCiFailuresVersion"] == "v1"
+    assert result["jiraStatusAllowed"] is jira_allowed
+    evidence = classify_readiness(
+        result,
+        tracked_head_sha="abc123",
+        actionable_ci_failures=module.MoonMindMergeAutomationWorkflow()._actionable_ci_failures_enabled(result),
+    )
+    assert evidence.ready is False
+    assert jira_blocker["kind"] in {blocker.kind for blocker in evidence.blockers}
 
 
 @pytest.mark.asyncio

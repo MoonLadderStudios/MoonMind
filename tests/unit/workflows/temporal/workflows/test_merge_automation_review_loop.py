@@ -317,7 +317,7 @@ async def test_recorded_pending_review_cannot_release_a_repair(
     result = await MoonMindMergeAutomationWorkflow().run(payload)
     assert result["status"] == "review_clean"
     assert len(harness.child_payloads) == 1
-    assert harness.wait_calls == int(barrier_enabled)
+    assert harness.wait_calls == int(barrier_enabled or observation == "failed_queued")
     assert not harness.request_payloads
 
 

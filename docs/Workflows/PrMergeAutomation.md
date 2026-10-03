@@ -212,19 +212,19 @@ before `pr-resolver` can select `fix-ci` or reconcile an infrastructure failure.
 Incomplete checks with no confirmed failure continue to wait. Raw check evidence
 remains incomplete and failing; resolver admission does not certify merge readiness.
 Current-head, policy, unavailable-evidence, Jira, and active automated-review
-barriers still apply. The changed timer-versus-child decision is Temporal-patched
-so retained histories keep their recorded waits during replay.
+barriers still apply. The changed timer-versus-child decision uses a capability
+in the recorded readiness result, preserving older waits during replay.
 
-Retained gates that already recorded the earlier wait decision retain that
-behavior after a worker upgrade. For an identified gate with a confirmed
-current-head failure, send the existing `merge_automation.external_event` signal
-with `{"schemaVersion":"merge-automation-reconcile/v1","action":"reconcile_known_ci_failure"}`.
-The recorded signal enables the same failure-aware readiness reevaluation for
-that gate. Ordinary events only wake the gate; malformed reconciliation requests
-do not change its admission behavior. Reconciliation preserves its saved head,
-resolver attempts, review state, and deadlines, and still checks every other
-readiness barrier before dispatching a resolver. It does not repeat publication
-or merge effects.
+Retained gates keep the earlier wait decision while replaying old observations.
+After upgrading the workflow and readiness Activity workers, their next ordinary
+event or fallback poll reads fresh readiness evidence automatically. The Activity records
+`actionableCiFailuresVersion: "v1"` alongside the check, configured review, and
+Jira evidence, allowing that observation to use the same failure-aware admission
+rule. Older observations without this capability keep their historical behavior;
+the capability applies only to the current observation. This automatic migration
+preserves the saved head, resolver attempts, review state, and deadlines, and
+still checks every other readiness barrier before dispatching a resolver. It
+does not repeat publication or merge effects or require an operator signal.
 
 ## 11.3 Automated review loop
 
