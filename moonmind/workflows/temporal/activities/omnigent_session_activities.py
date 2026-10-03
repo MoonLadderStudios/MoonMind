@@ -427,16 +427,17 @@ async def _plan_capacity_authority(
     queued. Only these compact identities cross the boundary; no credential,
     secret, or host detail does.
 
-    Only the generic host plane admits capacity before its Activity, so only it
-    resolves this authority. Resolving it for every realizer would add a
-    database read and a new failure mode to admission decisions that never use
-    the result.
+    Both the generic host and Codex planes admit Provider Profile capacity
+    before their execution Activities. Other realizers do not use this authority.
     """
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import ManagedAgentProviderProfile
 
-    if plan.payload.executionRealizerRef != "generic-omnigent-host@1":
+    if plan.payload.executionRealizerRef not in {
+        "generic-omnigent-host@1",
+        "codex-profile-bound@1",
+    }:
         return {}
     selected = sorted(
         {
