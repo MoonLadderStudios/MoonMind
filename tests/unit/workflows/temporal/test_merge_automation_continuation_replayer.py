@@ -258,9 +258,6 @@ async def test_incomplete_ci_histories_replay_deterministically(
     explicit_failure: bool,
 ) -> None:
     should_wait = not (versioned_producer and explicit_failure)
-    version_evidence = (
-        {"actionableCiFailuresVersion": "v1"} if versioned_producer else {}
-    )
     readiness_calls = 0
     initial_blockers = [
         {
@@ -284,6 +281,14 @@ async def test_incomplete_ci_histories_replay_deterministically(
     async def evaluate_readiness(_payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal readiness_calls
         readiness_calls += 1
+        version_evidence = (
+            {
+                "actionableCiFailuresVersion": "v1",
+                "readinessObservationId": activity.info().activity_id,
+            }
+            if versioned_producer
+            else {}
+        )
         if readiness_calls == 1:
             return {
                 **version_evidence,
@@ -395,6 +400,7 @@ async def test_incomplete_ci_histories_replay_deterministically(
     assert observations[0].get("actionableCiFailuresVersion") == (
         "v1" if versioned_producer else None
     )
+    assert bool(observations[0].get("readinessObservationId")) is versioned_producer
     assert observations[-1]["pullRequestMerged"] is True
     child_started = next(
         event.event_id
@@ -419,14 +425,11 @@ async def test_incomplete_ci_histories_replay_deterministically(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("review_state", ["complete", "pending", "unavailable"])
-@pytest.mark.parametrize(
-    "versioned_old_producer", [False, True],
-    ids=["old-activity", "activity-upgraded-first"],
-)
+@pytest.mark.parametrize("historical_producer", ["old", "new"])
 async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgrade(
     monkeypatch: pytest.MonkeyPatch,
     review_state: str,
-    versioned_old_producer: bool,
+    historical_producer: str,
 ) -> None:
     from unittest.mock import AsyncMock
 
@@ -439,6 +442,7 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
 
     state = {"merged": False, "upgraded": False}
     readiness_requests: list[dict[str, Any]] = []
+    readiness_activity_ids: list[str] = []
     producer_results: list[dict[str, Any]] = []
     http_requests: list[str] = []
     fresh_readiness = asyncio.Event()
@@ -514,11 +518,14 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
     @activity.defn(name="merge_automation.evaluate_readiness")
     async def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         readiness_requests.append(payload)
-        # Exercise the production producer and GitHub HTTP reader; only the
-        # version field is removed when recording a pre-deployment Activity.
+        readiness_activity_ids.append(activity.info().activity_id)
+        # An old consumer may receive either producer during a rolling update.
+        # Keep actual producer output intact except for the fields an old
+        # producer did not emit before deployment.
         evidence = await integration_activities.merge_automation_evaluate_readiness(payload)
-        if not state["upgraded"] and not versioned_old_producer:
+        if not state["upgraded"] and historical_producer == "old":
             evidence.pop("actionableCiFailuresVersion", None)
+            evidence.pop("readinessObservationId", None)
         producer_results.append(dict(evidence))
         if state["upgraded"]:
             fresh_readiness.set()
@@ -620,22 +627,25 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
                 handle = await env.client.start_workflow(
                     _PreActionableCIFailureGate.run,
                     payload,
-                    id=f"mm-open-legacy-ci-wait-{review_state}-{versioned_old_producer}",
+                    id=f"mm-open-legacy-ci-wait-{historical_producer}-{review_state}",
                     task_queue=parent_queue,
                     execution_timeout=timedelta(minutes=2),
                 )
                 old_history = await wait_for_old_timer()
-                assert producer_results[0].get("actionableCiFailuresVersion") == (
-                    "v1" if versioned_old_producer else None
-                )
 
-            # An upgraded Activity may have published its capability before
-            # the old Workflow worker recorded this wait. The new consumer
-            # must replay that timer before adopting the next fresh poll.
+            # A new producer's capability must not rewrite the old consumer's
+            # already-recorded timer. Catch that replay boundary before a
+            # fresh observation has a chance to admit the resolver.
             await Replayer(
                 workflows=[MoonMindMergeAutomationWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ).replay_workflow(old_history)
+            if historical_producer == "old":
+                assert "actionableCiFailuresVersion" not in producer_results[0]
+                assert "readinessObservationId" not in producer_results[0]
+            else:
+                assert producer_results[0]["actionableCiFailuresVersion"] == "v1"
+                assert producer_results[0]["readinessObservationId"] == readiness_activity_ids[0]
 
             state["upgraded"] = True
             async with Worker(
@@ -650,6 +660,7 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
                 await env.sleep(timedelta(seconds=2))
                 await asyncio.wait_for(fresh_readiness.wait(), timeout=10)
                 assert producer_results[1].get("actionableCiFailuresVersion") == "v1"
+                assert producer_results[1].get("readinessObservationId") == readiness_activity_ids[1]
                 result = await asyncio.wait_for(handle.result(), timeout=30)
                 history = await handle.fetch_history()
 
@@ -673,15 +684,23 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
         and request["mergeAutomationConfig"] == readiness_requests[0]["mergeAutomationConfig"]
         for request in readiness_requests
     ), "Automatic recovery must preserve the admitted PR and continuation budgets"
-    assert observations[0].get("actionableCiFailuresVersion") == (
-        "v1" if versioned_old_producer else None
-    )
+    if historical_producer == "old":
+        assert "actionableCiFailuresVersion" not in observations[0]
+        assert "readinessObservationId" not in observations[0]
+    else:
+        assert observations[0]["actionableCiFailuresVersion"] == "v1"
+        assert observations[0]["readinessObservationId"] == readiness_activity_ids[0]
     assert observations[0]["checksComplete"] is False
     assert observations[0]["checksPassing"] is False
     assert {blocker["kind"] for blocker in observations[0]["blockers"]} >= {
         "checks_failed", "checks_running"
     }
     assert producer_results[1]["actionableCiFailuresVersion"] == "v1"
+    assert readiness_activity_ids[1] != readiness_activity_ids[0]
+    assert all(
+        evidence["readinessObservationId"] == activity_id
+        for evidence, activity_id in zip(producer_results[1:], readiness_activity_ids[1:])
+    )
     if review_state != "complete":
         assert producer_results[1]["automatedReviewComplete"] is (
             False if review_state == "pending" else None

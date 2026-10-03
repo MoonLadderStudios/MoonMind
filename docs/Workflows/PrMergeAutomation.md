@@ -212,16 +212,20 @@ before `pr-resolver` can select `fix-ci` or reconcile an infrastructure failure.
 Incomplete checks with no confirmed failure continue to wait. Raw check evidence
 remains incomplete and failing; resolver admission does not certify merge readiness.
 Current-head, policy, unavailable-evidence, Jira, and active automated-review
-barriers still apply. The changed timer-versus-child decision uses a capability
-in the recorded readiness result, preserving older waits during replay.
+barriers still apply. The changed timer-versus-child decision requires producer
+capability and a Temporal replay patch for that recorded observation, preserving
+older waits during replay even when Activity workers upgrade first.
 
 Retained gates keep the earlier wait decision while replaying old observations.
 After upgrading the workflow and readiness Activity workers, their next ordinary
 event or fallback poll reads fresh readiness evidence automatically. The Activity records
-`actionableCiFailuresVersion: "v1"` alongside the check, configured review, and
-Jira evidence, allowing that observation to use the same failure-aware admission
-rule. Older observations without this capability keep their historical behavior;
-the capability applies only to the current observation. This automatic migration
+`actionableCiFailuresVersion: "v1"` and `readinessObservationId` from the scheduled
+Activity ID alongside the check, configured review, and Jira evidence. The
+workflow records a separate admission patch decision for each observation. An
+observation already consumed by an older worker retains its earlier wait; the
+next poll has a fresh Activity ID and adopts the failure-aware rule automatically.
+Older observations without both fields keep their historical behavior. This
+automatic migration
 preserves the saved head, resolver attempts, review state, and deadlines, and
 still checks every other readiness barrier before dispatching a resolver. It
 does not repeat publication or merge effects or require an operator signal.

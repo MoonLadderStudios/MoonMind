@@ -328,8 +328,14 @@ async def test_clean_response_crosses_activity_skill_and_workflow_without_anothe
 ):
     import httpx
     import runpy
+    from moonmind.workflows.temporal import activity_runtime
     from moonmind.workflows.temporal.activity_runtime import (
         TemporalIntegrationActivities,
+    )
+
+    monkeypatch.setattr(
+        activity_runtime.temporal_activity, "info",
+        lambda: SimpleNamespace(activity_id="readiness-clean-review"),
     )
 
     root = Path(__file__).resolve().parents[5]
