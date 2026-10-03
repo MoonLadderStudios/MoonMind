@@ -6,6 +6,9 @@ import pytest
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
+from moonmind.omnigent.harness_platform.runtime_binding import (
+    runtime_binding_execution_scope,
+)
 
 
 class _Repository:
@@ -288,11 +291,13 @@ async def test_janitor_rejects_host_fenced_by_replacement_binding() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", [None, "profile", "lease", "generation"])
+@pytest.mark.parametrize("scope", ["legacy", "execution"])
 async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
-    mismatch,
+    mismatch, scope,
 ) -> None:
     lease = _lease(heartbeat_age=121)
     lease.holder_workflow_id = "workflow-pre-host"
+    lease.idempotency_key = "workflow-pre-host:step-1:execution1"
     lease.status = "starting"
     lease.credential_generation = 1
     lease.omnigent_session_id = None
@@ -320,7 +325,11 @@ async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
     binding_store = InMemoryRuntimeBindingStore()
     initial = await binding_store.create_initial(
         execution_plan_ref="omnigent-execution-plan:sha256:" + "7" * 64,
-        execution_scope_ref=lease.holder_workflow_id,
+        execution_scope_ref=(
+            lease.holder_workflow_id
+            if scope == "legacy"
+            else runtime_binding_execution_scope(lease.idempotency_key)
+        ),
         provider_leases={
             "primary-model": {
                 "providerProfileRef": (
@@ -334,6 +343,28 @@ async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
             }
         },
     )
+    previous = None
+    if scope == "execution":
+        # An earlier step may retain the same immutable plan under the old
+        # parent scope. It must not redirect this execution's cleanup lookup.
+        earlier = await binding_store.create_initial(
+            execution_plan_ref=initial.executionPlanRef,
+            execution_scope_ref=lease.holder_workflow_id,
+            provider_leases={
+                "primary-model": {
+                    "providerProfileRef": "profile-1",
+                    "providerLeaseRef": "provider-lease-earlier",
+                    "credentialGeneration": 1,
+                    "credentialRuntimeRef": "credential-runtime:profile-1:1",
+                }
+            },
+        )
+        await binding_store.mark_cleanup_complete(
+            earlier.runtimeBindingRef,
+            expected_revision=1,
+            expected_fencing_generation=1,
+        )
+        previous = await binding_store.get_state(earlier.runtimeBindingRef)
     lease_client = _LeaseClient(repository.order)
     janitor = OmnigentOAuthHostJanitor(
         repository=repository,
@@ -354,6 +385,11 @@ async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
         assert repository.cleanup_claims == []
         assert runtime.stopped == 0
         assert lease_client.released == []
+        if previous is not None:
+            assert (
+                await binding_store.get_state(previous.binding.runtimeBindingRef)
+                == previous
+            )
         return
 
     result = await janitor.run_action(
@@ -372,6 +408,10 @@ async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
     ]
     state = await binding_store.get_state(initial.runtimeBindingRef)
     assert state.state == "cleanup_complete"
+    if previous is not None:
+        assert (
+            await binding_store.get_state(previous.binding.runtimeBindingRef) == previous
+        )
     # A retry after the terminal write retains the same acquired authority.
     await janitor.run_action(
         action_kind="host.stop",

@@ -476,8 +476,7 @@ class OmnigentBridgeSessionStore:
                 step_execution_id=str(row.step_execution_id or row.bridge_session_id),
                 agent_run_id=str(row.moonmind_agent_run_id),
                 source_idempotency_key=str(row.idempotency_key),
-                execution_plan_ref=str(launch.get("executionPlanRef") or "")
-                or None,
+                execution_plan_ref=str(launch.get("executionPlanRef") or "") or None,
                 owner_principal=actor_principal,
             ),
         )
@@ -741,9 +740,7 @@ class OmnigentBridgeSessionStore:
                         "leaseReleaseState": (
                             "released"
                             if lease_released is True
-                            else "held"
-                            if lease_released is False
-                            else "unknown"
+                            else "held" if lease_released is False else "unknown"
                         ),
                     }
                 )
@@ -1148,9 +1145,7 @@ class OmnigentBridgeSessionStore:
                 ),
                 **(
                     {
-                        "executionPlanRef": (
-                            request.omnigent_execution_plan.plan_ref
-                        ),
+                        "executionPlanRef": (request.omnigent_execution_plan.plan_ref),
                         "executionPlanDigest": (
                             request.omnigent_execution_plan.plan_digest
                         ),
@@ -1224,9 +1219,7 @@ class OmnigentBridgeSessionStore:
                 "egress cleanup authority requires protected launch evidence"
             )
         if phase not in {"launched", "attested"}:
-            raise OmnigentIdempotencyError(
-                "egress cleanup authority phase is invalid"
-            )
+            raise OmnigentIdempotencyError("egress cleanup authority phase is invalid")
         async with self._session_factory() as session:
             row = await self._require(session, request.idempotency_key)
             if row.host_lease_ref != host_lease_ref:
@@ -1277,7 +1270,8 @@ class OmnigentBridgeSessionStore:
                         and all(
                             safe_evidence.get(key) == value
                             for key, value in old_evidence.items()
-                            if key not in {
+                            if key
+                            not in {
                                 "deniedConnectionCount",
                                 "denialDiagnostics",
                                 "diagnostics",
@@ -1317,9 +1311,7 @@ class OmnigentBridgeSessionStore:
             selected: dict[str, Any] | None = None
             selected_effective_launch: dict[str, Any] | None = None
             for row in result.scalars().all():
-                authority = (row.metadata_ or {}).get(
-                    EGRESS_CLEANUP_AUTHORITY_KEY
-                )
+                authority = (row.metadata_ or {}).get(EGRESS_CLEANUP_AUTHORITY_KEY)
                 # Repository continuations intentionally create a newer bridge
                 # row under the same host lease. Rows without post-launch
                 # authority are not evidence that the original authority ceased
@@ -1327,8 +1319,7 @@ class OmnigentBridgeSessionStore:
                 if authority is None:
                     continue
                 if not isinstance(authority, dict) or (
-                    authority.get("schemaVersion")
-                    != EGRESS_CLEANUP_AUTHORITY_VERSION
+                    authority.get("schemaVersion") != EGRESS_CLEANUP_AUTHORITY_VERSION
                     or authority.get("hostLeaseRef") != host_lease_ref
                 ):
                     raise OmnigentIdempotencyError(
@@ -2396,10 +2387,12 @@ class OmnigentBridgeSessionStore:
         )
 
         plan = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
+        # The recorded host lease identifies this execution's current binding,
+        # including active legacy bindings whose scope is still the parent.
         state = await DbRuntimeBindingStore(
             self._session_factory
-        ).get_current_state(plan_ref, str(row.moonmind_workflow_id or ""))
-        if plan is None or state is None:
+        ).get_state_for_host_lease(str(row.host_lease_ref or ""))
+        if plan is None or state is None or state.binding.executionPlanRef != plan_ref:
             return {}
         expected_digest = "sha256:" + plan.planRef.rsplit(":", 1)[-1]
         if str(metadata.get("executionPlanDigest") or "") != expected_digest:
