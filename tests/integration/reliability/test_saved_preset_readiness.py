@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 import yaml
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
@@ -151,7 +151,8 @@ async def test_stale_schedule_stops_before_planner_or_agent(
 
 
 @pytest.mark.parametrize(
-    "runtime", [None, "auto", "omnigent", "codex_cli", "claude_code", "jules"]
+    "runtime",
+    [None, "universal", "omnigent", "codex_cli", "claude_code", "jules", "openclaw"],
 )
 async def test_current_preset_requirements_admit_saved_schedule(boundary, runtime):
     workflow, calls, sessions = boundary
@@ -176,6 +177,30 @@ async def test_current_preset_requirements_admit_saved_schedule(boundary, runtim
         == "art_new_plan"
     )
     assert calls == [ACTIVITY]
+    assert saved == original
+
+
+@pytest.mark.parametrize("runtime", ["auto", "codex_cloud", "unknown_runtime"])
+async def test_unsupported_saved_runtime_stops_before_planner_or_agent(
+    boundary, monkeypatch, runtime
+):
+    workflow, calls, _ = boundary
+    planner = AsyncMock()
+    monkeypatch.setattr(run_module, "execute_typed_activity", planner)
+    saved = parameters()
+    saved["targetRuntime"] = runtime
+    original = deepcopy(saved)
+
+    with pytest.raises(
+        ApplicationError, match="payload.targetRuntime must be one of:"
+    ) as raised:
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+        )
+
+    assert raised.value.non_retryable
+    assert calls == []
+    planner.assert_not_awaited()
     assert saved == original
 
 
