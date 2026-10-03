@@ -29,7 +29,9 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from temporalio.exceptions import ApplicationError
+from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, ApplicationError, TimeoutType
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 from moonmind.omnigent.harness_platform.execution_plan import (
     compute_model_config_digest,
@@ -1557,6 +1559,261 @@ def _codex_admission() -> OmnigentSessionAdmissionDecision:
         runtime_id="codex_cli",
         capacity_scope_ref="provider-profile:codex_openai_oauth",
     ).model_copy(update={"execution_realizer_ref": "codex-profile-bound@1"})
+
+
+def _execution_timeout(timeout_type: TimeoutType) -> ActivityError:
+    error = ActivityError(
+        "Execution delivery timed out",
+        scheduled_event_id=10,
+        started_event_id=0 if timeout_type == TimeoutType.SCHEDULE_TO_START else 11,
+        identity="test-worker",
+        activity_type="integration.omnigent.execute",
+        activity_id="execution-1",
+        retry_state=None,
+    )
+    error.__cause__ = TemporalTimeoutError(
+        "Execution delivery timed out",
+        type=timeout_type,
+        last_heartbeat_details=[],
+    )
+    return error
+
+
+class _TimedOutCodexRun(_ExecutingRun):
+    async def _execute_routed_activity(self, name, payload=None, **kwargs):
+        result = await super()._execute_routed_activity(name, payload, **kwargs)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+async def _run_codex_execution(
+    run: _ExecutingRun, *, maximum_attempts: int = 1
+) -> tuple[Any, Any]:
+    return await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(plan_binding=PLAN_REF).model_copy(
+            update={"execution_profile_ref": "codex_openai_oauth"}
+        ),
+        admission=_codex_admission(),
+        parent_info=None,
+        stc_seconds=600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+        retry_policy=RetryPolicy(maximum_attempts=maximum_attempts),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_type", list(TimeoutType))
+async def test_codex_handoff_releases_only_a_known_unstarted_delivery(
+    monkeypatch: pytest.MonkeyPatch, timeout_type: TimeoutType
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    error = _execution_timeout(timeout_type)
+    run = _TimedOutCodexRun([error])
+    _capture_release_signals(monkeypatch, run)
+
+    with pytest.raises(ActivityError) as raised:
+        await _run_codex_execution(run)
+
+    assert raised.value is error
+    releases = [name for name, _ in run.signals if name == "release_slot"]
+    if timeout_type == TimeoutType.SCHEDULE_TO_START:
+        assert releases == ["release_slot"]
+        assert run._omnigent_capacity_state == "released"
+        assert run._omnigent_pending_request is None
+    else:
+        assert releases == []
+        assert run._omnigent_capacity_state == "consumed"
+        assert run._omnigent_pending_request is run.executions[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconcile_admission", [False, True])
+async def test_codex_handoff_timeout_preserves_an_earlier_uncertain_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+    reconcile_admission: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = _TimedOutCodexRun(
+        [
+            _execution_timeout(TimeoutType.HEARTBEAT),
+            _execution_timeout(TimeoutType.SCHEDULE_TO_START),
+        ]
+    )
+    monkeypatch.setattr(
+        run,
+        "_workflow_patch_enabled",
+        lambda marker: (
+            reconcile_admission
+            if marker == "omnigent-resume-owned-admission-v1"
+            else True
+        ),
+    )
+    _capture_release_signals(monkeypatch, run)
+
+    for _ in range(2):
+        with pytest.raises(ActivityError):
+            await _run_codex_execution(run)
+
+    assert not any(name == "release_slot" for name, _ in run.signals)
+    assert run._omnigent_capacity_state == "consumed"
+    if reconcile_admission:
+        assert run.executions[0] is run.executions[1]
+        assert sum(name == "request_slot" for name, _ in run.signals) == 1
+        assert run._omnigent_pending_request is run.executions[0]
+
+
+@pytest.mark.asyncio
+async def test_codex_handoff_timeout_does_not_release_server_side_retry_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = _TimedOutCodexRun([_execution_timeout(TimeoutType.SCHEDULE_TO_START)])
+    _capture_release_signals(monkeypatch, run)
+
+    with pytest.raises(ActivityError):
+        await _run_codex_execution(run, maximum_attempts=2)
+
+    assert not any(name == "release_slot" for name, _ in run.signals)
+    assert run._omnigent_capacity_state == "consumed"
+
+
+@pytest.mark.asyncio
+async def test_codex_handoff_recovery_preserves_pre_patch_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda marker: marker != "agent-run-codex-execution-handoff-recovery-v1",
+    )
+    run = _TimedOutCodexRun([_execution_timeout(TimeoutType.SCHEDULE_TO_START)])
+    _capture_release_signals(monkeypatch, run)
+
+    with pytest.raises(ActivityError):
+        await _run_codex_execution(run)
+
+    assert not any(name == "release_slot" for name, _ in run.signals)
+    assert run._omnigent_capacity_state == "consumed"
+
+
+@pytest.mark.asyncio
+async def test_codex_workflow_retry_reacquires_after_an_unstarted_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = _TimedOutCodexRun(
+        [
+            _execution_timeout(TimeoutType.SCHEDULE_TO_START),
+            {
+                "summary": "completed after a worker became available",
+                "metadata": {"admittedProviderCapacityCleanupCompleted": True},
+            },
+        ]
+    )
+    _capture_release_signals(monkeypatch, run)
+
+    result, _ = await run._execute_profile_bound_with_remaining_budget(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(plan_binding=PLAN_REF).model_copy(
+            update={"execution_profile_ref": "codex_openai_oauth"}
+        ),
+        admission=_codex_admission(),
+        parent_info=None,
+        stc_seconds=600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+
+    assert result["summary"] == "completed after a worker became available"
+    assert sum(name == "request_slot" for name, _ in run.signals) == 2
+    assert sum(name == "release_slot" for name, _ in run.signals) == 2
+    tickets = [request.admitted_provider_capacity for request in run.executions]
+    assert tickets[1].admission_epoch == tickets[0].admission_epoch + 1
+    assert all(
+        options["retry_policy"].maximum_attempts == 1
+        for options in run.execution_options
+    )
+
+
+@pytest.mark.asyncio
+async def test_codex_retry_budget_excludes_durable_capacity_queueing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    now = datetime(2026, 10, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr(agent_run_module.workflow, "now", lambda: now)
+    run = _TimedOutCodexRun(
+        [
+            _execution_timeout(TimeoutType.SCHEDULE_TO_START),
+            {
+                "summary": "completed after durable waiting",
+                "metadata": {"admittedProviderCapacityCleanupCompleted": True},
+            },
+        ]
+    )
+    _capture_release_signals(monkeypatch, run)
+    original_admit = run._admit_omnigent_capacity_before_execution
+    original_execute = run._execute_routed_activity
+
+    async def admit_after_capacity_wait(**kwargs):
+        nonlocal now
+        admitted = await original_admit(**kwargs)
+        if not run.executions:
+            now += timedelta(hours=1)
+        return admitted
+
+    async def execute_after_worker_wait(name, payload=None, **kwargs):
+        nonlocal now
+        if name == "integration.omnigent.execute" and not run.executions:
+            now += timedelta(seconds=2)
+        return await original_execute(name, payload, **kwargs)
+
+    monkeypatch.setattr(
+        run, "_admit_omnigent_capacity_before_execution", admit_after_capacity_wait
+    )
+    monkeypatch.setattr(run, "_execute_routed_activity", execute_after_worker_wait)
+    result, _ = await run._execute_profile_bound_with_remaining_budget(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(plan_binding=PLAN_REF).model_copy(
+            update={"execution_profile_ref": "codex_openai_oauth"}
+        ),
+        admission=_codex_admission(),
+        parent_info=None,
+        stc_seconds=600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+
+    assert result["summary"] == "completed after durable waiting"
+    assert [options["start_to_close_timeout"] for options in run.execution_options] == [
+        timedelta(seconds=600),
+        timedelta(seconds=598),
+    ]
+
+
+@pytest.mark.parametrize("retained", [False, True])
+@pytest.mark.parametrize("admit_capacity", [False, True])
+def test_codex_workflow_retry_policy_preserves_retained_histories(
+    monkeypatch: pytest.MonkeyPatch, retained: bool, admit_capacity: bool
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda marker: not (
+            retained and marker == "agent-run-codex-execution-handoff-recovery-v1"
+        ),
+    )
+    run = _RecordingRun()
+    assert run._omnigent_uses_remaining_budget_retry(
+        act_name="integration.omnigent.execute",
+        admission=_codex_admission(),
+        admit_capacity_before_activity=admit_capacity,
+    ) is (admit_capacity and not retained)
 
 
 @pytest.mark.parametrize("retained", [False, True])
