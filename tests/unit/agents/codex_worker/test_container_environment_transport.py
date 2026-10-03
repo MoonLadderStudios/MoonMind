@@ -12,7 +12,11 @@ from uuid import uuid4
 import pytest
 
 from moonmind.agents.codex_worker.handlers import CodexExecHandler, CommandResult
-from moonmind.agents.codex_worker.worker import CodexWorker, CodexWorkerConfig, JobCancellationRequested
+from moonmind.agents.codex_worker.worker import (
+    CodexWorker,
+    CodexWorkerConfig,
+    JobCancellationRequested,
+)
 from tests.unit.agents.codex_worker.test_worker import (
     FakeQueueClient,
     _build_execute_stage_payloads,
@@ -24,9 +28,13 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.mark.parametrize("pull_mode", ["always", "if-missing"])
 @pytest.mark.parametrize("success_log_failure", [False, True])
+@pytest.mark.parametrize("api_version", [None, "1.47"])
 async def test_container_launch_keeps_values_out_of_argv_and_client_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    pull_mode: str, success_log_failure: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pull_mode: str,
+    success_log_failure: bool,
+    api_version: str | None,
 ) -> None:
     authored = {
         "BUILD_CREDENTIAL": "fixture-sensitive-build-value",
@@ -40,7 +48,10 @@ async def test_container_launch_keeps_values_out_of_argv_and_client_environment(
         "SPACES": "  preserved  ",
     }
     monkeypatch.setenv("DOCKER_HOST", "unix:///trusted/docker.sock")
-    monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
+    if api_version is None:
+        monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("DOCKER_API_VERSION", api_version)
     worker = CodexWorker(
         config=CodexWorkerConfig(
             moonmind_url="http://localhost:8000",
@@ -82,6 +93,8 @@ async def test_container_launch_keeps_values_out_of_argv_and_client_environment(
                     b"HTTP/1.1 201 Created\r\nContent-Length: "
                     + str(len(body)).encode() + b"\r\n\r\n" + body
                 )
+            elif args[1] == "version":
+                self.stdout.feed_data(b"1.52\n")
             self.stdout.feed_eof()
             self.stderr.feed_eof()
             self.stdin = self
@@ -109,6 +122,8 @@ async def test_container_launch_keeps_values_out_of_argv_and_client_environment(
                     + body,
                     b"",
                 )
+            if self.args[1] == "version":
+                return b"1.52\n", b""
             return b"", b""
 
     async def spawn(*args, **kwargs):
@@ -137,7 +152,12 @@ async def test_container_launch_keeps_values_out_of_argv_and_client_environment(
         assert options["env"] is None or options["env"] == dict(os.environ)
     assert len(requests) == 1
     headers, body = requests[0].split(b"\r\n\r\n", 1)
-    assert headers.startswith(f"POST /containers/create?name=mm-task-{job_id} ".encode())
+    expected_version = api_version or "1.52"
+    assert headers.startswith(
+        f"POST /v{expected_version}/containers/create?name=mm-task-{job_id} ".encode()
+    )
+    version_queries = [args for args, _ in observed if args[1] == "version"]
+    assert len(version_queries) == (1 if api_version is None else 0)
     config = json.loads(body)
     received_env = dict(item.split("=", 1) for item in config["Env"])
     assert {key: received_env[key] for key in authored} == authored
@@ -165,6 +185,7 @@ async def test_container_transport_failure_preserves_diagnostics_and_owned_clean
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     secret = "fixture-sensitive-container-setting"
+    monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
     worker = CodexWorker(
         config=CodexWorkerConfig(
             moonmind_url="http://localhost:8000", worker_id="worker-1",
@@ -242,6 +263,8 @@ async def test_container_transport_failure_preserves_diagnostics_and_owned_clean
     async def run_stage(command, **kwargs):
         commands.append(command)
         action = command[1]
+        if action == "version":
+            return CommandResult(tuple(command), 0, "1.52\n", "")
         if action == "image":
             return CommandResult(tuple(command), 1, "", "missing image")
         if action == "inspect":
@@ -295,10 +318,67 @@ async def test_container_transport_failure_preserves_diagnostics_and_owned_clean
     assert secret not in str(result.error_message)
 
 
+@pytest.mark.parametrize(
+    "failure", ["unavailable", "malformed", "timeout", "cancelled"]
+)
+async def test_container_create_requires_successful_api_negotiation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=CodexExecHandler(workdir_root=tmp_path),
+    )
+
+    async def version_query(command, **options):
+        assert command == ["docker", "version", "--format", "{{.Server.APIVersion}}"]
+        assert options["env"] == dict(os.environ)
+        assert options["timeout_seconds"] == 2.0
+        if failure == "timeout":
+            raise asyncio.TimeoutError()
+        if failure == "cancelled":
+            raise JobCancellationRequested("cancelled during version query")
+        return CommandResult(
+            tuple(command), 1 if failure == "unavailable" else 0, "invalid", ""
+        )
+
+    async def unexpected_create(*args, **options):
+        raise AssertionError("must not create a container without a valid API version")
+
+    monkeypatch.setattr(worker, "_run_stage_command", version_query)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_create)
+    error = {
+        "unavailable": RuntimeError,
+        "malformed": ValueError,
+        "timeout": asyncio.TimeoutError,
+        "cancelled": JobCancellationRequested,
+    }[failure]
+    with pytest.raises(error):
+        await worker._create_task_container(
+            config={"Image": "fixture-image", "Env": [], "Labels": {}},
+            name="fixture-container",
+            cwd=tmp_path,
+            log_path=tmp_path / "execute.log",
+            timeout_seconds=2.0,
+        )
+
+
 @pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize("api_version", [None, "1.47"])
 @pytest.mark.slow
 async def test_container_real_docker_cli_transfers_json_and_half_closes_stdin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chunked: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    chunked: bool,
+    api_version: str | None,
 ) -> None:
     """Exercise the installed Docker CLI against a run-local fake daemon only."""
     binary = shutil.which("docker")
@@ -309,7 +389,10 @@ async def test_container_real_docker_cli_transfers_json_and_half_closes_stdin(
     docker_config.mkdir()
     monkeypatch.setenv("DOCKER_HOST", f"unix://{socket_path}")
     monkeypatch.setenv("DOCKER_CONFIG", str(docker_config))
-    monkeypatch.setenv("DOCKER_API_VERSION", "1.47")
+    if api_version is None:
+        monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("DOCKER_API_VERSION", api_version)
     monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
     monkeypatch.delenv("DOCKER_TLS", raising=False)
     monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
@@ -345,6 +428,22 @@ async def test_container_real_docker_cli_transfers_json_and_half_closes_stdin(
                 response = b"HTTP/1.1 200 OK\r\nAPI-Version: 1.47\r\nOSType: linux\r\nContent-Length: 2\r\nConnection: close\r\n\r\n"
                 if method != "HEAD":
                     response += b"OK"
+            elif path.endswith("/version"):
+                response_body = json.dumps(
+                    {
+                        "Version": "27.0.0",
+                        "ApiVersion": "1.47",
+                        "MinAPIVersion": "1.24",
+                        "Os": "linux",
+                        "Arch": "amd64",
+                    }
+                ).encode()
+                response = (
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                    + str(len(response_body)).encode()
+                    + b"\r\nConnection: close\r\n\r\n"
+                    + response_body
+                )
             else:
                 raise AssertionError(f"unexpected fake-daemon request: {method} {path}")
             writer.write(response)

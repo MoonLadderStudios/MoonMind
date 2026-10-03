@@ -22,7 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from moonmind.auth.github_app_setup import GitHubAppSetupService, SetupConfiguration
-from moonmind.workflows.executions.repository_contract import RepositoryRouteError
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryOperation,
+    RepositoryRouteError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -68,7 +71,7 @@ class GitHubAppBeginRequest(BaseModel):
     )
     display_name: str = Field(default="GitHub App connection", alias="displayName")
     endpoint_ref: str = Field(default="https://github.com", alias="endpointRef")
-    allowed_operations: Sequence[str] = Field(
+    allowed_operations: Sequence[RepositoryOperation] = Field(
         default=("read",), alias="allowedOperations"
     )
 
@@ -185,8 +188,9 @@ async def begin_github_app_setup(
         if provider_origin.hostname == "api.github.com"
         else f"{provider_origin.scheme}://{provider_origin.netloc}"
     )
+    app_path = "apps" if provider_origin.hostname == "api.github.com" else "github-apps"
     setup_url = (
-        f"{install_origin}/apps/{quote(request.app_slug.strip(), safe='')}"
+        f"{install_origin}/{app_path}/{quote(request.app_slug.strip(), safe='')}"
         f"/installations/new?state={quote(pending.state, safe='')}"
     )
     return GitHubAppBeginResponse(

@@ -9442,7 +9442,7 @@ export interface components {
              *       "read"
              *     ]
              */
-            allowedOperations: string[];
+            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[];
         };
         /** GitHubAppBeginResponse */
         GitHubAppBeginResponse: {

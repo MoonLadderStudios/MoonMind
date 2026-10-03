@@ -159,7 +159,9 @@ allow the managed-session user to copy them.
    Tmate) and credential verification accept only Docker named-volume identifiers,
    never host paths. Container targets must be canonical absolute directory paths
    without mount-option delimiters. The API validates requested and derived
-   defaults, and each Docker launch independently validates the mount and uses
+   defaults. Omitted, empty, and whitespace-only optional volume fields select
+   the same provider defaults; nonblank overrides retain strict validation.
+   Each Docker launch independently validates the mount and uses
    explicit `--mount type=volume` semantics. Existing invalid session records fail
    closed before contacting Docker.
 

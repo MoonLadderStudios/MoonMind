@@ -528,7 +528,9 @@ The retained worker `task.container.env` adapter sends the container-create JSON
 through the configured Docker CLI's `system dial-stdio` tunnel. Values, including
 multiline settings, travel through stdin and never enter process arguments or the
 Docker client's environment. The CLI retains deployment-owned connection,
-context, and TLS settings. Creation and attachment share the execution deadline;
+context, and TLS settings. Unless `DOCKER_API_VERSION` is explicitly set, the
+worker queries the selected daemon's API version through that CLI before sending
+a versioned container-create request. Negotiation, creation, and attachment share the execution deadline;
 after an uncertain create, cleanup reconciles the unique launch label before
 removing a container.
 
