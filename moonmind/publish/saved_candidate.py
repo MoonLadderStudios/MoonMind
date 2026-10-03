@@ -29,6 +29,10 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.publish import is_unpublished_submodule_failure
+from moonmind.publish.submodules import (
+    SubmodulePublicationError,
+    verify_submodule_publication,
+)
 from moonmind.schemas.saved_work_models import saved_work_path_exclusion
 from moonmind.utils.logging import redact_sensitive_text
 
@@ -868,9 +872,30 @@ async def push_candidate(
         await scan(Path(repo_dir), candidate_sha, base_sha, git.local_env)
     except RuntimeError as exc:
         raise SavedPublicationError("PUBLICATION_SCAN_BLOCKED", str(exc)) from exc
+    try:
+        await verify_submodule_publication(
+            repo_dir=Path(repo_dir),
+            candidate_ref=candidate_sha,
+            base_ref=base_sha,
+            run_git=git.run,
+            remote_url=remote_url,
+        )
+    except SubmodulePublicationError as exc:
+        dependency_unavailable = is_unpublished_submodule_failure(str(exc))
+        return outcome(
+            "unavailable",
+            (
+                "dependency_commit_unavailable"
+                if dependency_unavailable
+                else "dependency_verification_unavailable"
+            ),
+            observed,
+            retryable=not dependency_unavailable,
+            summary=str(exc),
+        )
     pushed = await git.run(
         "push",
-        "--recurse-submodules=check",
+        "--recurse-submodules=no",
         "--porcelain",
         f"--force-with-lease={head_ref}:{expected_remote_sha or ''}",
         remote_url,
