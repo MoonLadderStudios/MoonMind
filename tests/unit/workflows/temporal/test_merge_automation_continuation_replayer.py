@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.api.enums.v1 import IndexedValueType
+from temporalio.api.enums.v1 import EventType, IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
@@ -509,32 +509,57 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
             ),
         ):
             async def wait_for_gate_timer(expected_count: int):
-                async with asyncio.timeout(10):
-                    while True:
-                        history = await handle.fetch_history()
-                        assert not any(
-                            event.HasField(
-                                "start_child_workflow_execution_initiated_event_attributes"
+                try:
+                    async with asyncio.timeout(10):
+                        while True:
+                            history = await handle.fetch_history()
+                            assert not any(
+                                event.HasField(
+                                    "start_child_workflow_execution_initiated_event_attributes"
+                                )
+                                for event in history.events
+                            ), "An ordinary signal must not opt an old gate into CI remediation"
+                            timer_count = sum(
+                                event.HasField("timer_started_event_attributes")
+                                for event in history.events
                             )
-                            for event in history.events
-                        ), "An ordinary signal must not opt an old gate into CI remediation"
-                        timer_count = sum(
-                            event.HasField("timer_started_event_attributes")
-                            for event in history.events
-                        )
-                        if timer_count >= expected_count:
-                            return history
-                        await asyncio.sleep(0.01)
+                            if timer_count >= expected_count:
+                                return history
+                            await asyncio.sleep(0.01)
+                except TimeoutError as exc:
+                    history = await handle.fetch_history()
+                    recent_events = [
+                        {
+                            "id": event.event_id,
+                            "type": EventType.Name(event.event_type),
+                            "failure": (
+                                event.workflow_task_failed_event_attributes.failure.message
+                                if event.HasField("workflow_task_failed_event_attributes")
+                                else None
+                            ),
+                            "signal": (
+                                event.workflow_execution_signaled_event_attributes.signal_name
+                                if event.HasField("workflow_execution_signaled_event_attributes")
+                                else None
+                            ),
+                        }
+                        for event in history.events[-20:]
+                    ]
+                    raise AssertionError(
+                        f"Expected timer {expected_count}; "
+                        f"readiness calls={len(readiness_requests)}; "
+                        f"recent events={recent_events}"
+                    ) from exc
 
             async with Worker(
                 env.client,
                 task_queue=parent_queue,
                 workflows=[_PreActionableCIFailureGate],
                 workflow_runner=UnsandboxedWorkflowRunner(),
-                # A restarted test worker must get the task before the
-                # assertion deadline, rather than waiting on the old sticky
-                # queue's default ten-second ScheduleToStart timeout.
-                sticky_queue_schedule_to_start_timeout=timedelta(seconds=1),
+                # The ephemeral server retains orphan sticky routing when the
+                # worker is replaced. Force normal-queue delivery and real
+                # history replay for every activation in this upgrade fixture.
+                max_cached_workflows=0,
             ):
                 handle = await env.client.start_workflow(
                     _PreActionableCIFailureGate.run,
@@ -557,7 +582,7 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
                 task_queue=parent_queue,
                 workflows=[MoonMindMergeAutomationWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
-                sticky_queue_schedule_to_start_timeout=timedelta(seconds=1),
+                max_cached_workflows=0,
             ):
                 for timer_count, signal_payload in enumerate(
                     ordinary_or_malformed_signals, start=2
@@ -582,7 +607,7 @@ async def test_open_legacy_ci_wait_reconciles_after_worker_upgrade(
                 task_queue=parent_queue,
                 workflows=[MoonMindMergeAutomationWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
-                sticky_queue_schedule_to_start_timeout=timedelta(seconds=1),
+                max_cached_workflows=0,
             ):
                 result = await asyncio.wait_for(handle.result(), timeout=30)
                 history = await handle.fetch_history()

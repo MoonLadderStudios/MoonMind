@@ -295,7 +295,15 @@ A no-op fix pass is successful only when the latest required review covers the c
 
 External scheduling reads cover PR state/current head, reported/running checks, configured review completion, and optional Jira state. These compact observations determine whether to launch the resolver, not permission to merge.
 
-Completed failing checks and merge conflicts are resolver-actionable. Once required check reporting is complete and no relevant checks are running, failing results can launch remediation rather than leave the gate waiting indefinitely. A merge conflict does not skip required check observation or configured automated-review completion. Unavailable evidence retains its blocker; disabled gates and the active-request review-loop contract keep their existing semantics.
+Confirmed failing checks and merge conflicts are resolver-actionable. A completed
+failure can launch remediation while other checks remain queued or running;
+incomplete checks without a confirmed failure keep waiting. With the review loop
+disabled, required automated review is still observed and must complete before
+that resolver dispatch, including when a failed build has a queued downstream
+check. A merge conflict
+does not skip required check observation or configured automated-review
+completion. Unavailable evidence retains its blocker; disabled gates and the
+active-request review-loop contract keep their existing semantics.
 
 ### 12.2 Gate semantics
 
