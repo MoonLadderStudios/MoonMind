@@ -8,7 +8,13 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from temporalio import workflow, activity
-from temporalio.exceptions import ApplicationError, CancelledError
+from temporalio.exceptions import (
+    ActivityError,
+    ApplicationError,
+    CancelledError,
+    TimeoutType,
+)
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 from temporalio.workflow import (
     ActivityCancellationType,
     ChildWorkflowCancellationType,
@@ -317,6 +323,9 @@ OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
 )
 CODEX_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-codex-pre-activity-capacity-admission-v1"
+)
+CODEX_EXECUTION_HANDOFF_RECOVERY_PATCH_ID = (
+    "agent-run-codex-execution-handoff-recovery-v1"
 )
 OMNIGENT_CAPACITY_PAYLOAD_PREFLIGHT_PATCH_ID = (
     "agent-run-omnigent-capacity-payload-preflight-v1"
@@ -4881,6 +4890,26 @@ class MoonMindAgentRun:
             non_retryable=True,
         )
 
+    def _omnigent_uses_remaining_budget_retry(
+        self,
+        *,
+        act_name: str,
+        admission: Any,
+        admit_capacity_before_activity: bool,
+    ) -> bool:
+        if act_name == "integration.omnigent.profile_bound_execute":
+            return workflow.patched(OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID)
+        # A ScheduleToStart timeout on a server-side retry does not prove
+        # the first delivery never owned a host. Reuse the profile-bound
+        # single-shot owner so new Codex admissions can distinguish them.
+        return (
+            act_name == "integration.omnigent.execute"
+            and admit_capacity_before_activity
+            and getattr(admission, "execution_realizer_ref", None)
+            == "codex-profile-bound@1"
+            and workflow.patched(CODEX_EXECUTION_HANDOFF_RECOVERY_PATCH_ID)
+        )
+
     @staticmethod
     def _omnigent_host_binding_identity(
         request: AgentExecutionRequest,
@@ -5195,6 +5224,9 @@ class MoonMindAgentRun:
             and getattr(admission, "execution_realizer_ref", None)
             == "codex-profile-bound@1"
         )
+        codex_handoff_recovery = codex_capacity and self._workflow_patch_enabled(
+            CODEX_EXECUTION_HANDOFF_RECOVERY_PATCH_ID
+        )
         while True:
             resuming = (
                 reconcile_admission
@@ -5257,6 +5289,7 @@ class MoonMindAgentRun:
                 # StartToClose from a server-side retry.
                 routed_overrides["retry_policy"] = retry_policy
             activity_returned = False
+            activity_never_started = False
             activity_started_at = workflow.now()
             try:
                 result_payload = await self._execute_routed_activity(
@@ -5290,6 +5323,21 @@ class MoonMindAgentRun:
                 )
                 activity_returned = True
             except Exception as exc:
+                if codex_handoff_recovery and admitted_at is not None:
+                    # The retry owner must not charge durable profile queueing
+                    # against this execution. Preserve the clock even when
+                    # known-unused capacity is released in finally below.
+                    setattr(exc, "_omnigent_capacity_admitted_at", admitted_at)
+                activity_never_started = (
+                    codex_handoff_recovery
+                    and reconcile_admission
+                    and not resuming
+                    and retry_policy is not None
+                    and retry_policy.maximum_attempts == 1
+                    and isinstance(exc, ActivityError)
+                    and isinstance(exc.cause, TemporalTimeoutError)
+                    and exc.cause.type == TimeoutType.SCHEDULE_TO_START
+                )
                 cause = exc
                 while getattr(cause, "cause", None) is not None:
                     cause = cause.cause
@@ -5345,8 +5393,11 @@ class MoonMindAgentRun:
                 # A heartbeat timeout or worker loss is not a cleanup receipt.
                 # Keep the admitted request and lease while reconciliation may
                 # find a live session; the runtime's existing binding/turn fence
-                # owns reattachment. Only a completed Activity can release here.
-                cleanup_confirmed = activity_returned
+                # owns reattachment. A single-shot ScheduleToStart timeout
+                # on a fresh admission proves no host ever consumed it. A
+                # resumed admission can still belong to an earlier live
+                # delivery even when this delivery never started.
+                cleanup_confirmed = activity_returned or activity_never_started
                 if codex_capacity and activity_returned:
                     metadata = (
                         result_payload.get("metadata", {})
@@ -5466,7 +5517,8 @@ class MoonMindAgentRun:
                 if getattr(cause, "non_retryable", False):
                     raise
                 cause = getattr(cause, "cause", None)
-            elapsed = (workflow.now() - lane_start).total_seconds()
+            budget_start = getattr(exc, "_omnigent_capacity_admitted_at", lane_start)
+            elapsed = (workflow.now() - budget_start).total_seconds()
             retry_stc = profile_bound_retry_start_to_close_seconds(
                 first_stc_seconds=stc_seconds,
                 elapsed_seconds=elapsed,
@@ -8129,10 +8181,12 @@ class MoonMindAgentRun:
                                 )
                             )
                             use_remaining_budget_retry = (
-                                act_name
-                                == "integration.omnigent.profile_bound_execute"
-                                and workflow.patched(
-                                    OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID
+                                self._omnigent_uses_remaining_budget_retry(
+                                    act_name=act_name,
+                                    admission=admission,
+                                    admit_capacity_before_activity=(
+                                        admit_capacity_before_activity
+                                    ),
                                 )
                             )
                             if use_remaining_budget_retry:

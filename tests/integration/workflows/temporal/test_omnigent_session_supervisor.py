@@ -29,7 +29,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
-from api_service.db.base import get_async_session
+from api_service.db import base as db_base
 from api_service.db.models import ProviderProfileSlotLease
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
@@ -823,7 +823,7 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
         commit=AsyncMock(),
         refresh=AsyncMock(),
     )
-    app.dependency_overrides[get_async_session] = lambda: db_session
+    app.dependency_overrides[db_base.get_async_session] = lambda: db_session
     _override_user_dependencies(app, is_superuser=False)
     profile_snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
@@ -1198,8 +1198,6 @@ async def test_plan_bound_codex_keeps_recorded_realizer_and_replays(
 ) -> None:
     """Two Codex runs share one real slot; the parent's wait is observable."""
 
-    import api_service.db.base as db_base
-
     _reset_state()
     STATE["execution_realizer_ref"] = "codex-profile-bound@1"
     binding = OmnigentExecutionPlanBinding(
@@ -1304,10 +1302,13 @@ async def test_plan_bound_codex_keeps_recorded_realizer_and_replays(
                 )
                 assert [row.lease_id for row in held] == [first.id + ":agent"]
 
-            capacity.finish_first.set()
-            results = await asyncio.wait_for(
-                asyncio.gather(first.result(), second.result()), 30
-            )
+            # Exercise the release wakeup without advancing the manager's
+            # periodic fallback timer while waiting for workflow completion.
+            with env.auto_time_skipping_disabled():
+                capacity.finish_first.set()
+                results = await asyncio.wait_for(
+                    asyncio.gather(first.result(), second.result()), 30
+                )
             assert len(capacity.started) == 2
             assert all(
                 AgentRunResult.model_validate(result).summary

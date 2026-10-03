@@ -1359,11 +1359,20 @@ the generic host reservation applies only to the generic realizer.
 
 The execution Activity consumes the admitted lease by inspecting its recorded
 plan, request, step, and credential authority. The workflow releases that lease
-after the Codex coordinator confirms host cleanup. Failed or interrupted cleanup
-keeps capacity spent for reconciliation and verified janitor teardown. A Temporal
-patch marker preserves the Activity-owned acquisition of Codex runs already
+after the Codex coordinator confirms host cleanup. New Codex handoffs use a
+single Activity attempt and bounded workflow retries. A ScheduleToStart timeout
+releases a fresh admission because execution never started; a resumed admission
+retains capacity when an earlier delivery may still own a host. Failed or
+interrupted cleanup keeps capacity spent for reconciliation and verified janitor
+teardown. Temporal patch markers preserve the Activity-owned acquisition of runs
 scheduled before this change; those retained runs can still display `executing`
 while waiting internally until they finish.
+
+After a confirmed durable owner release, the manager immediately offers the
+returned capacity to queued requests. It consumes its wakeup before awaited
+loop work so signals received during persistence remain pending for the next
+pass. The separate `provider-profile-manager-durable-release-wakeup-v1` marker
+preserves the timer ordering in retained manager histories.
 
 The UI and parent workflow should clearly indicate:
 
