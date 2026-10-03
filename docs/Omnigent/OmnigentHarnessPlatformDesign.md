@@ -1262,7 +1262,7 @@ After the plan is committed and Provider Profile leases are acquired, the realiz
 schemaVersion: moonmind.omnigent-runtime-binding.v1
 runtimeBindingRef: omnigent-runtime-binding:sha256:...
 executionPlanRef: omnigent-execution-plan:sha256:...
-executionScopeRef: mm:<workflow-id>
+executionScopeRef: omnigent-execution-scope:sha256:...
 providerLeases:
   primary-model:
     providerProfileRef: opencode-go-default
@@ -1283,6 +1283,15 @@ cleanupAuthorityRefs: []
 ```
 
 Mutable lifecycle fields are stored through the fenced control-plane aggregates. The stable aggregate identity is `(executionPlanRef, executionScopeRef)`; each accepted authority transition produces a new digest-addressed binding ref and a monotonic revision. Replaced acquired generations remain historical evidence and cannot authorize a current write.
+
+Admitted profile-bound executions derive their scope from the request's
+idempotency key. Activity redelivery reuses that scope; a new Step Execution
+acquires an independent binding even when it reuses the parent's immutable
+plan. Cleanup before host attestation resolves this same execution scope.
+Existing parent-scoped bindings remain authoritative for active matching
+acquisitions through the transition. Completed bindings remain unchanged, and
+another lease never inherits their host or session authority. The legacy
+lookup can be removed once active parent-scoped bindings have drained.
 
 ### 17.2 Credential rotation
 
