@@ -216,6 +216,11 @@ def build_generic_omnigent_execution_services(
         session_factory=session_factory
     )
 
+    repository_credentials = OmnigentGithubCredentialService(
+        docker,
+        session_factory=session_factory,
+        artifact_gateway=artifacts,
+    )
     host_runtime = GenericOmnigentHostRuntime(
         launcher=DockerOmnigentHostLauncher(
             backend=docker,
@@ -228,6 +233,7 @@ def build_generic_omnigent_execution_services(
             workspace_root=workspace_root,
             workspace_volume=workspace_volume,
             artifact_service=artifacts,
+            repository_credential_service=repository_credentials,
         ),
         skill_service=OmnigentSkillDeliveryService(
             workspace_root=workspace_root,
@@ -235,7 +241,7 @@ def build_generic_omnigent_execution_services(
             artifact_gateway=artifacts,
         ),
         tool_service=OmnigentMountedToolService(backend=docker),
-        github_credential_service=OmnigentGithubCredentialService(docker),
+        github_credential_service=repository_credentials,
         egress_service=OmnigentEgressService(backend=docker, artifacts=artifacts),
         runtime_environment_service=OmnigentRuntimeEnvironmentService(
             moonmind_url=str(os.getenv("MOONMIND_URL") or "http://api:8000"),

@@ -1,12 +1,10 @@
 import importlib.util
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.host_services.runtime_scripts import (
-    OmnigentRuntimeScriptService,
-)
+from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 
 
 def _build(
@@ -273,3 +271,65 @@ def test_projected_cli_restores_context_after_child_environment_is_stripped(tmp_
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.exercise_projection(tmp_path)
+
+
+def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(tmp_path):
+    import json
+    import os
+
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[],
+        skill_attachment={"targetPath": "/opt/moonmind-skills"},
+        step_execution_id="workflow:run:node-1:execution:1",
+        github_credential_attachment={"targetPath": "/run/mm-credentials/github"},
+    )
+    home = tmp_path / "home"
+    credentials = tmp_path / "credentials"
+    tools = tmp_path / "tools"
+    binaries = tmp_path / "bin"
+    skills = tmp_path / "skills"
+    for directory in (home, credentials / "github", tools / "bin", binaries, skills):
+        directory.mkdir(parents=True)
+    (credentials / "github" / "hosts.yml").write_text(
+        "github.com:\n  oauth_token: selected-canary\n"
+    )
+    gh = tools / "bin" / "gh"
+    gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "print(json.dumps({'ambient': [name for name in "
+        "('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN') "
+        "if os.getenv(name)], 'config': Path(os.environ['GH_CONFIG_DIR'], 'hosts.yml').read_text()}))\n"
+    )
+    gh.chmod(0o755)
+    omnigent = binaries / "omnigent"
+    omnigent.write_text(
+        f"#!/bin/sh\nGH_TOKEN=ambient-again; export GH_TOKEN; "
+        f'exec "{home}/.omnigent/moonmind/bin/gh" "$@"\n'
+    )
+    omnigent.chmod(0o755)
+    script = (
+        script.replace("/home/app", str(home))
+        .replace("/run/mm-credentials", str(credentials))
+        .replace("/opt/moonmind-tools", str(tools))
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-ceu", script, "--", "http://test-omnigent"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            **environment,
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "MOONMIND_ACTIVE_SKILLS_DIR": str(skills),
+            "GH_TOKEN": "ambient-canary",
+            "GITHUB_TOKEN": "ambient-canary",
+            "GH_ENTERPRISE_TOKEN": "ambient-canary",
+            "GITHUB_ENTERPRISE_TOKEN": "ambient-canary",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["ambient"] == []
+    assert "selected-canary" in observed["config"]

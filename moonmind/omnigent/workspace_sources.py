@@ -867,15 +867,21 @@ def compile_workspace_source(
     if authored_kind == "repository" or (
         not authored_kind and wants_repo and not wants_artifact and not wants_checkpoint
     ):
-        target_repo = _clean_str(
-            authored.get("repository")
-            or (authored.get("repositoryTarget", {}) or {}).get("repository", {})
-            if isinstance(authored.get("repositoryTarget"), Mapping)
-            else repo_alias
-        ) or repo_alias
-        target_branch = _clean_str(
-            authored.get("branch") or branch_alias
-        ) or branch_alias
+        authored_target = _as_mapping(authored.get("repositoryTarget"))
+        authored_repository = authored.get("repository") or authored_target.get(
+            "repository"
+        )
+        if isinstance(authored_repository, Mapping):
+            authored_repository = authored_repository.get("name")
+        target_repo = _clean_str(authored_repository) or repo_alias
+        target_branch = (
+            _clean_str(
+                authored.get("branch")
+                or _as_mapping(authored_target.get("branch")).get("name")
+                or branch_alias
+            )
+            or branch_alias
+        )
         check_source_runtime_supported("repository", runtime)
         return CompiledWorkspaceSource(
             kind="repository",

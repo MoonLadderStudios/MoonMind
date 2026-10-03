@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from moonmind.auth.bound_acquisition import AcquiredCredential
 
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
@@ -117,6 +119,9 @@ class OmnigentWorkspaceMaterializationPort(Protocol):
         mutation: Any,
         runtime_uid: int,
         runtime_gid: int,
+        plan: OmnigentExecutionPlanEnvelope,
+        repository_owner_ref: str,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -146,6 +151,18 @@ class OmnigentMountedToolPort(Protocol):
 class OmnigentGithubCredentialPort(Protocol):
     """Materialize and clean up run-owned repository credentials."""
 
+    async def acquire_repository_use(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        role: str,
+        operation: str,
+        repository: str | None = None,
+        execution_owner: str | None = None,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> AcquiredCredential | None: ...
+
     def anticipated_attachment(
         self, resolved_tools: Any, *, owner_ref: str
     ) -> dict[str, Any] | None: ...
@@ -160,6 +177,8 @@ class OmnigentGithubCredentialPort(Protocol):
         runtime_uid: int,
         runtime_gid: int,
         expected_omnigent_version: str = "",
+        plan: OmnigentExecutionPlanEnvelope,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def cleanup(self, attachment: dict[str, Any]) -> None: ...

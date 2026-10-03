@@ -1199,6 +1199,8 @@ async def _compile_opencode_plan(
     extra_parameters: dict | None = None,
     provider_id: str = "opencode-go",
     document_source: dict | None = None,
+    session_factory=None,
+    workflow_id="mm:test-deployment-evidence",
 ):
     """Compile one real OpenCode plan through the product admission boundary."""
 
@@ -1222,10 +1224,10 @@ async def _compile_opencode_plan(
     if document_source is not None:
         snapshot["document"]["source"] = document_source
     return await service.compile_and_persist_execution_plan(
-        session_factory=object(),
+        session_factory=session_factory or object(),
         artifact_service=artifacts,
         principal="user-1",
-        workflow_id="mm:test-deployment-evidence",
+        workflow_id=workflow_id,
         agent_profile_snapshot=snapshot,
         provider_profile=SimpleNamespace(
             profile_id="provider-opencode-native",
@@ -1532,6 +1534,20 @@ def _write_deployment_evidence(
         evidence_refs={"readRun": "artifact:read-run"},
         resolved_state=None,
     )
+    # Keep the writer's Compose mirror inside this test's owned directory.
+    from moonmind.omnigent.bootstrap import evidence as bootstrap_evidence
+
+    original_path = bootstrap_evidence.Path
+
+    def evidence_path(value):
+        if (
+            str(value)
+            == "/workspace/omnigent-evidence/deployment-execution-evidence.json"
+        ):
+            return tmp_path / "compose-deployment-execution-evidence.json"
+        return original_path(value)
+
+    monkeypatch.setattr(bootstrap_evidence, "Path", evidence_path)
     destination = tmp_path / "deployment-execution-evidence.json"
     write_deployment_evidence(evidence, path=destination)
     monkeypatch.setenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(destination))

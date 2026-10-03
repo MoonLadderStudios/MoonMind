@@ -73,6 +73,9 @@ _GITHUB_RUNTIME_ENV = {
     "GH_NO_UPDATE_NOTIFIER": "1",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
 }
+_GITHUB_TOKEN_ENV_UNSET = (
+    "unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN"
+)
 _MOONMIND_RUNTIME_ENV_FILES = {
     "MOONMIND_URL": "moonmind-url",
     "MOONMIND_AGENT_RUN_ID": "agent-run-id",
@@ -223,6 +226,7 @@ class OmnigentRuntimeScriptService:
             + runtime_context_exports
             + f"'export PATH={':'.join(tool_bins)}:$PATH' "
             + "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
+            + f"'  {_GITHUB_TOKEN_ENV_UNSET}' "
             "'  export GH_CONFIG_DIR=/home/app/.config/gh' "
             "'  export GH_PROMPT_DISABLED=1' "
             "'  export GH_NO_UPDATE_NOTIFIER=1' "
@@ -252,7 +256,9 @@ class OmnigentRuntimeScriptService:
             "set -eu; "
             "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
             "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
-            "oldifs=$IFS; IFS=,; "
+            + _GITHUB_TOKEN_ENV_UNSET
+            + "; "
+            + "oldifs=$IFS; IFS=,; "
             "for check in ${MOONMIND_CREDENTIAL_GENERATION_CHECKS:-}; do "
             "path=${check%:*}; generation=${check##*:}; "
             'test -r "$path"; test "$(cat "$path")" = "$generation"; done; '
@@ -317,6 +323,7 @@ class OmnigentRuntimeScriptService:
             "/home/app/.config/gh/config.yml; "
             "mkdir -p " + _RUNTIME_BIN_DIR + "; "
             "printf '%s\\n' '#!/bin/sh' "
+            f"'{_GITHUB_TOKEN_ENV_UNSET}' "
             "'export GH_CONFIG_DIR=/home/app/.config/gh' "
             "'exec /opt/moonmind-tools/bin/gh \"$@\"' "
             "> " + _RUNTIME_BIN_DIR + "/gh; "

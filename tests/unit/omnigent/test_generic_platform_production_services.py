@@ -13,10 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from moonmind.auth.github_credentials import (
-    GitHubCredentialSource,
-    ResolvedGitHubCredential,
-)
+from moonmind.auth.bound_acquisition import EphemeralCredential
 from moonmind.omnigent.bootstrap import store
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 from moonmind.omnigent.credential_materializers import (
@@ -1132,19 +1129,10 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 ) -> None:
     secret = "github-secret-that-must-not-be-inspectable"
 
-    async def resolve(*, repo=None):
-        assert repo == "MoonLadderStudios/Tactics"
-        return ResolvedGitHubCredential(
-            token=secret,
-            source=GitHubCredentialSource.DIRECT_ENV,
-            sourceName="GITHUB_TOKEN",
-            repo=repo,
-        )
-
-    monkeypatch.setattr(
-        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
-        resolve,
-    )
+    async def acquire(**kwargs):
+        assert kwargs["role"] == "collaboration" and kwargs["operation"] == "read"
+        assert kwargs["execution_owner"] == "lease-owner-1"
+        return SimpleNamespace(credential=EphemeralCredential(secret.encode()))
 
     class Backend:
         def __init__(self) -> None:
@@ -1169,9 +1157,15 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
     )
     backend = Backend()
     service = OmnigentGithubCredentialService(backend)
+    monkeypatch.setattr(service, "acquire_repository_use", acquire)
     attachment = await service.materialize(
         request=request,
-        resolved_tools={"tools": ["gh", "git"]},
+        resolved_tools={
+            "tools": ["gh", "git"],
+            "repositoryAccess": {
+                "collaboration": {"snapshotRef": "admitted-test-snapshot"}
+            },
+        },
         owner_ref="lease-owner-1",
         writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
         runtime_uid=1000,

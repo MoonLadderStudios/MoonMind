@@ -301,9 +301,22 @@ async def omnigent_evaluate_session_admission_activity(
             )
         from moonmind.omnigent.realizers.registry import get_default_registry
 
-        get_default_registry().require(plan.payload.executionRealizerRef)
+        realizer = get_default_registry().require(plan.payload.executionRealizerRef)
         _validate_plan_support_authority(plan)
-        _enforce_session_worker_authority_barrier(plan)
+        managed_lifecycle = plan.payload.executionRealizerRef != "codex-profile-bound@1"
+        if managed_lifecycle and plan_bindings_have_repository_authority(
+            plan.payload.credentialBindings
+        ):
+            from moonmind.workflows.temporal.activities.omnigent_activities import (
+                _parent_repository_binding_set,
+            )
+
+            assert_worker_supports_binding_set(
+                getattr(realizer, "authority_kinds", ("model",)),
+                _parent_repository_binding_set(plan),
+            )
+        else:
+            _enforce_session_worker_authority_barrier(plan)
         from moonmind.omnigent.session_supervisor_rollback import (
             SessionRollbackContext,
             resolve_rollback_effect,
@@ -321,9 +334,6 @@ async def omnigent_evaluate_session_admission_activity(
             raise ValueError(
                 "recorded rollback generation blocks new supervisor admission"
             )
-        managed_lifecycle = (
-            plan.payload.executionRealizerRef != "codex-profile-bound@1"
-        )
         capacity_authority = await _plan_capacity_authority(
             plan, execution_profile_ref=request.execution_profile_ref
         )
@@ -565,9 +575,7 @@ def _validate_plan_support_authority(plan: Any) -> None:
     newly deployed image defaults.
     """
 
-    from moonmind.omnigent.harness_platform.capabilities import (
-        ClassAdmissionDecision,
-    )
+    from moonmind.omnigent.harness_platform.capabilities import ClassAdmissionDecision
     from moonmind.omnigent.harness_platform.support import (
         compute_required_capabilities_digest,
         compute_support_combination_key,
@@ -619,7 +627,7 @@ def _validate_plan_support_authority(plan: Any) -> None:
         "materializerRefs": tuple(
             sorted(
                 value.materializerRef
-                for value in plan.payload.credentialBindings.values()
+                for value in model_bindings_of(plan.payload.credentialBindings).values()
             )
         ),
         "providerCompatibilityClass": binding_identity,

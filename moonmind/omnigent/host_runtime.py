@@ -117,6 +117,7 @@ class GenericOmnigentHostRuntime:
         plan: OmnigentExecutionPlanEnvelope,
         host_class: HostClass,
         launch_policy: LaunchPolicy,
+        repository_owner_ref: str,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> PreparedHostInputs:
         workspace = await self._workspace.materialize(
@@ -124,6 +125,9 @@ class GenericOmnigentHostRuntime:
             mutation=plan.payload.workspaceMutation,
             runtime_uid=int(host_class.runtime.get("uid", 1000)),
             runtime_gid=int(host_class.runtime.get("gid", 1000)),
+            plan=plan,
+            repository_owner_ref=repository_owner_ref,
+            authority_sink=authority_sink,
         )
         if authority_sink is not None:
             await authority_sink({"kind": "workspace", **workspace})
@@ -169,20 +173,20 @@ class GenericOmnigentHostRuntime:
                 await authority_sink({"kind": "tool", **tool})
         anticipated_github = self._github_credentials.anticipated_attachment(
             plan.payload.resolvedTools,
-            owner_ref=request.idempotency_key,
+            owner_ref=repository_owner_ref,
         )
         if anticipated_github is not None and authority_sink is not None:
-            await authority_sink(
-                {"kind": "github_credentials", **anticipated_github}
-            )
+            await authority_sink({**anticipated_github, "kind": "github_credentials"})
         github_credentials = await self._github_credentials.materialize(
             request=request,
             resolved_tools=plan.payload.resolvedTools,
-            owner_ref=request.idempotency_key,
+            owner_ref=repository_owner_ref,
             writer_image_ref=host_class.imageRef,
             runtime_uid=int(host_class.runtime.get("uid", 1000)),
             runtime_gid=int(host_class.runtime.get("gid", 1000)),
             expected_omnigent_version=str(host_class.omnigentVersion or ""),
+            plan=plan,
+            authority_sink=authority_sink,
         )
         if github_credentials != anticipated_github:
             raise HarnessPlatformError(
