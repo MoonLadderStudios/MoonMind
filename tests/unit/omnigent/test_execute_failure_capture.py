@@ -16,12 +16,28 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "pooled,resources_available",
-    [(False, True), (True, True), (False, False)],
-    ids=["owned", "pooled", "capture-unavailable"],
+    "pooled,resources_available,stall",
+    [
+        (False, True, None),
+        (True, True, None),
+        (False, False, None),
+        (False, True, "snapshot"),
+        (False, True, "list"),
+        (False, True, "file"),
+        (False, True, "diff"),
+    ],
+    ids=[
+        "owned",
+        "pooled",
+        "capture-unavailable",
+        "snapshot-deadline",
+        "list-deadline",
+        "file-deadline",
+        "partial-diff-deadline",
+    ],
 )
 async def test_stream_failure_captures_work_without_repeating_provider_effects(
-    monkeypatch, tmp_path, pooled, resources_available
+    monkeypatch, tmp_path, pooled, resources_available, stall
 ) -> None:
     posted = asyncio.Event()
     requests: list[tuple[str, str]] = []
@@ -31,17 +47,32 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
     workspace_path = f"{resources_path}/environments/default"
     saved_content = b"saved work from the accepted turn\n"
     saved_patch = b"diff --git a/work.txt b/work.txt\n+saved work\n"
+    stalled = asyncio.Event()
+    read_cancelled = asyncio.Event()
+    manifest_published = asyncio.Event()
+    stall_path = {
+        "snapshot": "/v1/sessions/child-1",
+        "list": f"{workspace_path}/changes",
+        "file": f"{workspace_path}/filesystem/blocked.txt",
+        "diff": f"{workspace_path}/diff/blocked.txt",
+    }.get(stall)
 
     class InterruptedStream(httpx.AsyncByteStream):
         async def __aiter__(self):
             # Observation is reserved before dispatch, so wait until the
             # provider confirms that this execution's one message was accepted.
             await posted.wait()
+            if stall == "snapshot":
+                yield (
+                    b'data: {"type":"session.child.created",'
+                    b'"data":{"childSessionId":"child-1"}}\n\n'
+                    + b":"
+                    + b"x" * (64 * 1024)
+                    + b"\n\n"
+                )
             raise httpx.ReadError("stream disconnected after accepted work")
-            if False:
-                yield b""
 
-    def handle(request: httpx.Request) -> httpx.Response:
+    async def handle(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         requests.append((request.method, path))
         assert request.url.host == "omnigent.test"
@@ -54,6 +85,12 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
             return httpx.Response(200, json={"pending_id": "pending-1"})
         if request.method != "GET":
             raise AssertionError(f"unexpected provider effect: {request.method} {path}")
+        if path == stall_path:
+            stalled.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                read_cancelled.set()
         if path == session_path:
             return httpx.Response(200, json={"status": "idle", "items": []})
         if path == f"{session_path}/stream":
@@ -65,12 +102,18 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
         if path.startswith(resources_path) and not resources_available:
             return httpx.Response(503, json={"error": "resources unavailable"})
         if path == f"{workspace_path}/changes":
-            return httpx.Response(200, json={"items": [{"path": "work.txt"}]})
+            items = [{"path": "work.txt"}]
+            if stall in {"file", "diff"}:
+                items.append({"path": "blocked.txt"})
+            return httpx.Response(200, json={"items": items})
         if path == f"{workspace_path}/filesystem":
             return httpx.Response(
                 200, json={"items": [{"path": "work.txt", "type": "file"}]}
             )
-        if path == f"{workspace_path}/filesystem/work.txt":
+        if path in {
+            f"{workspace_path}/filesystem/work.txt",
+            f"{workspace_path}/filesystem/blocked.txt",
+        }:
             return httpx.Response(200, content=saved_content)
         if path == f"{workspace_path}/diff/work.txt":
             return httpx.Response(200, content=saved_patch)
@@ -93,8 +136,24 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setenv("OMNIGENT_API_TOKEN", "test-capture-token")
     monkeypatch.setattr("moonmind.omnigent.transport.httpx.AsyncClient", create_client)
+    if stall:
+        monkeypatch.setattr(
+            "moonmind.omnigent.bridge_artifacts._OMNIGENT_HARVEST_TIMEOUT_SECONDS",
+            0.05,
+        )
     pool = OmnigentTransportPool() if pooled else None
-    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+
+    class Gateway(LocalOmnigentArtifactGateway):
+        async def write_json(self, **kwargs):
+            if stall and kwargs["name"] == "output.omnigent.capture_manifest.json":
+                # Publication outlasts the remote-read budget and must finish.
+                await asyncio.sleep(0.1)
+            ref = await super().write_json(**kwargs)
+            if kwargs["name"] == "output.omnigent.capture_manifest.json":
+                manifest_published.set()
+            return ref
+
+    gateway = Gateway(root=tmp_path)
     try:
         result = await asyncio.wait_for(
             run_omnigent_execution(
@@ -114,7 +173,7 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
                 artifact_gateway=gateway,
                 transport_pool=pool,
             ),
-            timeout=5,
+            timeout=0.75 if stall else 5,
         )
 
         assert result.failure_class == "integration_error"
@@ -131,8 +190,9 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
         )
         assert manifest["terminalStatus"] == "failed"
         assert manifest["omnigentSessionId"] == "session-1"
-        assert manifest["patchUnavailable"] is (not resources_available), manifest
-        if resources_available:
+        patch_missing = not resources_available or stall in {"snapshot", "list", "file"}
+        assert manifest["patchUnavailable"] is patch_missing, manifest
+        if resources_available and not stall:
             assert manifest["evidenceCompleteness"]["status"] == "complete"
             assert (
                 await gateway.read_bytes(manifest["changedFiles"][0]["artifactRef"])
@@ -150,7 +210,7 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
                 await gateway.read_bytes(manifest["sessionFiles"][0]["artifactRef"])
                 == b"session evidence\n"
             )
-        else:
+        elif not resources_available:
             assert manifest["evidenceCompleteness"]["status"] == "degraded"
             for key in (
                 "changedFilesUnavailable",
@@ -159,13 +219,57 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
             ):
                 assert "503" in manifest[key]
                 assert "closed" not in manifest[key]
+        else:
+            assert stalled.is_set() and read_cancelled.is_set()
+            assert manifest_published.is_set()
+            assert manifest["evidenceCompleteness"]["status"] == "degraded"
+            assert "deadline" in json.dumps(manifest).lower()
+            assert (
+                await gateway.read_text(result.metadata["rawSseStreamRef"]) is not None
+            )
+            assert (
+                await gateway.read_text(result.metadata["normalizedEventStreamRef"])
+                is not None
+            )
+            if stall == "snapshot":
+                child = manifest["childSessionEvidence"][0]
+                assert child["childSessionId"] == "child-1"
+                assert "deadline" in child["unavailable"].lower()
+                assert "child-1" in await gateway.read_text(
+                    result.metadata["rawSseStreamRef"]
+                )
+                assert "child-1" in await gateway.read_text(
+                    result.metadata["normalizedEventStreamRef"]
+                )
+            if stall in {"file", "diff"}:
+                assert (
+                    await gateway.read_bytes(manifest["changedFiles"][0]["artifactRef"])
+                    == saved_content
+                )
+            if stall == "file":
+                assert "deadline" in manifest["changedFiles"][1]["unavailable"].lower()
+            if stall == "diff":
+                assert (
+                    await gateway.read_bytes(
+                        manifest["workspaceDiffs"][0]["artifactRef"]
+                    )
+                    == saved_patch
+                )
+                assert "deadline" in manifest["workspaceDiffsUnavailable"].lower()
+            stalled_index = requests.index(("GET", stall_path))
+            assert requests[stalled_index + 1 :] == []
         external_state = json.loads(
             await gateway.read_text(result.metadata["externalStateRef"])
         )
         assert external_state["firstMessage"]["posted"] is True
-        assert external_state["patchEvidence"]["patchUnavailable"] is (
-            not resources_available
-        )
+        assert external_state["patchEvidence"]["patchUnavailable"] is patch_missing
+        if stall == "diff":
+            assert external_state["patchEvidence"]["diffRefs"] == [
+                {
+                    "path": "work.txt",
+                    "artifactRef": manifest["workspaceDiffs"][0]["artifactRef"],
+                }
+            ]
         assert [item for item in requests if item[0] != "GET"] == [
             ("POST", "/v1/sessions"),
             ("POST", f"{session_path}/events"),
