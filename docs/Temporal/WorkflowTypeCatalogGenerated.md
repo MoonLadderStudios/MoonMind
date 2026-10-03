@@ -164,10 +164,6 @@ with deterministic workflow code, not Temporal Local Activities.
 | `github_issue.plan_legacy_repair` | `integrations` | `mm.activity.integrations` |
 | `github_issue.reconcile_handoffs` | `integrations` | `mm.activity.integrations` |
 | `github_issue.renew_claim` | `integrations` | `mm.activity.integrations` |
-| `integration.codex_cloud.cancel` | `integrations` | `mm.activity.integrations` |
-| `integration.codex_cloud.fetch_result` | `integrations` | `mm.activity.integrations` |
-| `integration.codex_cloud.start` | `integrations` | `mm.activity.integrations` |
-| `integration.codex_cloud.status` | `integrations` | `mm.activity.integrations` |
 | `integration.jules.answer_question` | `integrations` | `mm.activity.integrations` |
 | `integration.jules.cancel` | `integrations` | `mm.activity.integrations` |
 | `integration.jules.fetch_result` | `integrations` | `mm.activity.integrations` |

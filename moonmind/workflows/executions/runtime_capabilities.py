@@ -312,13 +312,6 @@ _DESCRIPTORS = (
         postExecutionCheckpointCriticality="unsupported",
     ),
     _descriptor(
-        runtimeId="codex_cloud", runtimeFamily="external_provider",
-        workspaceAuthority="external_provider", checkpointCaptureKinds=(),
-        checkpointRestoreKinds=(), supportsSameSessionContinuation=False,
-        terminalContractIds=("codex_cloud_fetch_result_v1",),
-        postExecutionCheckpointCriticality="unsupported",
-    ),
-    _descriptor(
         runtimeId="omnigent", runtimeFamily="external_provider",
         agentIdentity={"agentKind": "external", "agentId": "omnigent", "harness": "codex-native"},
         sessionState={

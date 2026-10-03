@@ -131,7 +131,6 @@ flowchart LR
 
   subgraph IntegrationPlane["External Agent and Integration Plane"]
     JULES[Jules]
-    CCLOUD[Codex Cloud]
     OTHER[Other External Systems]
   end
 
@@ -193,7 +192,6 @@ flowchart LR
   WC --> OBJ
 
   IW --> JULES
-  IW --> CCLOUD
   IW --> OTHER
   AW --> OBJ
   AW --> PG
@@ -222,7 +220,6 @@ Diagram rules:
 | `claude_code` | Managed CLI runtime | Working managed-run path; session admission not yet live | Provider profiles, OAuth/API-key materialization, context delivery, runtime-specific hardening |
 | Omnigent | Agent host and meta-harness | Combined-stack integration in progress | Omnigent runners call MoonMind through authenticated APIs and MCP tools |
 | Jules | External delegated agent | Working integration | Provider adapter normalizes status and artifacts into canonical agent contracts |
-| Codex Cloud | External delegated agent | Working integration | Integration Activities and canonical result contracts |
 | Docker Backend Service | API-owned workload service | Desired-state container-job interface over existing Docker backend | Arbitrary permitted images, logical workspaces, Temporal durability, cross-workflow image reuse |
 
 ---
@@ -504,7 +501,7 @@ infrastructure branch.
 
 ## 10. External agent systems
 
-External agents such as Jules and Codex Cloud are delegated integrations.
+External agents such as Jules are delegated integrations.
 MoonMind does not own their execution envelope, but it owns:
 
 - durable orchestration;

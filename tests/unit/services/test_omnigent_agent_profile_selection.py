@@ -1149,3 +1149,25 @@ async def test_default_drift_recovery_skips_non_drift_409(
         )
 
     assert sync_calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cloud_profile_snapshot_cannot_become_codex_native_selection():
+    """#4644: an immutable saved Cloud configuration cannot resolve through Codex."""
+    session = _Session()
+    session.provider.runtime_id = "codex_cloud"
+    session.version.document["providerRequirements"]["runtimeId"] = "codex_cloud"
+    with pytest.raises(HTTPException) as error:
+        await resolve_agent_profile_snapshot(
+            session,
+            selection={
+                "profileId": "team-codex",
+                "version": 2,
+                "providerProfileRef": "oauth-team",
+            },
+            consumer_type="workflow",
+            consumer_id="old-cloud-workflow",
+            user=SimpleNamespace(id=uuid4()),
+        )
+    assert error.value.status_code == 409
+    assert session.added == []

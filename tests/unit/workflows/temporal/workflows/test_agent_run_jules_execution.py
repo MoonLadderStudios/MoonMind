@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -468,33 +469,28 @@ async def test_resolve_adapter_metadata_exposes_gated_omnigent_streaming_gateway
         "callback_base_url": None,
     }
 
+@pytest.mark.parametrize(
+    "alias",
+    ["omnigent_session", "omnigent_claude", "omnigent_codex", "omnigent_polly"],
+)
 async def test_resolve_adapter_metadata_rejects_omnigent_top_level_aliases(
     monkeypatch: pytest.MonkeyPatch,
+    alias: str,
 ) -> None:
-    from moonmind.workflows.adapters.external_adapter_registry import (
-        build_default_registry,
-    )
+    def unexpected_registry() -> None:
+        pytest.fail("Unsupported aliases must be rejected before adapter lookup")
 
-    registry = build_default_registry(
-        env={
-            "OMNIGENT_ENABLED": "1",
-            "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
-        }
-    )
     monkeypatch.setattr(
         agent_run_module,
         "build_default_registry",
-        lambda: registry,
+        unexpected_registry,
     )
 
-    for alias in (
-        "omnigent_session",
-        "omnigent_claude",
-        "omnigent_codex",
-        "omnigent_polly",
-    ):
-        with pytest.raises(ValueError, match="No external adapter registered"):
-            await agent_run_module.resolve_adapter_metadata(alias)
+    with pytest.raises(
+        ApplicationError, match=f"unknown agent runtime capability '{alias}'"
+    ) as error:
+        await agent_run_module.resolve_adapter_metadata(alias)
+    assert error.value.non_retryable is True
 
 async def test_agent_run_streaming_gateway_uses_validated_provider_execute_activity(
     monkeypatch: pytest.MonkeyPatch,
@@ -511,9 +507,10 @@ async def test_agent_run_streaming_gateway_uses_validated_provider_execute_activ
     ) -> Any:
         routed_calls.append((activity_name, payload, kwargs))
         if activity_name == "integration.resolve_adapter_metadata":
-            return {"agent_id": "stream_test", "execution_style": "streaming_gateway"}
-        if activity_name == "integration.stream_test.execute":
+            return {"agent_id": "omnigent", "execution_style": "streaming_gateway"}
+        if activity_name == "integration.omnigent.execute":
             assert isinstance(payload, AgentExecutionRequest)
+            assert payload.agent_id == "omnigent"
             return AgentRunResult(summary="Stream complete", metadata={})
         if activity_name == "agent_runtime.publish_artifacts":
             return payload
@@ -523,15 +520,15 @@ async def test_agent_run_streaming_gateway_uses_validated_provider_execute_activ
 
     result = await run.run(
         _request(
-            agentId="stream_test",
-            executionProfileRef="profile:stream-test",
+            agentId="omnigent",
+            executionProfileRef=None,
         )
     )
 
     execute_call = next(
-        call for call in routed_calls if call[0] == "integration.stream_test.execute"
+        call for call in routed_calls if call[0] == "integration.omnigent.execute"
     )
-    assert execute_call[0] == "integration.stream_test.execute"
+    assert execute_call[0] == "integration.omnigent.execute"
     assert (
         execute_call[2]["heartbeat_timeout"]
         == agent_run_module.STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT

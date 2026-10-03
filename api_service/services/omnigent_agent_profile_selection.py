@@ -553,6 +553,13 @@ async def resolve_agent_profile_snapshot(
                 ManagedAgentProviderProfile.provider_id.in_(requirements["providerIds"])
             )
         compatible_provider = await session.scalar(provider_query.limit(1))
+    if compatible_provider is not None:
+        from api_service.services.profile_execution_selection import (
+            profile_runtime_supported,
+        )
+
+        if not profile_runtime_supported(compatible_provider.runtime_id):
+            compatible_provider = None
     if compatible_provider is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

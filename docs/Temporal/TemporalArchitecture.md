@@ -201,7 +201,7 @@ The managed runtime plane:
 
 The external integration plane:
 
-- talks to delegated providers such as Jules, Codex Cloud, OpenClaw, GitHub, Jira, and future providers
+- talks to delegated providers such as Jules, OpenClaw, GitHub, Jira, and future providers
 - verifies callbacks before translating them into workflow events
 - normalizes provider-specific payloads into canonical runtime contracts before workflow code sees them
 

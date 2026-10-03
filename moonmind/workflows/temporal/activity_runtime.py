@@ -142,9 +142,6 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
-from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
-from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
-from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.schemas.agent_skill_models import (
@@ -600,8 +597,6 @@ PlanGenerator = Callable[
 ]
 JulesClientFactory = Callable[[], JulesClient]
 JulesAgentAdapterFactory = Callable[[], JulesAgentAdapter]
-CodexCloudClientFactory = Callable[[], CodexCloudHttpClient]
-CodexCloudAdapterFactory = Callable[[], CodexCloudAgentAdapter]
 SessionContractT = TypeVar("SessionContractT", bound=BaseModel)
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -1156,13 +1151,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_load_session_snapshot",
     ),
-    "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
-    "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
-    "integration.codex_cloud.fetch_result": (
-        "integrations",
-        "integration_codex_cloud_fetch_result",
-    ),
-    "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
     "integration.omnigent.execute": ("agent_runtime", "integration_omnigent_execute"),
     "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
@@ -4557,8 +4545,6 @@ class TemporalIntegrationActivities:
         artifact_service: TemporalArtifactService | None = None,
         client_factory: JulesClientFactory | None = None,
         adapter_factory: JulesAgentAdapterFactory | None = None,
-        codex_cloud_client_factory: CodexCloudClientFactory | None = None,
-        codex_cloud_adapter_factory: CodexCloudAdapterFactory | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._client_factory = client_factory or self._build_default_client
@@ -4566,16 +4552,6 @@ class TemporalIntegrationActivities:
             adapter_factory()
             if adapter_factory is not None
             else JulesAgentAdapter(client_factory=self._client_factory)
-        )
-        self._codex_cloud_client_factory = (
-            codex_cloud_client_factory or self._build_default_codex_cloud_client
-        )
-        self._codex_cloud_adapter = (
-            codex_cloud_adapter_factory()
-            if codex_cloud_adapter_factory is not None
-            else CodexCloudAgentAdapter(
-                client_factory=self._codex_cloud_client_factory
-            )
         )
 
     async def publication_recovery_observe(self, payload, /, **kwargs):
@@ -5908,38 +5884,6 @@ class TemporalIntegrationActivities:
     async def integration_jules_get_auto_answer_config(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_get_auto_answer_config_activity
         return await jules_get_auto_answer_config_activity(payload)
-
-    @staticmethod
-    def _build_default_codex_cloud_client() -> CodexCloudHttpClient:
-        import os
-
-        gate = build_codex_cloud_gate()
-        if not gate.enabled:
-            raise TemporalActivityRuntimeError(
-                f"{CODEX_CLOUD_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
-            )
-        cloud_url = os.environ.get("CODEX_CLOUD_API_URL", "").strip()
-        cloud_key = os.environ.get("CODEX_CLOUD_API_KEY", "").strip()
-        return CodexCloudHttpClient(base_url=cloud_url, api_key=cloud_key)
-
-    async def integration_codex_cloud_start(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_start_activity
-        return await codex_cloud_start_activity(request)
-
-    async def integration_codex_cloud_status(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_status_activity
-        request = _validate_external_agent_run_input(payload)
-        return await codex_cloud_status_activity(request.run_id)
-
-    async def integration_codex_cloud_fetch_result(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_fetch_result_activity
-        request = _validate_external_agent_run_input(payload)
-        return await codex_cloud_fetch_result_activity(request.run_id)
-
-    async def integration_codex_cloud_cancel(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_cancel_activity
-        request = _validate_external_agent_run_input(payload)
-        return await codex_cloud_cancel_activity(request.run_id)
 
     async def integration_openclaw_execute(self, request, /, **kwargs):
         from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity

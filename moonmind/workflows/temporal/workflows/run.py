@@ -260,6 +260,9 @@ from moonmind.workflows.temporal.publish_auto_evidence import (
     AutoPublishEvidenceError,
     parse_auto_publish_evidence,
 )
+from moonmind.workflows.executions.execution_contract import (
+    validate_workflow_runtime_targets,
+)
 from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
@@ -329,7 +332,7 @@ _PR_OPTIONAL_TASK_SKILLS = frozenset({"jira-implement", *_PR_OPTIONAL_AGENT_SKIL
 _CANONICAL_NO_COMMIT_TASK_PRESETS = frozenset(
     {"github-issue-implement", "github-issue-search-and-implement"}
 )
-_EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"codex_cloud", "jules"})
+_EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"jules"})
 _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
     {
         "not_required",
@@ -12129,6 +12132,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        if workflow.patched("run-supported-runtime-admission-v1"):
+            try:
+                validate_workflow_runtime_targets(parameters)
+            except ValueError as exc:
+                raise exceptions.ApplicationError(str(exc), non_retryable=True) from exc
         if workflow.patched(RUN_WORKFLOW_PREPARED_INPUTS_PATCH):
             # Temporal supplies the actual run identity here. Authorize declared
             # inputs before any child can read them, including scheduled starts
@@ -21216,6 +21224,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel"
             )
 
+        if self._workflow_patch_enabled("run-supported-runtime-admission-v1"):
+            resolve_runtime_execution_capabilities(agent_id)
         agent_kind = self._agent_kind_for_id(agent_id)
         # Prefer runtime_block profile values (set by the runtime planner)
         # over top-level node_inputs keys, which may have been corrupted

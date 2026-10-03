@@ -5770,17 +5770,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const supportedAgentRuntimes = dashboardConfig.system
     ?.supportedRuntimes ||
     dashboardConfig.system?.supportedAgentRuntimes || ["omnigent", "codex_cli", "claude_code"];
-  const runtimeOptions = Array.from(new Set(supportedAgentRuntimes));
-  // Recommended vs explicitly labeled compatibility paths come from the
-  // server-owned rollout policy, never from a client-side runtime map.
   const agentRuntimeOptionGroups = useMemo(
-    () => runtimeOptionGroups(runtimeOptions, runtimeTargetCatalog),
-    [runtimeOptions, runtimeTargetCatalog],
-  );
-  const stepRuntimeOptionGroups = useMemo(
     () => runtimeOptionGroups(supportedAgentRuntimes, runtimeTargetCatalog),
     [supportedAgentRuntimes, runtimeTargetCatalog],
   );
+  const runtimeOptions = [
+    ...agentRuntimeOptionGroups.recommended,
+    ...agentRuntimeOptionGroups.compatibility,
+    ...agentRuntimeOptionGroups.unavailable,
+  ].map((option) => option.runtimeId);
+  const stepRuntimeOptionGroups = agentRuntimeOptionGroups;
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -9226,6 +9225,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
+    const unsupportedSelection = selectedRuntimeUnavailableReason || steps
+      .map((step) => step.runtimeMode ? runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) : null)
+      .find(Boolean);
+    if (unsupportedSelection) {
+      setSubmitMessage(unsupportedSelection);
+      clearSubmitBusy();
+      return;
+    }
     if (selectedProfileMissing || runtimeProfileMismatch || configurationSelectionError || configurationDetailsUnavailable || selectedConfiguredProfile?.execution_selection_error) {
       setSubmitMessage(profileSelectionError || "Profile configuration is unavailable.");
       clearSubmitBusy();
@@ -12248,7 +12255,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                         <select
                           data-step-field="runtimeMode"
                           data-step-index={String(index)}
-                          value={step.runtimeMode}
+                          value={step.runtimeMode && runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) ? "" : step.runtimeMode}
                           onChange={(event) =>
                             updateStep(step.localId, {
                               runtimeMode: event.target.value,
@@ -12256,14 +12263,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           }
                         >
                           <option value="">Inherit agent runtime</option>
-                          {step.runtimeMode &&
-                          !runtimeOptions.includes(step.runtimeMode) ? (
+                          {step.runtimeMode && runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) ? (
+                            <option value="" disabled>Choose a supported runtime</option>
+                          ) : step.runtimeMode && !runtimeOptions.includes(step.runtimeMode) ? (
                             <option value={step.runtimeMode}>
-                              {formatRuntimeTargetLabel(
-                                step.runtimeMode,
-                                runtimeTargetCatalog,
-                              )}{" "}
-                              (Current selection)
+                              {formatRuntimeTargetLabel(step.runtimeMode, runtimeTargetCatalog)} (Current selection)
                             </option>
                           ) : null}
                           {stepRuntimeOptionGroups.recommended.map((option) => (
@@ -12486,16 +12490,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             Runtime
             <select
               name="runtime"
-              value={runtime}
+              value={selectedRuntimeUnavailableReason ? "" : runtime}
               onChange={(event) => {
                 setRuntime(event.target.value);
                 setRuntimeAuthored(true);
               }}
             >
-              {runtime && !runtimeOptions.includes(runtime) ? (
+              {selectedRuntimeUnavailableReason ? (
+                <option value="" disabled>Choose a supported runtime</option>
+              ) : runtime && !runtimeOptions.includes(runtime) ? (
                 <option value={runtime}>
-                  {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)}{" "}
-                  (Current selection)
+                  {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)} (Current selection)
                 </option>
               ) : null}
               {agentRuntimeOptionGroups.unavailable.map((option) => (

@@ -93,28 +93,6 @@ def build_default_registry(
         registry.register("jules_api", _jules_factory)
         logger.info("Registered Jules external adapter")
 
-    # --- Codex Cloud ---
-    from moonmind.codex_cloud.settings import is_codex_cloud_enabled
-
-    if is_codex_cloud_enabled(env=env):
-        import os
-
-        from moonmind.workflows.adapters.codex_cloud_agent_adapter import (
-            CodexCloudAgentAdapter,
-        )
-        from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient
-
-        source = env if env is not None else dict(os.environ)
-        cloud_url = str(source.get("CODEX_CLOUD_API_URL", "")).strip()
-        cloud_key = str(source.get("CODEX_CLOUD_API_KEY", "")).strip()
-
-        def _codex_cloud_factory() -> AgentAdapter:
-            client = CodexCloudClient(base_url=cloud_url, api_key=cloud_key)
-            return CodexCloudAgentAdapter(client_factory=lambda: client)  # type: ignore[return-value]
-
-        registry.register("codex_cloud", _codex_cloud_factory)
-        logger.info("Registered Codex Cloud external adapter")
-
     # --- OpenClaw (streaming gateway) ---
     from moonmind.openclaw.settings import is_openclaw_enabled
 

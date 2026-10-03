@@ -31,7 +31,6 @@ const RUNTIME_DISPLAY_NAMES: Record<string, string> = {
   claude_code: 'Claude Code',
   claude: 'Claude Code',
   jules: 'Jules',
-  codex_cloud: 'Codex Cloud',
 };
 
 function titleizeRuntime(runtime: string): string {

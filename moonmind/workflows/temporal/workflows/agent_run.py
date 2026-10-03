@@ -692,8 +692,12 @@ async def resolve_adapter_metadata(agent_id: str) -> dict:
     Returns ``{"agent_id": ..., "execution_style": ...}`` on success;
     raises if no adapter is registered for *agent_id*.
     """
-    registry = build_default_registry()
     resolved_agent_id = str(agent_id).strip().lower()
+    try:
+        resolve_runtime_execution_capabilities(resolved_agent_id)
+    except ValueError as exc:
+        raise ApplicationError(str(exc), non_retryable=True) from exc
+    registry = build_default_registry()
     adapter = registry.create(resolved_agent_id)
     execution_style = "polling"
     supports_callbacks = False
@@ -2250,13 +2254,6 @@ class MoonMindAgentRun:
                     "noProgressTimeoutSeconds": 2400,
                     "stuckAction": "request_intervention",
                     "retryPolicy": "provider_polling_with_human_feedback_escalation",
-                }
-            if agent_id == "codex_cloud":
-                return {
-                    "runtime": agent_id,
-                    "noProgressTimeoutSeconds": 1800,
-                    "stuckAction": "request_intervention",
-                    "retryPolicy": "provider_polling_with_terminal_fetch",
                 }
             return {
                 "runtime": agent_id or request.agent_id,
@@ -6200,6 +6197,13 @@ class MoonMindAgentRun:
         *,
         refresh_derived_selection: bool = False,
     ) -> None:
+        if self._workflow_patch_enabled("agent-run-supported-runtime-admission-v1"):
+            target_runtime = str(payload.get("targetRuntime") or "").strip()
+            if target_runtime:
+                try:
+                    resolve_runtime_execution_capabilities(target_runtime)
+                except ValueError as exc:
+                    raise ApplicationError(str(exc), non_retryable=True) from exc
         previous_runtime_id = self._managed_runtime_id(request.agent_id)
         params = dict(request.parameters or {})
         preserve_model_selection = self._workflow_patch_enabled(
@@ -7016,6 +7020,14 @@ class MoonMindAgentRun:
 
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
+        # #4644: reject queued/indirect unsupported work before capacity or launch.
+        # Recorded histories retain their command sequence; release drainage is
+        # owned by the existing update procedure.
+        if workflow.patched("agent-run-supported-runtime-admission-v1"):
+            try:
+                resolve_runtime_execution_capabilities(request.agent_id)
+            except ValueError as exc:
+                raise ApplicationError(str(exc), non_retryable=True) from exc
         lease = request.parameters.get("issueClaimLease")
         if lease:
             from moonmind.workflows.temporal.github_issue_lease_workflow import execute_with_issue_lease
