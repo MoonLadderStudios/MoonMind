@@ -419,9 +419,14 @@ async def test_incomplete_ci_histories_replay_deterministically(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("review_state", ["complete", "pending", "unavailable"])
+@pytest.mark.parametrize(
+    "versioned_old_producer", [False, True],
+    ids=["old-activity", "activity-upgraded-first"],
+)
 async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgrade(
     monkeypatch: pytest.MonkeyPatch,
     review_state: str,
+    versioned_old_producer: bool,
 ) -> None:
     from unittest.mock import AsyncMock
 
@@ -512,7 +517,7 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
         # Exercise the production producer and GitHub HTTP reader; only the
         # version field is removed when recording a pre-deployment Activity.
         evidence = await integration_activities.merge_automation_evaluate_readiness(payload)
-        if not state["upgraded"]:
+        if not state["upgraded"] and not versioned_old_producer:
             evidence.pop("actionableCiFailuresVersion", None)
         producer_results.append(dict(evidence))
         if state["upgraded"]:
@@ -615,12 +620,22 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
                 handle = await env.client.start_workflow(
                     _PreActionableCIFailureGate.run,
                     payload,
-                    id=f"mm-open-legacy-ci-wait-{review_state}",
+                    id=f"mm-open-legacy-ci-wait-{review_state}-{versioned_old_producer}",
                     task_queue=parent_queue,
                     execution_timeout=timedelta(minutes=2),
                 )
-                await wait_for_old_timer()
-                assert "actionableCiFailuresVersion" not in producer_results[0]
+                old_history = await wait_for_old_timer()
+                assert producer_results[0].get("actionableCiFailuresVersion") == (
+                    "v1" if versioned_old_producer else None
+                )
+
+            # An upgraded Activity may have published its capability before
+            # the old Workflow worker recorded this wait. The new consumer
+            # must replay that timer before adopting the next fresh poll.
+            await Replayer(
+                workflows=[MoonMindMergeAutomationWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ).replay_workflow(old_history)
 
             state["upgraded"] = True
             async with Worker(
@@ -658,7 +673,9 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
         and request["mergeAutomationConfig"] == readiness_requests[0]["mergeAutomationConfig"]
         for request in readiness_requests
     ), "Automatic recovery must preserve the admitted PR and continuation budgets"
-    assert "actionableCiFailuresVersion" not in observations[0]
+    assert observations[0].get("actionableCiFailuresVersion") == (
+        "v1" if versioned_old_producer else None
+    )
     assert observations[0]["checksComplete"] is False
     assert observations[0]["checksPassing"] is False
     assert {blocker["kind"] for blocker in observations[0]["blockers"]} >= {
