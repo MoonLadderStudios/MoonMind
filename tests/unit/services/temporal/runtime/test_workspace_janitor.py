@@ -384,5 +384,6 @@ def test_quarantine_rejects_parent_swapped_to_symlink(tmp_path, monkeypatch):
     try:
         janitor._quarantine_delete(candidate)
     except OSError:
+        # Refusing the swapped parent is valid; outside data must survive.
         pass
     assert marker.read_text() == "keep outside"

@@ -2712,6 +2712,7 @@ def test_runtime_artifact_write_does_not_follow_workload_links(tmp_path, link_le
     try:
         _write_text_artifact(destination, "attacker output")
     except OSError:
+        # Refusing the unsafe path is valid; verify protected bytes below.
         pass
     assert protected.read_text() == "protected"
     assert not (outside / "workload").exists()

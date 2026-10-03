@@ -8585,20 +8585,30 @@ class MoonMindAgentRun:
                                 or workspace_spec.get("targetBranch")
                                 or ""
                             ).strip()
-                            repository_target = workspace_spec.get("repositoryTarget")
-                            if repository_target is None:
-                                repository_target = (
-                                    workspace_spec.get("repository")
-                                    or workspace_spec.get("repo")
+                            expected_repository = (
+                                workspace_spec.get("repository")
+                                or workspace_spec.get("repo")
+                                or ""
+                            )
+                            merge_target_branch = target_branch or starting_branch
+                            # Preserve both authority fields in already-recorded
+                            # initial and continuation activity payloads.
+                            if workflow.patched("jules-merge-canonical-authority-v1"):
+                                repository_target = workspace_spec.get(
+                                    "repositoryTarget"
                                 )
-                            expected_repository = repository_name_from_value(
-                                repository_target, provider="git"
-                            )
-                            merge_target_branch = (
-                                target_branch
-                                or repository_branch_from_value(repository_target)
-                                or starting_branch
-                            )
+                                if repository_target is None:
+                                    repository_target = workspace_spec.get(
+                                        "repository"
+                                    ) or workspace_spec.get("repo")
+                                expected_repository = repository_name_from_value(
+                                    repository_target, provider="git"
+                                )
+                                merge_target_branch = (
+                                    target_branch
+                                    or repository_branch_from_value(repository_target)
+                                    or starting_branch
+                                )
                             merge_payload: dict[str, Any] = {"pr_url": pr_url}
                             if workflow.patched("jules-merge-target-authority-v1"):
                                 merge_payload["expected_repository"] = expected_repository
