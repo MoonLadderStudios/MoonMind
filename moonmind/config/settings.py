@@ -1344,7 +1344,6 @@ class SecuritySettings(BaseSettings):
     )
 
 
-
 class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
 
@@ -1389,6 +1388,9 @@ class GitHubSettings(BaseSettings):
         None, alias="GITHUB_REPOS"
     )  # Comma-delimited string of repositories
     github_enabled: bool = Field(True, alias="GITHUB_ENABLED")
+    github_trusted_api_hosts: Optional[str] = Field(
+        None, alias="GITHUB_TRUSTED_API_HOSTS"
+    )  # Deployment-owned, comma-delimited Enterprise API host allowlist.
     # Operator declaration that every version-1 issue-claim writer is upgraded
     # or stopped. Version-1 attempt comments GitHub timestamps before this
     # instant stop reserving their issue; newer ones are untouched. Unset means

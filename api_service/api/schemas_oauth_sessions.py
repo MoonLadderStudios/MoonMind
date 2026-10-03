@@ -5,7 +5,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api_service.db.models import ManagedAgentRateLimitPolicy, OAuthSessionStatus
 from moonmind.provider_profiles.oauth_policy import validate_codex_oauth_capacity
-from moonmind.provider_profiles.volume_mounts import validate_volume_ref, validate_volume_mount_path
+from moonmind.provider_profiles.volume_mounts import (
+    validate_volume_mount_path,
+    validate_volume_ref,
+)
+
 
 class ProviderProfileSummary(BaseModel):
     profile_id: str
@@ -35,12 +39,18 @@ class CreateOAuthSessionRequest(BaseModel):
     @field_validator("volume_ref")
     @classmethod
     def _validate_volume_ref(cls, value: str | None) -> str | None:
-        return validate_volume_ref(value) if value is not None else None
+        return (
+            validate_volume_ref(value) if value is not None and value.strip() else None
+        )
 
     @field_validator("volume_mount_path")
     @classmethod
     def _validate_mount_path(cls, value: str | None) -> str | None:
-        return validate_volume_mount_path(value) if value is not None else None
+        return (
+            validate_volume_mount_path(value)
+            if value is not None and value.strip()
+            else None
+        )
 
     @model_validator(mode="after")
     def _enforce_oauth_exclusivity(self) -> "CreateOAuthSessionRequest":

@@ -263,13 +263,81 @@ def test_begin_cannot_supply_principal_or_trusted_hosts(enrollment):
 
 def test_enterprise_enrollment_uses_only_server_trusted_host(enrollment, monkeypatch):
     client, _, calls = enrollment
-    from moonmind.auth import github_app_wiring
+    from moonmind.config.settings import GitHubSettings, settings
 
-    monkeypatch.setattr(
-        github_app_wiring, "TRUSTED_GITHUB_API_HOSTS", ("github.example",)
-    )
+    monkeypatch.setenv("GITHUB_TRUSTED_API_HOSTS", " other.example , GITHUB.example ")
+    monkeypatch.setattr(settings, "github", GitHubSettings())
     state = _begin(client, endpointRef="https://github.example")
     pending = next(iter(routes.get_setup_service()._pending.values()))
     assert pending.configuration.api_base == "https://github.example/api/v3"
     assert pending.state == state
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "install_origin", "app_path"),
+    [
+        ("https://github.com", "https://github.com", "apps"),
+        (
+            "https://github.example:8443/api/v3",
+            "https://github.example:8443",
+            "github-apps",
+        ),
+    ],
+)
+def test_enrollment_returns_provider_installation_url(
+    enrollment, monkeypatch, endpoint, install_origin, app_path
+):
+    from urllib.parse import parse_qs, urlsplit
+
+    from moonmind.auth import github_app_wiring
+
+    client, _, _ = enrollment
+    # Isolate the URL behavior from the deployment-settings regression above.
+    resolve_base = github_app_wiring.github_api_base_for
+
+    def trusted_base(endpoint_ref):
+        return resolve_base(endpoint_ref, allowed_hosts=("github.example",))
+
+    monkeypatch.setattr(github_app_wiring, "github_api_base_for", trusted_base)
+    response = client.post(
+        "/github-app/begin",
+        json={
+            "appSlug": "my-app",
+            "expectedAppRef": "github-app:123",
+            "appId": "123",
+            "keySecretRef": "db://github-app-key/configured",
+            "requestId": "request:enroll",
+            "connectionId": "connection:enroll",
+            "expectedAccount": "acme",
+            "permittedRepositories": ["acme/repo"],
+            "endpointRef": endpoint,
+        },
+    )
+    assert response.status_code == 201, response.text
+    state = response.json()["state"]
+    assert next(iter(routes.get_setup_service()._pending.values())).state == state
+    url = urlsplit(response.json()["setupUrl"])
+    assert f"{url.scheme}://{url.netloc}" == install_origin
+    assert url.path == f"/{app_path}/my-app/installations/new"
+    assert parse_qs(url.query) == {"state": [state]}
+
+
+@pytest.mark.parametrize("operations", [["wrte"], ["read", "admin"], [""]])
+def test_invalid_operations_are_rejected_before_enrollment(enrollment, operations):
+    client, _, calls = enrollment
+    response = client.post(
+        "/github-app/begin",
+        json={
+            "appSlug": "moonmind",
+            "expectedAppRef": "github-app:123",
+            "appId": "123",
+            "keySecretRef": "db://github-app-key/configured",
+            "requestId": "request:invalid",
+            "connectionId": "connection:invalid",
+            "allowedOperations": operations,
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert not routes.get_setup_service()._pending
     assert calls == []

@@ -29,12 +29,6 @@ DEFAULT_KEY_SECRET_REF = "db://github-app-key/default"
 
 _GITHUB_API_BASE = "https://api.github.com"
 
-#: Hosts the deployment administrator trusts for GitHub API traffic besides
-#: the default ``github.com`` SaaS host. Never populated from connection
-#: input: GitHub Enterprise hosts enter here from server configuration only.
-TRUSTED_GITHUB_API_HOSTS: tuple[str, ...] = ()
-
-
 def github_api_base_for(endpoint_ref: str = "", *, allowed_hosts: Sequence[str] = ()) -> str:
     """Derive the API base for the configured host (api.github.com default).
 
@@ -61,8 +55,14 @@ def github_api_base_for(endpoint_ref: str = "", *, allowed_hosts: Sequence[str] 
     if parsed.username or parsed.password:
         raise BoundAccessError(BOUND_DENIED, "GitHub endpoint must not embed credentials")
     host = parsed.hostname.lower()
-    allowlisted = {str(name or "").strip().lower() for name in allowed_hosts if str(name or "").strip()}
-    allowlisted.update(TRUSTED_GITHUB_API_HOSTS)
+    from moonmind.config.settings import settings
+
+    trusted_hosts = (settings.github.github_trusted_api_hosts or "").split(",")
+    allowlisted = {
+        str(name or "").strip().lower()
+        for name in (*allowed_hosts, *trusted_hosts)
+        if str(name or "").strip()
+    }
     if host in {"github.com", "api.github.com"}:
         return _GITHUB_API_BASE
     if host in allowlisted:
@@ -345,7 +345,6 @@ async def fetch_installation_record(
 
 __all__ = [
     "DEFAULT_KEY_SECRET_REF",
-    "TRUSTED_GITHUB_API_HOSTS",
     "acquire_bound_credential_for_connection",
     "acquire_bound_headers_for_connection",
     "build_bound_acquirer_for_connection",

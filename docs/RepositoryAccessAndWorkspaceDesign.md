@@ -195,6 +195,13 @@ OAuth/device enrollment and SSH can be additional qualified adapters. Enrollment
 
 GitHub.com is the initial GitHub endpoint. Enterprise and other-host support require operator-controlled endpoint/TLS policy and qualified adapters, not a free-form credential destination exposed to execution content.
 
+GitHub App enrollment and credential acquisition read deployment-trusted Enterprise
+API hostnames from the comma-delimited `GITHUB_TRUSTED_API_HOSTS` setting. Enrollment
+input cannot add trusted hosts. GitHub.com installation links use `/apps/<slug>/installations/new`;
+trusted Enterprise Server links use `/github-apps/<slug>/installations/new`.
+Enrollment validates `allowedOperations` against the repository operation contract
+before issuing setup state, so an invalid operation cannot fail only after installation.
+
 ### CONTRACT-007 Selection is deterministic for each declared role
 
 Selection receives target identity, requested capabilities, access mode, admitted operator/execution context, role, and policy version. Anonymous access admits only supported read operations and creates no dummy connection.

@@ -9719,7 +9719,31 @@ class CodexWorker:
         api_version = str(environ.get("DOCKER_API_VERSION") or "").strip()
         if api_version and not re.fullmatch(r"\d+\.\d+", api_version):
             raise ValueError("DOCKER_API_VERSION must have major.minor format")
-        api_prefix = f"/v{api_version}" if api_version else ""
+        if not api_version:
+            negotiation_started = time.monotonic()
+            version_result = await self._run_stage_command(
+                [
+                    self._config.docker_binary,
+                    "version",
+                    "--format",
+                    "{{.Server.APIVersion}}",
+                ],
+                cwd=cwd,
+                log_path=log_path,
+                env=dict(environ),
+                timeout_seconds=timeout_seconds,
+            )
+            if version_result.returncode != 0:
+                raise RuntimeError("Docker API version negotiation failed")
+            api_version = version_result.stdout.strip()
+            if not re.fullmatch(r"\d+\.\d+", api_version):
+                raise ValueError("Docker daemon returned an invalid API version")
+            timeout_seconds -= time.monotonic() - negotiation_started
+            if timeout_seconds <= 0:
+                raise asyncio.TimeoutError(
+                    "container create timed out during API negotiation"
+                )
+        api_prefix = f"/v{api_version}"
         request = (
             f"POST {api_prefix}/containers/create?name={name} HTTP/1.1\r\n"
             "Host: docker\r\nContent-Type: application/json\r\n"
