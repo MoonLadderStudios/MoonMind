@@ -6,12 +6,14 @@ refs and assembles the terminal ``AgentRunResult`` returned to workflows.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import mimetypes
 import os.path
 import tempfile
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
@@ -1072,6 +1074,20 @@ def _capture_enabled(capture_policy: dict[str, Any] | None, key: str) -> bool:
     return bool(capture_policy.get(key, True))
 
 
+async def _capture_read(
+    read: Callable[..., Awaitable[Any]], *args: Any, deadline: float
+) -> Any:
+    """Spend one shared remote-read budget without timing out artifact writes."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Omnigent resource harvest deadline exceeded")
+    try:
+        return await asyncio.wait_for(read(*args), timeout=remaining)
+    except TimeoutError as exc:
+        raise TimeoutError("Omnigent resource harvest deadline exceeded") from exc
+
+
 async def _harvest_changed_files(
     *,
     client: OmnigentHttpClient,
@@ -1080,9 +1096,12 @@ async def _harvest_changed_files(
     session_id: str,
     manifest: dict[str, Any],
     refs: dict[str, str],
+    deadline: float,
 ) -> list[dict[str, Any]]:
     try:
-        changed = await client.list_changed_files(session_id)
+        changed = await _capture_read(
+            client.list_changed_files, session_id, deadline=deadline
+        )
     except Exception as exc:
         manifest["changedFilesUnavailable"] = _compact_summary(
             exc,
@@ -1112,7 +1131,9 @@ async def _harvest_changed_files(
         if not path:
             continue
         try:
-            content = await client.get_workspace_file(session_id, path)
+            content = await _capture_read(
+                client.get_workspace_file, session_id, path, deadline=deadline
+            )
         except Exception as exc:
             harvested.append(
                 {
@@ -1147,9 +1168,12 @@ async def _harvest_workspace_files(
     session_id: str,
     manifest: dict[str, Any],
     refs: dict[str, str],
+    deadline: float,
 ) -> None:
     try:
-        files = await client.list_workspace_files(session_id)
+        files = await _capture_read(
+            client.list_workspace_files, session_id, deadline=deadline
+        )
     except Exception as exc:
         manifest["workspaceFilesUnavailable"] = _compact_summary(
             exc,
@@ -1179,7 +1203,9 @@ async def _harvest_workspace_files(
             harvested.append({"path": path, "skipped": "directory"})
             continue
         try:
-            content = await client.get_workspace_file(session_id, path)
+            content = await _capture_read(
+                client.get_workspace_file, session_id, path, deadline=deadline
+            )
         except Exception as exc:
             harvested.append(
                 {
@@ -1213,6 +1239,7 @@ async def _harvest_workspace_diffs(
     changed_items: list[dict[str, Any]],
     manifest: dict[str, Any],
     refs: dict[str, str],
+    deadline: float,
 ) -> None:
     paths = [path for path in (_resource_path(item) for item in changed_items) if path][
         :_MAX_OMNIGENT_HARVEST_ITEMS
@@ -1224,13 +1251,18 @@ async def _harvest_workspace_diffs(
     harvested: list[dict[str, Any]] = []
     for path in paths:
         try:
-            diff = await client.get_workspace_diff(session_id, path)
+            diff = await _capture_read(
+                client.get_workspace_diff, session_id, path, deadline=deadline
+            )
         except Exception as exc:
+            manifest["workspaceDiffs"] = harvested
             manifest["workspaceDiffsUnavailable"] = _compact_summary(
                 exc,
                 fallback="workspace diff capability unavailable",
             )
-            manifest["patchUnavailable"] = True
+            manifest["patchUnavailable"] = not any(
+                item.get("artifactRef") for item in harvested
+            )
             return
         if unavailable := _content_limit_reason(diff):
             harvested.append({"path": path, "unavailable": unavailable})
@@ -1246,7 +1278,7 @@ async def _harvest_workspace_diffs(
             _harvested_resource(path, ref, diff, content_type="text/x-diff")
         )
     manifest["workspaceDiffs"] = harvested
-    manifest["patchUnavailable"] = not bool(harvested)
+    manifest["patchUnavailable"] = not any(item.get("artifactRef") for item in harvested)
 
 
 async def _harvest_session_files(
@@ -1257,9 +1289,12 @@ async def _harvest_session_files(
     session_id: str,
     manifest: dict[str, Any],
     refs: dict[str, str],
+    deadline: float,
 ) -> None:
     try:
-        files = await client.list_session_files(session_id)
+        files = await _capture_read(
+            client.list_session_files, session_id, deadline=deadline
+        )
     except Exception as exc:
         manifest["sessionFilesUnavailable"] = _compact_summary(
             exc,
@@ -1285,7 +1320,9 @@ async def _harvest_session_files(
         if not file_id:
             continue
         try:
-            content = await client.get_session_file_content(session_id, file_id)
+            content = await _capture_read(
+                client.get_session_file_content, session_id, file_id, deadline=deadline
+            )
         except Exception as exc:
             harvested.append(
                 {
@@ -1782,6 +1819,9 @@ async def _build_capture_bundle_impl(
             ),
         },
     }
+    # All remote evidence shares the declared capture deadline. Artifact
+    # publication remains outside its cancellation scope and keeps saved work.
+    harvest_deadline = time.monotonic() + _OMNIGENT_HARVEST_TIMEOUT_SECONDS
     child_session_ids = _child_session_ids(raw_events, parent_session_id=session_id)
     manifest["childSessions"] = len(child_session_ids)
     if evidence_enabled and child_session_ids:
@@ -1803,7 +1843,9 @@ async def _build_capture_bundle_impl(
         if client is not None:
             for child_session_id in child_session_ids:
                 try:
-                    child_snapshot = await client.get_session(child_session_id)
+                    child_snapshot = await _capture_read(
+                        client.get_session, child_session_id, deadline=harvest_deadline
+                    )
                 except Exception as exc:
                     child_snapshots.append(
                         {
@@ -1841,6 +1883,7 @@ async def _build_capture_bundle_impl(
                 session_id=session_id,
                 manifest=manifest,
                 refs=refs,
+                deadline=harvest_deadline,
             )
         if _capture_enabled(capture_policy, "workspaceFiles"):
             await _harvest_workspace_files(
@@ -1850,6 +1893,7 @@ async def _build_capture_bundle_impl(
                 session_id=session_id,
                 manifest=manifest,
                 refs=refs,
+                deadline=harvest_deadline,
             )
         await _harvest_workspace_diffs(
             client=client,
@@ -1859,6 +1903,7 @@ async def _build_capture_bundle_impl(
             changed_items=changed_items,
             manifest=manifest,
             refs=refs,
+            deadline=harvest_deadline,
         )
         if _capture_enabled(capture_policy, "sessionFiles"):
             await _harvest_session_files(
@@ -1868,6 +1913,7 @@ async def _build_capture_bundle_impl(
                 session_id=session_id,
                 manifest=manifest,
                 refs=refs,
+                deadline=harvest_deadline,
             )
     _associate_resource_events(manifest, normalized_events)
     _reconcile_changed_file_evidence(manifest)

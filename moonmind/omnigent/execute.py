@@ -4258,26 +4258,36 @@ async def run_omnigent_execution(
             if isinstance(exc, OmnigentClientError)
             else {"error": str(exc), "failureClass": transport_failure_class}
         )
-        bundle = await _build_capture_bundle(
-            client=client,
-            artifact_gateway=artifact_gateway,
-            request=request,
-            session_id=session_id,
-            agent_id=target_agent_id,
-            initial_snapshot=initial_snapshot,
-            final_snapshot=final_snapshot,
-            first_message_request=first_message,
-            first_message_response=first_message_response,
-            first_message_posted=first_message_posted,
-            first_message_response_identifiers=first_message_response_identifiers,
-            raw_events=raw_events,
-            normalized_events=normalized_events,
-            terminal_status="failed",
-            diagnostics=diagnostics,
-            harvest_resources=bool(client and session_id),
-            external_state=external_state,
-            capture_policy=capture_policy,
-        )
+        # The attempt's owned transport has closed on async-with exit. Harvest
+        # the accepted session's saved work over the injected pool or a fresh
+        # owned transport, without dispatching another message or session.
+        async with omnigent_httpx_client(transport_pool) as capture_httpx:
+            capture_client = OmnigentHttpClient(
+                base_url=resolved_server_url(),
+                api_token=resolved_api_token(),
+                client=capture_httpx,
+                upstream_header_allowlist=resolved_proxy_forward_headers(),
+            )
+            bundle = await _build_capture_bundle(
+                client=capture_client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                agent_id=target_agent_id,
+                initial_snapshot=initial_snapshot,
+                final_snapshot=final_snapshot,
+                first_message_request=first_message,
+                first_message_response=first_message_response,
+                first_message_posted=first_message_posted,
+                first_message_response_identifiers=first_message_response_identifiers,
+                raw_events=raw_events,
+                normalized_events=normalized_events,
+                terminal_status="failed",
+                diagnostics=diagnostics,
+                harvest_resources=bool(client and session_id),
+                external_state=external_state,
+                capture_policy=capture_policy,
+            )
         # A status-less transport failure with no locally observed work is only
         # safe to retry fresh when reconciliation proves the server never
         # accepted the first message. An ambiguous POST timeout (server
