@@ -30,6 +30,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 
 class CodexProfileBoundRealizer:
     ref = "codex-profile-bound@1"
+    authority_kinds = ("model",)
 
     def __init__(
         self,

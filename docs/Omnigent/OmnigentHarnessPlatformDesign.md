@@ -3,7 +3,7 @@
 **Status:** Proposed  
 **Document Class:** System / Feature Design View  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-20  
+**Last updated:** 2026-10-03
 **Authority:** Desired-state architecture for making Omnigent the primary harness-wrapper provider for MoonMind while preserving the existing Codex product path until a generic realization proves equivalent support.
 
 ## Related documents
@@ -667,6 +667,10 @@ omnigent-credential-bindings:opencode-go-primary@3#sha256:<digest>
 ```
 
 Plans and evidence carry that exact ref. Editing a binding set appends a new version and never changes historical authority.
+
+The implemented repository handoff (#4009) uses the existing v2 union of model and repository bindings; historical model-only v1 bytes and digests remain unchanged. The common execution and schedule compiler derives source, declared hosting-tool, and requested publication roles. It stores immutable selection artifacts and compact references in `resolvedTools.repositoryAccess`, alongside the typed bindings. Scratch has no repository slot, anonymous source reads have no credential binding, and save-only work admits no destination-write role. Only model bindings enter Provider Profile capacity and model support-materializer checks.
+
+Generic host preparation resolves those references through the existing connection and bound-acquisition owners for clone and GitHub CLI delivery. Issuance evidence is recorded with the runtime binding before consumption; credential projections use its fencing generation for ownership and cleanup. Ready workspaces survive source revocation without another clone. Schedule occurrences use fresh execution owners under the admitted plan. Merge-resolver child preparation re-admits equal or narrower parent selections through the same compiler, rather than requiring caller-authored snapshot digests. Admission checks the selected realizer's supported authority kinds and retains the model-only supervisor barrier. Credential-free boundary coverage lives in [the #4009 handoff journeys](../../tests/integration/reliability/test_repository_authority_handoffs_4009.py).
 
 ### 11.4 Credential generation ownership
 
