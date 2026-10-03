@@ -340,7 +340,11 @@ adapter passes the validated verdict through instead of failing the resolver chi
 the parent then reports that verdict and its `manual_review` blocker. Failing the
 child there would replace a complete result with a generic execution error and a
 false "failed before returning a result" summary. Every other `manual_review`
-reason remains an agent failure.
+reason remains an agent failure. When a resolver child fails before returning a
+result, the terminal summary preserves its bounded, redacted underlying error
+and diagnostic reference after the existing current-head reconciliation. This
+reporting improvement is versioned for retained Temporal histories; it does not
+reinterpret a failed child as successful or launch another unchanged attempt.
 
 Both `request_review` and `reenter_gate` consume the existing review loop's
 `maxConsecutiveNoProgressCycles` budget when their progress signature repeats.

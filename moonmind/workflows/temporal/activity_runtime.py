@@ -30,14 +30,20 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from types import SimpleNamespace
 from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
 from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
+from moonmind.publish import is_unpublished_submodule_failure
+from moonmind.publish.submodules import (
+    SubmodulePublicationError,
+    verify_submodule_publication,
+)
 from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.security.outbound_scan import (
     OutboundBundleItem,
@@ -245,7 +251,10 @@ from moonmind.workflows.skills.approval_policy import (
     recommended_next_actions,
     step_gate_contract_violations,
 )
-from moonmind.workflows.skills.run_projection import append_remediation_attempt_context
+from moonmind.workflows.skills.run_projection import (
+    append_remediation_attempt_context,
+    prepend_skill_activation_summary,
+)
 from moonmind.workflows.skills.tool_plan_contracts import (
     REVIEW_VERDICTS,
     ToolFailure,
@@ -617,7 +626,7 @@ def build_git_push_with_lease_args(
         if remote_sha
         else f"--force-with-lease=refs/heads/{branch_name}:"
     )
-    return ["push", "-u", lease, "origin", branch_name]
+    return ["push", "--recurse-submodules=no", "-u", lease, "origin", branch_name]
 
 
 def classify_git_push_failure(
@@ -629,6 +638,23 @@ def classify_git_push_failure(
     """Classify git push failures that indicate a retryable lease conflict."""
 
     detail = str(stderr or "").strip() or "(no stderr)"
+    if is_unpublished_submodule_failure(detail):
+        result = {
+            "push_status": "failed",
+            "push_branch": branch,
+            "push_error": detail,
+            "retryable": False,
+            "diagnostic_kind": "publish_dependency_unavailable",
+            "reason_code": "dependency_commit_unavailable",
+            "summary": (
+                "The candidate references an unpublished dependency commit. "
+                "Preserve the work and resolve the dependency's publication "
+                "prerequisite before retrying the parent push."
+            ),
+        }
+        if base_branch:
+            result["push_base_branch"] = base_branch
+        return result
     lowered = detail.casefold()
     lease_markers = (
         "stale info",
@@ -10692,39 +10718,12 @@ class TemporalAgentRuntimeActivities:
         parameters: Mapping[str, Any] | None,
         skill_materialization_metadata: Mapping[str, Any] | None = None,
     ) -> str:
-        selected_skill = selected_agent_skill(parameters)
-        if (
-            not selected_skill
-            or selected_skill == _AUTO_SKILL_SENTINEL
-            or not skill_materialization_metadata
-        ):
-            return instructions
-        if "Active MoonMind skill snapshot:" in instructions:
-            return instructions
-        visible_path = str(skill_materialization_metadata.get("visiblePath") or "").strip()
-        skill_doc = f"{visible_path}/{selected_skill}/SKILL.md" if visible_path else ""
-        alias_available = bool(
-            skill_materialization_metadata.get("canonicalAliasAvailable")
+        return prepend_skill_activation_summary(
+            instructions,
+            parameters=parameters,
+            materialization_metadata=skill_materialization_metadata,
+            skills_on_demand_enabled=settings.workflow.skills_on_demand_enabled,
         )
-        block = (
-            "Active MoonMind skill snapshot:\n"
-            f"- Selected skill: {selected_skill}\n"
-            f"- Full active MoonMind skill content is available at: {visible_path}\n"
-            f"- Read `{skill_doc}` first and follow that active snapshot.\n"
-            "- Do not discover skills from repo-local or local-only source folders during execution.\n\n"
-        )
-        on_demand_instruction = skills_on_demand_runtime_instruction(
-            enabled=settings.workflow.skills_on_demand_enabled
-        )
-        if on_demand_instruction:
-            block = block.rstrip() + f"\n{on_demand_instruction}\n\n"
-        if not alias_available:
-            block = block.rstrip() + (
-                "\n- The repository also contains `.agents/skills`; that directory "
-                "is repo-authored source and must not be modified or treated as "
-                "the active selected skill snapshot.\n\n"
-            )
-        return block + instructions
 
     @staticmethod
     def _append_selected_jira_tool_hint(
@@ -14653,6 +14652,49 @@ class TemporalAgentRuntimeActivities:
             if pre_push_scan_result is not None:
                 return pre_push_scan_result
 
+            async def verify_dependencies() -> dict[str, Any] | None:
+                async def run_git(
+                    *args: str, cwd: Path = Path(workspace), network: bool = False
+                ) -> SimpleNamespace:
+                    proc = await _create_managed_agent_subprocess(
+                        *self._workspace_git_command(
+                            str(cwd), "-c", "core.hooksPath=/dev/null", *args
+                        ),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=auth_command_env if network else command_env,
+                    )
+                    try:
+                        stdout, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=120
+                        )
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                        raise
+                    return SimpleNamespace(
+                        returncode=proc.returncode, stdout=stdout, stderr=stderr
+                    )
+
+                try:
+                    await verify_submodule_publication(
+                        repo_dir=Path(workspace),
+                        candidate_ref=current_branch,
+                        base_ref=base_ref,
+                        run_git=run_git,
+                    )
+                except SubmodulePublicationError as exc:
+                    return classify_git_push_failure(
+                        stderr=str(exc),
+                        branch=current_branch,
+                        base_branch=base_branch_name,
+                    )
+                return None
+
+            dependency_failure = await verify_dependencies()
+            if dependency_failure is not None:
+                return dependency_failure
+
             push_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
@@ -14823,6 +14865,10 @@ class TemporalAgentRuntimeActivities:
                         if retry_scan_result is not None:
                             retry_scan_result.update(retry_metadata)
                             return retry_scan_result
+                        dependency_failure = await verify_dependencies()
+                        if dependency_failure is not None:
+                            dependency_failure.update(retry_metadata)
+                            return dependency_failure
                         retry_push_proc = await _create_managed_agent_subprocess(
                             *self._workspace_git_command(
                                 workspace,
