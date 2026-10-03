@@ -39,9 +39,28 @@ Workflow-scoped expansion does not require a human account. Machine execution pr
 Recent-choice attribution records an explicit catalog selection. Automatic goal selection supplies no catalog-usage actor, so goal-selected submissions expand without recording usage under the execution owner.
 
 Trusted issue loaders persist the complete GitHub or Jira brief as a linked JSON
-artifact before returning to the workflow. The existing `briefArtifactRef` carries
+artifact before returning to the workflow. The artifact contains the portable
+assessment fields `issue_provider`, `issue_ref`, `issue_url`, `title`, `description`,
+`acceptance_criteria`, `labels`, `preset_brief`, `constraints`, `source_resolution`,
+`trusted_source`, `truncated`, and `truncated_fields` alongside the existing
+provider and claim handoff fields. Native text is retained exactly, including
+whitespace; Jira's structured description is also retained in `jiraIssue.description`
+alongside its text rendering. Embedded acceptance criteria stay in the full
+description when no separate provider field exists. `source_resolution` records
+missing mandatory source fields; absent optional enrichment does not make the
+source incomplete. Source completeness and truncation describe the native read
+before prompt compaction, separately from Jira's document-path `sourceResolution`.
+The existing `briefArtifactRef` carries
 that source into attachment-capable assessment, implementation, remediation,
-and verification workspaces. Direct managed Codex sessions retain their existing
+and verification workspaces. An isolated workspace receives the exact JSON under
+`.moonmind/attachments/` with an opaque filename; its issue identity and `artifactPath`
+identify the logical brief path. Reading that attachment fulfills the assessment
+source requirement without creating an agent-authored copy at the old path.
+Preset loaders receive the original constraints through their explicit inputs.
+Freeform textarea/Markdown inputs and whole-value string bindings preserve source
+spacing and string values such as `false`; actual boolean settings retain their
+boolean type.
+Direct managed Codex sessions retain their existing
 prepared-context path because their session adapter rejects raw input refs.
 Inline context may be shortened for prompt limits;
 the full attachment remains authoritative. Agent-generated copies do not replace

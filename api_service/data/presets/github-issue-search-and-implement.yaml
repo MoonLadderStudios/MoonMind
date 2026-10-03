@@ -185,6 +185,7 @@ steps:
       issueSearch: '{{ inputs.issue_search }}'
       includeAllAuthors: '{{ inputs.include_all_authors }}'
       artifactPath: artifacts/github-issue-implement-brief.json
+      constraints: '{{ inputs.constraints }}'
       predecessorStopped: '{{ context.get(''predecessorStopped'', context.get(''predecessor_stopped'', '''')) }}'
       handoffUsable: '{{ context.get(''handoffUsable'', context.get(''handoff_usable'', '''')) }}'
       priorWorkPullRequest: '{{ context.get(''priorWorkPullRequest'', context.get(''prior_work_pull_request'', context.get(''pullRequest'', context.get(''pull_request'', '''')))) }}'
