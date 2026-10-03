@@ -21,6 +21,14 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 
 
+def runtime_binding_execution_scope(idempotency_key: str) -> str:
+    """Return a bounded identity for one execution, shared with cleanup."""
+
+    return "omnigent-execution-scope:sha256:" + hashlib.sha256(
+        idempotency_key.encode("utf-8")
+    ).hexdigest()
+
+
 class RuntimeBindingProviderLease(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
