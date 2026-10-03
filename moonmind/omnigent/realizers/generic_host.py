@@ -101,6 +101,7 @@ def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
 
 class GenericOmnigentHostRealizer:
     ref = "generic-omnigent-host@1"
+    authority_kinds = ("model", "repository")
 
     def __init__(
         self,
@@ -498,6 +499,7 @@ class GenericOmnigentHostRealizer:
                 plan=plan,
                 host_class=host_class,
                 launch_policy=launch_policy,
+                repository_owner_ref=f"{binding.bindingId}:{binding.fencingGeneration}",
                 authority_sink=record_prepared,
             )
             await self._assert_host_capacity_admits()

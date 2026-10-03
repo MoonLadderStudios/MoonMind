@@ -1297,6 +1297,39 @@ class RepositoryConnectionService:
             )
         return self._stored_assignment(matches[0], endpoint=connection.endpoint_ref)
 
+    async def launch_candidates(
+        self,
+        repository: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> list[Any]:
+        """Read permitted recorded routes for a launch, without probing secrets."""
+        from moonmind.workflows.executions.repository_contract import (
+            ScopedRouteCandidate,
+        )
+
+        wanted = _github_repository_key(repository)
+        connections = await self.export_snapshot_connections(
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+        )
+        candidates = []
+        for connection in connections:
+            if connection.lifecycle != "active":
+                continue
+            try:
+                assignment = await self.launch_assignment(connection, repository)
+            except RepositoryRouteError as exc:
+                if exc.code == REPOSITORY_SETUP_REQUIRED:
+                    continue
+                raise
+            if wanted:
+                candidates.append(
+                    ScopedRouteCandidate(connection=connection, assignment=assignment)
+                )
+        return candidates
+
     async def lore_projection_owner(self, repository: str) -> str | None:
         """Return the Lore connection whose review projection is this GitHub repo.
 
