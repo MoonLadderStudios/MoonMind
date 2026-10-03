@@ -524,6 +524,14 @@ A backend-neutral request is shaped approximately as follows:
 }
 ```
 
+The retained worker `task.container.env` adapter sends the container-create JSON
+through the configured Docker CLI's `system dial-stdio` tunnel. Values, including
+multiline settings, travel through stdin and never enter process arguments or the
+Docker client's environment. The CLI retains deployment-owned connection,
+context, and TLS settings. Creation and attachment share the execution deadline;
+after an uncertain create, cleanup reconciles the unique launch label before
+removing a container.
+
 A request supplies either a permitted `image` or a deployment-approved
 `imageSourceRef`. An image-source reference resolves to an immutable provisioning
 plan before execution. The caller does not provide:

@@ -275,6 +275,7 @@ Rules:
 - live publication must target a shared MoonMind observability transport such as Redis pub/sub, a shared append-only spool, or DB-backed tailing
 - the current implementation choice of a shared append-only spool file under the run workspace remains valid
 - spool reads and appends pin every directory component and reject symlink or special-file endpoints; appends also reject hardlinks, and readers retain partial records until a complete newline-delimited event arrives
+- managed-session snapshots and finalization redact raw stream captures up to 64 MiB; oversized streams publish a bounded truncation message and diagnostics recording the source size and zero retained content, preserving source logs and their original byte offsets; unreadable or unsafe streams publish an explicit unavailability annotation and retain the previous offsets
 
 ## 6.5 Projection model
 

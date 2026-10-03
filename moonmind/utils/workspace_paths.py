@@ -32,6 +32,7 @@ def open_directory(path: str | Path, *, create: bool = False) -> Iterator[int]:
                 try:
                     os.mkdir(part, mode=0o755, dir_fd=fd)
                 except FileExistsError:
+                    # The descriptor open below validates the existing entry.
                     pass
             child_fd = os.open(part, _DIRECTORY_FLAGS, dir_fd=fd)
             os.close(fd)
@@ -60,6 +61,7 @@ def atomic_write_text(
         try:
             existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
+            # A missing destination is the normal first-write path.
             pass
         else:
             if not stat.S_ISREG(existing.st_mode):
@@ -81,6 +83,7 @@ def atomic_write_text(
             try:
                 os.unlink(temporary, dir_fd=parent_fd)
             except FileNotFoundError:
+                # A successful replacement already consumed this temporary name.
                 pass
 
 

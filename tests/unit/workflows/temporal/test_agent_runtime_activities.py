@@ -3825,7 +3825,11 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
 
             assert result["profile_id"] == "proxy-prof"
             assert "MOONMIND_PROXY_TOKEN" in result["delta_env_overrides"]
-            assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
+            # Repository/tool launch authority selects GitHub access later;
+            # this provider context must not grant ambient credentials.
+            assert "GITHUB_TOKEN" not in result["passthrough_env_keys"]
+            assert "GITHUB_TOKEN" not in result["delta_env_overrides"]
+            assert "ghs_test_token" not in json.dumps(result)
             assert result["workload_mode"] == "no-docker"
             # Single-user (#4349): launch context carries no human owner.
             # Profile owner_user_id/ownerUserId is legacy provenance, never

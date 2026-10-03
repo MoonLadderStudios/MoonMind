@@ -5608,8 +5608,11 @@ async def _run_coordinator_failure_case(
         owner_mock.side_effect = fail_from_production_runtime
 
     async def run_cleanup_command(*args, **_kwargs):
-        if args[:3] == ("docker", "inspect", "--format") and args[-1] == "container-1":
-            assert args[3].startswith("{{range .Mounts}}")
+        if (
+            args[:3] == ("docker", "inspect", "--format")
+            and args[-1] == "container-1"
+            and args[3].startswith("{{range .Mounts}}")
+        ):
             return 0, "valid", ""
         command = tuple(args[:3])
         if command[:2] == ("docker", "stop"):

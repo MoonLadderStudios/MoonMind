@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from temporalio import activity
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -16,6 +19,7 @@ from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeFetchResultInput,
     ExternalAgentRunInput,
 )
+from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -383,6 +387,147 @@ async def test_agent_run_jules_pins_head_and_recovers_old_authority(
         "pr_url": url, "expected_repository": "org/repo",
         "target_branch": "release", "expected_head_sha": "a" * 40,
     }
+
+
+@pytest.mark.parametrize(
+    "legacy_patches",
+    [
+        (),
+        ("jules-merge-canonical-authority-v1",),
+        ("jules-merge-canonical-authority-v1", "jules-merge-target-authority-v1"),
+    ],
+    ids=["canonical", "retained-bound", "retained-unbound"],
+)
+@pytest.mark.parametrize("legacy_aliases", [False, True])
+async def test_agent_run_jules_repository_authority_history_replays(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_patches: tuple[str, ...],
+    legacy_aliases: bool,
+) -> None:
+    """Retain old repository/branch payloads and replay canonical-only publication."""
+    calls = []
+    emitted_merge_payloads = []
+    url = "https://github.com/org/repo/pull/123"
+
+    @activity.defn(name="integration.resolve_adapter_metadata")
+    async def resolve_metadata(agent_id: str) -> dict:
+        return {"agent_id": agent_id, "execution_style": "polling"}
+
+    @activity.defn(name="integration.jules.start")
+    async def start(request: AgentExecutionRequest) -> dict:
+        return {"external_id": "session-1", "status": "queued"}
+
+    @activity.defn(name="integration.jules.status")
+    async def status(request: ExternalAgentRunInput) -> dict:
+        return {"normalized_status": "completed"}
+
+    @activity.defn(name="integration.jules.fetch_result")
+    async def fetch(request: ExternalAgentRunInput) -> dict:
+        return {"summary": "Done", "metadata": {"pullRequestUrl": url}}
+
+    @activity.defn(name="repo.merge_pr")
+    async def merge(payload: dict) -> dict:
+        calls.append(dict(payload))
+        if not payload.get("expected_repository"):
+            return {"merged": False, "reasonCode": "merge_authority_required"}
+        if not payload.get("expected_head_sha"):
+            return {
+                "merged": False,
+                "reasonCode": "merge_head_resolved",
+                "expectedHeadSha": "a" * 40,
+            }
+        return {"merged": True, "mergeSha": "c" * 40}
+
+    @activity.defn(name="agent_runtime.publish_artifacts")
+    async def publish(result: AgentRunResult) -> AgentRunResult:
+        return result
+
+    async def routed(self, name, payload, **_kwargs):
+        if name == "repo.merge_pr":
+            emitted_merge_payloads.append(dict(payload))
+        return await agent_run_module.workflow.execute_activity(
+            name,
+            payload,
+            task_queue=agent_run_module.workflow.info().task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+
+    original_patched = agent_run_module.workflow.patched
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch: False if patch in legacy_patches else original_patched(patch),
+    )
+    monkeypatch.setattr(MoonMindAgentRun, "_execute_routed_activity", routed)
+    queue = f"jules-canonical-authority-{len(legacy_patches)}-{legacy_aliases}"
+    workspace_spec = {
+        "repositoryTarget": {
+            "provider": "git",
+            "repository": {"name": "org/repo"},
+            "branch": {"name": "release"},
+        },
+    }
+    if legacy_aliases:
+        workspace_spec.update(repository="legacy/repo", startingBranch="main")
+    # Bound startup and teardown as well as execution; a broken ephemeral
+    # server must release the managed test slot rather than stall the resolver.
+    async with asyncio.timeout(60):
+        async with (
+            await WorkflowEnvironment.start_time_skipping(
+                data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+            ) as env,
+            Worker(
+                env.client,
+                task_queue=queue,
+                workflows=[MoonMindAgentRun],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+                activities=[resolve_metadata, start, status, fetch, merge, publish],
+                graceful_shutdown_timeout=timedelta(seconds=1),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                _request(
+                    workspaceSpec=workspace_spec,
+                    parameters={"publishMode": "branch"},
+                ),
+                id=queue,
+                task_queue=queue,
+            )
+            result = await asyncio.wait_for(handle.result(), 30)
+            history = await handle.fetch_history()
+
+    expected_repository = (
+        ("legacy/repo" if legacy_aliases else "") if legacy_patches else "org/repo"
+    )
+    authored = {
+        "pr_url": url,
+        "expected_repository": expected_repository,
+        "target_branch": "main" if legacy_patches else "release",
+    }
+    expected_calls = (
+        [{"pr_url": url}, authored] if len(legacy_patches) == 2 else [authored]
+    )
+    if expected_repository:
+        expected_calls.append({**authored, "expected_head_sha": "a" * 40})
+    elif len(legacy_patches) != 2:
+        expected_calls.append(authored)
+    assert calls == expected_calls
+    assert result.failure_class == (None if expected_repository else "execution_error")
+
+    monkeypatch.setattr(agent_run_module.workflow, "patched", original_patched)
+    emitted_merge_payloads.clear()
+    await asyncio.wait_for(
+        Replayer(
+            workflows=[MoonMindAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+        ).replay_workflow(history),
+        30,
+    )
+    # Temporal's determinism checker does not compare every argument value;
+    # verify the actual replayed payloads match their retained activity inputs.
+    assert emitted_merge_payloads == calls
 
 
 async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(

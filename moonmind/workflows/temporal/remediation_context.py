@@ -977,8 +977,10 @@ class RemediationLifecyclePublisher:
             *(artifact.metadata_json[key].as_string().is_(None) for key in identity)
         )
         matching_identity = and_(
-            *(artifact.metadata_json[key].as_string() == value
-              for key, value in identity.items())
+            *(
+                artifact.metadata_json[key].as_string() == value
+                for key, value in identity.items()
+            )
         )
         statement = (
             select(artifact)
@@ -1002,18 +1004,21 @@ class RemediationLifecyclePublisher:
                 # The original producer link survives a public relink. Any
                 # lifecycle association to another execution makes legacy
                 # origin ambiguous; supplemental target annotations do not.
-                ~select(other_link.id).where(
+                ~select(other_link.id)
+                .where(
                     other_link.artifact_id == artifact.artifact_id,
-                    other_link.created_by_activity_type == "remediation.lifecycle.publish",
+                    other_link.created_by_activity_type
+                    == "remediation.lifecycle.publish",
                     or_(
                         other_link.namespace != record.namespace,
                         other_link.workflow_id != record.workflow_id,
                         other_link.run_id != record.run_id,
                     ),
-                ).exists(),
+                )
+                .exists(),
             )
-            .order_by(artifact.created_at.asc())
-            .limit(1)
+            .distinct()
+            .order_by(artifact.created_at.asc(), artifact.artifact_id.asc())
         )
         producer_authority = artifact.created_by_principal.in_(
             (
@@ -1034,29 +1039,57 @@ class RemediationLifecyclePublisher:
             "remediation.audit_event": "auditEvent",
             "remediation.target_annotation": "targetAnnotation",
         }.get(link_type)
+        receipt_ref = None
         if owner_link is not None and owner_link.remediation_run_id == record.run_id:
             state = owner_link.approval_state or {}
+            state = state if isinstance(state, Mapping) else {}
             refs = state.get("artifactRefs") or {}
-            if role and isinstance(refs, Mapping) and isinstance(refs.get(role), str):
+            if role and isinstance(refs, Mapping):
+                receipt_ref = refs.get(role)
+            if link_type == "remediation.action_request" and not receipt_ref:
+                receipt_ref = state.get("actionRequestArtifactRef")
+            receipt_ref = receipt_ref if isinstance(receipt_ref, str) else None
+            owner_pins = {
+                "remediationWorkflowId": owner_link.remediation_workflow_id,
+                "remediationRunId": owner_link.remediation_run_id,
+                "targetWorkflowId": owner_link.target_workflow_id,
+                "targetRunId": owner_link.target_run_id,
+            }
+            if receipt_ref and all(
+                state.get(key) in (None, value) for key, value in owner_pins.items()
+            ):
                 # These exact refs are persisted by the approval/action owner,
                 # unlike generic execution refs which may include imported or
-                # provider-submitted evidence.
+                # provider-submitted evidence. Older receipts omit duplicate
+                # pins; recorded pins must agree with the owning relationship.
                 producer_authority = or_(
-                    producer_authority, artifact.artifact_id == refs[role]
+                    producer_authority, artifact.artifact_id == receipt_ref
                 )
         retained = (
-            await self._session.execute(statement.where(producer_authority))
-        ).scalar_one_or_none()
-        if retained is not None:
+            (await self._session.execute(statement.where(producer_authority).limit(2)))
+            .scalars()
+            .all()
+        )
+        if len(retained) > 1:
+            raise RemediationContextError(
+                "Competing legacy remediation artifacts cannot be reconciled; "
+                "retained evidence was preserved instead of republished"
+            )
+        if retained:
             # Keep the historical actor, metadata, bytes, digest, and outcome
             # unchanged. Revalidate its existing authority on every retry.
-            return retained
-        if record.artifact_refs:
+            return retained[0]
+        known_refs = set(record.artifact_refs or [])
+        if receipt_ref:
+            known_refs.add(receipt_ref)
+        if known_refs:
             uncertain = (
-                await self._session.execute(statement.where(
-                    missing_identity,
-                    artifact.artifact_id.in_(record.artifact_refs),
-                ))
+                await self._session.execute(
+                    statement.where(
+                        missing_identity,
+                        artifact.artifact_id.in_(known_refs),
+                    ).limit(1)
+                )
             ).scalar_one_or_none()
             if uncertain is not None:
                 raise RemediationContextError(
