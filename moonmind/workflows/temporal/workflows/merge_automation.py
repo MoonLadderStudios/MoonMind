@@ -19,6 +19,7 @@ with workflow.unsafe.imports_passed_through():
         ReadinessBlockerModel,
     )
     from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
+    from moonmind.utils.logging import redact_sensitive_text
     from moonmind.workflows.merge_automation_review import (
         REVIEW_REQUEST_POSTED_STATUSES,
         REVIEW_REQUEST_RETRY_GATE_STATUSES,
@@ -74,6 +75,9 @@ MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
 )
 MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH = (
     "merge-automation-resolver-parent-gate-id-v1"
+)
+MERGE_AUTOMATION_RESOLVER_FAILURE_SUMMARY_PATCH = (
+    "merge-automation-resolver-failure-summary-v1"
 )
 MERGE_AUTOMATION_POST_RESOLVER_PROGRESS_RECOVERY_PATCH = (
     "merge-automation-post-resolver-progress-recovery-v1"
@@ -1117,6 +1121,20 @@ class MoonMindMergeAutomationWorkflow:
     def _actionable_merge_conflicts_enabled() -> bool:
         return workflow.patched("merge-automation-actionable-merge-conflict-v1")
 
+    @staticmethod
+    def _resolver_child_failure_summary(error: Exception) -> str:
+        prefix = "pr-resolver child workflow failed before returning a result."
+        cause: BaseException | None = error
+        detail = ""
+        for _ in range(8):
+            if cause is None:
+                break
+            detail = str(getattr(cause, "message", None) or cause).strip()
+            cause = getattr(cause, "cause", None) or cause.__cause__
+        if not detail:
+            return prefix
+        return f"{prefix} {redact_sensitive_text(detail)}"[:2048]
+
     async def _failed_resolver_summary(
         self,
         *,
@@ -1833,15 +1851,18 @@ class MoonMindMergeAutomationWorkflow:
                     await self._write_resolver_attempt(workflow_id=resolver_workflow_id)
                     self._publish_visibility()
                     return await self._finish()
-                except Exception:
+                except Exception as exc:
                     await self._write_resolver_attempt(workflow_id=resolver_workflow_id)
                     recovery, recovered = await self._recover_after_resolver_issue()
                     if recovered is not None:
                         return recovered
                     if recovery == RESOLVER_ISSUE_RECOVERY_REENTER_GATE:
                         continue
+                    summary = "pr-resolver child workflow failed before returning a result."
+                    if workflow.patched(MERGE_AUTOMATION_RESOLVER_FAILURE_SUMMARY_PATCH):
+                        summary = self._resolver_child_failure_summary(exc)
                     return await self._failed_resolver_summary(
-                        summary="pr-resolver child workflow failed before returning a result.",
+                        summary=summary,
                         blocker_kind=DISPOSITION_FAILED,
                     )
                 await self._write_resolver_attempt(

@@ -131,6 +131,16 @@ class TestPushWorkspaceBranch:
     """Tests for TemporalAgentRuntimeActivities._push_workspace_branch."""
 
     @pytest.fixture(autouse=True)
+    def _stub_dependency_verification(self):
+        # Real dependency fetch/recovery journeys live in test_submodule_publication.
+        # These tests isolate branch, credential, and lease behavior with fake Git.
+        with patch(
+            "moonmind.workflows.temporal.activity_runtime.verify_submodule_publication",
+            new_callable=AsyncMock,
+        ):
+            yield
+
+    @pytest.fixture(autouse=True)
     def _stub_unrelated_publication_authority_calls(self, request):
         if request.node.name in {
             "test_push_refreshes_authoritative_base_before_remote_write",

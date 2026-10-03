@@ -111,6 +111,21 @@ If no inputs are provided, investigate the failing CI checks for the current bra
     successfully. A rerun that exposes a code failure returns to step 2. If
     the platform failure persists after the third attempt, write blocked
     evidence with `--reason ci_infra_rerun_exhausted`.
+- If checkout fails because a pinned submodule commit is unavailable, inspect
+  the recorded dependency source and retained work before changing the pin.
+  Recover the intended source from its existing checkout/checkpoint or find a
+  published equivalent that preserves the consumer's projection. Follow the
+  repository's source ownership; task-authorized Skill source authoring is
+  allowed while the active execution bundle stays immutable.
+  Publish dependency work only within the admitted destination authority, and
+  verify its remote reference before publishing the consumer. Use
+  `git push --recurse-submodules=check` for the consumer; it checks availability
+  without publishing other repositories. If dependency publication is outside
+  this invocation's scope, preserve the candidate and source and report the
+  exact missing commit, owning repository, evidence, and next authorized
+  automated action. Unavailable dependency evidence alone is not a request for
+  mandatory human review. Do not substitute an arbitrary latest revision,
+  weaken a projection check, or repeat CI against an unchanged missing pin.
 - Analyze the error output.
 - Apply surgical code changes to fix the build error or test failure.
 - Ensure the fix doesn't break other existing functionality.
@@ -135,7 +150,7 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - Ensure the working tree is clean except for the fixed files.
 - Stage the resolved files with `git add <file>`.
 - Commit the changes using a descriptive message (e.g. `fix(ci): <short failure summary>`).
-- Push to the current branch with `git push` when publication is authorized.
+- Push to the current branch with `git push --recurse-submodules=check` when publication is authorized.
 
 6. Verify the pushed head in CI.
 - Record the exact local `HEAD` SHA after the push.

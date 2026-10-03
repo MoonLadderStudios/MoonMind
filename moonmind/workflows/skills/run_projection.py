@@ -347,8 +347,8 @@ def build_skill_activation_summary(
     Returns an empty string when no selected skill is in scope. The summary
     follows ``docs/Steps/SkillSystem.md`` §14.5: active skill names, the
     materialized ``visiblePath``, first-read hint at ``SKILL.md``, and the
-    repo-authored ``.agents/skills`` non-mutation rule when the canonical
-    alias is unavailable.
+    separation of editable repository Skill sources from the immutable active
+    snapshot when the canonical alias is unavailable.
     """
 
     if not materialization_metadata:
@@ -369,7 +369,8 @@ def build_skill_activation_summary(
         f"- Read `{skill_doc}` first and follow that active snapshot.\n"
         "- For Skill helper commands, set `MOONMIND_ACTIVE_SKILLS_DIR` to the "
         "visible path above if it is not already exported.\n"
-        "- Do not discover skills from repo-local or local-only source folders during execution.\n"
+        "- Resolve execution Skills and helper commands from this active snapshot; "
+        "repository sources do not replace it. Keep the active snapshot unchanged.\n"
     )
     on_demand_instruction = skills_on_demand_runtime_instruction(
         enabled=skills_on_demand_enabled
@@ -379,8 +380,10 @@ def build_skill_activation_summary(
     if not alias_available:
         block = block + (
             "- If the repository contains `.agents/skills`, that directory is "
-            "repo-authored source and must not be modified or treated as the "
-            "active selected skill snapshot.\n"
+            "repo-authored source, separate from the active selected skill snapshot. "
+            "Repository Skill sources may be read and edited when required by the task. "
+            "Follow the repository's source ownership and projection rules; "
+            "do not edit sources as a runtime materialization side effect.\n"
         )
     return block + "\n"
 
