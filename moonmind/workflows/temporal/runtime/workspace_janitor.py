@@ -516,15 +516,21 @@ class ManagedRuntimeWorkspaceJanitor:
             if stat.S_ISDIR(info.st_mode):
                 try:
                     shutil.rmtree(quarantine, dir_fd=parent_fd)
-                except OSError:
+                except OSError as original_error:
                     # Retry transient traversal failures while the same parent
                     # remains pinned. Never touch a recreated canonical path.
                     try:
                         shutil.rmtree(quarantine, dir_fd=parent_fd)
                     except FileNotFoundError:
-                        # The quarantine may already be gone; still report the
-                        # initial deletion error below.
-                        pass
+                        try:
+                            os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            # Absence under the pinned parent confirms cleanup.
+                            pass
+                        except OSError:
+                            raise original_error
+                        else:
+                            raise original_error
                     except OSError as retry_error:
                         logger.warning(
                             "Quarantine cleanup retry failed for %s/%s: %s",
@@ -532,9 +538,12 @@ class ManagedRuntimeWorkspaceJanitor:
                             quarantine,
                             retry_error,
                         )
-                    # Preserve the original failure in the structured result,
-                    # including when the best-effort cleanup succeeded.
-                    raise
+                        raise original_error
+                    logger.warning(
+                        "Quarantine cleanup recovered after %s (errno=%s)",
+                        type(original_error).__name__,
+                        original_error.errno,
+                    )
             else:
                 os.unlink(quarantine, dir_fd=parent_fd)
         return estimated

@@ -171,10 +171,9 @@ def test_workspace_cleanup_recovers_transient_quarantine_delete_failure(
     assert not list(parent.glob(".gc-*run-1"))
     assert (workspace / "active.txt").read_text(encoding="utf-8") == "active work"
     assert run_store.load("run-1").status == "running"
-    assert result.deleted_roots == 0
-    assert any(
-        "transient recursive deletion failure" in error for error in result.errors
-    )
+    assert result.deleted_roots == 1
+    assert result.estimated_deleted_bytes == len("discardedremaining")
+    assert not result.errors
 
 
 def test_workspace_cleanup_preserves_failed_retry_quarantine_and_original_error(
@@ -211,6 +210,46 @@ def test_workspace_cleanup_preserves_failed_retry_quarantine_and_original_error(
     )
     assert quarantines[0].name in caplog.text
     assert "retry cleanup denied" in caplog.text
+
+
+@pytest.mark.parametrize("quota", ["roots", "bytes"])
+@pytest.mark.parametrize("already_gone", [False, True])
+def test_recovered_quarantine_deletion_consumes_cleanup_quota(
+    tmp_path, monkeypatch, quota, already_gone
+) -> None:
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
+    for run_id in ("run-1", "run-2"):
+        workspace = tmp_path / run_id
+        workspace.mkdir()
+        (workspace / "payload.txt").write_text("payload")
+        _age_path(workspace)
+        run_store.save(_run_record(run_id, workspace_path=str(workspace / "repo")))
+    real_rmtree = shutil.rmtree
+    calls = 0
+
+    @wraps(real_rmtree)
+    def fail_once(path, *, dir_fd):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("transient deletion failure")
+        result = real_rmtree(path, dir_fd=dir_fd)
+        if already_gone:
+            raise FileNotFoundError("quarantine already removed")
+        return result
+
+    monkeypatch.setattr(shutil, "rmtree", fail_once)
+    limits = {"max_delete_paths": 1} if quota == "roots" else {"max_delete_bytes": 7}
+    result = _janitor(tmp_path, run_store, session_store, **limits).run()
+
+    assert result.deleted_roots == 1
+    assert result.estimated_deleted_bytes == 7
+    assert not result.errors
+    assert (tmp_path / "run-2" / "payload.txt").read_text() == "payload"
+    assert not (tmp_path / "run-1").exists()
+    assert not list(tmp_path.glob(".gc-*"))
+    assert calls == 2
 
 
 def test_quarantine_cleanup_retry_keeps_parent_descriptor_after_symlink_swap(
@@ -252,10 +291,9 @@ def test_quarantine_cleanup_retry_keeps_parent_descriptor_after_symlink_swap(
 
     assert not list(retained_runtime.glob(".gc-*run-1"))
     assert marker.read_text(encoding="utf-8") == "keep outside"
-    assert result.deleted_roots == 0
-    assert any(
-        "transient recursive deletion failure" in error for error in result.errors
-    )
+    assert result.deleted_roots == 1
+    assert result.estimated_deleted_bytes == len("remaining")
+    assert not result.errors
 
 
 def test_quarantine_cleanup_retry_does_not_follow_replaced_quarantine(

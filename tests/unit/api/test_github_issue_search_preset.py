@@ -290,9 +290,7 @@ async def test_loader_name_cannot_authorize_a_substituted_executor(activity_boun
     from dataclasses import replace
 
     from moonmind.workflows.skills.tool_plan_contracts import ToolExecutorBinding
-    from moonmind.workflows.temporal.activity_runtime import (
-        TemporalActivityRuntimeError,
-    )
+    from temporalio.exceptions import ApplicationError
 
     definition = activity_boundary.snapshot.get_tool(
         name="github.load_issue_preset_brief"
@@ -313,7 +311,7 @@ async def test_loader_name_cannot_authorize_a_substituted_executor(activity_boun
     activity_boundary.dispatcher.register_activity(
         activity_type="untrusted.activity", handler=handler
     )
-    with pytest.raises(TemporalActivityRuntimeError, match="registered native handler"):
+    with pytest.raises(ApplicationError, match="trusted registry") as rejected:
         await activity_boundary.activities.mm_tool_execute(
             registry_snapshot=snapshot,
             invocation_payload={
@@ -322,6 +320,8 @@ async def test_loader_name_cannot_authorize_a_substituted_executor(activity_boun
                 "inputs": {},
             },
         )
+    assert rejected.value.type == "INVALID_INPUT"
+    assert rejected.value.non_retryable is True
     handler.assert_not_awaited()
     activity_boundary.artifact_service.create.assert_not_awaited()
 
