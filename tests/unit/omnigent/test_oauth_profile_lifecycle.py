@@ -54,6 +54,9 @@ from moonmind.omnigent.execution_profiles import (
     validate_effective_launch_snapshot,
 )
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.runtime_binding import (
+    runtime_binding_execution_scope,
+)
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
@@ -6210,7 +6213,9 @@ async def test_pre_host_cleanup_reporting_retries_and_preserves_diagnostics(
     )
     assert store.attempts == 3
     assert "provider_released" in actions
-    state = await store.get_current_state(plan.planRef, "workflow-1")
+    state = await store.get_current_state(
+        plan.planRef, runtime_binding_execution_scope("idem-failure-matrix")
+    )
     assert state.state == (
         "cleanup_complete" if cleanup_recovers else "credentials_acquired"
     )
