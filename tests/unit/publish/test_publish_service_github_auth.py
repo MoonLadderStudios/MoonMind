@@ -21,8 +21,8 @@ async def test_publish_branch_push_uses_resolved_token_env(monkeypatch, tmp_path
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0, stderr="", stdout=" M file.py\n")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     result = await PublishService().publish(
         job_id=uuid4(),
@@ -52,7 +52,7 @@ async def test_publish_clean_worktree_returns_no_commit_result(tmp_path: Path):
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0, stderr="", stdout="")
         raise AssertionError(f"Unexpected command after clean worktree: {command!r}")
 
     result = await PublishService().publish(
@@ -85,8 +85,8 @@ async def test_publish_branch_blocks_high_security_scan_before_push(
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0, stderr="", stdout=" M file.py\n")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     async def _mock_exec(*args, **kwargs):
         nonlocal scan_call_count
@@ -144,8 +144,8 @@ async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0, stderr="", stdout=" M file.py\n")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     async def _create_pr(**kwargs):
         created.update(kwargs)
@@ -183,10 +183,10 @@ async def test_publish_pr_accepts_only_verified_adoption(
 
     async def _run(command, **kwargs):
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
+            return SimpleNamespace(returncode=0, stderr="", stdout=" M file.py\n")
         if command[:3] == ["git", "rev-parse", "HEAD"]:
-            return SimpleNamespace(stdout="c" * 40 + "\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0, stderr="", stdout="c" * 40 + "\n")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     async def _create_pr(**kwargs):
         return SimpleNamespace(
@@ -230,8 +230,8 @@ async def test_publish_pr_gh_fallback_injects_explicit_token_without_repo(
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0, stderr="", stdout=" M file.py\n")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     result = await PublishService(gh_binary=sys.executable).publish(
         job_id=uuid4(),
@@ -274,8 +274,8 @@ async def test_publish_pr_gh_fallback_rejects_ambient_auth_without_token(
     async def _run(command, **kwargs):
         calls.append({"command": command, **kwargs})
         if command[:3] == ["git", "status", "--porcelain"]:
-            return SimpleNamespace(stdout=" M file.py\n")
-        return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0, stderr="", stdout=" M file.py\n")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     with pytest.raises(RuntimeError, match="requires an explicit resolved token"):
         await PublishService(gh_binary=sys.executable).publish(
