@@ -821,7 +821,7 @@ async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> N
         def __exit__(self, *args: object) -> None:
             return None
 
-        def starttls(self) -> None:
+        def starttls(self, *, context=None) -> None:
             calls.append({"action": "starttls"})
 
         def login(self, username: str, password: str) -> None:
@@ -3825,7 +3825,11 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
 
             assert result["profile_id"] == "proxy-prof"
             assert "MOONMIND_PROXY_TOKEN" in result["delta_env_overrides"]
-            assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
+            # Repository/tool launch authority selects GitHub access later;
+            # this provider context must not grant ambient credentials.
+            assert "GITHUB_TOKEN" not in result["passthrough_env_keys"]
+            assert "GITHUB_TOKEN" not in result["delta_env_overrides"]
+            assert "ghs_test_token" not in json.dumps(result)
             assert result["workload_mode"] == "no-docker"
             # Single-user (#4349): launch context carries no human owner.
             # Profile owner_user_id/ownerUserId is legacy provenance, never
@@ -7615,8 +7619,8 @@ async def test_terminal_evidence_activity_surfaces_batch_fanout_cause(
                 "created": 0,
                 "queued": [],
                 "skipped": [],
-                "errors": [{"code": "BATCH_FANOUT_FAILED", "error": message}],
-                "failure": {"code": "BATCH_FANOUT_FAILED", "message": message},
+                "errors": [{"code": "BATCH_FANOUT_FAILED", "error": message + " token=private-fanout-token"}],
+                "failure": {"code": "BATCH_FANOUT_FAILED", "message": "no child workflows were queued"},
             }
         ),
         encoding="utf-8",
@@ -7639,9 +7643,11 @@ async def test_terminal_evidence_activity_surfaces_batch_fanout_cause(
 
     assert result.provider_error_code == "BATCH_FANOUT_FAILED"
     assert result.failure_class == expected_class
-    assert result.summary == message
+    assert message in result.summary
+    assert "private-fanout-token" not in result.summary
+    assert "[REDACTED" in result.summary
     assert "valid terminal evidence" not in result.summary
-    assert result.metadata["terminalFailureMessage"] == message
+    assert result.metadata["terminalFailureMessage"] == result.summary
 
 
 @pytest.mark.asyncio

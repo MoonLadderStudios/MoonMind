@@ -1907,3 +1907,56 @@ def test_native_missing_tools_missing_action_stops_blocked_not_human(
     )
     assert explicit_decision["continueLoop"] is False
     assert explicit_decision["state"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    "selected_skill", ["external-publish", "auto", "moonspec-verify", ""]
+)
+def test_title_only_side_effect_step_cannot_keep_failed_verification_loop_open(
+    monkeypatch, selected_skill
+):
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(parent, "_patched_or_false_outside_workflow", lambda _: True)
+    node = {
+        "id": "side-effect",
+        "skill": {"id": selected_skill},
+        "inputs": {
+            "title": "Remediate verification gaps — attempt 1 of 6",
+            "selectedSkill": selected_skill,
+        },
+    }
+    decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED", feedback="Required check failed."
+        ),
+        gate_result_ref="artifact://gate/current",
+        ordered_nodes=[
+            {"id": "verify", "inputs": {"selectedSkill": "moonspec-verify"}},
+            node,
+        ],
+        current_index=0,
+    )
+    assert not parent._is_moonspec_remediation_step(node)
+    assert decision["hasRemainingRemediationStep"] is False
+    assert decision["continueLoop"] is False
+
+
+@pytest.mark.parametrize("boundary_enabled", [False, True])
+def test_title_fallback_preserves_actual_remediation_and_recorded_history(
+    monkeypatch, boundary_enabled
+):
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        parent, "_patched_or_false_outside_workflow", lambda _: boundary_enabled
+    )
+    node = {
+        "inputs": {
+            "title": "Remediate verification gaps — attempt 1 of 6",
+            "selectedSkill": "moonspec-implement",
+        }
+    }
+    assert parent._is_moonspec_remediation_step(node)
+    assert parent._moonspec_remediation_attempt_metadata(node) == (1, 6)
+    node["inputs"]["selectedSkill"] = "external-publish"
+    assert parent._is_moonspec_remediation_step(node) is (not boundary_enabled)

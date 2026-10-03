@@ -53,6 +53,9 @@ from moonmind.schemas.container_job_models import (
     TerminalOutcome,
     require_explicit_resources,
 )
+from moonmind.security.container_job_capabilities import (
+    ContainerJobSessionCapability, container_job_matches_capability,
+)
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 _STDERR_MARKER = "[stderr]"
@@ -115,8 +118,12 @@ class ContainerJobArtifactReader(Protocol):
 
 
 class ContainerJobRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self, session: AsyncSession, *,
+        capability: ContainerJobSessionCapability | None = None,
+    ) -> None:
         self._session = session
+        self._capability = capability
 
     async def create_or_replay(
         self,
@@ -182,7 +189,21 @@ class ContainerJobRepository:
 
     async def get_for_owner(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobRecord | None:
         result = await self._session.execute(select(ContainerJobRecord).where(ContainerJobRecord.job_id == job_id, ContainerJobRecord.owner_id == owner.principal_id, ContainerJobRecord.owner_type == owner.principal_type))
-        return result.scalar_one_or_none()
+        record = result.scalar_one_or_none()
+        if record is not None and self._capability is not None:
+            if owner != self._capability.owner:
+                return None
+            try:
+                # Source correlation is the API-owned persisted authority,
+                # never an assertion supplied with a later read/cancel call.
+                saved = ContainerJobSubmitRequest.model_validate({
+                    **record.request_json, "source": record.source_json,
+                })
+            except (ValueError, TypeError):
+                return None
+            if not container_job_matches_capability(saved, self._capability):
+                return None
+        return record
 
     async def record_observation(
         self, *, owner: OwnerIdentity, job_id: str, state: ContainerJobState,
@@ -227,9 +248,10 @@ class ContainerJobService:
         authorizer: PrivateImageAuthorizationService | None = None,
         artifacts: ContainerJobArtifactReader | None = None,
         backend_settings: ContainerBackendSettings | None = None,
+        capability: ContainerJobSessionCapability | None = None,
     ) -> None:
         self._session = session
-        self.repository = ContainerJobRepository(session)
+        self.repository = ContainerJobRepository(session, capability=capability)
         self._temporal = temporal or TemporalClientAdapter()
         self._artifacts = artifacts
         self._authorizer = authorizer or PrivateImageAuthorizationService(

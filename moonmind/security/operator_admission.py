@@ -304,7 +304,7 @@ def _local_origin_denied(*, candidate: str, host_header: str | None) -> bool:
     return False
 
 
-def _check_host_and_origin(
+def validate_browser_host_and_origin(
     *,
     method: str,
     host_header: str | None,
@@ -555,7 +555,7 @@ def resolve_operator_admission(
     # would deny loopback-bound development while the equivalent omitted
     # base works. Host/origin checks below use local rules for them.
     loopback_base = _is_loopback_base_url(base_url)
-    _check_host_and_origin(
+    validate_browser_host_and_origin(
         method=method,
         host_header=host_header,
         origin=str(origin) if origin is not None else None,

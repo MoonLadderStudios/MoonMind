@@ -123,6 +123,9 @@ to prewarm it.
     temporary credential lifecycles are job-scoped. Image retention is separate.
 12. **Workspaces are logical references.** Callers do not provide daemon-visible
     host paths. MoonMind resolves an authorized workspace into a mount plan.
+    A workspace locator can never resolve to the entire workspace store, for
+    either bind mounts or volume-subpath mounts. Retained managed-session launch
+    paths must also identify children of their configured workspace root.
 13. **The structured container contract is the normal public interface.** Docker
     CLI execution remains an explicitly gated internal escape hatch.
 14. **The core remains workload-agnostic.** Toolchain-specific commands and local
@@ -521,6 +524,16 @@ A backend-neutral request is shaped approximately as follows:
 }
 ```
 
+The retained worker `task.container.env` adapter sends the container-create JSON
+through the configured Docker CLI's `system dial-stdio` tunnel. Values, including
+multiline settings, travel through stdin and never enter process arguments or the
+Docker client's environment. The CLI retains deployment-owned connection,
+context, and TLS settings. Unless `DOCKER_API_VERSION` is explicitly set, the
+worker queries the selected daemon's API version through that CLI before sending
+a versioned container-create request. Negotiation, creation, and attachment share the execution deadline;
+after an uncertain create, cleanup reconciles the unique launch label before
+removing a container.
+
 A request supplies either a permitted `image` or a deployment-approved
 `imageSourceRef`. An image-source reference resolves to an immutable provisioning
 plan before execution. The caller does not provide:
@@ -542,6 +555,21 @@ MoonMind enriches every request with owner, workflow, run, step, session,
 expiration, idempotency, and resolved-image metadata.
 
 ---
+
+### Workspace filesystem boundary
+
+Agent-written workspace directories are untrusted when the worker publishes logs
+or prepares another launch. Runtime artifact writes use fresh files and atomic
+replacement under descriptor-pinned, non-symlink parents; they never truncate an
+agent-selected symlink or hardlink target. Managed launchers use the same parent
+validation for support files and artifact directories, and ownership transfer
+walks pinned directory handles without following symlinks.
+
+Workload `collectGlobs` traversal never enters symlinked directories, including
+literal glob prefixes. Collection has bounded entry and depth budgets as well as
+the existing artifact-count limit. Budget exhaustion is recorded as truncation;
+unsafe paths fail publication with observable diagnostics instead of redirecting
+worker filesystem access.
 
 ## 9. Durable job identity and state
 
@@ -720,6 +748,11 @@ Registry credentials are resolved only inside a trusted execution-time Activity,
 materialized in a per-job Docker config with restrictive permissions, redacted
 from observations, and removed on success, failure, cancellation, timeout, and
 orphan reconciliation.
+
+The default Unreal workload profile does not mount registry pull credentials
+into the running workload. Its runner has no Docker endpoint and uses
+`networkPolicy: none`; its image is acquired by the host before it starts. Its
+workspace and build-cache mounts remain independent of registry authentication.
 
 #### 11.6.1 Managed-session GHCR pull decoupling
 

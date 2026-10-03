@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from moonmind.config.settings import settings
+
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     CodexManagedSessionLocator,
@@ -31,6 +33,10 @@ from moonmind.security.container_job_capabilities import (
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
+from moonmind.workflows.temporal.runtime import (
+    managed_api_key_resolve as managed_api_key_resolve_module,
+)
+from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
     ManagedSessionReapResult,
@@ -43,10 +49,6 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
 )
 from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
     ManagedSessionSupervisor,
-)
-from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
-from moonmind.workflows.temporal.runtime import (
-    managed_api_key_resolve as managed_api_key_resolve_module,
 )
 
 _production_connection_loader = (
@@ -450,7 +452,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     capability = verify_container_job_session_capability(
         docker_run_env["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"],
-        secret="test_jwt_secret_key",
+        secret=str(settings.security.JWT_SECRET_KEY),
     )
     assert capability.agent_run_id == "task-1"
     assert capability.session_id == "sess-1"
@@ -462,7 +464,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
         )
         fanout = verify_execution_fanout_capability(
             docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
-            secret="test_jwt_secret_key",
+            secret=str(settings.security.JWT_SECRET_KEY),
         )
         assert fanout.parent_workflow_id == "wf-task-1"
         assert fanout.agent_run_id == "task-1"
@@ -1046,7 +1048,7 @@ async def test_no_docker_profile_does_not_advertise_container_jobs(
     )
     fanout = verify_execution_fanout_capability(
         docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
-        secret="test_jwt_secret_key",
+        secret=str(settings.security.JWT_SECRET_KEY),
     )
     assert fanout.parent_workflow_id == "task-no-docker"
     assert fanout.agent_run_id == "task-no-docker"
@@ -1186,7 +1188,10 @@ async def test_controller_launch_normalizes_created_paths_for_container_user(
         gid: int,
         *,
         follow_symlinks: bool = True,
+        dir_fd: int | None = None,
     ) -> None:
+        if dir_fd is not None:
+            path = Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path)
         chown_calls.append((Path(path), uid, gid, follow_symlinks))
 
     monkeypatch.setattr(
@@ -1284,7 +1289,10 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         gid: int,
         *,
         follow_symlinks: bool = True,
+        dir_fd: int | None = None,
     ) -> None:
+        if dir_fd is not None:
+            path = Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path)
         chown_calls.append((Path(path), uid, gid, follow_symlinks))
 
     monkeypatch.setattr(
@@ -1661,8 +1669,8 @@ def test_persist_brokered_github_config_preserves_container_visible_paths(
 ) -> None:
     workspace_target = tmp_path / "workspace-target"
     workspace_target.mkdir()
-    workspace_path = tmp_path / "workspace-link"
-    workspace_path.symlink_to(workspace_target, target_is_directory=True)
+    workspace_path = tmp_path / "workspace-visible"
+    workspace_path.mkdir()
     repo_git_config_path = workspace_path / ".git" / "config"
     repo_git_config_path.parent.mkdir()
     repo_git_config_path.write_text(
@@ -2045,7 +2053,10 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
         gid: int,
         *,
         follow_symlinks: bool = True,
+        dir_fd: int | None = None,
     ) -> None:
+        if dir_fd is not None:
+            path = Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path)
         chown_calls.append((Path(path), uid, gid, follow_symlinks))
 
     monkeypatch.setattr(
@@ -2178,14 +2189,30 @@ async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
     )
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
-        lambda path, uid, gid, *, follow_symlinks=True: chowned.append(
-            (Path(path), uid, gid)
+        lambda path, uid, gid, *, follow_symlinks=True, dir_fd=None: chowned.append(
+            (
+                (
+                    (Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path))
+                    if dir_fd is not None
+                    else Path(path)
+                ),
+                uid,
+                gid,
+            )
         ),
     )
     monkeypatch.setattr(
         "moonmind.omnigent.git_identity.os.chown",
-        lambda path, uid, gid, *, follow_symlinks=True: chowned.append(
-            (Path(path), uid, gid)
+        lambda path, uid, gid, *, follow_symlinks=True, dir_fd=None: chowned.append(
+            (
+                (
+                    (Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path))
+                    if dir_fd is not None
+                    else Path(path)
+                ),
+                uid,
+                gid,
+            )
         ),
     )
 
@@ -2421,7 +2448,10 @@ async def test_controller_launch_normalizes_support_paths_before_git_failures(
         gid: int,
         *,
         follow_symlinks: bool = True,
+        dir_fd: int | None = None,
     ) -> None:
+        if dir_fd is not None:
+            path = Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path)
         assert uid == 1000
         assert gid == 1000
         assert follow_symlinks is False
@@ -7265,7 +7295,10 @@ async def test_controller_launch_normalizes_materialized_codex_home_for_containe
         gid: int,
         *,
         follow_symlinks: bool = True,
+        dir_fd: int | None = None,
     ) -> None:
+        if dir_fd is not None:
+            path = Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path)
         chown_calls.append((Path(path), uid, gid, follow_symlinks))
 
     monkeypatch.setattr(
@@ -7782,3 +7815,37 @@ async def test_unconfigured_deployment_session_still_clones_anonymously(
 
     assert "GITHUB_TOKEN" not in git_env
     assert secret_env == {}
+
+
+@pytest.mark.parametrize("target", ["support", "bin", "helper", "config"])
+def test_broker_configuration_rejects_workspace_links(tmp_path, target):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "victim"
+    victim.write_text("unchanged")
+    workspace = tmp_path / "repo"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / "config").write_text("[core]\n\tbare = false\n")
+    support = tmp_path / "session" / ".moonmind"
+    support.parent.mkdir()
+    if target == "support":
+        support.symlink_to(outside, target_is_directory=True)
+    else:
+        support.mkdir()
+        if target == "bin":
+            (support / "bin").symlink_to(outside, target_is_directory=True)
+        elif target == "helper":
+            (support / "bin").mkdir()
+            (support / "bin" / "git-credential-moonmind").symlink_to(victim)
+        else:
+            (workspace / ".git" / "config").unlink()
+            (workspace / ".git" / "config").symlink_to(victim)
+    with pytest.raises(OSError):
+        DockerCodexManagedSessionController._persist_brokered_github_config(
+            {},
+            workspace_path=str(workspace),
+            support_root=support,
+            github_socket_path="/tmp/test.sock",
+        )
+    assert victim.read_text() == "unchanged"
+    assert list(outside.iterdir()) == [victim]

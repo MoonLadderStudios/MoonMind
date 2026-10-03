@@ -291,18 +291,16 @@ async def test_pending_requested_review_blocks_remediation(monkeypatch, blocker)
             200, {"check_runs": [{"status": "completed", "conclusion": "failure"}]}
         )
     else:
-        prefix = [
-            _get(
-                200,
-                {
-                    "state": "open",
-                    "merged": False,
-                    "head": {"sha": _HEAD},
-                    "mergeable": False,
-                    "mergeable_state": "dirty",
-                },
-            )
-        ]
+        prefix[0] = _get(
+            200,
+            {
+                "state": "open",
+                "merged": False,
+                "head": {"sha": _HEAD},
+                "mergeable": False,
+                "mergeable_state": "dirty",
+            },
+        )
     mock_client = _client(get_responses=[*prefix, *[_get(200, []) for _ in range(4)]])
     with _patch_client(mock_client):
         result = await GitHubService().evaluate_pull_request_readiness(

@@ -424,32 +424,53 @@ async def test_add_comment_scans_consolidated_adf_text_nodes() -> None:
     assert raw_secret not in str(exc_info.value)
     assert service.calls == []
 
-async def test_add_comment_ignores_adf_metadata_during_outbound_scan() -> None:
+@pytest.mark.parametrize("secret_node", [
+    {"attrs": {"localId": "password=metadata-only"}},
+    {"type": "text", "text": "click", "marks": [{"type": "link", "attrs": {"href": "https://example.test/?token=metadata-only"}}]},
+    {"type": "inlineCard", "attrs": {"url": "https://example.test/?token=metadata-only"}},
+])
+async def test_add_comment_scans_adf_metadata_before_submission(secret_node: dict[str, Any]) -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),
-        responses=[{"id": "20001"}],
         high_security_mode=True,
     )
-
-    result = await service.add_comment(
-        AddCommentRequest(
+    with pytest.raises(JiraToolError) as exc_info:
+        await service.add_comment(AddCommentRequest(
             issueKey="ENG-123",
-            body={
-                "type": "doc",
-                "version": 1,
-                "attrs": {"localId": "password=metadata-only"},
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": "Ready to publish"}],
-                    }
-                ],
-            },
-        )
-    )
+            body={"type": "doc", "version": 1, "content": [secret_node]},
+        ))
+    assert exc_info.value.code == "outbound_scan_blocked"
+    assert "metadata-only" not in str(exc_info.value)
+    assert service.calls == []
 
-    assert result == {"id": "20001"}
-    assert len(service.calls) == 1
+@pytest.mark.parametrize("jql", [
+    "project = OTHER) OR (project = OTHER",
+    "status = 'Todo') OR project = OTHER OR (status = 'Todo'",
+    "status = 'Todo' ORDER BY created) OR (project = OTHER",
+    "status = 'Todo",
+    "status = \"Todo",
+    "(status = 'Todo'",
+])
+async def test_search_issues_rejects_jql_scope_breakout(jql: str) -> None:
+    service = _StubJiraToolService(atlassian_settings=_build_settings(
+        jira=JiraSettings(jira_tool_enabled=True, jira_allowed_projects="ENG"),
+    ))
+    with pytest.raises(JiraToolError) as exc_info:
+        await service.search_issues(SearchIssuesRequest(jql=jql))
+    assert exc_info.value.code == "jira_validation_failed"
+    assert service.calls == []
+
+@pytest.mark.parametrize(("jql", "scoped"), [
+    ('summary ~ "order by"', 'project = ENG AND (summary ~ "order by")'),
+    ('summary ~ "literal (parenthesis)" ORDER BY created DESC', 'project = ENG AND (summary ~ "literal (parenthesis)") ORDER BY created DESC'),
+    ("(status = 'Todo' OR status = 'Done') AND assignee in (currentUser())", "project = ENG AND ((status = 'Todo' OR status = 'Done') AND assignee in (currentUser()))"),
+    (r'summary ~ "say \"order by\"" ORDER BY created DESC', r'project = ENG AND (summary ~ "say \"order by\"") ORDER BY created DESC'),
+    ("ORDER BY created DESC", "project = ENG ORDER BY created DESC"),
+])
+async def test_search_issues_scopes_balanced_quoted_jql(jql: str, scoped: str) -> None:
+    service = _StubJiraToolService(atlassian_settings=_build_settings())
+    await service.search_issues(SearchIssuesRequest(projectKey="ENG", jql=jql))
+    assert service.calls[0]["json_body"]["jql"] == scoped
 
 async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
     service = _StubJiraToolService(

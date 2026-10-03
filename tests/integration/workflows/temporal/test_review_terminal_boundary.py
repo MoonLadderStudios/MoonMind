@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import io
 import json
 import tarfile
@@ -30,6 +29,10 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import AppSettings, OpenAISettings, settings
 from moonmind.schemas.managed_session_models import CodexManagedSessionWorkflowInput
+from moonmind.workflows.skills.tool_registry import (
+    compute_registry_digest,
+    parse_tool_registry,
+)
 from moonmind.workflows.temporal.activities.reviewer import ConfiguredStepReviewer
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_TASK_QUEUE,
@@ -144,10 +147,11 @@ async def test_review_survives_through_terminal_persistence(
                     "title": "Review lifecycle",
                     "created_at": "2026-09-05T00:00:00Z",
                     "registry_snapshot": {
-                        "digest": "reg:sha256:"
-                        + hashlib.sha256(
-                            await owners.read(registry, principal=owner)
-                        ).hexdigest(),
+                        "digest": compute_registry_digest(
+                            skills=parse_tool_registry(
+                                json.loads(await owners.read(registry, principal=owner))
+                            )
+                        ),
                         "artifact_ref": registry,
                     },
                 },

@@ -153,9 +153,14 @@ async def test_create_oauth_session_expires_stale_active_before_conflict_check(
         assert stale_row.status == OAuthSessionStatus.EXPIRED
         assert stale_row.failure_reason is not None
 
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("blank", [None, "", " \t\n"])
 async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
-    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+    blank: str | None,
 ) -> None:
     captured = {}
 
@@ -172,9 +177,11 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
 
     payload = {
         "runtime_id": "codex_cli",
-        "profile_id": "codex-cli-default-volume",
+        "profile_id": f"codex-cli-default-volume-{uuid.uuid4()}",
         "account_label": "codex account",
     }
+    if blank is not None:
+        payload.update(volume_ref=blank, volume_mount_path=blank)
     async with client_app as client:
         response = await client.post("/api/v1/oauth-sessions", json=payload)
 
@@ -186,12 +193,17 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
     assert captured["metadata_json"]["provider_id"] == "openai"
     assert captured["metadata_json"]["provider_label"] == "OpenAI"
 
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("blank", [None, "", " \t\n"])
 async def test_create_claude_oauth_session_applies_profile_and_transport_defaults(
-    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+    blank: str | None,
 ) -> None:
     captured = {}
-    profile_id = "claude_anthropic_route_defaults"
+    profile_id = f"claude_anthropic_route_defaults_{uuid.uuid4()}"
 
     async with db_base.async_session_maker() as session:
         session.add(
@@ -226,14 +238,17 @@ async def test_create_claude_oauth_session_applies_profile_and_transport_default
         _capture_start,
     )
 
+    payload = {
+        "runtime_id": "claude_code",
+        "profile_id": profile_id,
+        "account_label": "Claude Anthropic OAuth",
+    }
+    if blank is not None:
+        payload.update(volume_ref=blank, volume_mount_path=blank)
     async with client_app as client:
         response = await client.post(
             "/api/v1/oauth-sessions",
-            json={
-                "runtime_id": "claude_code",
-                "profile_id": profile_id,
-                "account_label": "Claude Anthropic OAuth",
-            },
+            json=payload,
         )
 
     assert response.status_code == 201
@@ -250,6 +265,7 @@ async def test_create_claude_oauth_session_applies_profile_and_transport_default
     assert captured["session_transport"] == "moonmind_pty_ws"
     assert captured["metadata_json"]["provider_id"] == "anthropic"
     assert captured["metadata_json"]["provider_label"] == "Anthropic"
+
 
 @pytest.mark.asyncio
 async def test_create_oauth_session_returns_terminal_transport_refs(

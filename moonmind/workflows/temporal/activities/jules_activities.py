@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import timedelta
 
 from temporalio import activity
@@ -293,40 +294,111 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     finally:
         await client.aclose()
 
+
 @activity.defn(name="repo.merge_pr")
 async def repo_merge_pr_activity(payload: dict) -> dict:
-    """Merge a PR via GitHub REST API (provider-agnostic).
+    """Merge a provider PR only into the workflow's authored repository/branch.
 
-    Accepts a dict with:
-    - ``pr_url`` (str): the GitHub PR URL to merge
-    - ``target_branch`` (str, optional): if set and differs from the PR's
-      current base, the PR base is updated before merging
-    - ``merge_method`` (str, optional): merge strategy (default "merge")
+    The URL is provider output, not destination authority. Missing authority
+    asks the workflow to rebind from its recorded inputs without mutation.
+    A read-only first call returns the head; only a separately recorded call
+    with that head may mutate. Retries therefore cannot select another head.
     """
-    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.adapters.github_service import GitHubService, MergePRResult
 
-    pr_url = payload.get("pr_url") or payload.get("prUrl") or ""
-    target_branch = payload.get("target_branch") or payload.get("targetBranch")
+    pr_url = str(payload.get("pr_url") or payload.get("prUrl") or "").strip()
+    repository = str(payload.get("expected_repository") or "").strip()
+    target_branch = str(
+        payload.get("target_branch") or payload.get("targetBranch") or ""
+    ).strip()
     merge_method = payload.get("merge_method") or payload.get("mergeMethod") or "merge"
 
-    svc = GitHubService()
+    def failed(summary: str) -> dict:
+        return MergePRResult(pr_url=pr_url, merged=False, summary=summary).model_dump(
+            by_alias=True
+        )
 
-    # If a target branch is specified, update the PR's base before merging
-    if target_branch:
+    match = re.fullmatch(
+        r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)/?",
+        pr_url,
+    )
+    if not repository or not target_branch:
+        return {
+            **failed("Merge authority requires the authored repository and target branch."),
+            "reasonCode": "merge_authority_required",
+        }
+    if (
+        not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+        or match is None
+        or f"{match[1]}/{match[2]}".lower() != repository.lower()
+    ):
+        return failed(
+            "Merge authority requires a PR in the authored repository and an authored target branch."
+        )
+
+    expected_head = payload.get("expected_head_sha")
+    if "expected_head_sha" in payload and (
+        not isinstance(expected_head, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head)
+    ):
+        return failed("Merge requires a valid recorded PR head.")
+
+    svc = GitHubService()
+    current = await svc.read_pull_request(repository, pr_url)
+    head_sha = str((current.get("head") or {}).get("sha") or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
+        return failed("GitHub did not return a valid PR head for merge verification.")
+    if expected_head is not None and head_sha.lower() != expected_head.lower():
+        return failed("PR head changed from the recorded merge candidate; merge was not attempted.")
+
+    def reconciled_merge(data: dict) -> dict | None:
+        if data.get("merged") is not True:
+            return None
+        if (data.get("base") or {}).get("ref") != target_branch or (
+            str((data.get("head") or {}).get("sha") or "").lower() != head_sha.lower()
+        ):
+            return failed("Merged PR does not match the authored branch and recorded candidate.")
+        return MergePRResult(
+            pr_url=pr_url, merged=True, merge_sha=data.get("merge_commit_sha"),
+            summary="PR was already merged into the authored branch.",
+        ).model_dump(by_alias=True)
+
+    reconciled = reconciled_merge(current)
+    if reconciled is not None:
+        return reconciled
+    if expected_head is None:
+        return {
+            **failed("PR head resolved; awaiting the workflow's recorded merge command."),
+            "reasonCode": "merge_head_resolved",
+            "expectedHeadSha": head_sha,
+        }
+    if (current.get("base") or {}).get("ref") != target_branch:
         success, summary = await svc.update_pull_request_base(
-            pr_url=pr_url, new_base=target_branch,
+            pr_url=pr_url,
+            new_base=target_branch,
         )
         if not success:
-            from moonmind.workflows.adapters.github_service import MergePRResult
-            result = MergePRResult(
-                pr_url=pr_url,
-                merged=False,
-                summary=f"Base branch update failed: {summary}",
+            return failed(f"Base branch update failed: {summary}")
+        current = await svc.read_pull_request(repository, pr_url)
+        if (current.get("base") or {}).get("ref") != target_branch or (
+            current.get("head") or {}
+        ).get("sha") != head_sha:
+            return failed(
+                "PR changed while binding its authored target branch; merge was not attempted."
             )
-            return result.model_dump(by_alias=True)
-
-    result = await svc.merge_pull_request(pr_url=pr_url, merge_method=merge_method)
+    result = await svc.merge_pull_request(
+        pr_url=pr_url,
+        merge_method=merge_method,
+        expected_head_sha=head_sha,
+    )
+    if not result.merged:
+        # A failed response can follow a successful remote merge (lost ack).
+        # A read failure remains retryable with the same recorded candidate.
+        reconciled = reconciled_merge(await svc.read_pull_request(repository, pr_url))
+        if reconciled is not None:
+            return reconciled
     return result.model_dump(by_alias=True)
+
 
 @activity.defn(name="integration.jules.get_auto_answer_config")
 async def jules_get_auto_answer_config_activity(_args: list | None = None) -> dict:

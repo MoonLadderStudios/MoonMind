@@ -45,9 +45,11 @@ optional MoonSpec packet is not a gap when a usable original baseline exists.
 
 Browser execution, browser installation, live UI access, screenshots, and human
 visual signoff are optional diagnostics by default, including for frontend and
-UI changes. The need for a browser must never block verification or fail a
-workflow under these defaults. An unavailable browser is `NOT RUN` with an
-advisory limitation, never by itself Remaining Work, `ADDITIONAL_WORK_NEEDED`,
+UI changes. These defaults apply when the controlling source has no explicit
+browser or human visual acceptance requirement. The need for a browser must
+never block verification or fail a workflow under these defaults. An unavailable
+browser is `NOT RUN` with an advisory limitation, never by itself Remaining Work,
+`ADDITIONAL_WORK_NEEDED`,
 `NO_DETERMINATION`, `BLOCKED`, or a `blocked`/`needs_human` continuation.
 
 Verify the requested behavior through executed non-browser evidence at its actual
@@ -58,13 +60,15 @@ helpers as proof of the complete API/client/UI journey, invent screenshots, or
 claim an unexecuted browser check passed. A concrete observed defect still
 requires remediation, even when discovered through optional browser diagnostics.
 
-A browser suite named in repository guidance, a source document, a derived plan,
-or an earlier report does not make browser execution mandatory in the default
-verification run. Apply this default to the evidence method while preserving the
-underlying behavior to prove. Only an explicit caller instruction requiring
-browser execution as an acceptance gate for this verification run opts into
-mandatory browser evidence. Disclose that opt-in and its exact source; otherwise
-use the non-browser path and record any limits of the evidence honestly.
+Merely naming a browser suite in repository guidance, a source document, a
+derived plan, or an earlier report does not make browser execution mandatory.
+Apply this default to the evidence method while preserving the underlying
+behavior to prove. An explicit acceptance requirement in the original
+implementation instructions, selected canonical source, or caller instruction
+for this verification run requires that evidence. Preserve explicitly required
+human visual signoff and its authority; automated evidence cannot replace it.
+Disclose the requirement and its exact source; otherwise use the non-browser
+path and record any limits of the evidence honestly.
 
 ## Setup recovery and attempt accounting
 
@@ -147,7 +151,7 @@ Use repository-approved AI artifact review for rendered or semantic criteria whe
 permitted. The reviewer must inspect the actual artifacts against the rubric, not
 infer visible behavior from source, logs, or artifact existence. Ambiguity in
 controlling evidence requires better observations or an explicit non-pass, not
-automatic human escalation. For an explicitly opted-in browser gate, never
+automatic human escalation. For an explicitly required browser gate, never
 substitute structural tests for required pixels. Under the browser-independent defaults, report visual diagnostic
 limits without turning browser access into a gate. Never override failed
 controlling machine checks.

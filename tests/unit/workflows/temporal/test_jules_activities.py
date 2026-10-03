@@ -227,6 +227,7 @@ async def test_jules_send_message_activity_blocks_secret_before_adapter_send(
     assert raw_secret not in str(exc_info.value)
     _patch_build_adapter.send_message.assert_not_awaited()
 
+
 async def test_repo_merge_pr_activity_updates_base_before_merge():
     from moonmind.workflows.temporal.activities.jules_activities import (
         repo_merge_pr_activity,
@@ -236,6 +237,12 @@ async def test_repo_merge_pr_activity_updates_base_before_merge():
         "moonmind.workflows.adapters.github_service.GitHubService"
     ) as mock_service_cls:
         service = mock_service_cls.return_value
+        service.read_pull_request = AsyncMock(
+            side_effect=[
+                {"base": {"ref": "other"}, "head": {"sha": "a" * 40}},
+                {"base": {"ref": "main"}, "head": {"sha": "a" * 40}},
+            ]
+        )
         service.update_pull_request_base = AsyncMock(
             return_value=(True, "Base updated to main")
         )
@@ -244,6 +251,7 @@ async def test_repo_merge_pr_activity_updates_base_before_merge():
                 "MergeResult",
                 (),
                 {
+                    "merged": True,
                     "model_dump": lambda self, by_alias=True: {
                         "prUrl": "https://github.com/org/repo/pull/123",
                         "merged": True,
@@ -258,6 +266,8 @@ async def test_repo_merge_pr_activity_updates_base_before_merge():
             {
                 "pr_url": "https://github.com/org/repo/pull/123",
                 "target_branch": "main",
+                "expected_repository": "org/repo",
+                "expected_head_sha": "a" * 40,
             }
         )
 
@@ -268,9 +278,11 @@ async def test_repo_merge_pr_activity_updates_base_before_merge():
     service.merge_pull_request.assert_awaited_once_with(
         pr_url="https://github.com/org/repo/pull/123",
         merge_method="merge",
+        expected_head_sha="a" * 40,
     )
     assert result["merged"] is True
     assert result["mergeSha"] == "abc123"
+
 
 async def test_repo_merge_pr_activity_returns_non_success_when_base_update_fails():
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -281,6 +293,12 @@ async def test_repo_merge_pr_activity_returns_non_success_when_base_update_fails
         "moonmind.workflows.adapters.github_service.GitHubService"
     ) as mock_service_cls:
         service = mock_service_cls.return_value
+        service.read_pull_request = AsyncMock(
+            side_effect=[
+                {"base": {"ref": "other"}, "head": {"sha": "a" * 40}},
+                {"base": {"ref": "main"}, "head": {"sha": "a" * 40}},
+            ]
+        )
         service.update_pull_request_base = AsyncMock(
             return_value=(False, "Target branch does not exist")
         )
@@ -290,12 +308,31 @@ async def test_repo_merge_pr_activity_returns_non_success_when_base_update_fails
             {
                 "pr_url": "https://github.com/org/repo/pull/123",
                 "target_branch": "main",
+                "expected_repository": "org/repo",
+                "expected_head_sha": "a" * 40,
             }
         )
 
     service.merge_pull_request.assert_not_awaited()
     assert result["merged"] is False
     assert "Base branch update failed" in result["summary"]
+
+
+@pytest.mark.parametrize("expected_head", [None, "", "not-a-sha"])
+async def test_repo_merge_rejects_invalid_recorded_head_before_github(expected_head):
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as cls:
+        result = await repo_merge_pr_activity({
+            "pr_url": "https://github.com/org/repo/pull/123",
+            "expected_repository": "org/repo", "target_branch": "release",
+            "expected_head_sha": expected_head,
+        })
+    assert result["merged"] is False
+    cls.assert_not_called()
+
 
 # --- T019: integration.jules.list_activities tests ---
 
@@ -694,3 +731,223 @@ async def test_repo_create_pr_transient_failure_retries_and_adopts_lost_ack(monk
     assert result['url'] == pr['html_url']
     # Adopting the lost-ack PR performs no metadata overwrite (#4018).
     assert calls == ['GET', 'POST', 'GET']
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "pr_url": "https://github.com/other/private/pull/123",
+            "expected_repository": "org/repo",
+            "target_branch": "main",
+        },
+        {
+            "pr_url": "https://github.com/org/repo/pull/123/../../issues",
+            "expected_repository": "org/repo",
+            "target_branch": "main",
+        },
+        {"pr_url": "https://github.com/org/repo/pull/123", "target_branch": "main"},
+        {
+            "pr_url": "https://github.com/org/repo/pull/123",
+            "expected_repository": "org/repo",
+        },
+    ],
+)
+async def test_repo_merge_rejects_unbound_destination_before_github(payload):
+    from moonmind.workflows.adapters.github_service import MergePRResult
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.GitHubService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.update_pull_request_base = AsyncMock(return_value=(True, "Updated"))
+        service.merge_pull_request = AsyncMock(
+            return_value=MergePRResult(
+                pr_url=payload["pr_url"], merged=True, summary="Merged"
+            )
+        )
+        result = await repo_merge_pr_activity(payload)
+    assert result["merged"] is False
+    assert "authority" in result["summary"].lower()
+    service_cls.assert_not_called()
+
+
+async def test_repo_merge_pins_verified_head_and_authored_branch():
+    from moonmind.workflows.adapters.github_service import MergePRResult
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    url = "https://github.com/ORG/repo/pull/123"
+    sha = "a" * 40
+    with patch(
+        "moonmind.workflows.adapters.github_service.GitHubService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.read_pull_request = AsyncMock(
+            return_value={"base": {"ref": "release"}, "head": {"sha": sha}}
+        )
+        service.update_pull_request_base = AsyncMock()
+        service.merge_pull_request = AsyncMock(
+            return_value=MergePRResult(pr_url=url, merged=True, summary="Merged")
+        )
+        result = await repo_merge_pr_activity(
+            {
+                "pr_url": url,
+                "expected_repository": "org/repo",
+                "target_branch": "release",
+                "expected_head_sha": sha,
+            }
+        )
+    service.read_pull_request.assert_awaited_once_with("org/repo", url)
+    service.update_pull_request_base.assert_not_awaited()
+    service.merge_pull_request.assert_awaited_once_with(
+        pr_url=url, merge_method="merge", expected_head_sha=sha
+    )
+    assert result["merged"] is True
+
+
+async def test_repo_merge_rejects_changed_head_after_base_update():
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.GitHubService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.read_pull_request = AsyncMock(
+            side_effect=[
+                {"base": {"ref": "other"}, "head": {"sha": "a" * 40}},
+                {"base": {"ref": "release"}, "head": {"sha": "b" * 40}},
+            ]
+        )
+        service.update_pull_request_base = AsyncMock(return_value=(True, "Updated"))
+        service.merge_pull_request = AsyncMock()
+        result = await repo_merge_pr_activity(
+            {
+                "pr_url": "https://github.com/org/repo/pull/123",
+                "expected_repository": "org/repo",
+                "target_branch": "release",
+                "expected_head_sha": "a" * 40,
+            }
+        )
+    assert result["merged"] is False
+    service.merge_pull_request.assert_not_awaited()
+
+
+async def test_repo_merge_prepares_head_without_mutating():
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as cls:
+        service = cls.return_value
+        service.read_pull_request = AsyncMock(
+            return_value={"base": {"ref": "other"}, "head": {"sha": "a" * 40}}
+        )
+        service.update_pull_request_base = AsyncMock(return_value=(True, "Updated"))
+        service.merge_pull_request = AsyncMock()
+        result = await repo_merge_pr_activity({
+            "pr_url": "https://github.com/org/repo/pull/123",
+            "expected_repository": "org/repo",
+            "target_branch": "release",
+        })
+
+    assert result["reasonCode"] == "merge_head_resolved"
+    assert result["expectedHeadSha"] == "a" * 40
+    service.update_pull_request_base.assert_not_awaited()
+    service.merge_pull_request.assert_not_awaited()
+
+
+async def test_repo_merge_retry_cannot_rebind_recorded_head():
+    from moonmind.workflows.adapters.github_service import MergePRResult
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    payload = {
+        "pr_url": "https://github.com/org/repo/pull/123",
+        "expected_repository": "org/repo",
+        "target_branch": "release",
+        "expected_head_sha": "a" * 40,
+    }
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as cls:
+        service = cls.return_value
+        service.read_pull_request = AsyncMock(side_effect=[
+            {"base": {"ref": "other"}, "head": {"sha": "a" * 40}},
+            TimeoutError("verification read interrupted"),
+            {"base": {"ref": "release"}, "head": {"sha": "b" * 40}},
+        ])
+        service.update_pull_request_base = AsyncMock(return_value=(True, "Updated"))
+        service.merge_pull_request = AsyncMock(return_value=MergePRResult(
+            pr_url=payload["pr_url"], merged=True, summary="Merged"
+        ))
+        with pytest.raises(TimeoutError):
+            await repo_merge_pr_activity(payload)
+        result = await repo_merge_pr_activity(payload)
+
+    assert result["merged"] is False
+    service.merge_pull_request.assert_not_awaited()
+
+
+async def test_repo_merge_reconciles_already_merged_candidate_without_mutation():
+    from moonmind.workflows.adapters.github_service import MergePRResult
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as cls:
+        service = cls.return_value
+        service.read_pull_request = AsyncMock(return_value={
+            "base": {"ref": "release"}, "head": {"sha": "a" * 40},
+            "merged": True, "merge_commit_sha": "c" * 40,
+        })
+        service.update_pull_request_base = AsyncMock()
+        service.merge_pull_request = AsyncMock(return_value=MergePRResult(
+            pr_url="https://github.com/org/repo/pull/123", merged=False, summary="Already merged"
+        ))
+        result = await repo_merge_pr_activity({
+            "pr_url": "https://github.com/org/repo/pull/123",
+            "expected_repository": "org/repo",
+            "target_branch": "release",
+            "expected_head_sha": "a" * 40,
+        })
+
+    assert result["merged"] is True
+    assert result["mergeSha"] == "c" * 40
+    service.update_pull_request_base.assert_not_awaited()
+    service.merge_pull_request.assert_not_awaited()
+
+
+async def test_repo_merge_reconciles_lost_merge_response():
+    from moonmind.workflows.adapters.github_service import MergePRResult
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    url = "https://github.com/org/repo/pull/123"
+    candidate = {"base": {"ref": "release"}, "head": {"sha": "a" * 40}}
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as cls:
+        service = cls.return_value
+        service.read_pull_request = AsyncMock(side_effect=[
+            candidate,
+            {**candidate, "merged": True, "merge_commit_sha": "c" * 40},
+        ])
+        service.merge_pull_request = AsyncMock(return_value=MergePRResult(
+            pr_url=url, merged=False, summary="Merge response timed out",
+        ))
+        result = await repo_merge_pr_activity({
+            "pr_url": url, "expected_repository": "org/repo",
+            "target_branch": "release", "expected_head_sha": "a" * 40,
+        })
+
+    assert result["merged"] is True
+    assert result["mergeSha"] == "c" * 40
+    service.merge_pull_request.assert_awaited_once_with(
+        pr_url=url, merge_method="merge", expected_head_sha="a" * 40,
+    )

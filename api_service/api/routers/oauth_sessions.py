@@ -19,6 +19,8 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from moonmind.provider_profiles.volume_mounts import credential_volume_mount
+
 from api_service.api.schemas_oauth_sessions import (
     CreateOAuthSessionRequest,
     OAuthTerminalAttachResponse,
@@ -366,6 +368,10 @@ async def create_oauth_session(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="volume_mount_path is required for OAuth sessions.",
         )
+    try:
+        credential_volume_mount(volume_ref, volume_mount_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     session_transport = _resolve_session_transport(
         request.runtime_id,
         request.session_transport,

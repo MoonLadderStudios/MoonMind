@@ -1083,7 +1083,8 @@ class DockerContainerJobBackend:
         else:  # pragma: no cover - discriminated schema prevents this
             raise RuntimeError("unsupported container-job workspace locator")
         if (
-            not workspace.is_relative_to(self._workspace_root)
+            workspace == self._workspace_root
+            or not workspace.is_relative_to(self._workspace_root)
             or not workspace.is_dir()
         ):
             raise RuntimeError("authorized container-job workspace is unavailable")

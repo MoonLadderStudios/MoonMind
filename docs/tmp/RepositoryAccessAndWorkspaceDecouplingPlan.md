@@ -38,6 +38,14 @@ Source review at `93e325464e0fc5fa416b0842306e7ac18af50d00` found existing found
 | Merged #4484 | Preserve gh configuration-migration suppression and isolated tool-version inspection. Build inspection must not depend on a provider login succeeding. |
 | #4023 legacy credential migration | Migration `391_legacy_github_cred_4023` records the legacy GitHub source the deployment used as a typed SecretRef on `repository-connection:git-default`. The managed runtime launcher, managed sessions, `resolve_github_token_for_launch` callers, and readiness read only the selected connection through one shared selection (`select_git_connection_for_launch`); a managed session follows its `repositoryTarget.connectionRef`, and a configured source that fails stops it with the correction instead of cloning without a token. The launcher reads the selected connection and its credential once per launch and carries that read through readiness, cloning, and runtime setup; a recorded legacy request naming only a `repository` fails closed on the default connection as sessions do. A recorded non-default connection admits only repositories with a verified assignment. Scratch gets no GitHub credential, a deployment with no GitHub configuration at all still clones public repositories anonymously, and the startup census, the multi-source managed-store search, and the always-on alias file are gone; an unrecorded default still reads an active `GITHUB_TOKEN`/`GITHUB_PAT` managed secret last, as the migration does, so a token saved after the migration applies. An omitted Git `connectionRef` selects the same default as authoring `repository-connection:git-default`, so no separate selection-origin record is kept. A selected GitHub App connection fails closed at the launch boundary until its acquisition reaches Git/gh (#4011). Remaining: API-side `resolve_github_credential` callers (#4010), Omnigent delivery (#4011), and the Settings probe and PAT connection form (#4008/#4019). |
 
+The managed adapter does not declare a deployment-token passthrough on every
+Provider Profile. The launcher derives GitHub need from the repository and
+canonical `requiredCapabilities` (including repository-free `gh` tasks), then
+uses the existing selected connection. Explicit profile secret declarations
+remain supported. Adapter-to-launcher regressions cover scratch isolation and
+selected-connection precedence; this does not qualify process/container or
+broker isolation.
+
 These are source observations, not newly executed regressions or live qualification. Recheck current code and PRs before implementation. Do not restore old defects or repeat landed work just because a historical issue describes them.
 
 ## 3. Implementation sequence

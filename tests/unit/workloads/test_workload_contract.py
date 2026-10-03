@@ -281,7 +281,7 @@ def test_registry_allows_explicit_credential_mount_declarations(
     )
     assert validated.profile.credential_mounts[0].approval_ref == "MM-318"
 
-def test_default_unreal_profile_declares_read_only_ghcr_pull_auth_mount() -> None:
+def test_default_unreal_profile_does_not_mount_registry_credentials() -> None:
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
         workspace_root=WORKSPACE_ROOT,
@@ -290,12 +290,7 @@ def test_default_unreal_profile_declares_read_only_ghcr_pull_auth_mount() -> Non
     profile = registry.get("unreal-5_3-linux")
 
     assert profile is not None
-    mount = profile.credential_mounts[0]
-    assert mount.source == "ghcr_pull_auth_volume"
-    assert mount.target == "/home/runner/.docker"
-    assert mount.read_only is True
-    assert "read:packages" in mount.justification
-    assert mount.approval_ref == "THOR-555"
+    assert profile.credential_mounts == ()
 
 def test_registry_rejects_credential_mount_without_justification(
     tmp_path: Path,

@@ -156,11 +156,31 @@ def temporal_tracing_interceptors() -> list[object]:
         return []
 
 
+def _redact_request_query(span: trace.Span, _scope: Mapping[str, object]) -> None:
+    """Drop query data from exported request URLs, leaving ASGI scope intact.
+
+    Terminal WebSocket authentication uses query tokens. Do not depend on an
+    instrumentation version's partial list of credential parameter names.
+    """
+    if not span.is_recording():
+        return
+    attributes = getattr(span, "attributes", None) or {}
+    for key in ("http.url", "url.full", "http.target"):
+        value = attributes.get(key)
+        if isinstance(value, str) and "?" in value:
+            span.set_attribute(key, value.partition("?")[0])
+    if "url.query" in attributes:
+        span.set_attribute("url.query", "")
+
+
 def instrument_fastapi(app: object) -> None:
     if not TelemetrySettings.from_env(service_name="moonmind-api").enabled:
         return
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        FastAPIInstrumentor.instrument_app(app, excluded_urls="/healthz,/readyz,/metrics")
+        FastAPIInstrumentor.instrument_app(
+            app, excluded_urls="/healthz,/readyz,/metrics",
+            server_request_hook=_redact_request_query,
+        )
     except Exception:
         logger.warning("FastAPI instrumentation unavailable", exc_info=True)

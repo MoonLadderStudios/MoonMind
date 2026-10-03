@@ -98,6 +98,15 @@ and outcome when repair is attempted. It does not store raw provider responses o
 credentials. The workflow's existing gate-result artifact remains the durable
 owner; this is additional evidence, not a parallel receipt store.
 
+## Remediation step identity
+
+A title is descriptive evidence, not permission to continue past a blocking
+verification. In newly recorded workflows, title fallback identifies remediation
+only for `moonspec-implement` and a remediation verifier only for
+`moonspec-verify`. Compiler-authored role annotations remain the primary route.
+Retained histories preserve their previous title interpretation through the
+workflow's versioned patch boundary.
+
 ## Verdicts and continuation
 
 Use the existing canonical verdict and action vocabulary:
@@ -131,6 +140,12 @@ current verification run; inherited report or plan wording does not opt in.
 Missing historical setup records also do not create an implicit authority gate:
 the workflow retains its own budgets, and independent authorized repository
 repairs proceed while an affected unavailable check keeps its precise handoff.
+
+A workspace-policy rejection before launch records the failed attempt and obeys
+`failure_mode: FAIL_FAST`, just like a dispatched step failure. Explicit
+`CONTINUE` can still run independent nodes; dependent nodes remain blocked and
+unaccepted work does not become publication evidence. The failed workspace and
+checkpoint diagnostics remain available to the existing recovery path.
 
 Blocked means the current attempt must not repeat an unchanged prerequisite. It
 does not mean that the candidate is abandoned to a human. An authorized later

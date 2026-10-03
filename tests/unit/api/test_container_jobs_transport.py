@@ -98,7 +98,7 @@ class _FakeService:
 
 def _install_fake_service(monkeypatch, module, service) -> None:
     monkeypatch.setattr(
-        module, "ContainerJobService", lambda session, artifacts=None: service
+        module, "ContainerJobService", lambda session, artifacts=None, capability=None: service
     )
     monkeypatch.setattr(
         module, "get_temporal_artifact_service", lambda session: None, raising=False
