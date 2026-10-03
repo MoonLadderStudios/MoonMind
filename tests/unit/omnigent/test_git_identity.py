@@ -150,6 +150,44 @@ def test_ensure_workspace_git_identity_replaces_stale_imported_identity(
     assert '"Deployment Operator"' in config
 
 
+@pytest.mark.parametrize("failure_phase", ["write", "chown"])
+def test_ensure_workspace_git_identity_propagates_preparation_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_phase: str
+):
+    from moonmind.omnigent import git_identity
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Deployment Operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "operator@example.test")
+    workspace = tmp_path / "repo"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    config = workspace / ".git" / "config"
+    original = "[user]\n\tname = Stale Import\n\temail = stale@example.test\n"
+    config.write_text(original)
+    retained = workspace / "accepted.txt"
+    retained.write_text("accepted work")
+    failure = PermissionError(f"Git identity {failure_phase} refused")
+
+    def refuse(*_args, **_kwargs):
+        raise failure
+
+    if failure_phase == "write":
+        monkeypatch.setattr(git_identity, "atomic_write_text", refuse)
+    else:
+        monkeypatch.setattr(git_identity.os, "chown", refuse)
+
+    uid, gid = _identity_owner()
+    with pytest.raises(PermissionError) as captured:
+        ensure_workspace_git_identity(workspace, runtime_uid=uid, runtime_gid=gid)
+
+    assert captured.value is failure
+    assert retained.read_text() == "accepted work"
+    if failure_phase == "write":
+        assert config.read_text() == original
+    else:
+        assert '"Deployment Operator"' in config.read_text()
+
+
 def test_ensure_workspace_git_identity_skips_non_git_directories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -204,9 +242,13 @@ def test_identity_never_follows_workspace_symlinks(tmp_path, kind):
             (workspace / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
             (workspace / ".git" / "config").symlink_to(victim)
     before = victim.read_bytes()
-    assert not ensure_workspace_git_identity(
-        workspace, runtime_uid=None, runtime_gid=None
-    )
+    if kind == "git_parent":
+        assert not ensure_workspace_git_identity(
+            workspace, runtime_uid=None, runtime_gid=None
+        )
+    else:
+        with pytest.raises(OSError):
+            ensure_workspace_git_identity(workspace, runtime_uid=None, runtime_gid=None)
     assert victim.read_bytes() == before
 
 

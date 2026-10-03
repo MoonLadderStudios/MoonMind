@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import UTC, datetime, timedelta
+from functools import wraps
 
 import pytest
 
@@ -127,6 +129,180 @@ def test_workspace_delete_uses_quarantine_protocol(tmp_path) -> None:
     assert result.estimated_deleted_bytes == len("payload")
     assert not workspace.exists()
     assert not list(tmp_path.glob(".gc-*run-1"))
+
+
+@pytest.mark.parametrize("shared_workspace", [False, True], ids=["run", "shared"])
+def test_workspace_cleanup_recovers_transient_quarantine_delete_failure(
+    tmp_path, monkeypatch, shared_workspace
+) -> None:
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
+    parent = tmp_path / "workspaces" if shared_workspace else tmp_path
+    workspace = parent / "run-1"
+    workspace.mkdir(parents=True)
+    (workspace / "removed.txt").write_text("discarded", encoding="utf-8")
+    (workspace / "remaining.txt").write_text("remaining", encoding="utf-8")
+    _age_path(workspace)
+    run_store.save(_run_record("run-1", workspace_path=str(workspace / "repo")))
+    real_rmtree = shutil.rmtree
+    failed = False
+
+    @wraps(real_rmtree)
+    def fail_after_partial_delete(path, *, dir_fd):
+        nonlocal failed
+        if not failed:
+            failed = True
+            (parent / path / "removed.txt").unlink()
+            # A new run may recreate the canonical path after quarantine.
+            workspace.mkdir()
+            (workspace / "active.txt").write_text("active work", encoding="utf-8")
+            run_store.save(
+                _run_record(
+                    "run-1", status="running", workspace_path=str(workspace / "repo")
+                )
+            )
+            raise PermissionError("transient recursive deletion failure")
+        return real_rmtree(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(shutil, "rmtree", fail_after_partial_delete)
+
+    result = _janitor(tmp_path, run_store, session_store).run()
+
+    assert not list(parent.glob(".gc-*run-1"))
+    assert (workspace / "active.txt").read_text(encoding="utf-8") == "active work"
+    assert run_store.load("run-1").status == "running"
+    assert result.deleted_roots == 0
+    assert any(
+        "transient recursive deletion failure" in error for error in result.errors
+    )
+
+
+def test_workspace_cleanup_preserves_failed_retry_quarantine_and_original_error(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
+    workspace = tmp_path / "run-1"
+    workspace.mkdir()
+    (workspace / "remaining.txt").write_text("remaining", encoding="utf-8")
+    _age_path(workspace)
+    run_store.save(_run_record("run-1", workspace_path=str(workspace / "repo")))
+    real_rmtree = shutil.rmtree
+    failed = False
+
+    @wraps(real_rmtree)
+    def fail_both_deletes(path, *, dir_fd):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise PermissionError("original recursive deletion failure")
+        raise PermissionError("retry cleanup denied")
+
+    monkeypatch.setattr(shutil, "rmtree", fail_both_deletes)
+
+    result = _janitor(tmp_path, run_store, session_store).run()
+
+    quarantines = list(tmp_path.glob(".gc-*run-1"))
+    assert len(quarantines) == 1
+    assert (quarantines[0] / "remaining.txt").read_text(encoding="utf-8") == "remaining"
+    assert result.deleted_roots == 0
+    assert any(
+        "original recursive deletion failure" in error for error in result.errors
+    )
+    assert quarantines[0].name in caplog.text
+    assert "retry cleanup denied" in caplog.text
+
+
+def test_quarantine_cleanup_retry_keeps_parent_descriptor_after_symlink_swap(
+    tmp_path, monkeypatch
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    workspace = runtime / "run-1"
+    workspace.mkdir()
+    (workspace / "remaining.txt").write_text("remaining", encoding="utf-8")
+    _age_path(workspace)
+    run_store = ManagedRunStore(runtime / "managed_runs")
+    session_store = ManagedSessionStore(runtime / "managed_sessions")
+    run_store.save(_run_record("run-1", workspace_path=str(workspace / "repo")))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    retained_runtime = tmp_path / "retained-runtime"
+    real_rmtree = shutil.rmtree
+    failed = False
+    marker = None
+
+    @wraps(real_rmtree)
+    def swap_after_failure(path, *, dir_fd):
+        nonlocal failed, marker
+        if not failed:
+            failed = True
+            runtime.rename(retained_runtime)
+            runtime.symlink_to(outside, target_is_directory=True)
+            victim = outside / path
+            victim.mkdir()
+            marker = victim / "payload.txt"
+            marker.write_text("keep outside", encoding="utf-8")
+            raise PermissionError("transient recursive deletion failure")
+        return real_rmtree(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(shutil, "rmtree", swap_after_failure)
+
+    result = _janitor(runtime, run_store, session_store).run()
+
+    assert not list(retained_runtime.glob(".gc-*run-1"))
+    assert marker.read_text(encoding="utf-8") == "keep outside"
+    assert result.deleted_roots == 0
+    assert any(
+        "transient recursive deletion failure" in error for error in result.errors
+    )
+
+
+def test_quarantine_cleanup_retry_does_not_follow_replaced_quarantine(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    workspace = runtime / "run-1"
+    workspace.mkdir()
+    (workspace / "remaining.txt").write_text("remaining", encoding="utf-8")
+    _age_path(workspace)
+    run_store = ManagedRunStore(runtime / "managed_runs")
+    session_store = ManagedSessionStore(runtime / "managed_sessions")
+    run_store.save(_run_record("run-1", workspace_path=str(workspace / "repo")))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "payload.txt"
+    marker.write_text("keep outside", encoding="utf-8")
+    real_rmtree = shutil.rmtree
+    failed = False
+
+    @wraps(real_rmtree)
+    def replace_quarantine_after_failure(path, *, dir_fd):
+        nonlocal failed
+        if not failed:
+            failed = True
+            os.rename(path, ".preserved-original", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            os.symlink(outside, path, dir_fd=dir_fd)
+            raise PermissionError("original recursive deletion failure")
+        return real_rmtree(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(shutil, "rmtree", replace_quarantine_after_failure)
+
+    result = _janitor(runtime, run_store, session_store).run()
+
+    assert marker.read_text(encoding="utf-8") == "keep outside"
+    assert (runtime / ".preserved-original" / "remaining.txt").read_text(
+        encoding="utf-8"
+    ) == "remaining"
+    quarantines = list(runtime.glob(".gc-*run-1"))
+    assert len(quarantines) == 1
+    assert quarantines[0].is_symlink()
+    assert quarantines[0].name in caplog.text
+    assert any(
+        "original recursive deletion failure" in error for error in result.errors
+    )
+    assert result.deleted_roots == 0
 
 
 def test_second_pass_recheck_prevents_delete_when_owner_becomes_active(
