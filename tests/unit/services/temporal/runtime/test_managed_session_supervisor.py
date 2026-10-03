@@ -187,6 +187,47 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publication", ["snapshot", "finalize"])
+@pytest.mark.parametrize("present_stream", [None, "stdout", "stderr"])
+async def test_absent_spools_publish_empty_artifacts_without_read_failure(
+    tmp_path: Path,
+    publication: str,
+    present_stream: str | None,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(storage),
+        artifact_storage=storage,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    source = b"session output\n"
+    if present_stream is not None:
+        (Path(record.artifact_spool_path) / f"{present_stream}.log").write_bytes(source)
+
+    if publication == "snapshot":
+        published = await supervisor.publish_snapshot(record.session_id)
+    else:
+        published = await supervisor.finalize(record.session_id, status="terminated")
+
+    for stream_name in ("stdout", "stderr"):
+        expected = source if stream_name == present_stream else b""
+        artifact_ref = getattr(published, f"{stream_name}_artifact_ref")
+        assert storage.resolve_storage_path(artifact_ref).read_bytes() == expected
+        assert getattr(published, f"{stream_name}_log_offset") == len(expected)
+    assert published.last_log_offset == (len(source) if present_stream else 0)
+    diagnostics = json.loads(
+        storage.resolve_storage_path(published.diagnostics_ref).read_text()
+    )
+    assert not any(
+        item["type"] == "managed_session_spool_read_failed"
+        for item in diagnostics["annotations"]
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stream_name", ["stdout", "stderr"])
 async def test_snapshot_reports_oversized_spool_without_losing_source_offsets(
     tmp_path: Path, stream_name: str,
@@ -1046,7 +1087,18 @@ async def test_publish_reset_artifacts_tolerates_event_publication_failure(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["leaf_link", "parent_link", "fifo", "directory"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "leaf_link",
+        "dangling_leaf_link",
+        "parent_link",
+        "dangling_parent_link",
+        "fifo",
+        "directory",
+        "unreadable",
+    ],
+)
 async def test_spool_snapshot_reports_unsafe_input_without_publishing_it(tmp_path, kind):
     record = _record(tmp_path).model_copy(
         update={"stdout_log_offset": 7, "last_log_offset": 7}
@@ -1064,15 +1116,21 @@ async def test_spool_snapshot_reports_unsafe_input_without_publishing_it(tmp_pat
     (outside / "stdout.log").write_text("private-host-data")
     (outside / "stderr.log").write_text("private-host-data")
     spool = Path(record.artifact_spool_path)
-    if kind == "parent_link":
+    if kind in {"parent_link", "dangling_parent_link"}:
         spool.rmdir()
-        spool.symlink_to(outside, target_is_directory=True)
+        target = outside if kind == "parent_link" else tmp_path / "absent"
+        spool.symlink_to(target, target_is_directory=True)
     else:
         (spool / "stderr.log").write_bytes(b"")
         if kind == "leaf_link":
             (spool / "stdout.log").symlink_to(outside / "stdout.log")
+        elif kind == "dangling_leaf_link":
+            (spool / "stdout.log").symlink_to(outside / "absent.log")
         elif kind == "fifo":
             os.mkfifo(spool / "stdout.log")
+        elif kind == "unreadable":
+            (spool / "stdout.log").write_text("private-host-data")
+            (spool / "stdout.log").chmod(0)
         else:
             (spool / "stdout.log").mkdir()
 

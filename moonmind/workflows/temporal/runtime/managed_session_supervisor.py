@@ -367,6 +367,9 @@ class ManagedSessionSupervisor:
                 ).encode("utf-8"),
                 source_bytes=source_bytes,
             )
+        except FileNotFoundError:
+            # The runtime creates each stream lazily when output first arrives.
+            return _SpoolSnapshot(data=b"", source_bytes=0)
         except OSError as exc:
             message = f"{stream_name} spool could not be read; diagnostic output unavailable."
             return _SpoolSnapshot(
