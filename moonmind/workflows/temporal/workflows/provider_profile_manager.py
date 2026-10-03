@@ -133,6 +133,10 @@ SHARED_THROTTLE_OWNERSHIP_PATCH = (
 LEASE_TRANSITION_CONTRACT_PATCH = (
     "provider-profile-manager-lease-transition-contract-v1"
 )
+# A release's initial signal can be consumed while its durable write is still
+# pending. New managers wake again after committed release and consume events
+# before awaited loop work, so signals received during that work survive.
+DURABLE_RELEASE_WAKEUP_PATCH = "provider-profile-manager-durable-release-wakeup-v1"
 
 # MoonLadderStudios/MoonMind#1089 (#4330): the redrive of outstanding cleanup
 # obligations and the automatic completion of direct cleanup obligations are
@@ -1176,6 +1180,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self._event_count: int = 0
         self._shutdown_requested: bool = False
         self._has_new_events: bool = False
+        self._durable_release_wakeup: bool = False
         self._profile_refresh_requested: bool = False
         self._has_db_profile_snapshot: bool = False
         # True once startup finished restoring profiles and durable leases from
@@ -1565,6 +1570,12 @@ class MoonMindProviderProfileManagerWorkflow:
                     workflow.now() + timedelta(seconds=handoff_ttl_seconds)
                 ).isoformat(),
             )
+        if released and self._durable_release_wakeup:
+            # The loop may have consumed the release signal while awaiting
+            # this write. Capacity became reusable only now; offer it without
+            # waiting for the periodic timer. Unresolved outcomes never wake
+            # the queue as though the lease were free.
+            self._has_new_events = True
         return outcome
 
     @workflow.signal
@@ -3020,6 +3031,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self._lease_cleanup_redrive = workflow.patched(
             LEASE_CLEANUP_REDRIVE_PATCH
         )
+        self._durable_release_wakeup = workflow.patched(DURABLE_RELEASE_WAKEUP_PATCH)
         self._restore_state(
             input_payload,
             repair_legacy_codex_oauth=repair_legacy_codex_oauth,
@@ -3063,13 +3075,19 @@ class MoonMindProviderProfileManagerWorkflow:
 
         # Main event loop: process signals, drain queue, clear cooldowns.
         while not self._shutdown_requested:
+            if self._durable_release_wakeup:
+                # Consume the wakeup this pass owns before any awaited work.
+                # A signal or completed release during that work requests the
+                # next pass instead of being erased at the end of this one.
+                self._has_new_events = False
             if workflow.patched(DB_AUTHORITATIVE_PROFILE_SYNC_PATCH):
                 if self._profile_refresh_requested:
                     refresh_succeeded = await self._load_profiles_from_db(
                         prune_removed_profiles=True
                     )
                     if not refresh_succeeded and not self._has_db_profile_snapshot:
-                        self._has_new_events = False
+                        if not self._durable_release_wakeup:
+                            self._has_new_events = False
                         try:
                             await workflow.wait_condition(
                                 lambda: (
@@ -3176,8 +3194,10 @@ class MoonMindProviderProfileManagerWorkflow:
                     await self._detach_handlers_for_rollover()
                 workflow.continue_as_new(self._build_continue_as_new_input())
 
-            # Reset event flag and wait for new signals or periodic wake-up.
-            self._has_new_events = False
+            # Retained histories keep their recorded end-of-loop reset and
+            # timer order. New histories retain events received during work.
+            if not self._durable_release_wakeup:
+                self._has_new_events = False
             try:
                 await workflow.wait_condition(
                     lambda: self._has_new_events or self._shutdown_requested,
@@ -4887,7 +4907,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 self._cleanup_delivery_attempts[lease_id] = int(
                     self._cleanup_delivery_attempts.get(lease_id, 0)
                 ) + 1
-                self._has_new_events = True
+                # This acknowledges the same outstanding claim without
+                # returning capacity. Waking another pass would redeliver it
+                # continuously instead of waiting for the periodic retry.
+                if not self._durable_release_wakeup:
+                    self._has_new_events = True
                 continue
             if outcome == LeaseTransitionOutcome.ALREADY_RELEASED.value:
                 # A verified release tombstoned the row while this pass was
@@ -5483,10 +5507,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 reason="owner_terminal",
             )
             if outcome == LeaseTransitionOutcome.CLEANUP_REQUESTED.value:
+                newly_requested = lease_id not in self._cleanup_requested_leases
                 self._cleanup_requested_leases.add(lease_id)
                 self._cleanup_request_reasons[lease_id] = "owner_terminal"
                 self._cleanup_delivery_attempts.setdefault(lease_id, 0)
-                self._has_new_events = True
+                if newly_requested or not self._durable_release_wakeup:
+                    self._has_new_events = True
                 self._get_logger().warning(
                     "Requested resource cleanup for the terminal-owner lease "
                     "%s on profile %s (status=%s, consumer=%s); its slot "

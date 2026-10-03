@@ -3431,6 +3431,7 @@ async def test_update_profile(client_app: AsyncClient, _module_db):
 
 
 async def _seed_profile_with_execution_configuration() -> tuple[str, dict, dict]:
+    """Seed pins for the supported Codex runtime and distinct provider contracts."""
     profile_id = f"pinned-update-{uuid4().hex}"
     pins = []
     async with db_base.async_session_maker() as session:
@@ -3453,7 +3454,7 @@ async def _seed_profile_with_execution_configuration() -> tuple[str, dict, dict]
                 validation_result={"ready": True},
                 document={
                     "providerRequirements": {
-                        "runtimeId": "pin_update_runtime",
+                        "runtimeId": "codex_cli",
                         "providerIds": [provider_id],
                         "credentialSource": source,
                         "materializationMode": mode,
@@ -3463,7 +3464,7 @@ async def _seed_profile_with_execution_configuration() -> tuple[str, dict, dict]
             pins.append({"profileId": configuration_id, "version": 1, "digest": digest})
         session.add(ManagedAgentProviderProfile(
             profile_id=profile_id,
-            runtime_id="pin_update_runtime",
+            runtime_id="codex_cli",
             provider_id="original",
             credential_source=ProviderCredentialSource.SECRET_REF,
             runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
@@ -3512,7 +3513,7 @@ async def test_update_profile_can_replace_or_clear_pin_with_changed_contract(
     _override_current_user()
     _advertise_expert_manual_contracts(
         monkeypatch,
-        ("pin_update_runtime", "replacement", "oauth_volume", "oauth_home"),
+        ("codex_cli", "replacement", "oauth_volume", "oauth_home"),
     )
     profile_id, _, replacement_pin = await _seed_profile_with_execution_configuration()
     requested_pin = None if clear_configuration else replacement_pin
@@ -3525,6 +3526,8 @@ async def test_update_profile_can_replace_or_clear_pin_with_changed_contract(
                 "credential_source": "oauth_volume",
                 "runtime_materialization_mode": "oauth_home",
                 "execution_configuration": requested_pin,
+                "volume_ref": f"{profile_id}-oauth-volume",
+                "volume_mount_path": "/home/app/.codex",
             },
         )
 
@@ -3536,6 +3539,8 @@ async def test_update_profile_can_replace_or_clear_pin_with_changed_contract(
         assert stored.credential_source == ProviderCredentialSource.OAUTH_VOLUME
         assert stored.runtime_materialization_mode == RuntimeMaterializationMode.OAUTH_HOME
         assert stored.execution_configuration == requested_pin
+        assert stored.volume_ref == f"{profile_id}-oauth-volume"
+        assert stored.volume_mount_path == "/home/app/.codex"
 
 
 @pytest.mark.asyncio

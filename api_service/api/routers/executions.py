@@ -324,6 +324,7 @@ from api_service.api.execution_principal import (
 )
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
+    validate_workflow_runtime_targets,
     WorkflowInputAttachmentRef,
     WorkflowSkillSelectors,
     allows_repository_publish_for_skill_context,
@@ -353,7 +354,6 @@ _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _SUPPORTED_TASK_RUNTIMES = frozenset({
     "codex_cli",
     "claude_code",
-    "codex_cloud",
     "jules",
     "omnigent",
     # Legacy aliases accepted and normalized below.
@@ -3369,7 +3369,6 @@ def _facet_label(facet: str, value: str) -> str:
         labels = {
             "codex_cli": "Codex CLI",
             "claude_code": "Claude Code",
-            "codex_cloud": "Codex Cloud",
         }
         return labels.get(value, value.replace("_", " ").title())
     if facet == "status":
@@ -8759,7 +8758,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                                 "Unsupported payload.workflow.steps"
                                 f"[{index}].runtime.mode: {value!r}. "
                                 "Must be one of: codex_cli, claude_code, "
-                                "codex_cloud, jules."
+                                "jules."
                             )
                     if target_key == "modelTier":
                         normalized_runtime[target_key] = value
@@ -9166,7 +9165,7 @@ async def _resolve_step_runtime_selections(
                 raise _invalid_workflow_request(
                     f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
                     f"{raw_step_runtime!r}. Must be one of: codex_cli, "
-                    "claude_code, codex_cloud, jules."
+                    "claude_code, jules."
                 )
             canonical_step_runtime = normalized_rt
             # A step override is new admission in its own right. The top-level
@@ -11488,6 +11487,10 @@ async def _create_execution_from_workflow_request(
         )
 
     payload = request.payload if isinstance(request.payload, dict) else {}
+    try:
+        validate_workflow_runtime_targets(payload)
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     task_node = payload.get("task")
     workflow_node = payload.get("workflow")
     if isinstance(task_node, dict) and isinstance(workflow_node, dict):
@@ -11946,7 +11949,7 @@ async def _create_execution_from_workflow_request(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, codex_cloud, jules, omnigent."
+                "Must be one of: codex_cli, claude_code, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
 
@@ -12755,7 +12758,7 @@ async def _resolve_recurring_runtime_metadata(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, codex_cloud, jules, omnigent."
+                "Must be one of: codex_cli, claude_code, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
 
@@ -12781,7 +12784,7 @@ async def _resolve_recurring_runtime_metadata(
                 raise _invalid_workflow_request(
                     f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
                     f"{raw_step_mode!r}. Must be one of: codex_cli, "
-                    "claude_code, codex_cloud, jules, omnigent."
+                    "claude_code, jules, omnigent."
                 )
             try:
                 from moonmind.omnigent.codex_cutover_drain import (

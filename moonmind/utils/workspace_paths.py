@@ -49,15 +49,23 @@ def ensure_directory(path: str | Path) -> None:
 
 
 def atomic_write_text(
-    path: str | Path, text: str, *, encoding: str = "utf-8", mode: int = 0o600
+    path: str | Path,
+    text: str,
+    *,
+    encoding: str = "utf-8",
+    mode: int = 0o600,
+    preserve_existing_owner: bool = False,
 ) -> None:
     """Replace a file inside a pinned parent, never writing through a link.
 
     A fresh inode also prevents writes through hardlinks. A concurrent rename
     of the parent or replacement of the destination cannot redirect the write.
+    Optional ownership preservation applies to the fresh inode before replacing
+    an existing file; the requested mode remains authoritative.
     """
     path = Path(path)
     with open_directory(path.parent, create=True) as parent_fd:
+        existing = None
         try:
             existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -78,6 +86,13 @@ def atomic_write_text(
         try:
             with os.fdopen(fd, "w", encoding=encoding) as output:
                 output.write(text)
+                if preserve_existing_owner and existing is not None:
+                    output.flush()
+                    created = os.fstat(output.fileno())
+                    if (created.st_uid, created.st_gid) != (
+                        existing.st_uid, existing.st_gid
+                    ):
+                        os.fchown(output.fileno(), existing.st_uid, existing.st_gid)
             os.replace(temporary, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         finally:
             try:

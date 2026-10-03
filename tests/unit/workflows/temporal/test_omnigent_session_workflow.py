@@ -536,6 +536,8 @@ async def test_bound_legacy_host_launch_preserves_exact_policy_version() -> None
 async def test_plan_bound_admission_uses_persisted_host_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import api_service.db.base as db_base
+
     binding = OmnigentExecutionPlanBinding(
         planRef="omnigent-execution-plan:sha256:" + "a" * 64,
         planDigest="sha256:" + "a" * 64,
@@ -581,6 +583,18 @@ async def test_plan_bound_admission_uses_persisted_host_authority(
         "moonmind.omnigent.realizers.registry.get_default_registry",
         lambda: SimpleNamespace(require=lambda _ref: None),
     )
+    profile = SimpleNamespace(
+        runtime_id="codex_cli",
+        capacity_scope_ref="provider-profile:provider-profile-1",
+        credential_generation=3,
+    )
+    profile_session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    @asynccontextmanager
+    async def profile_sessions():
+        yield profile_session
+
+    monkeypatch.setattr(db_base, "async_session_maker", profile_sessions)
 
     decision = await (
         omnigent_session_activities.omnigent_evaluate_session_admission_activity(
@@ -595,6 +609,15 @@ async def test_plan_bound_admission_uses_persisted_host_authority(
     )
 
     assert decision["admitted"] is True
+    assert decision["capacityAcquisitionOwner"] == "workflow"
+    assert decision["capacityProfiles"] == [
+        {
+            "providerProfileRef": "provider-profile-1",
+            "providerRuntimeId": "codex_cli",
+            "capacityScopeRef": "provider-profile:provider-profile-1",
+            "credentialGeneration": 3,
+        }
+    ]
     validate_support.assert_called_once_with(plan)
 
 

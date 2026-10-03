@@ -79,6 +79,7 @@ from moonmind.omnigent.oauth_hosts import (
     HOST_PROFILE_BUSY_ERROR_CODE,
     OmnigentOAuthHostRepository,
 )
+from moonmind.omnigent.provider_leases import OmnigentProviderLeaseCoordinator
 from moonmind.omnigent.stock_agents import (
     CLAUDE_STOCK_AGENT_NAME,
     CODEX_STOCK_AGENT_NAME,
@@ -693,6 +694,61 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "Omnigent repository continuation command settlement remains pending"
             )
 
+    async def _acquire_provider_capacity(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope | None,
+        runtime_id: str,
+        profile_id: str,
+        workflow_id: str,
+        step_execution_id: str | None,
+    ) -> CredentialLease:
+        if request.admitted_provider_capacity is not None:
+            ticket = request.admitted_provider_capacity
+            if (
+                plan is None
+                or ticket.idempotency_key != request.idempotency_key
+                or ticket.step_execution_id
+                != (step_execution_id or request.idempotency_key)
+                or len(ticket.profiles) != 1
+                or ticket.profiles[0].provider_profile_ref != profile_id
+                or ticket.profiles[0].provider_runtime_id != runtime_id
+            ):
+                raise HarnessPlatformError(
+                    "Codex capacity ticket conflicts with the executing request",
+                    code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+                )
+            acquired = await OmnigentProviderLeaseCoordinator(
+                session_factory=self._session_factory,
+                lease_client=self._lease_client,
+            ).acquire_all(
+                plan=plan,
+                workflow_id=workflow_id,
+                step_execution_id=step_execution_id or request.idempotency_key,
+                idempotency_key=request.idempotency_key,
+                admitted_capacity=ticket,
+            )
+            return acquired[0].lease
+        return await self._lease_client.acquire_execution_lease(
+            runtime_id=runtime_id,
+            profile_id=profile_id,
+            owner_id=deterministic_lease_owner_id(
+                profile_id=profile_id,
+                purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+                workflow_id=workflow_id,
+                step_execution_id=step_execution_id,
+                idempotency_key=request.idempotency_key,
+            ),
+            purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+            metadata={
+                "workflowId": workflow_id,
+                "stepExecutionId": step_execution_id,
+                "idempotencyKey": request.idempotency_key,
+                "ownerIsWorkflow": False,
+            },
+        )
+
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         recorded_plan = self._require_recorded_plan_request(request)
         if recorded_plan is not None:
@@ -703,6 +759,10 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
         budget_rejection = max_budget_enforcement_rejection(request)
         if budget_rejection is not None:
+            if request.admitted_provider_capacity is not None:
+                budget_rejection.metadata[
+                    "admittedProviderCapacityCleanupCompleted"
+                ] = True
             return budget_rejection
         profile_id = str(request.execution_profile_ref or "").strip()
         workflow_id, step_execution_id = request_identity(request)
@@ -796,6 +856,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         # once at terminal, covering both success and every failure path.
         authority_workspace_resolution: Mapping[str, Any] | None = None
         authority_result: AgentRunResult | None = None
+        authority_error: BaseException | None = None
         authority_bridge_session_id: str | None = None
         authority_idempotency_key = request.idempotency_key
         authority_cleanup_mode: str | None = None
@@ -1087,13 +1148,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "publishMode": workspace_intent.publish_mode,
                     },
                 )
-            owner_id = deterministic_lease_owner_id(
-                profile_id=profile_id,
-                purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
-                workflow_id=workflow_id,
-                step_execution_id=step_execution_id,
-                idempotency_key=request.idempotency_key,
-            )
             current_stage = "profile_lease_wait"
             await emit(
                 current_stage, "waiting", metadata={"providerProfileId": profile_id}
@@ -1104,17 +1158,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                 runtime=provider_runtime,
                 attempt_ordinal=self._attempts.current_attempt(),
             ):
-                provider_lease = await self._lease_client.acquire_execution_lease(
+                provider_lease = await self._acquire_provider_capacity(
+                    request=request,
+                    plan=recorded_plan,
                     runtime_id=provider_runtime,
                     profile_id=profile_id,
-                    owner_id=owner_id,
-                    purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
-                    metadata={
-                        "workflowId": workflow_id,
-                        "stepExecutionId": step_execution_id,
-                        "idempotencyKey": request.idempotency_key,
-                        "ownerIsWorkflow": False,
-                    },
+                    workflow_id=workflow_id,
+                    step_execution_id=step_execution_id,
                 )
             control_plane_metrics.observe(
                 control_plane_metrics.LEASE_ACQUIRE_LATENCY,
@@ -2191,6 +2241,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             return result
         except (Exception, asyncio.CancelledError) as exc:
+            authority_error = exc
             prepared_host_evidence = getattr(
                 exc, "prepared_host_evidence", None
             )
@@ -2462,7 +2513,21 @@ class OmnigentProfileBoundExecutionCoordinator:
                         }
                     )
             lease_released = provider_lease is None
-            if provider_lease is not None:
+            workflow_owns_capacity = request.admitted_provider_capacity is not None
+            if workflow_owns_capacity:
+                # This is a cleanup receipt, not a release receipt. The workflow
+                # remains the sole releaser of its admitted Provider Profile slot.
+                # Stamp it before best-effort reporting so a reporting failure
+                # cannot erase confirmed teardown or fabricate it on failure.
+                if authority_result is not None:
+                    authority_result.metadata[
+                        "admittedProviderCapacityCleanupCompleted"
+                    ] = safe_to_release_provider
+                if authority_error is not None:
+                    authority_error.admitted_provider_capacity_cleanup_completed = (
+                        safe_to_release_provider
+                    )
+            if provider_lease is not None and not workflow_owns_capacity:
                 if safe_to_release_provider:
                     await emit(
                         "profile_lease_release",
@@ -2508,17 +2573,19 @@ class OmnigentProfileBoundExecutionCoordinator:
                         metadata={"leaseReleased": False, "janitorRequired": True},
                         ignore_errors=True,
                     )
-            janitor_required = provider_lease is not None and not lease_released
+            janitor_required = (
+                provider_lease is not None
+                and not lease_released
+                and (not workflow_owns_capacity or not safe_to_release_provider)
+            )
             if (
                 recorded_plan is not None
                 and runtime_binding_ref is not None
                 and safe_to_release_provider
-                and lease_released
+                and (lease_released or workflow_owns_capacity)
             ):
-                from sqlalchemy.exc import (
-                    DBAPIError,
-                    TimeoutError as DatabaseTimeoutError,
-                )
+                from sqlalchemy.exc import DBAPIError
+                from sqlalchemy.exc import TimeoutError as DatabaseTimeoutError
 
                 cleanup_reporting_attempt = 0
                 try:
@@ -2627,7 +2694,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         else "provider_lease_release_deferred"
                     )
                 release_ordering.append("terminal")
-                if provider_lease is not None and not lease_released:
+                if janitor_required:
                     authority_reasons.append(
                         {
                             "stage": "profile_lease_release",

@@ -19,7 +19,7 @@ OpenClaw is treated as an autonomous gateway exposed through an OpenAI-compatibl
 
 This document does **not** define a separate OpenClaw-only external-agent model. It narrows MoonMind’s shared external-agent architecture for one provider and calls out one deliberate difference:
 
-> OpenClaw is a **streaming-gateway** provider, not a poll-by-external-id provider like Jules or Codex Cloud.
+> OpenClaw is a **streaming-gateway** provider, not a poll-by-external-id provider like Jules.
 
 ### Non-goals
 

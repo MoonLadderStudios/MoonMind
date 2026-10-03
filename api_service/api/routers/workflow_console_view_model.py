@@ -1428,7 +1428,6 @@ def _build_supported_runtimes() -> list[str]:
         "omnigent",
         "codex_cli",
         "claude_code",
-        "codex_cloud",
     ]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
