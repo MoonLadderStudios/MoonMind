@@ -166,3 +166,61 @@ async def test_omnigent_execute_retry_preserves_each_terminal_capture(
     assert len(first.output_refs) == len(second.output_refs)
     assert first_manifest["workspaceFiles"] == second_manifest["workspaceFiles"]
     assert first_manifest["workspaceDiffs"] == second_manifest["workspaceDiffs"]
+
+
+@pytest.mark.parametrize("fake_omnigent_server", [True], indirect=True)
+async def test_omnigent_execute_journals_bounded_large_tool_output(
+    fake_omnigent_server, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    server, server_url = fake_omnigent_server
+    monkeypatch.setenv("OMNIGENT_ENABLED", "1")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", server_url)
+    output = "\x00" * (1024 * 1024) + (
+        "\n\n[output truncated by omnigent: 1000 of 1049576 bytes omitted]"
+    )
+    tool_event = {
+        "type": "response.output_item.done",
+        "item": {
+            "id": "large-tool-item",
+            "type": "function_call_output",
+            "call_id": "large-tool-call",
+            "status": "completed",
+            "output": output,
+        },
+    }
+    server.scenario.stream_frames = [
+        ("data: " + json.dumps(tool_event) + "\n\n").encode(),
+        b'data: {"type":"response.completed","session":{"status":"completed"}}\n\n',
+    ]
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-large-tool-output",
+            idempotencyKey="idem-large-tool-output",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Inspect the existing candidate"},
+                }
+            },
+        ),
+        artifact_gateway=gateway,
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["normalizedStatus"] == "completed"
+    journal = await gateway.read_text(result.metadata["rawSseStreamRef"])
+    events = [json.loads(line) for line in journal.splitlines()]
+    assert (
+        next(
+            event["item"]["output"]
+            for event in events
+            if event.get("type") == "response.output_item.done"
+        )
+        == output
+    )
+    assert len(server.session_ids) == 1
+    assert len(server.events) == 1

@@ -362,6 +362,23 @@ The bridge preserves:
 
 The Workflow Detail projection uses these records rather than relying on host-local logs or an Omnigent-only dashboard. Replay remains useful after a static host restart or an on-demand host removal.
 
+The SSE client accepts the stock producer's bounded tool-output mirror: 1 MiB
+of UTF-8 plus its truncation notice. The wire-line ceiling accounts for JSON's
+worst-case six-byte escaping of each input byte, a 200-byte notice allowance,
+and 64 KiB of event metadata. Received transport chunks are processed in
+64 KiB slices without delaying complete live events. The ceiling applies to
+each complete or pending line, so coalesced valid frames do not consume a
+shared frame budget. Nonblank lines also count toward the same finite frame
+ceiling until a blank SSE delimiter resets it. Oversized lines, oversized
+multiline frames, and malformed JSON still fail explicitly.
+The bound applies to encoded SSE data, rather than the tool's unescaped text.
+
+When a transport or SSE error ends an attempt, failure capture reopens the
+existing HTTP transport owner for read-only harvest of that same session.
+This preserves available workspace evidence after an attempt-owned client has
+closed. Capture keeps the original failure and retry decision; it does not
+create a session, repost the accepted message, or repeat provider effects.
+
 ---
 
 ## 11. Cancellation, cleanup, and reconciliation
