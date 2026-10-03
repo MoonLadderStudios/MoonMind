@@ -5249,19 +5249,39 @@ async def _local_capacity_deferral(
     Unknown capacity is not saturation: selection proceeds and admission keeps
     its existing backoff, which also covers a slot taken after this check.
     """
+    from api_service.services.provider_profile_runtime import (
+        load_provider_profile_for_runtime,
+        resolve_launch_target_profile_selection,
+    )
     from moonmind.runtime_identity import normalize_runtime_id
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         snapshot_admits_new_execution,
     )
 
     selection = _mapping((context or {}).get("runtime_selection"))
-    if not _string(selection.get("targetRuntime")):
+    selected = resolve_launch_target_profile_selection(selection)
+    if not selected.runtime_ids:
         return None
-    runtime_id = normalize_runtime_id(
-        _string(selection.get("targetRuntime")).replace("-", "_")
-    )
-    profile_ref = _string(selection.get("profileId"))
+    runtime_id = selected.runtime_ids[0]
+    profile_ref = selected.profile_id or ""
     try:
+        if runtime_id == "omnigent":
+            # Omnigent is the Backend. Capacity belongs to the selected
+            # Provider Profile's harness, as it does at AgentRun admission.
+            if not profile_ref:
+                return None
+            from api_service.db.base import async_session_maker
+
+            async with async_session_maker() as session:
+                profile = await load_provider_profile_for_runtime(
+                    session=session,
+                    profile_id=profile_ref,
+                    selected_runtime=runtime_id,
+                )
+                profile_runtime = _string(getattr(profile, "runtime_id", None))
+            if not profile_runtime:
+                return None
+            runtime_id = normalize_runtime_id(profile_runtime.replace("-", "_"))
         state = await _provider_profile_manager_state(runtime_id)
     except Exception:  # noqa: BLE001 - an unobservable manager is not saturation
         return None
@@ -5272,7 +5292,11 @@ async def _local_capacity_deferral(
         return None
     pending = (state or {}).get("pending_requests")
     queued = len(pending) if isinstance(pending, list) else 0
-    profile = f"provider profile {profile_ref}" if profile_ref else "the default provider profile"
+    profile = (
+        f"provider profile {profile_ref}"
+        if profile_ref
+        else "the default provider profile"
+    )
     return {
         "disposition": "idle",
         "reasonCode": "local_capacity_unavailable",
