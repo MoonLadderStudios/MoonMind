@@ -1023,16 +1023,16 @@ async def test_opencode_506_boundary_replays_patched_and_fails_prefix() -> None:
             assert assignment["profile_id"] == "test-default"
             # The live holder keeps its slot while the lease expires, so the
             # manager owes a cleanup redrive instead of a release.
-            await asyncio.wait_for(activities.redriven.wait(), timeout=120)
+            # Event waits do not auto-skip Temporal time. Advance the test
+            # clock through the unchanged 60-second lease duration explicitly.
+            await env.sleep(timedelta(seconds=61))
+            await asyncio.wait_for(activities.redriven.wait(), timeout=15)
             state = await manager.query("get_state")
             assert requester.id in state["cleanup_requested_leases"]
-            # MoonLadderStudios/MoonMind#4363 504-before-506 shape: keep the
-            # manager alive (time-skipping still enabled) past the next 60s
-            # workflow-time tick after the redrive, so the recorded history
-            # contains a periodic 60s timer after the redriven activity
-            # before shutdown/fetch_history. Without this the shutdown races
-            # the periodic wake-up and the ordering assertion sees no timer.
-            async with asyncio.timeout(90):
+            # Keep the manager alive until the completed redrive pass records
+            # its next periodic timer, preserving the #4363 504-before-506
+            # shape without racing shutdown against the Activity completion.
+            async with asyncio.timeout(15):
                 while True:
                     probe = await manager.fetch_history()
                     probe_cleanups: list[int] = []
