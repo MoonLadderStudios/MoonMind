@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import aclosing
 
 import httpx
 import pytest
@@ -66,6 +67,47 @@ async def test_stream_rejects_aggregate_frame_before_consuming_full_body(
         assert len(emitted) < 85
     else:
         assert emitted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suffix_kind", ["data", "comment"])
+async def test_terminal_event_is_not_yielded_before_oversized_frame_is_validated(
+    suffix_kind: str,
+) -> None:
+    terminal = b'data: {"type": "response.completed"}\n'
+    _, suffix = _data_line(delta_bytes=100_000)
+    if suffix_kind == "comment":
+        suffix = b":" + b"x" * 100_000
+    body = terminal + (suffix + b"\n") * 85 + b"\n"
+    wire = _CountingWire(body)
+    # Execution stops reading after the first terminal event. Its first anext
+    # must validate the entire frame, including suffixes arriving later.
+    with pytest.raises(OmnigentClientError, match="exceeds bounded frame size"):
+        async with aclosing(_client(wire).stream_events("terminal-overflow")) as events:
+            await anext(events)
+    assert wire.bytes_delivered < len(body)
+
+
+@pytest.mark.asyncio
+async def test_bounded_frame_at_true_eof_preserves_data_line_compatibility() -> None:
+    event, line = _data_line(delta_bytes=100_000)
+    wire = _CountingWire(line + b"\n" + line)
+    events = [event async for event in _client(wire).stream_events("bounded-eof")]
+    assert events == [event, event]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delimiter", [b"\n", b""], ids=["blank-delimited", "eof"])
+async def test_terminal_event_is_not_yielded_before_malformed_data_in_same_frame(
+    delimiter: bytes,
+) -> None:
+    body = b'data: {"type": "response.completed"}\ndata: not-json\n' + delimiter
+    wire = _CountingWire(body, fragment_bytes=7)
+    with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
+        async with aclosing(
+            _client(wire).stream_events("terminal-malformed")
+        ) as events:
+            await anext(events)
 
 
 @pytest.mark.asyncio
