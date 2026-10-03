@@ -10,7 +10,9 @@ query are replaced.
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import pytest_asyncio
 
+from api_service.db.models import ManagedAgentProviderProfile
 from moonmind.workflows.temporal import story_output_tools as tools
 from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
 
@@ -37,7 +39,9 @@ def _profile(profile_id="codex_openai_oauth", *, leases=0, capacity=1, **extra):
         "enabled": True,
         "launch_ready": True,
         "is_default": profile_id == "codex_openai_oauth",
-        "current_leases": [f"mm:{profile_id}-{index}:agent:node-1" for index in range(leases)],
+        "current_leases": [
+            f"mm:{profile_id}-{index}:agent:node-1" for index in range(leases)
+        ],
         "max_parallel_runs": capacity,
         "effective_capacity": capacity,
         "effective_limit": capacity,
@@ -77,6 +81,10 @@ def manager(monkeypatch):
 
     async def query(runtime_id):
         observed["runtimes"].append(runtime_id)
+        if "states" in observed:
+            if runtime_id not in observed["states"]:
+                raise RuntimeError(f"manager not found: {runtime_id}")
+            return observed["states"][runtime_id]
         if isinstance(observed["state"], Exception):
             raise observed["state"]
         return observed["state"]
@@ -92,6 +100,28 @@ async def _search(service, owner, *, selection=SELECTION):
     return await tools.load_github_issue_preset_brief(
         SEARCH, context, github_service_factory=lambda: service
     )
+
+
+@pytest_asyncio.fixture
+async def provider_profile(journey, monkeypatch):
+    from api_service.db import base
+
+    _github, _service, sessions = journey
+    async with sessions() as session:
+        connection = await session.connection()
+        await connection.run_sync(ManagedAgentProviderProfile.__table__.create)
+    monkeypatch.setattr(base, "async_session_maker", sessions)
+
+    async def persist(profile_id, runtime_id):
+        async with sessions() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id, runtime_id=runtime_id
+                )
+            )
+            await session.commit()
+
+    return persist
 
 
 @pytest.mark.asyncio
@@ -110,7 +140,11 @@ async def _search(service, owner, *, selection=SELECTION):
         # A sibling profile on the same scope uses the scope's only unit.
         _manager_state(
             _profile(capacity=2),
-            _profile("sibling", leases=1, capacity_scope_ref="provider-profile:codex_openai_oauth"),
+            _profile(
+                "sibling",
+                leases=1,
+                capacity_scope_ref="provider-profile:codex_openai_oauth",
+            ),
             scope={"effective_limit": 1},
         ),
     ],
@@ -236,3 +270,70 @@ async def test_search_without_a_runtime_selection_is_not_gated(journey, manager)
     assert result.completion_disposition is None, result.outputs
     assert manager["runtimes"] == []
     assert github["posts"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_id", ["codex_cli", "claude_code", "opencode"])
+@pytest.mark.parametrize("nested_profile", [False, True])
+async def test_omnigent_search_checks_the_selected_profile_capacity_owner(
+    journey, manager, provider_profile, runtime_id, nested_profile
+):
+    """A backend has no capacity manager; the selected profile's harness does."""
+    github, service, _sessions = journey
+    profile_id = "selected-provider"
+    await provider_profile(profile_id, runtime_id)
+    manager["states"] = {runtime_id: _manager_state(_profile(profile_id, leases=1))}
+    selection = {
+        "targetRuntime": "omnigent",
+        **(
+            {
+                "workflow": {
+                    "runtime": {"mode": "omnigent", "executionProfileRef": profile_id}
+                }
+            }
+            if nested_profile
+            else {"profileId": profile_id}
+        ),
+    }
+    owner = "default/omnigent-capacity-gate"
+
+    result = await _search(service, owner, selection=selection)
+
+    assert result.completion_disposition == "idle", result.outputs
+    assert result.outputs["reasonCode"] == "local_capacity_unavailable"
+    assert result.outputs["capacityEvidence"]["runtimeId"] == runtime_id
+    assert manager["runtimes"] == [runtime_id]
+    assert github["posts"] == 0
+    assert github["labels"] == []
+    assert await tools.IssueClaimStore().get(owner) is None
+
+    # The same selection proceeds on a later occurrence when its slot frees.
+    manager["states"][runtime_id] = _manager_state(_profile(profile_id))
+    selected = await _search(service, owner, selection=selection)
+    assert selected.completion_disposition is None, selected.outputs
+    assert selected.outputs["issue"]["number"] == 3970
+    assert github["posts"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["profile", "profile_runtime", "manager"])
+async def test_omnigent_search_does_not_treat_unobservable_capacity_as_saturation(
+    journey, manager, provider_profile, missing
+):
+    github, service, _sessions = journey
+    if missing != "profile":
+        await provider_profile(
+            "selected-provider", "" if missing == "profile_runtime" else "codex_cli"
+        )
+    manager["states"] = {}
+
+    result = await _search(
+        service,
+        "default/omnigent-capacity-unknown",
+        selection={"targetRuntime": "omnigent", "profileId": "selected-provider"},
+    )
+
+    assert result.completion_disposition is None, result.outputs
+    assert result.outputs["issue"]["number"] == 3970
+    assert github["posts"] == 1
+    assert manager["runtimes"] == (["codex_cli"] if missing == "manager" else [])
