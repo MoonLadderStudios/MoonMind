@@ -140,6 +140,7 @@ steps:
       repository: '{{ inputs.github_issue.repository }}'
       issueNumber: '{{ inputs.github_issue.number }}'
       artifactPath: artifacts/github-issue-orchestrate-brief.json
+      constraints: '{{ inputs.constraints }}'
 - kind: include
   slug: issue-implement-assessment
   alias: assess
