@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import gzip
 import hashlib
+import http.client
+import io
 import json
 import logging
 import os
@@ -18,10 +20,13 @@ from collections import Counter, defaultdict
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from os import environ
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, MutableMapping, NoReturn, Sequence
-from uuid import UUID
+from uuid import UUID, uuid4
+
+from docker.utils import parse_bytes
 
 import httpx
 
@@ -99,6 +104,30 @@ _PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
+_CONTAINER_CREATE_RESPONSE_LIMIT = 1024 * 1024
+# Deployment-owned process/toolchain settings also needed by repository
+# verification. This positive projection excludes credential/service settings;
+# arbitrary repository flags require an explicit non-secret declaration owner.
+_WORKER_TOOLCHAIN_ENV_KEYS = frozenset(
+    {
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+        "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",
+        "SYSTEMROOT", "COMSPEC", "PATHEXT", "WINDIR",
+        "VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME", "PYTHONUTF8",
+        "PYTHONIOENCODING", "PYTEST_ADDOPTS", "PYTEST_XDIST_AUTO_NUM_WORKERS",
+        "JAVA_HOME", "JDK_HOME", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS",
+        "_JAVA_OPTIONS", "MAVEN_HOME", "M2_HOME", "MAVEN_OPTS",
+        "GRADLE_USER_HOME", "GRADLE_OPTS", "NODE_OPTIONS", "NODE_PATH",
+        "CC", "CXX", "CPP", "AR", "AS", "LD", "FC", "RANLIB", "STRIP",
+        "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "CPATH",
+        "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH",
+        "PKG_CONFIG", "PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR",
+        "CMAKE_PREFIX_PATH", "CMAKE_TOOLCHAIN_FILE", "CI",
+        "MOONMIND_FORCE_LOCAL_TESTS", "MOONMIND_PYTEST_DURATIONS",
+        "MOONMIND_PYTEST_JUNITXML", "MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP",
+        "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS",
+    }
+)
 _FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _SECRET_LIKE_METADATA_PATTERN = re.compile(
     r"""(?ix)
@@ -5306,12 +5335,21 @@ class CodexWorker:
                 f"evidence; running {rendered_command}"
             ),
         )
+        # Repository tests need their toolchain, never publisher credentials
+        # or the worker's service secrets. The repository execution boundary is
+        # still responsible for filesystem/network isolation.
+        verification_source = (
+            prepared.repo_command_env
+            if prepared.repo_command_env is not None
+            else environ
+        )
+        verification_env = self._project_toolchain_environment(verification_source)
         try:
             await self._run_stage_command(
                 command,
                 cwd=prepared.repo_dir,
                 log_path=prepared.publish_log_path,
-                env=prepared.publish_command_env,
+                env=verification_env,
             )
         except Exception as exc:
             raise RuntimeError(
@@ -7710,7 +7748,7 @@ class CodexWorker:
                     repo_dir=repo_dir,
                     env=scan_env,
                     timeout=30,
-                    args=["fetch", "origin", base_ref.removeprefix("origin/")],
+                    args=["fetch", "--", "origin", base_ref.removeprefix("origin/")],
                 )
         commit_range = f"{base_ref}..{branch_name}"
         try:
@@ -7770,6 +7808,7 @@ class CodexWorker:
                         args=[
                             "diff",
                             "--no-ext-diff",
+                            "--no-textconv",
                             "--text",
                             commit_range,
                             "--",
@@ -9583,14 +9622,14 @@ class CodexWorker:
             log_path=log_path,
         )
 
-    def _build_container_run_command(
+    def _build_container_create_config(
         self,
         *,
         job_id: UUID,
         repository: str,
         prepared: PreparedTaskWorkspace,
         container_spec: ContainerTaskSpec,
-    ) -> tuple[list[str], str, str, dict[str, str]]:
+    ) -> tuple[dict[str, Any], str, str, dict[str, str]]:
         workspace_root = self._config.workdir
         if not workspace_root.is_absolute():
             raise ValueError(
@@ -9604,53 +9643,39 @@ class CodexWorker:
         workdir = container_spec.workdir or str(prepared.repo_dir)
         container_name = f"mm-task-{job_id}"
 
-        command: list[str] = [
-            self._config.docker_binary,
-            "run",
-            "--rm",
-            "--name",
-            container_name,
-            "--label",
-            f"moonmind.job_id={job_id}",
-            "--label",
-            f"moonmind.repository={repository}",
-            "--label",
-            "MoonMind.UserWorkflowtime=container",
-        ]
+        mounts: list[dict[str, str]] = []
 
         if self._config.container_workspace_volume:
-            command.extend(
-                [
-                    "--mount",
-                    (
-                        "type=volume,"
-                        f"src={self._config.container_workspace_volume},"
-                        f"dst={mount_target}"
-                    ),
-                ]
+            mounts.append(
+                {
+                    "Type": "volume",
+                    "Source": self._config.container_workspace_volume,
+                    "Target": mount_target,
+                }
             )
         else:
-            command.extend(
-                [
-                    "--mount",
-                    (f"type=bind,src={workspace_root.resolve()},dst={mount_target}"),
-                ]
+            mounts.append(
+                {
+                    "Type": "bind",
+                    "Source": str(workspace_root.resolve()),
+                    "Target": mount_target,
+                }
             )
 
         for cache_volume in container_spec.cache_volumes:
-            command.extend(
-                [
-                    "--mount",
-                    (f"type=volume,src={cache_volume.name},dst={cache_volume.target}"),
-                ]
+            mounts.append(
+                {
+                    "Type": "volume",
+                    "Source": cache_volume.name,
+                    "Target": cache_volume.target,
+                }
             )
 
+        host_config: dict[str, Any] = {"AutoRemove": True, "Mounts": mounts}
         if container_spec.cpus:
-            command.extend(["--cpus", container_spec.cpus])
+            host_config["NanoCpus"] = int(Decimal(container_spec.cpus) * 1_000_000_000)
         if container_spec.memory:
-            command.extend(["--memory", container_spec.memory])
-
-        command.extend(["--workdir", workdir])
+            host_config["Memory"] = parse_bytes(container_spec.memory)
 
         run_env = {
             **container_spec.env,
@@ -9658,12 +9683,223 @@ class CodexWorker:
             "JOB_ID": str(job_id),
             "REPOSITORY": repository,
         }
-        for key in sorted(run_env):
-            command.extend(["--env", key])
+        config = {
+            "Image": container_spec.image,
+            "Cmd": list(container_spec.command),
+            "AttachStdout": True,
+            "AttachStderr": True,
+            "WorkingDir": workdir,
+            "Env": [f"{key}={run_env[key]}" for key in sorted(run_env)],
+            "Labels": {
+                "moonmind.job_id": str(job_id),
+                "moonmind.repository": repository,
+                "MoonMind.UserWorkflowtime": "container",
+                "moonmind.container_launch": str(uuid4()),
+            },
+            "HostConfig": host_config,
+        }
+        return config, container_name, artifact_dir_in_container, run_env
 
-        command.append(container_spec.image)
-        command.extend(container_spec.command)
-        return command, container_name, artifact_dir_in_container, run_env
+    async def _create_task_container(
+        self,
+        *,
+        config: Mapping[str, Any],
+        name: str,
+        cwd: Path,
+        log_path: Path,
+        timeout_seconds: float,
+    ) -> str:
+        """Send JSON through the configured CLI's daemon tunnel, never argv/env.
+
+        Docker's line-based env-file cannot preserve multiline values. Its
+        dial-stdio plumbing retains the selected context, TLS and client config;
+        only the container-create body receives authored environment values.
+        """
+        body = json.dumps(config).encode("utf-8")
+        api_version = str(environ.get("DOCKER_API_VERSION") or "").strip()
+        if api_version and not re.fullmatch(r"\d+\.\d+", api_version):
+            raise ValueError("DOCKER_API_VERSION must have major.minor format")
+        if not api_version:
+            negotiation_started = time.monotonic()
+            version_result = await self._run_stage_command(
+                [
+                    self._config.docker_binary,
+                    "version",
+                    "--format",
+                    "{{.Server.APIVersion}}",
+                ],
+                cwd=cwd,
+                log_path=log_path,
+                env=dict(environ),
+                timeout_seconds=timeout_seconds,
+            )
+            if version_result.returncode != 0:
+                raise RuntimeError("Docker API version negotiation failed")
+            api_version = version_result.stdout.strip()
+            if not re.fullmatch(r"\d+\.\d+", api_version):
+                raise ValueError("Docker daemon returned an invalid API version")
+            timeout_seconds -= time.monotonic() - negotiation_started
+            if timeout_seconds <= 0:
+                raise asyncio.TimeoutError(
+                    "container create timed out during API negotiation"
+                )
+        api_prefix = f"/v{api_version}"
+        request = (
+            f"POST {api_prefix}/containers/create?name={name} HTTP/1.1\r\n"
+            "Host: docker\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+        ).encode("ascii") + body
+        cancel_event = getattr(self, "_active_cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            raise JobCancellationRequested(
+                "cancellation requested before container create"
+            )
+        process = await asyncio.create_subprocess_exec(
+            self._config.docker_binary,
+            "system",
+            "dial-stdio",
+            cwd=str(cwd),
+            env=dict(environ),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async def read_bounded(stream: asyncio.StreamReader) -> bytes:
+            chunks: list[bytes] = []
+            size = 0
+            while chunk := await stream.read(65536):
+                size += len(chunk)
+                if size > _CONTAINER_CREATE_RESPONSE_LIMIT:
+                    raise ValueError("container create response exceeds limit")
+                chunks.append(chunk)
+            return b"".join(chunks)
+
+        async def exchange() -> tuple[bytes, bytes]:
+            process.stdin.write(request)
+            await process.stdin.drain()
+            process.stdin.close()
+            stdout, stderr, _ = await asyncio.gather(
+                read_bounded(process.stdout),
+                read_bounded(process.stderr),
+                process.wait(),
+            )
+            return stdout, stderr
+
+        exchange_task = asyncio.create_task(exchange())
+        cancel_task = asyncio.create_task(cancel_event.wait()) if cancel_event else None
+        try:
+            tasks = {exchange_task} | ({cancel_task} if cancel_task else set())
+            done, _ = await asyncio.wait(
+                tasks,
+                timeout=timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_task is not None and cancel_task in done:
+                raise JobCancellationRequested(
+                    "cancellation requested during container create"
+                )
+            if exchange_task not in done:
+                raise asyncio.TimeoutError("container create timed out")
+            stdout, stderr = await exchange_task
+            if process.returncode != 0:
+                raise RuntimeError(
+                    stderr.decode("utf-8", errors="replace")
+                    or "container create transport failed"
+                )
+        except BaseException:
+            # The daemon may have created the container before a lost response.
+            # Only the unique launch label can establish ownership for cleanup.
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                with suppress(Exception):
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+            exchange_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await exchange_task
+            await self._remove_task_container_if_owned(
+                config=config, name=name, cwd=cwd, log_path=log_path
+            )
+            raise
+        finally:
+            if cancel_task:
+                cancel_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await cancel_task
+
+        class ResponseSocket:
+            def makefile(self, mode: str):
+                return io.BytesIO(stdout)
+
+        try:
+            response = http.client.HTTPResponse(ResponseSocket())
+            response.begin()
+            payload = json.loads(response.read())
+            if response.status != 201:
+                raise RuntimeError(
+                    str(payload.get("message") or f"container create refused ({response.status})")
+                )
+            container_id = str(payload.get("Id") or "")
+            if not container_id:
+                raise ValueError("container create returned no container ID")
+        except Exception:
+            await self._remove_task_container_if_owned(
+                config=config, name=name, cwd=cwd, log_path=log_path
+            )
+            raise
+        # A diagnostics write must not erase the confirmed create result.
+        with suppress(OSError):
+            keys = ", ".join(sorted(item.split("=", 1)[0] for item in config["Env"]))
+            self._append_stage_log(
+                log_path,
+                f"docker container created: {config['Image']}; environment keys: {keys}",
+            )
+        return container_id
+
+    async def _remove_task_container_if_owned(
+        self,
+        *,
+        config: Mapping[str, Any],
+        name: str,
+        cwd: Path,
+        log_path: Path,
+    ) -> None:
+        """Reconcile uncertain create effects without touching an older launch."""
+        try:
+            result = await self._run_stage_command(
+                [
+                    self._config.docker_binary,
+                    "inspect",
+                    "--format",
+                    "{{.Id}} {{json .Config.Labels}}",
+                    name,
+                ],
+                cwd=cwd,
+                log_path=log_path,
+                check=False,
+                timeout_seconds=_CONTAINER_STOP_TIMEOUT_SECONDS,
+                cancel_event=asyncio.Event(),
+            )
+            container_id, _, labels_json = result.stdout.strip().partition(" ")
+            if (
+                result.returncode == 0
+                and container_id
+                and json.loads(labels_json).get("moonmind.container_launch")
+                == config["Labels"]["moonmind.container_launch"]
+            ):
+                await self._run_stage_command(
+                    [self._config.docker_binary, "rm", "--force", container_id],
+                    cwd=cwd,
+                    log_path=log_path,
+                    check=False,
+                    timeout_seconds=_CONTAINER_STOP_TIMEOUT_SECONDS,
+                    cancel_event=asyncio.Event(),
+                )
+        except Exception:
+            # Keep the original launch error and make incomplete cleanup visible.
+            with suppress(OSError):
+                self._append_stage_log(log_path, "container create cleanup reconciliation unavailable")
 
     async def _run_container_execute_stage(
         self,
@@ -9686,6 +9922,7 @@ class CodexWorker:
         timed_out = False
         error_message: str | None = None
         started_at = datetime.now(UTC)
+        created_container_id: str | None = None
 
         await self._emit_event(
             job_id=job_id,
@@ -9707,18 +9944,36 @@ class CodexWorker:
                 log_path=prepared.execute_log_path,
             )
             (
-                run_command,
+                create_config,
                 container_name,
                 artifact_dir_in_container,
                 run_env,
-            ) = self._build_container_run_command(
+            ) = self._build_container_create_config(
                 job_id=job_id,
                 repository=repository,
                 prepared=prepared,
                 container_spec=container_spec,
             )
             run_command_env = dict(environ)
-            run_command_env.update(run_env)
+            execution_deadline = time.monotonic() + container_spec.timeout_seconds
+            created_container_id = await self._create_task_container(
+                config=create_config,
+                name=container_name,
+                cwd=prepared.repo_dir,
+                log_path=prepared.execute_log_path,
+                timeout_seconds=min(
+                    float(container_spec.timeout_seconds),
+                    float(self._config.stage_command_timeout_seconds),
+                ),
+            )
+            run_command = [
+                self._config.docker_binary, "start", "--attach", created_container_id
+            ]
+            remaining_seconds = execution_deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise asyncio.TimeoutError(
+                    "container execution deadline elapsed during create"
+                )
             run_result = await self._run_stage_command(
                 run_command,
                 cwd=prepared.repo_dir,
@@ -9726,7 +9981,7 @@ class CodexWorker:
                 check=False,
                 env=run_command_env,
                 redaction_values=tuple(value for value in run_env.values() if value),
-                timeout_seconds=float(container_spec.timeout_seconds),
+                timeout_seconds=remaining_seconds,
             )
             if run_result.returncode != 0:
                 error_message = f"container command failed ({run_result.returncode})"
@@ -9735,30 +9990,43 @@ class CodexWorker:
             error_message = (
                 f"container execution timed out after {container_spec.timeout_seconds}s"
             )
-            with suppress(Exception):
-                await asyncio.wait_for(
-                    self._run_stage_command(
-                        [self._config.docker_binary, "stop", container_name],
-                        cwd=prepared.repo_dir,
-                        log_path=prepared.execute_log_path,
-                        check=False,
-                    ),
-                    timeout=_CONTAINER_STOP_TIMEOUT_SECONDS,
-                )
+            if created_container_id:
+                with suppress(Exception):
+                    await asyncio.wait_for(
+                        self._run_stage_command(
+                            [self._config.docker_binary, "stop", created_container_id],
+                            cwd=prepared.repo_dir, log_path=prepared.execute_log_path, check=False,
+                            cancel_event=asyncio.Event(),
+                        ),
+                        timeout=_CONTAINER_STOP_TIMEOUT_SECONDS,
+                    )
             run_result = CommandResult(
                 command=tuple(run_command),
                 returncode=124,
                 stdout="",
                 stderr=error_message,
             )
+
         except Exception as exc:
-            error_message = str(exc)
+            error_message = self._redact_command_for_log(
+                [str(exc)], redaction_values=tuple(container_spec.env.values())
+            )[0]
             run_result = CommandResult(
                 command=tuple(run_command),
                 returncode=1,
                 stdout="",
                 stderr=error_message,
             )
+
+        finally:
+            if created_container_id and (run_result is None or run_result.returncode != 0):
+                with suppress(Exception):
+                    await self._run_stage_command(
+                        [self._config.docker_binary, "rm", "--force", created_container_id],
+                        cwd=prepared.repo_dir, log_path=prepared.execute_log_path, check=False,
+                        timeout_seconds=_CONTAINER_STOP_TIMEOUT_SECONDS,
+                        cancel_event=asyncio.Event(),
+                    )
 
         finished_at = datetime.now(UTC)
         duration_seconds = max(0.0, (finished_at - started_at).total_seconds())
@@ -10687,35 +10955,26 @@ class CodexWorker:
         return (None, "none")
 
     @staticmethod
+    def _project_toolchain_environment(source: Mapping[str, str]) -> dict[str, str]:
+        """Carry declared toolchain settings without selecting ambient authority."""
+        return {
+            key: value for key, value in source.items()
+            if key in _WORKER_TOOLCHAIN_ENV_KEYS
+        }
+
+    @staticmethod
     def _build_command_env(
         token: str | None,
         *,
         git_user_name: str | None = None,
         git_user_email: str | None = None,
     ) -> dict[str, str] | None:
-        inherited_keys = (
-            "PATH",
-            "HOME",
-            "USER",
-            "LOGNAME",
-            "TMPDIR",
-            "TMP",
-            "TEMP",
-            "LANG",
-            "LC_ALL",
-            "LC_CTYPE",
-            "SHELL",
-            "SSH_AUTH_SOCK",
-            "SYSTEMROOT",
-            "COMSPEC",
-            "PATHEXT",
-            "WINDIR",
-        )
-        command_env: dict[str, str] = {}
-        for key in inherited_keys:
-            value = environ.get(key)
-            if value:
-                command_env[key] = value
+        command_env = CodexWorker._project_toolchain_environment(environ)
+        # Git acquisition may need the selected host's SSH agent; repository
+        # verification does not inherit that authentication channel.
+        ssh_auth_sock = environ.get("SSH_AUTH_SOCK")
+        if ssh_auth_sock:
+            command_env["SSH_AUTH_SOCK"] = ssh_auth_sock
         configured = False
 
         if token:

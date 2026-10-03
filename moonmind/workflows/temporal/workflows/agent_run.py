@@ -22,6 +22,11 @@ from temporalio.workflow import (
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.workflows.temporal.jules_merge import continue_jules_merge
+    from moonmind.workflows.executions.repository_contract import (
+        repository_branch_from_value,
+        repository_name_from_value,
+    )
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
@@ -8697,13 +8702,52 @@ class MoonMindAgentRun:
                                 or workspace_spec.get("targetBranch")
                                 or ""
                             ).strip()
+                            expected_repository = (
+                                workspace_spec.get("repository")
+                                or workspace_spec.get("repo")
+                                or ""
+                            )
+                            merge_target_branch = target_branch or starting_branch
+                            # Preserve both authority fields in already-recorded
+                            # initial and continuation activity payloads.
+                            if workflow.patched("jules-merge-canonical-authority-v1"):
+                                repository_target = workspace_spec.get(
+                                    "repositoryTarget"
+                                )
+                                if repository_target is None:
+                                    repository_target = workspace_spec.get(
+                                        "repository"
+                                    ) or workspace_spec.get("repo")
+                                expected_repository = repository_name_from_value(
+                                    repository_target, provider="git"
+                                )
+                                merge_target_branch = (
+                                    target_branch
+                                    or repository_branch_from_value(repository_target)
+                                    or starting_branch
+                                )
                             merge_payload: dict[str, Any] = {"pr_url": pr_url}
-                            if target_branch and target_branch != starting_branch:
+                            if workflow.patched("jules-merge-target-authority-v1"):
+                                merge_payload["expected_repository"] = expected_repository
+                                merge_payload["target_branch"] = merge_target_branch
+                            elif target_branch and target_branch != starting_branch:
                                 merge_payload["target_branch"] = target_branch
                             merge_result = await self._execute_routed_activity(
                                 "repo.merge_pr",
                                 merge_payload,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+                            merge_result = await continue_jules_merge(
+                                merge_result,
+                                authored_payload={
+                                    "pr_url": pr_url,
+                                    "expected_repository": expected_repository,
+                                    "target_branch": merge_target_branch,
+                                },
+                                execute_merge=lambda payload: self._execute_routed_activity(
+                                    "repo.merge_pr", payload,
+                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                ),
                             )
                             merged = bool(
                                 merge_result.get("merged")

@@ -19,6 +19,7 @@ import re
 import shlex
 import shutil
 import smtplib
+import ssl
 import stat
 import tempfile
 import threading
@@ -31,6 +32,7 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
@@ -147,6 +149,11 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.utils.metrics import get_metrics_emitter
+from moonmind.utils.workspace_paths import (
+    atomic_write_text,
+    open_directory,
+    read_regular_file,
+)
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
@@ -157,14 +164,6 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.skills.deployment_tools import (
-    DEPLOYMENT_OVERVIEW_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_NAME,
-    OPS_DIAGNOSE_STACK_TOOL_NAME,
-    build_deployment_overview_tool_definition_payload,
-    build_deployment_update_tool_definition_payload,
-    build_ops_diagnose_stack_tool_definition_payload,
-)
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -177,10 +176,6 @@ from moonmind.schemas.agent_runtime_models import (
     resolve_execution_budget,
 )
 from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
-from moonmind.workloads.tool_bridge import (
-    build_container_job_tool_definition_payload,
-    is_container_job_tool,
-)
 from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 # Replay-only vocabulary for the retained ``workload.run`` Activity. These
@@ -239,6 +234,12 @@ from moonmind.workflows.skills.skill_plan_contracts import (
     SkillResult,
     parse_plan_definition,
 )
+from moonmind.workflows.skills.tool_definitions import (
+    default_registry_tool_payload as _default_registry_skill_payload,
+    validate_machine_tool_authority,
+    validate_tool_dispatch_authority,
+)
+from moonmind.workflows.skills.tool_registry import ToolRegistryError
 from moonmind.workflows.skills.skill_registry import (
     SkillRegistrySnapshot,
     compute_registry_digest,
@@ -278,9 +279,6 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 )
 from moonmind.workflows.temporal.story_output_tools import (
     ISSUE_BRIEF_LOADER_TOOL_NAMES,
-    JIRA_CHECK_BLOCKERS_TOOL_NAME,
-    JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
-    JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
 )
 from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_create_result,
@@ -1577,377 +1575,6 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     text = payload.decode("utf-8", errors="replace")
     return text[-max_chars:]
 
-def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
-    if is_container_job_tool(name):
-        return build_container_job_tool_definition_payload(name=name)
-
-    if name == DEPLOYMENT_UPDATE_TOOL_NAME:
-        return build_deployment_update_tool_definition_payload()
-
-    if name == OPS_DIAGNOSE_STACK_TOOL_NAME:
-        return build_ops_diagnose_stack_tool_definition_payload()
-
-    if name == DEPLOYMENT_OVERVIEW_TOOL_NAME:
-        return build_deployment_overview_tool_definition_payload()
-
-
-    if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
-        return {
-            "name": name,
-            "description": (
-                "Check whether a Jira issue is blocked by unresolved inbound "
-                "Blocks links using trusted Jira data."
-            ),
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "targetIssueKey": {"type": "string"},
-                        "issueKey": {"type": "string"},
-                        "jiraIssueKey": {"type": "string"},
-                        "blockerPreflight": {"type": "object"},
-                        "assessmentArtifactPath": {"type": "string"},
-                        "assessment_artifact_path": {"type": "string"},
-                        "assessmentVerdict": {"type": "string"},
-                        "assessment_verdict": {"type": "string"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "required": ["targetIssueKey", "decision", "summary"],
-                    "properties": {
-                        "targetIssueKey": {"type": "string"},
-                        "decision": {"type": "string", "enum": ["continue", "blocked"]},
-                        "blockingIssues": {"type": "array"},
-                        "resolvedBlockingIssues": {"type": "array"},
-                        "assessmentVerdict": {"type": "string"},
-                        "summary": {"type": "string"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "executor": {
-                "activity_type": "mm.tool.execute",
-                "selector": {"mode": "by_capability"},
-            },
-            "requirements": {"capabilities": ["integration:jira"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 60,
-                    "schedule_to_close_seconds": 120,
-                },
-                "retries": {"max_attempts": 1},
-            },
-        }
-
-    if name == JIRA_LOAD_PRESET_BRIEF_TOOL_NAME:
-        return {
-            "name": name,
-            "description": (
-                "Load a compact Jira preset brief through MoonMind's trusted "
-                "Jira service."
-            ),
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "issueKey": {"type": "string"},
-                        "issue_key": {"type": "string"},
-                        "jiraIssueKey": {"type": "string"},
-                        "jira_issue_key": {"type": "string"},
-                        "artifactPath": {"type": "string"},
-                        "artifact_path": {"type": "string"},
-                        "briefArtifactPath": {"type": "string"},
-                        "brief_artifact_path": {"type": "string"},
-                        "jira": {"type": "object"},
-                        "issue": {"type": "object"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "required": [
-                        "trustedSource",
-                        "jiraIssueKey",
-                        "jiraPresetBrief",
-                        "summary",
-                    ],
-                    "properties": {
-                        "trustedSource": {"type": "string"},
-                        "jiraIssueKey": {"type": "string"},
-                        "jiraPresetBrief": {"type": "string"},
-                        "presetBrief": {"type": "string"},
-                        "jiraStepInstructions": {"type": "string"},
-                        "artifactPath": {"type": "string"},
-                        "resolvedSourceDesignPath": {"type": "string"},
-                        "sourceResolution": {"type": "object"},
-                        "jiraIssue": {"type": "object"},
-                        "summary": {"type": "string"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "executor": {
-                "activity_type": "mm.tool.execute",
-                "selector": {"mode": "by_capability"},
-            },
-            "requirements": {"capabilities": ["integration:jira"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 60,
-                    "schedule_to_close_seconds": 120,
-                },
-                "retries": {"max_attempts": 1},
-            },
-        }
-
-    if name == JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME:
-        return {
-            "name": name,
-            "description": (
-                "Move a Jira issue to a named status through MoonMind's "
-                "trusted Jira transition path."
-            ),
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "issueKey": {"type": "string"},
-                        "issue_key": {"type": "string"},
-                        "jiraIssueKey": {"type": "string"},
-                        "jira_issue_key": {"type": "string"},
-                        "targetStatus": {"type": "string"},
-                        "target_status": {"type": "string"},
-                        "statusName": {"type": "string"},
-                        "status_name": {"type": "string"},
-                        "mode": {"type": "string"},
-                        "repository": {"type": "string"},
-                        "completionTargetRef": {"type": "string"},
-                        "verificationArtifactPath": {"type": "string"},
-                        "verificationPayload": {"type": "object"},
-                        "pullRequestUrl": {"type": "string"},
-                        "requireVerification": {"type": "boolean"},
-                        "assessmentArtifactPath": {"type": "string"},
-                        "assessment_artifact_path": {"type": "string"},
-                        "assessmentVerdict": {"type": "string"},
-                        "assessment_verdict": {"type": "string"},
-                        "fields": {"type": "object"},
-                        "update": {"type": "object"},
-                        "jira": {"type": "object"},
-                        "issue": {"type": "object"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "required": ["issueKey", "targetStatus", "decision", "summary"],
-                    "properties": {
-                        "issueKey": {"type": "string"},
-                        "targetStatus": {"type": "string"},
-                        "decision": {"type": "string"},
-                        "transitioned": {"type": "boolean"},
-                        "transitionId": {"type": "string"},
-                        "currentStatus": {"type": "object"},
-                        "confirmedStatus": {"type": "object"},
-                        "summary": {"type": "string"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "executor": {
-                "activity_type": "mm.tool.execute",
-                "selector": {"mode": "by_capability"},
-            },
-            "requirements": {"capabilities": ["integration:jira"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 60,
-                    "schedule_to_close_seconds": 120,
-                },
-                "retries": {"max_attempts": 1},
-            },
-        }
-
-    if name == "story.create_jira_issues":
-        return {
-            "name": name,
-            "description": "Create Jira issues from MoonSpec story breakdown output.",
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "stories": {"type": "array"},
-                        "storyOutput": {"type": "object"},
-                        "storyBreakdownPath": {"type": "string"},
-                        "storyBreakdownJson": {"type": "string"},
-                        "repository": {"type": "string"},
-                        "targetBranch": {"type": "string"},
-                        "branch": {"type": "string"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": True,
-                }
-            },
-            "executor": {
-                "activity_type": "mm.tool.execute",
-                "selector": {"mode": "by_capability"},
-            },
-            "requirements": {"capabilities": ["integration:jira"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 300,
-                    "schedule_to_close_seconds": 600,
-                },
-                "retries": {"max_attempts": 1},
-            },
-        }
-
-    if name == "story.create_github_issues":
-        return {
-            "name": name,
-            "description": "Create GitHub issues from MoonSpec story breakdown output.",
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "stories": {"type": "array"},
-                        "storyOutput": {"type": "object"},
-                        "storyBreakdownPath": {"type": "string"},
-                        "storyBreakdownJson": {"type": "string"},
-                        "repository": {"type": "string"},
-                        "targetBranch": {"type": "string"},
-                        "branch": {"type": "string"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": True,
-                }
-            },
-            "executor": {
-                "activity_type": "mm.tool.execute",
-                "selector": {"mode": "by_capability"},
-            },
-            "requirements": {"capabilities": ["integration:github"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 300,
-                    "schedule_to_close_seconds": 600,
-                },
-                "retries": {"max_attempts": 1},
-            },
-        }
-
-    if name in {
-        "story.create_github_issue_implement_workflows",
-        "story.create_github_issue_orchestrate_workflows",
-    }:
-        return {
-            "name": name,
-            "description": (
-                "Create downstream MoonMind workflows from GitHub issue mappings."
-            ),
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "github": {"type": "object"},
-                        "issueMappings": {"type": "array"},
-                        "githubOrchestration": {"type": "object"},
-                        "traceability": {"type": "object"},
-                    },
-                    "additionalProperties": True,
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": True,
-                }
-            },
-            "executor": {
-                "activity_type": "mm.tool.execute",
-                "selector": {"mode": "by_capability"},
-            },
-            "requirements": {"capabilities": ["integration:github"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 300,
-                    "schedule_to_close_seconds": 600,
-                },
-                "retries": {"max_attempts": 1},
-            },
-        }
-
-    description = (
-        "Execute generic runtime CLI instructions."
-        if name == _AUTO_SKILL_SENTINEL
-        else f"Execute '{name}' via the generic runtime CLI handler."
-    )
-    # 3600s gives the sandbox worker enough headroom to exhaust the full
-    # Gemini capacity-retry backoff cycle (up to 8 attempts with max 600s
-    # delay each) before Temporal cancels the activity.
-    start_to_close_seconds = 3600
-    schedule_to_close_seconds = 3900
-    if name in {
-        "pr-resolver",
-        "batch-pr-resolver",
-        "fix-comments",
-        "fix-ci",
-        "fix-merge-conflicts",
-    }:
-        # Resolver/fix skills can run longer due bounded retry loops and CI waits.
-        start_to_close_seconds = 7200
-        schedule_to_close_seconds = 7500
-
-    return {
-        "name": name,
-        "description": description,
-        "inputs": {
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "instructions": {"type": "string"},
-                    "runtime": {"type": "object"},
-                },
-                "additionalProperties": True,
-            }
-        },
-        "outputs": {
-            "schema": {
-                "type": "object",
-                "additionalProperties": True,
-            }
-        },
-        "executor": {
-            "activity_type": "mm.tool.execute",
-            "selector": {"mode": "by_capability"},
-        },
-        "requirements": {"capabilities": ["sandbox"]},
-        "policies": {
-            "timeouts": {
-                "start_to_close_seconds": start_to_close_seconds,
-                "schedule_to_close_seconds": schedule_to_close_seconds,
-            },
-            "retries": {"max_attempts": 1},
-        },
-    }
-
 def _iter_requested_registry_tools(
     parameters: Mapping[str, Any] | None,
 ) -> tuple[str, ...]:
@@ -2230,9 +1857,11 @@ def _send_execution_notification_email(
         recipients=recipients,
     )
     smtp_cls = smtplib.SMTP_SSL if smtp_use_ssl else smtplib.SMTP
-    with smtp_cls(smtp_host, smtp_port, timeout=timeout_seconds) as client:
+    tls_context = ssl.create_default_context() if smtp_use_tls or smtp_use_ssl else None
+    smtp_options = {"context": tls_context} if smtp_use_ssl else {}
+    with smtp_cls(smtp_host, smtp_port, timeout=timeout_seconds, **smtp_options) as client:
         if smtp_use_tls and not smtp_use_ssl:
-            client.starttls()
+            client.starttls(context=tls_context)
         if smtp_username:
             client.login(smtp_username, smtp_password or "")
         client.send_message(message)
@@ -2697,6 +2326,20 @@ class TemporalSkillActivities:
             if isinstance(selector, Mapping)
             else ""
         )
+        try:
+            definition = resolved_snapshot.get_tool(name=selected_name)
+            validate_tool_dispatch_authority(definition)
+            validate_machine_tool_authority(
+                definition, execution_context.get("execution_principal")
+            )
+        except ToolRegistryError as exc:
+            raise _tool_failure_application_error(
+                ToolFailure(
+                    error_code="INVALID_INPUT",
+                    message=str(exc),
+                    retryable=False,
+                )
+            ) from exc
         is_issue_loader = selected_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
         if is_issue_loader:
             definition = resolved_snapshot.get_tool(name=selected_name)
@@ -3007,7 +2650,7 @@ class TemporalSandboxActivities:
         workspace = (
             self._resolve_sandbox_locator(model.workspace_locator, must_exist=True)
             if isinstance(model.workspace_locator, SandboxWorkspaceLocator)
-            else self._resolve_workspace(
+            else self._resolve_checkpoint_workspace(
                 model.workspace_path or model.workspace_root_ref or "",
                 must_exist=True,
             )
@@ -3393,7 +3036,7 @@ class TemporalSandboxActivities:
             return self._resolve_sandbox_locator(locator, must_exist=False)
         if model.target_workspace_ref:
             self._record_legacy_workspace_path_usage("apply_policy")
-            return self._resolve_workspace(model.target_workspace_ref, must_exist=False)
+            return self._resolve_checkpoint_workspace(model.target_workspace_ref, must_exist=False)
         digest = hashlib.sha256(model.idempotency_key.encode("utf-8")).hexdigest()[:16]
         target = (
             self._workspace_root
@@ -3401,7 +3044,7 @@ class TemporalSandboxActivities:
             / "policy-workspaces"
             / digest
         )
-        return self._resolve_workspace(target, must_exist=False)
+        return self._resolve_checkpoint_workspace(target, must_exist=False)
 
     async def _apply_workspace_policy_to_target(
         self,
@@ -3430,7 +3073,7 @@ class TemporalSandboxActivities:
                 or ""
             ).strip()
             if workspace_ref:
-                source = self._resolve_workspace(workspace_ref, must_exist=True)
+                source = self._resolve_checkpoint_workspace(workspace_ref, must_exist=True)
                 if source != target:
                     self._replace_workspace_tree(source, target)
                 return
@@ -3478,7 +3121,7 @@ class TemporalSandboxActivities:
                 or ""
             ).strip()
             if source_ref:
-                source = self._resolve_workspace(source_ref, must_exist=True)
+                source = self._resolve_checkpoint_workspace(source_ref, must_exist=True)
                 self._replace_workspace_tree(source, target)
                 return
             target.mkdir(parents=True, exist_ok=True)
@@ -3494,11 +3137,11 @@ class TemporalSandboxActivities:
         ).strip()
         if not workspace_ref:
             raise TemporalActivityRuntimeError("workspace ref evidence is missing")
-        return self._resolve_workspace(workspace_ref, must_exist=True)
+        return self._resolve_checkpoint_workspace(workspace_ref, must_exist=True)
 
     def _replace_workspace_tree(self, source: Path, target: Path) -> None:
-        source = self._resolve_workspace(source, must_exist=True)
-        target = self._resolve_workspace(target, must_exist=False)
+        source = self._resolve_checkpoint_workspace(source, must_exist=True)
+        target = self._resolve_checkpoint_workspace(target, must_exist=False)
         if source == target:
             return
         if target.exists():
@@ -3562,7 +3205,7 @@ class TemporalSandboxActivities:
             or ""
         ).strip()
         if source_ref:
-            source = self._resolve_workspace(source_ref, must_exist=True)
+            source = self._resolve_checkpoint_workspace(source_ref, must_exist=True)
             self._replace_workspace_tree(source, target)
         else:
             if not (target / ".git").exists():
@@ -3613,7 +3256,7 @@ class TemporalSandboxActivities:
             / ".moonmind-policy-idempotency"
             / f"{digest}.json"
         )
-        return self._resolve_workspace(path, must_exist=False)
+        return self._resolve_checkpoint_workspace(path, must_exist=False)
 
     def _read_workspace_policy_idempotency(
         self,
@@ -3766,7 +3409,7 @@ class TemporalSandboxActivities:
         workspace = (
             self._resolve_sandbox_locator(locator, must_exist=True)
             if isinstance(locator, SandboxWorkspaceLocator)
-            else self._resolve_workspace(
+            else self._resolve_checkpoint_workspace(
                 payload.get("workspacePath") or payload.get("workspaceRootRef") or "",
                 must_exist=True,
             )
@@ -3802,6 +3445,16 @@ class TemporalSandboxActivities:
                 "Failed to emit legacy workspace path compatibility metric",
                 exc_info=True,
             )
+
+    def _resolve_checkpoint_workspace(
+        self, workspace_ref: str | Path, *, must_exist: bool
+    ) -> Path:
+        workspace = self._resolve_workspace(workspace_ref, must_exist=must_exist)
+        if workspace == (self._workspace_root / "temporal_sandbox").resolve():
+            raise TemporalActivityRuntimeError(
+                "checkpoint operations cannot use the whole sandbox store"
+            )
+        return workspace
 
     def _resolve_workspace(
         self, workspace_ref: str | Path, *, must_exist: bool
@@ -4029,7 +3682,21 @@ class TemporalSandboxActivities:
         if not normalized:
             raise TemporalActivityRuntimeError("sandbox.checkout_repo repo_ref is required")
 
-        if normalized.startswith(("http://", "https://", "git@", "file://")):
+        if normalized.startswith("file://"):
+            parsed = urlsplit(normalized)
+            if parsed.netloc not in {"", "localhost"} or parsed.query or parsed.fragment:
+                raise TemporalActivityRuntimeError(
+                    "sandbox.checkout_repo file sources must be local paths under workspace_root"
+                )
+            source = Path(unquote(parsed.path)).resolve()
+            if not source.is_relative_to(self._workspace_root):
+                raise TemporalActivityRuntimeError(
+                    "sandbox.checkout_repo local sources must be under workspace_root"
+                )
+            # Keep Git clone/revision behavior for valid file URLs. URI syntax
+            # is transport, not permission to read an arbitrary worker path.
+            return ("remote", source.as_uri())
+        if normalized.startswith(("http://", "https://", "git@")):
             return ("remote", normalized)
         if _GITHUB_REPOSITORY_SLUG_PATTERN.fullmatch(normalized):
             return ("remote", f"https://github.com/{normalized}.git")
@@ -8554,7 +8221,14 @@ class TemporalAgentRuntimeActivities:
                         getattr(record, "workspace_path", "") or ""
                     ).strip()
                     if workspace_path:
-                        return Path(workspace_path).expanduser().resolve()
+                        workspace = Path(os.path.abspath(Path(workspace_path).expanduser()))
+                        try:
+                            with open_directory(workspace):
+                                pass
+                        except OSError:
+                            logger.warning("Artifact publication workspace is unsafe or unavailable")
+                            return None
+                        return workspace
 
             raw_locator = metadata.get("workspaceLocator")
             if not isinstance(raw_locator, Mapping):
@@ -8648,9 +8322,9 @@ class TemporalAgentRuntimeActivities:
                 candidates.append(candidate)
 
             resolved_candidates: list[Path] = []
-            job_artifact_root = (workspace.parent / "artifacts").resolve()
+            job_artifact_root = workspace.parent / "artifacts"
             for path in candidates:
-                resolved = path.expanduser().resolve()
+                resolved = Path(os.path.abspath(path.expanduser()))
                 allowed = resolved.is_relative_to(workspace) or resolved.is_relative_to(
                     job_artifact_root
                 )
@@ -8689,7 +8363,9 @@ class TemporalAgentRuntimeActivities:
             path = _workspace_story_path(workspace, raw_path)
             if path is None:
                 return ""
-            payload = path.read_bytes()
+            payload = read_regular_file(
+                path, limit=settings.workflow.agent_job_artifact_max_bytes
+            )
             artifact, _upload = await self._artifact_service.create(
                 principal="system:agent_runtime",
                 content_type=content_type,
@@ -13527,9 +13203,11 @@ class TemporalAgentRuntimeActivities:
                 metadata["prResolverVerdictSummary"] = verdict_summary
             return _validated_result(update)
         missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
-        terminal_failure_message = str(
+        terminal_failure_message = redact_sensitive_text(str(
             metadata.get("terminalFailureMessage") or ""
-        ).strip()
+        ).strip())[:1024]
+        if terminal_failure_message:
+            metadata["terminalFailureMessage"] = terminal_failure_message
         terminal_failure_code = str(
             metadata.get("terminalFailureCode") or evaluation.failure_code or ""
         ).strip()
@@ -14054,12 +13732,15 @@ class TemporalAgentRuntimeActivities:
         git_dir = Path(workspace) / ".git"
         objects_dir = git_dir / "objects"
         alternates_path = objects_dir / "info" / "alternates"
-        if not git_dir.is_dir() or not alternates_path.is_file():
-            return
-
         try:
-            raw_lines = alternates_path.read_text(encoding="utf-8").splitlines()
-        except OSError:
+            raw_lines = (
+                read_regular_file(alternates_path, limit=1024 * 1024)
+                .decode("utf-8")
+                .splitlines()
+            )
+        except FileNotFoundError:
+            return
+        except (OSError, UnicodeError):
             logger.warning(
                 "Unable to read Git alternates for workspace %s",
                 workspace,
@@ -14112,9 +13793,8 @@ class TemporalAgentRuntimeActivities:
                 continue
 
             logger.warning(
-                "Dropping missing Git alternate for workspace %s: %s",
+                "Dropping missing Git alternate for workspace %s",
                 workspace,
-                path_text,
             )
             changed = True
 
@@ -14124,12 +13804,13 @@ class TemporalAgentRuntimeActivities:
 
         try:
             if unique_normalized:
-                alternates_path.write_text(
-                    "\n".join(unique_normalized) + "\n",
-                    encoding="utf-8",
-                )
+                atomic_write_text(alternates_path, "\n".join(unique_normalized) + "\n")
             else:
-                alternates_path.unlink(missing_ok=True)
+                with (
+                    open_directory(alternates_path.parent) as parent_fd,
+                    contextlib.suppress(FileNotFoundError),
+                ):
+                    os.unlink(alternates_path.name, dir_fd=parent_fd)
         except OSError:
             logger.warning(
                 "Unable to update Git alternates for workspace %s",
@@ -14215,17 +13896,20 @@ class TemporalAgentRuntimeActivities:
 
         alternates_path = objects_dir / "info" / "alternates"
         existing_lines: list[str] = []
-        if alternates_path.is_file():
-            try:
-                existing_lines = [
-                    line.strip()
-                    for line in alternates_path.read_text(
-                        encoding="utf-8"
-                    ).splitlines()
-                    if line.strip()
-                ]
-            except OSError:
-                existing_lines = []
+        try:
+            existing_lines = [
+                line.strip()
+                for line in read_regular_file(alternates_path, limit=1024 * 1024)
+                .decode("utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+        except FileNotFoundError:
+            # A repository without alternates needs no existing entries preserved.
+            pass
+        except (OSError, UnicodeError):
+            logger.warning("Rejected unsafe Git alternates for workspace %s", workspace)
+            return
 
         try:
             objects_dir_resolved = objects_dir.resolve()
@@ -14299,11 +13983,7 @@ class TemporalAgentRuntimeActivities:
                 merged.append(line)
 
         try:
-            (objects_dir / "info").mkdir(parents=True, exist_ok=True)
-            alternates_path.write_text(
-                "\n".join(merged) + "\n",
-                encoding="utf-8",
-            )
+            atomic_write_text(alternates_path, "\n".join(merged) + "\n")
             logger.info(
                 "Registered %d sibling object store(s) as Git alternates for "
                 "workspace %s: %s",
@@ -14324,108 +14004,31 @@ class TemporalAgentRuntimeActivities:
         *,
         github_token: str | None = None,
     ) -> dict[str, str]:
-        """Build a subprocess env that exposes workspace-local command shims."""
-        env = dict(os.environ)
-        support_root = Path(workspace).resolve().parent / ".moonmind"
-        support_bin = support_root / "bin"
-        support_gitconfig = support_root / "gitconfig"
-        normalized_github_token = str(
-            github_token or env.get("GITHUB_TOKEN", "")
-        ).strip()
-        if normalized_github_token:
-            env["GITHUB_TOKEN"] = normalized_github_token
-            env["GH_TOKEN"] = normalized_github_token
-        git_helper_path = support_bin / "git-credential-moonmind"
-        helper_command: str | None = None
-
-        try:
-            support_root.mkdir(parents=True, exist_ok=True)
-            support_bin.mkdir(parents=True, exist_ok=True)
-            if normalized_github_token:
-                helper_script = (
-                    "#!/usr/bin/env python3\n"
-                    "import os\n"
-                    "import sys\n"
-                    "\n"
-                    "operation = str(sys.argv[1] if len(sys.argv) > 1 else '').strip().lower()\n"
-                    "if operation not in {'get', 'fill'}:\n"
-                    "    raise SystemExit(0)\n"
-                    "\n"
-                    "request = {}\n"
-                    "for raw_line in sys.stdin:\n"
-                    "    line = raw_line.rstrip('\\n')\n"
-                    "    if not line:\n"
-                    "        break\n"
-                    "    key, _, value = line.partition('=')\n"
-                    "    request[key] = value\n"
-                    "\n"
-                    "host = str(request.get('host') or '').strip().lower()\n"
-                    "protocol = str(request.get('protocol') or '').strip().lower()\n"
-                    "if host != 'github.com' or (protocol and protocol != 'https'):\n"
-                    "    raise SystemExit(0)\n"
-                    "\n"
-                    "token = str(os.environ.get('GITHUB_TOKEN', '')).strip()\n"
-                    "if not token:\n"
-                    "    raise SystemExit(0)\n"
-                    "\n"
-                    "sys.stdout.write('username=x-access-token\\n')\n"
-                    "sys.stdout.write(f'password={token}\\n\\n')\n"
-                    "sys.stdout.flush()\n"
-                )
-                git_helper_path.write_text(helper_script, encoding="utf-8")
-                git_helper_path.chmod(0o700)
-                helper_command = shlex.quote(str(git_helper_path))
-
-            git_config_lines = [
-                "# moonmind-runtime-git-config\n",
-                "[safe]\n",
-                f'\tdirectory = "{Path(workspace).resolve()}"\n',
-            ]
-            if helper_command is not None:
-                git_config_lines.extend(
-                    [
-                        "[credential]\n",
-                        f"\thelper = !{helper_command}\n",
-                    ]
-                )
-            support_gitconfig.write_text("".join(git_config_lines), encoding="utf-8")
-            support_gitconfig.chmod(0o600)
-        except OSError:
-            logger.warning(
-                "Failed to bootstrap workspace-local git support files for workspace %s "
-                "(support_root=%s, gitconfig=%s)",
-                workspace,
-                support_root,
-                support_gitconfig,
-                exc_info=True,
-            )
-
-        _normalize_managed_path_owners(
-            (support_root, support_bin, git_helper_path, support_gitconfig)
+        """Build host Git authentication in memory without workload-owned shims."""
+        from moonmind.omnigent.git_identity import resolve_git_identity
+        from moonmind.workflows.temporal.runtime.git_auth import (
+            build_github_token_git_environment,
         )
 
-        if support_bin.exists():
-            existing_path = str(env.get("PATH") or "").strip()
-            env["PATH"] = (
-                f"{support_bin}{os.pathsep}{existing_path}"
-                if existing_path
-                else str(support_bin)
-            )
-        if support_gitconfig.exists():
-            env["GIT_CONFIG_GLOBAL"] = str(support_gitconfig)
-        else:
-            env.pop("GIT_CONFIG_GLOBAL", None)
-        from moonmind.omnigent.git_identity import resolve_git_identity
-
+        del workspace  # Authentication never writes into an agent-owned path.
+        env = dict(os.environ)
+        for key in tuple(env):
+            if key.startswith("GIT_CONFIG_"):
+                env.pop(key)
+        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        token = str(github_token or env.get("GITHUB_TOKEN") or "").strip()
+        env = build_github_token_git_environment(token, base_env=env)
+        if token:
+            env["GH_TOKEN"] = token
         git_name, git_email = resolve_git_identity()
-        if git_name:
-            env["GIT_AUTHOR_NAME"] = git_name
-            env["GIT_COMMITTER_NAME"] = git_name
-        if git_email:
-            env["GIT_AUTHOR_EMAIL"] = git_email
-            env["GIT_COMMITTER_EMAIL"] = git_email
-        env["HOME"] = str(support_root)
-        env["GIT_TERMINAL_PROMPT"] = "0"
+        env.update(
+            GIT_AUTHOR_NAME=git_name,
+            GIT_COMMITTER_NAME=git_name,
+            GIT_AUTHOR_EMAIL=git_email,
+            GIT_COMMITTER_EMAIL=git_email,
+            GIT_TERMINAL_PROMPT="0",
+        )
         return env
 
     @staticmethod
@@ -15600,7 +15203,7 @@ class TemporalAgentRuntimeActivities:
                     workspace=workspace,
                     env=env,
                     timeout=30,
-                    args=("fetch", "origin", fetch_ref),
+                    args=("fetch", "--", "origin", fetch_ref),
                 )
 
         commit_range = f"{range_base}..{branch_name}"
@@ -15667,6 +15270,7 @@ class TemporalAgentRuntimeActivities:
                         args=(
                             "diff",
                             "--no-ext-diff",
+                            "--no-textconv",
                             "--text",
                             commit_range,
                             "--",

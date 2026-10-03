@@ -307,7 +307,7 @@ class JiraToolService:
         if isinstance(request.body, str):
             comment_body = request.body
         else:
-            comment_body = "\n".join(self._extract_adf_text(request.body))
+            comment_body = "\n".join(self._extract_adf_strings(request.body))
         result = scan_outbound_text(
             comment_body,
             location="jira.add_comment.body",
@@ -325,19 +325,21 @@ class JiraToolService:
             action="add_comment",
         )
 
-    def _extract_adf_text(self, node: Any) -> list[str]:
+    def _extract_adf_strings(self, node: Any) -> list[str]:
         if isinstance(node, dict):
-            if node.get("type") == "text" and isinstance(node.get("text"), str):
-                return [node["text"]]
             text: list[str] = []
             for value in node.values():
-                text.extend(self._extract_adf_text(value))
+                text.extend(self._extract_adf_strings(value))
             return text
         if isinstance(node, list):
             text: list[str] = []
             for item in node:
-                text.extend(self._extract_adf_text(item))
+                text.extend(self._extract_adf_strings(item))
             return text
+        # ADF attributes and marks are transmitted too, including link URLs.
+        # Never treat a text node as a leaf: its marks may carry secrets.
+        if isinstance(node, str):
+            return [node]
         return []
 
     async def list_create_issue_types(
@@ -496,11 +498,43 @@ class JiraToolService:
         return issue_key.split("-", 1)[0]
 
     def _scope_jql_to_project(self, jql: str, project_key: str) -> str:
-        match = _JQL_ORDER_BY_RE.search(jql)
-        if match is None:
+        # Validate only the structural boundary we add, leaving JQL semantics
+        # to Jira. Parentheses and ORDER BY inside quoted strings are data.
+        depth = 0
+        quote: str | None = None
+        escaped = False
+        order_by_start: int | None = None
+        for index, char in enumerate(jql):
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                continue
+            if char in {"'", '\"'}:
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0 and order_by_start is None:
+                if _JQL_ORDER_BY_RE.match(jql, index):
+                    order_by_start = index
+        if depth != 0 or quote is not None:
+            raise JiraToolError(
+                "JQL must contain balanced parentheses and quoted strings.",
+                code="jira_validation_failed",
+                status_code=422,
+                action="search_issues",
+            )
+        if order_by_start is None:
             return f"project = {project_key} AND ({jql})"
-        predicate = jql[: match.start()].strip()
-        order_by = jql[match.start() :].strip()
+        predicate = jql[:order_by_start].strip()
+        order_by = jql[order_by_start:].strip()
         if not predicate:
             return f"project = {project_key} {order_by}"
         return f"project = {project_key} AND ({predicate}) {order_by}"

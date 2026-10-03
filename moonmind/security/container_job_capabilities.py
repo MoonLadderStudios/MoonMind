@@ -10,7 +10,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from moonmind.schemas.container_job_models import OwnerIdentity
+from moonmind.schemas.container_job_models import ContainerJobSubmitRequest, OwnerIdentity
+from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
 
 _AUDIENCE = "moonmind-container-jobs"
 _VERSION = 3
@@ -36,6 +37,40 @@ class ContainerJobSessionCapability:
     workspace_relative_path: str
     workspace_read_only: bool
     expires_at: int
+
+
+def container_job_matches_capability(
+    request: ContainerJobSubmitRequest, capability: ContainerJobSessionCapability,
+) -> bool:
+    """Bind both new submissions and persisted jobs to the same signed scope."""
+    workspace = request.spec.workspace_ref
+    if capability.workspace_kind == "managed_runtime":
+        workspace_matches = (
+            isinstance(workspace, ManagedWorkspaceLocator)
+            and workspace.agent_run_id == capability.agent_run_id
+            and workspace.runtime_id == capability.runtime_id
+            and workspace.relative_path == capability.workspace_relative_path
+        )
+    else:
+        workspace_matches = (
+            isinstance(workspace, SandboxWorkspaceLocator)
+            and workspace.workspace_id == capability.workspace_id
+            and workspace.relative_path == capability.workspace_relative_path
+        )
+    source = request.source
+    session_id = (
+        source.managed_session_id if capability.source_kind == "managed_session"
+        else source.omnigent_conversation_id
+    )
+    return bool(
+        workspace_matches
+        and source.source == capability.source_kind
+        and source.agent_run_id == capability.agent_run_id
+        and source.workflow_id == capability.workflow_id
+        and source.step_id == capability.step_id
+        and session_id == capability.session_id
+        and (not capability.workspace_read_only or request.spec.workspace_read_only)
+    )
 
 
 def _encode(value: bytes) -> str:
@@ -203,6 +238,7 @@ def verify_container_job_session_capability(
 __all__ = [
     "ContainerJobCapabilityError",
     "ContainerJobSessionCapability",
+    "container_job_matches_capability",
     "mint_container_job_session_capability",
     "verify_container_job_session_capability",
 ]

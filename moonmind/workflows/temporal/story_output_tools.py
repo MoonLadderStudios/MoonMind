@@ -32,6 +32,11 @@ from moonmind.workflows.skills.acceptance_contract import (
     acceptance_evidence,
     validate_completion_target,
 )
+from moonmind.workflows.skills.tool_definitions import (
+    JIRA_CHECK_BLOCKERS_TOOL_NAME,
+    JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
+    JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
+)
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_attempts import (
     activity_for_lifecycle_mode,
@@ -96,9 +101,6 @@ GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME = (
 GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME = (
     "story.create_github_issue_implement_workflows"
 )
-JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
-JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
-JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 ISSUE_BRIEF_LOADER_TOOL_NAMES = frozenset(
     {JIRA_LOAD_PRESET_BRIEF_TOOL_NAME, GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME}
@@ -2664,7 +2666,7 @@ def _merge_fields(
     return fields
 
 async def _default_github_story_fetcher(repo: str, ref: str, path: str) -> str:
-    token, _resolution_error = await GitHubService.resolve_github_token()
+    token, _resolution_error = await GitHubService.resolve_github_token(repo=repo)
     headers = GitHubService._github_headers(token) if token else {}
     api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
     params = {"ref": ref} if ref else None

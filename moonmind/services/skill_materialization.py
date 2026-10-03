@@ -12,7 +12,9 @@ from moonmind.schemas.agent_skill_models import (
     RuntimeSkillProjectionDiagnostic,
     RuntimeMaterializationMode,
     RuntimeSkillMaterialization,
+    validate_skill_path_component,
 )
+from moonmind.utils.workspace_paths import ensure_directory
 
 _CANONICAL_ALIAS = ".agents/skills"
 
@@ -31,11 +33,12 @@ class AgentSkillMaterializer:
     ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
-        self.workspace_root = Path(workspace_root).resolve()
+        self.workspace_root = Path(workspace_root).expanduser().absolute()
         self._artifact_service = artifact_service
-        self.backing_root = Path(backing_root).resolve() if backing_root else None
+        # Preserve lexical authority so preparation can reject symlink parents.
+        self.backing_root = Path(backing_root).absolute() if backing_root else None
         self.source_preservation_root = (
-            Path(source_preservation_root).resolve()
+            Path(source_preservation_root).expanduser().absolute()
             if source_preservation_root
             else None
         )
@@ -50,6 +53,12 @@ class AgentSkillMaterializer:
         mode: RuntimeMaterializationMode,
     ) -> RuntimeSkillMaterialization:
         """Render the snapshot to disk as required by the runtime mode."""
+
+        # Models may be copied or mutated by internal callers after validation.
+        # Check the whole snapshot before creating or replacing any directory.
+        validate_skill_path_component(resolved_skillset.snapshot_id)
+        for skill in resolved_skillset.skills:
+            validate_skill_path_component(skill.skill_name)
         
         result = RuntimeSkillMaterialization(
             runtime_id=runtime_id,
@@ -82,7 +91,7 @@ class AgentSkillMaterializer:
 
             try:
                 self._preflight_projection(alias_dir, active_dir=active_dir)
-                active_dir.parent.mkdir(parents=True, exist_ok=True)
+                ensure_directory(active_dir.parent)
                 if active_dir.is_symlink():
                     raise RuntimeError(f"refusing to clear symlinked directory: {active_dir}")
                 if staging_dir.exists() or staging_dir.is_symlink():

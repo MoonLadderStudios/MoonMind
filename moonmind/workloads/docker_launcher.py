@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import json
 import os
 import posixpath
 import shlex
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from functools import lru_cache
+from pathlib import Path, PurePosixPath
 from typing import Mapping, Protocol, Sequence
 
 from moonmind.schemas.workload_models import (
@@ -34,6 +36,7 @@ from moonmind.security.egress_conformance_evidence import (
     serialize_conformance_evidence,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.utils.workspace_paths import atomic_write_text, open_directory
 from moonmind.workloads.gpu import gpu_device_request_args, gpu_launch_observations
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
@@ -46,6 +49,8 @@ _DEFAULT_KILL_GRACE_SECONDS = 30
 # is hit the remaining matches are reported as truncated rather than dropped
 # silently.
 _MAX_COLLECTED_ARTIFACTS = 512
+_MAX_ARTIFACT_SCAN_ENTRIES = 8192
+_MAX_ARTIFACT_SCAN_DEPTH = 64
 _UNRESTRICTED_RUNNER_PROFILE = RunnerProfile.model_validate(
     {
         "id": "unrestricted",
@@ -451,8 +456,7 @@ def _report_publication_metadata(
 
 
 def _write_text_artifact(path: Path, payload: str) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(payload, encoding="utf-8")
+    atomic_write_text(path, payload, mode=0o644)
     return str(path)
 
 
@@ -600,8 +604,7 @@ def _persist_helper_egress_authority(
         location=f"helper-egress-authority:{request.container_name}:{state}",
     )
     path = _helper_egress_authority_path(request, state=state)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(serialized + b"\n")
+    atomic_write_text(path, (serialized + b"\n").decode("utf-8"))
     return str(path)
 
 
@@ -707,6 +710,55 @@ def _declared_output_refs(
             missing[artifact_class] = relative_path
     return refs, missing
 
+class _ArtifactScanLimit(OSError):
+    """The bounded workspace enumeration budget was exhausted."""
+
+
+def _safe_workspace_glob(base: Path, pattern: str):
+    """Match a relative glob using pinned directories, never symlink traversal."""
+    pattern_parts = PurePosixPath(pattern).parts
+    if not pattern_parts or pattern.startswith("/") or ".." in pattern_parts or len(pattern_parts) > _MAX_ARTIFACT_SCAN_DEPTH:
+        raise ValueError("artifact glob must stay inside the workspace")
+    scanned = 0
+
+    @lru_cache(maxsize=8192)
+    def matches(parts, tokens, *, prefix=False):
+        if not parts:
+            return prefix or all(token == "**" for token in tokens)
+        if not tokens:
+            return False
+        if tokens[0] == "**":
+            return matches(parts, tokens[1:], prefix=prefix) or matches(parts[1:], tokens, prefix=prefix)
+        return fnmatch.fnmatchcase(parts[0], tokens[0]) and matches(parts[1:], tokens[1:], prefix=prefix)
+
+    def walk(directory_fd, parts):
+        nonlocal scanned
+        if len(parts) > _MAX_ARTIFACT_SCAN_DEPTH:
+            raise _ArtifactScanLimit("artifact traversal depth limit reached")
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > _MAX_ARTIFACT_SCAN_ENTRIES:
+                    raise _ArtifactScanLimit("artifact traversal entry limit reached")
+                child_parts = (*parts, entry.name)
+                if entry.is_symlink():
+                    if matches(child_parts, pattern_parts):
+                        yield base.joinpath(*child_parts), True
+                elif entry.is_dir(follow_symlinks=False):
+                    if not matches(child_parts, pattern_parts, prefix=True):
+                        continue
+                    child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                    try:
+                        yield from walk(child_fd, child_parts)
+                    finally:
+                        os.close(child_fd)
+                elif entry.is_file(follow_symlinks=False) and matches(child_parts, pattern_parts):
+                    yield base.joinpath(*child_parts), False
+
+    with open_directory(base) as root_fd:
+        yield from walk(root_fd, ())
+
+
 def _collect_workspace_artifacts(
     request: ValidatedWorkloadRequest,
 ) -> tuple[dict[str, str], list[dict[str, object]]]:
@@ -729,7 +781,7 @@ def _collect_workspace_artifacts(
     if not collect_globs:
         return {}, []
 
-    base = Path(request.request.repo_dir).resolve()
+    base = Path(request.request.repo_dir).absolute()
     refs: dict[str, str] = {}
     diagnostics: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -753,33 +805,21 @@ def _collect_workspace_artifacts(
         skipped: list[str] = []
         truncated = False
         try:
-            # Iterate lazily and stop once the cap is reached instead of
-            # materializing and sorting every candidate up front. A broad
-            # pattern (for example ``**/*``) over a large workspace would
-            # otherwise spend unbounded I/O and memory before the cap applies.
-            for candidate in base.glob(pattern):
+            for candidate, is_symlink in _safe_workspace_glob(base, pattern):
                 if len(refs) >= _MAX_COLLECTED_ARTIFACTS:
                     truncated = True
                     break
-                try:
-                    resolved = candidate.resolve()
-                except OSError:
-                    continue
-                if not resolved.is_file():
-                    continue
-                try:
-                    relative = resolved.relative_to(base)
-                except ValueError:
-                    # A symlink (or matched entry) resolving outside the repo
-                    # workspace must never be published as a collected artifact.
+                if is_symlink:
                     skipped.append(str(candidate))
                     continue
-                key = relative.as_posix()
+                key = candidate.relative_to(base).as_posix()
                 if key in seen:
                     continue
                 seen.add(key)
-                refs[f"collected:{key}"] = str(resolved)
+                refs[f"collected:{key}"] = str(candidate)
                 matched.append(key)
+        except _ArtifactScanLimit:
+            truncated = True
         except (NotImplementedError, OSError, ValueError) as exc:
             diagnostics.append(
                 {"pattern": pattern, "status": "error", "error": str(exc)}

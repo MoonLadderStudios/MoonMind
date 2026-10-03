@@ -464,9 +464,10 @@ def verify_existing_workspace_grant_signature(
 ) -> None:
     """Verify the HMAC issuance signature of a grant, when one is carried.
 
-    Grants without an ``hmac-sha256:`` digest are historical grants and keep
-    the owner/generation/expiry checks of :func:`verify_existing_workspace_grant`;
-    forged or mismatched signatures fail closed here.
+    The caller must also run :func:`verify_existing_workspace_grant`, which
+    restricts unsigned historical grants to their durable owner's workflow.
+    Missing signatures never authenticate cross-workflow access; carried forged
+    or mismatched signatures fail closed here.
     """
 
     digest = str(grant.grant_digest or "")
@@ -906,6 +907,7 @@ def verify_existing_workspace_grant(
     target_step_execution_id: str,
     expected_generation: int | None = None,
     record_owner_workflow_id: str | None = None,
+    record_owner_step_execution_id: str | None = None,
 ) -> None:
     """Verify a locator/use grant before any filesystem use.
 
@@ -937,6 +939,25 @@ def verify_existing_workspace_grant(
         raise WorkspaceSourceError(
             WORKSPACE_SOURCE_GRANT_INVALID,
             "existing workspace use requires a target workflow owner",
+        )
+    if (
+        record_owner_step_execution_id is not None
+        and grant.owner_step_execution_id != record_owner_step_execution_id
+    ):
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "existingWorkspaceGrant owner step does not match the workspace owner record",
+        )
+    if (
+        not str(grant.grant_digest or "").startswith("hmac-sha256:")
+        and target_workflow_id != record_owner_workflow_id
+    ):
+        # Omitted source kind is not proof that a grant came from old history.
+        # Preserve same-owner recovery against the durable record; sharing to
+        # a different workflow always requires authenticated issuance.
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "cross-workflow existing workspace use requires a server-issued grant",
         )
 
 

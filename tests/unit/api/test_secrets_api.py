@@ -51,6 +51,18 @@ def mock_secrets_service(monkeypatch):
     monkeypatch.setattr("api_service.api.routers.secrets.SecretsService", mock)
     return mock
 
+
+def test_delete_secret_requires_authenticated_operator(mock_secrets_service, monkeypatch):
+    from fastapi import HTTPException
+
+    def reject_unauthenticated():
+        raise HTTPException(status_code=401, detail="auth_required")
+
+    monkeypatch.setitem(app.dependency_overrides, _CURRENT_USER_DEP, reject_unauthenticated)
+    response = client.delete("/api/v1/secrets/TEST_API_KEY")
+    assert response.status_code == 401
+    mock_secrets_service.delete_secret.assert_not_awaited()
+
 def test_create_secret(mock_secrets_service):
     from api_service.db.models import ManagedSecret
     from datetime import datetime

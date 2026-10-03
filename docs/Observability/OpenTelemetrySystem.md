@@ -103,6 +103,12 @@ They must not contain:
 
 Large evidence must be written to artifacts and linked by reference.
 
+API request spans retain request paths and status but omit URL query data from
+legacy and current HTTP semantic-convention attributes. This protects terminal
+WebSocket query tokens without modifying the actual request or authentication
+inputs. It does not claim to sanitize secrets in arbitrary application-authored
+span attributes or logs.
+
 ### 5.5 Vendor-neutral export
 
 MoonMind should emit standard OTLP and allow operators to choose the backend:

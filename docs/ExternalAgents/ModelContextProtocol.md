@@ -50,6 +50,18 @@ and browser cookies or bearer headers are not blindly forwarded upstream.
 
 Clients send one JSON-RPC 2.0 message, or a 2025-03-26 batch, per HTTP POST. The request `Accept` header must allow `application/json`. MoonMind responds with JSON for requests and `202 Accepted` with an empty body for notification-only input.
 
+POST bodies require `Content-Type: application/json` (an optional charset is
+accepted). Missing or browser-simple media types return `415` before tool
+dispatch. The shared operator browser boundary rejects a foreign or opaque
+`Origin`/`Referer` with `403`, including in local disabled-auth mode. CLI clients
+without browser origin headers remain supported. For the default local disabled
+deployment (no public base URL or approved trusted ingress), an origin-bearing
+browser request must also use a loopback Host. Matching attacker-controlled Host
+and Origin values cannot authorize a DNS-rebound browser request. Configured
+public URLs and the documented audited-ingress path retain their existing
+contracts; origin-less Compose clients can still address `http://api:8000`.
+CORS alone is not a mutation authorization boundary.
+
 MoonMind supports protocol versions `2025-03-26` and `2025-06-18` for its implemented lifecycle and tool methods:
 
 - `initialize` negotiates the protocol and declares the `tools` capability.

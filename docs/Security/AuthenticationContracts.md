@@ -177,6 +177,10 @@ operator.
 - OIDC login uses authorization-code flow with PKCE, state/nonce protections,
   verified issuer/audience/signature/time claims, and exact configured redirect
   destinations. Open redirects are rejected.
+- Both retained OIDC callback implementations enforce
+  `MOONMIND_OIDC_REQUIRE_MFA` and `MOONMIND_OIDC_MFA_ACR_VALUES` through the same
+  verified-claim evidence check before resolving identity or issuing a session.
+  Password-only tokens cannot use an alternate callback to bypass that policy.
 - The trusted ingress strips user-supplied identity headers and replaces them;
   direct-ingress bypass is blocked.
 

@@ -16,6 +16,8 @@ import logging
 import shlex
 from typing import Any
 
+from moonmind.provider_profiles.volume_mounts import credential_volume_mount
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -166,6 +168,13 @@ async def verify_volume_credentials(
         )
 
     mount_path = volume_mount_path or "/mnt/auth"
+    try:
+        volume_mount = credential_volume_mount(volume_ref, mount_path, read_only=True)
+    except ValueError:
+        return _verification_result(
+            verified=False, runtime_id=runtime_id, reason="invalid_volume_mount",
+            found_count=0, missing_count=len(credential_paths),
+        )
 
     check_commands = _build_credential_check_command(
         runtime_id=runtime_id,
@@ -177,8 +186,8 @@ async def verify_volume_credentials(
         "docker",
         "run",
         "--rm",
-        "-v",
-        f"{volume_ref}:{mount_path}:ro",
+        "--mount",
+        volume_mount,
         "alpine:3.19",
         "sh",
         "-c",

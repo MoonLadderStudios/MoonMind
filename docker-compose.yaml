@@ -1212,9 +1212,63 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-    env_file:
-      - path: .env
-        required: false
+      # Deliberately pass host inputs only, never the full deployment .env.
+      # Null passthrough preserves absence and upstream defaults (an empty
+      # OMNIGENT_HOST_ID is invalid; ID and NAME must be supplied together).
+      OMNIGENT_HOST_ID: null
+      OMNIGENT_HOST_NAME: null
+      OMNIGENT_HOST_TOKEN: null
+      OMNIGENT_CONFIG_HOME: null
+      OMNIGENT_DATA_DIR: null
+      OMNIGENT_STATE_PATH: null
+      OMNIGENT_DISABLE_KEYRING: null
+      OMNIGENT_AUTH_ENABLED: null
+      OMNIGENT_AUTH_PROVIDER: null
+      DATABRICKS_CONFIG_PROFILE: null
+      DATABRICKS_CONFIG_FILE: null
+      DATABRICKS_AUTH_STORAGE: null
+      DATABRICKS_HOST: null
+      DATABRICKS_TOKEN: null
+      DATABRICKS_CLIENT_ID: null
+      DATABRICKS_CLIENT_SECRET: null
+      DATABRICKS_AUTH_TYPE: null
+      OMNIGENT_HOST_LIFECYCLE_POLL_S: null
+      OMNIGENT_HOST_SLICE_KEY_ENABLED: null
+      OMNIGENT_RUNNER_ZYGOTE: null
+      OMNIGENT_LOG_LEVEL: null
+      OMNIGENT_LOG_TO_STDERR: null
+      OMNIGENT_LOG_FORCE_COLOR: null
+      OMNIGENT_PROCESS_LOG_FILE: null
+      OMNIGENT_LOG_TTY_FD: null
+      OMNIGENT_TELEMETRY_ENABLED: null
+      OMNIGENT_DATABRICKS_EXTRA_HEADERS: null
+      OMNIGENT_DEBUG_LOG_CLIENT_ID: null
+      OMNIGENT_DEBUG_LOG_CLIENT_SECRET: null
+      OMNIGENT_DEBUG_LOG_WORKSPACE_URL: null
+      OMNIGENT_DEBUG_LOG_ENDPOINT: null
+      ANTHROPIC_AUTH_TOKEN: null
+      ANTHROPIC_BASE_URL: null
+      ANTHROPIC_MODEL: null
+      ANTHROPIC_BEDROCK_BASE_URL: null
+      AWS_BEARER_TOKEN_BEDROCK: null
+      CLAUDE_CODE_OAUTH_TOKEN: null
+      CODEX_ACCESS_TOKEN: null
+      OPENAI_BASE_URL: null
+      GIT_TOKEN: null
+      GIT_USERNAME: null
+      OMNIGENT_OPENAI_API_KEY: null
+      OMNIGENT_ANTHROPIC_API_KEY: null
+      OMNIGENT_GEMINI_API_KEY: null
+      OMNIGENT_ANTHROPIC_AUTH_TOKEN: null
+      OMNIGENT_ANTHROPIC_BASE_URL: null
+      OMNIGENT_ANTHROPIC_MODEL: null
+      OMNIGENT_ANTHROPIC_BEDROCK_BASE_URL: null
+      OMNIGENT_AWS_BEARER_TOKEN_BEDROCK: null
+      OMNIGENT_CLAUDE_CODE_OAUTH_TOKEN: null
+      OMNIGENT_CODEX_ACCESS_TOKEN: null
+      OMNIGENT_OPENAI_BASE_URL: null
+      OMNIGENT_GIT_TOKEN: null
+      OMNIGENT_GIT_USERNAME: null
     volumes:
       - omnigent-host-state:/root/.omnigent
       - omnigent-host-artifacts:/artifacts

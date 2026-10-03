@@ -297,14 +297,16 @@ def test_batch_terminal_accepts_preflight_failure_without_target_list(
     )
 
 
-def test_batch_terminal_falls_back_to_first_error_message(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failure_message", [None, "no child workflows were queued"])
+@pytest.mark.parametrize("secret", ["", " token=test-private-token", " Authorization: Bearer private-bearer-token", " ghp_" + "a" * 36])
+def test_batch_terminal_falls_back_to_first_error_message(tmp_path: Path, failure_message: str | None, secret: str) -> None:
     """A failed fan-out without a failure message must keep its error cause."""
 
     workspace = tmp_path / "repo"
     spool = tmp_path / "spool"
     workspace.mkdir()
     spool.mkdir()
-    message = "HTTP Error 403: Forbidden: execution fanout capability required"
+    message = "HTTP Error 403: Forbidden: execution fanout capability required" + secret
     targets_path = workspace / "artifacts" / "batch-workflows-targets.json"
     targets_path.parent.mkdir(parents=True, exist_ok=True)
     targets_path.write_text("[]", encoding="utf-8")
@@ -322,7 +324,7 @@ def test_batch_terminal_falls_back_to_first_error_message(tmp_path: Path) -> Non
                 "queued": [],
                 "skipped": [],
                 "errors": [{"code": "BATCH_FANOUT_FAILED", "error": message}],
-                "failure": {"code": "BATCH_FANOUT_FAILED"},
+                "failure": {"code": "BATCH_FANOUT_FAILED", "message": failure_message},
             }
         ),
         encoding="utf-8",
@@ -336,7 +338,12 @@ def test_batch_terminal_falls_back_to_first_error_message(tmp_path: Path) -> Non
 
     assert result.satisfied is False
     assert result.failure_code == "BATCH_FANOUT_FAILED"
-    assert result.metadata["terminalFailureMessage"] == message
+    safe = result.metadata["terminalFailureMessage"]
+    assert "HTTP Error 403: Forbidden: execution fanout capability required" in safe
+    if secret:
+        assert secret not in safe
+        assert "[REDACTED" in safe
+    assert len(safe) <= 1024
 
 
 def _dependabot_contract(execution_ref: str = "step:dependabot") -> dict[str, str]:

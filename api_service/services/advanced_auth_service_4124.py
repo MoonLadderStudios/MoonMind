@@ -453,6 +453,14 @@ def validate_advanced_mode_config(
                 client_secret=client_secret or None,
                 redirect_uri=callback or None,
                 base_url=base_url or None,
+                require_mfa=str(env.get("MOONMIND_OIDC_REQUIRE_MFA", ""))
+                .strip()
+                .lower() in {"1", "true", "yes"},
+                mfa_acr_values=tuple(
+                    value.strip()
+                    for value in str(env.get("MOONMIND_OIDC_MFA_ACR_VALUES", "")).split(",")
+                    if value.strip()
+                ),
             )
         except Exception as exc:
             from moonmind.security.omnigent_auth_qualification import AuthConfigError

@@ -388,10 +388,13 @@ class FakeHandler:
         cancel_event=None,
         output_chunk_callback=None,
     ):
-        del cwd, check, env, redaction_values, cancel_event, output_chunk_callback
+        del cwd, check, env, cancel_event, output_chunk_callback
+        rendered = " ".join(command)
+        for value in redaction_values:
+            rendered = rendered.replace(value, "[REDACTED]")
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"[command] $ {' '.join(command)}\n")
+            handle.write(f"[command] $ {rendered}\n")
         return CommandResult(tuple(command), 0, "", "")
 
 class CumulativeStepLogHandler(FakeHandler):
@@ -5480,8 +5483,22 @@ async def test_run_once_universal_worker_executes_claude_task(tmp_path: Path) ->
     assert queue.failed == []
     assert handler.calls == []
 
+@pytest.fixture
+def fake_container_create(monkeypatch):
+    """Keep queue-level container tests focused on their lifecycle boundary."""
+    created = []
+
+    async def create(worker, *, config, name, cwd, log_path, timeout_seconds):
+        created.append(config)
+        worker._append_stage_log(log_path, f"container created: {config['Image']}; environment keys: {', '.join(item.split('=', 1)[0] for item in config['Env'])}")
+        return name
+
+    monkeypatch.setattr(CodexWorker, "_create_task_container", create)
+    return created
+
+
 async def test_run_once_task_container_executes_generic_docker_path(
-    tmp_path: Path,
+    tmp_path: Path, fake_container_create,
 ) -> None:
     """Container-enabled task should execute through docker path, not codex handler."""
 
@@ -5537,13 +5554,13 @@ async def test_run_once_task_container_executes_generic_docker_path(
 
     execute_log = tmp_path / str(job.id) / "artifacts" / "logs" / "execute.log"
     content = execute_log.read_text(encoding="utf-8")
-    assert "docker run" in content
+    assert "docker start --attach" in content
     assert "mcr.microsoft.com/dotnet/sdk:8.0" in content
-    assert "--env NUGET_AUTH_TOKEN" in content
+    assert "NUGET_AUTH_TOKEN" in content
     assert "secret-token-value" not in content
 
 async def test_run_once_task_container_supports_distinct_images(
-    tmp_path: Path,
+    tmp_path: Path, fake_container_create,
 ) -> None:
     """One worker should execute container tasks with different task-provided images."""
 
@@ -5667,7 +5684,7 @@ async def test_run_once_task_container_with_steps_fails_contract_validation(
     assert "workflow.steps is not supported" in queue.failed[0]
 
 async def test_run_once_task_container_timeout_attempts_stop_and_fails(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, fake_container_create,
 ) -> None:
     """Timed out container execution should attempt docker stop and fail the job."""
 
@@ -5718,10 +5735,11 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
         env=None,
         redaction_values=(),
         timeout_seconds=None,
+        cancel_event=None,
     ):
         _ = (cwd, log_path, check, env, redaction_values)
         recorded_commands.append(tuple(str(item) for item in command))
-        if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
+        if len(command) >= 2 and command[0] == "docker" and command[1] == "start":
             raise asyncio.TimeoutError(
                 f"command timed out after {float(timeout_seconds or 0):g}s"
             )
@@ -5739,7 +5757,7 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
     assert any(cmd[:2] == ("docker", "stop") for cmd in recorded_commands)
 
 async def test_run_once_task_container_precreates_artifact_subdir(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, fake_container_create,
 ) -> None:
     """Container artifact subdir should exist before docker run starts."""
 
@@ -5789,7 +5807,7 @@ async def test_run_once_task_container_precreates_artifact_subdir(
         timeout_seconds=None,
     ):
         _ = timeout_seconds
-        if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
+        if len(command) >= 2 and command[0] == "docker" and command[1] == "start":
             artifact_root = (
                 tmp_path / str(job.id) / "artifacts" / "container" / "custom"
             )
@@ -9920,3 +9938,125 @@ async def test_run_once_fails_legacy_job_when_feature_flag_disabled(
     assert handler.calls == []
 
 # PR #533 CI retrigger.
+
+
+async def test_container_environment_never_controls_worker_docker_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_container_create,
+) -> None:
+    """Container settings cross the daemon boundary, never the client env."""
+    container_env = {
+        "PATH": "/workspace/untrusted/bin",
+        "LD_PRELOAD": "/workspace/untrusted/inject.so",
+        "DOCKER_HOST": "tcp://untrusted.example:2375",
+        "DOCKER_CONTEXT": "untrusted",
+        "DOCKER_CONFIG": "/workspace/untrusted/config",
+        "NORMAL_VALUE": "first line\nsecond line=still data",
+    }
+    monkeypatch.setenv("DOCKER_HOST", "unix:///trusted/docker.sock")
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_capabilities=("codex", "git", "docker"),
+        ),
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary=None, error_message=None)
+        ),
+    )
+    job_id = uuid4()
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    payload, _ = _build_execute_stage_payloads()
+    payload["workflow"]["container"] = {
+        "enabled": True,
+        "image": "alpine:3.20",
+        "command": ["echo", "ok"],
+        "env": container_env,
+    }
+    spec = worker._extract_container_task_spec(payload)
+    observed = []
+
+    async def run_command(command, **kwargs):
+        observed.append((command, kwargs))
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", run_command)
+    result = await worker._run_container_execute_stage(
+        job_id=job_id,
+        canonical_payload=payload,
+        prepared=prepared,
+        container_spec=spec,
+    )
+    assert result.succeeded
+    command, options = next(item for item in observed if item[0][1] == "start")
+    assert options["env"] == dict(os.environ)
+    for key, value in container_env.items():
+        assert f"{key}={value}" in fake_container_create[0]["Env"]
+        assert value not in " ".join(command)
+        assert value in options["redaction_values"]
+    rendered = worker._redact_command_for_log(
+        command, redaction_values=options["redaction_values"]
+    )
+    assert not any(value in " ".join(rendered) for value in container_env.values())
+
+
+@pytest.mark.parametrize("outcome", ["success", "nonzero", "spawn_error"])
+async def test_container_real_handler_redacts_environment_in_logs_and_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, fake_container_create,
+) -> None:
+    """Exercise the production handler through diagnostics and failed launch."""
+    value = "arbitrary-container-value-without-a-token-prefix"
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_capabilities=("codex", "git", "docker"),
+        ),
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=CodexExecHandler(workdir_root=tmp_path),
+    )
+    job_id = uuid4()
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    payload, _ = _build_execute_stage_payloads()
+    payload["workflow"]["container"] = {
+        "enabled": True,
+        "image": "alpine:3.20",
+        "command": ["echo", "ok"],
+        "env": {"BUILD_SETTING": value},
+    }
+    spec = worker._extract_container_task_spec(payload)
+
+    class Process:
+        def __init__(self, is_run):
+            self.is_run = is_run
+            self.returncode = 2 if is_run and outcome == "nonzero" else 0
+
+        async def communicate(self):
+            if self.is_run:
+                return f"stdout: {value}".encode(), f"stderr: {value}".encode()
+            return b"", b""
+
+    async def spawn(*args, **kwargs):
+        assert kwargs["env"] is None or kwargs["env"].get("BUILD_SETTING") != value
+        if args[1] == "start" and outcome == "spawn_error":
+            raise OSError(f"cannot launch {value}")
+        return Process(args[1] == "start")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    result = await worker._run_container_execute_stage(
+        job_id=job_id, canonical_payload=payload, prepared=prepared, container_spec=spec
+    )
+    assert result.succeeded == (outcome == "success")
+    log = prepared.execute_log_path.read_text()
+    metadata = (prepared.artifacts_dir / "container/metadata/run.json").read_text()
+    assert value not in log
+    assert value not in metadata
+    assert value not in str(result.error_message)

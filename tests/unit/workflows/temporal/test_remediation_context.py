@@ -16,6 +16,7 @@ from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
     TemporalArtifactLink,
+    TemporalArtifactRedactionLevel,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionRemediationLink,
@@ -1771,7 +1772,6 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
                     payload=payload,
                     target_workflow_id=target.workflow_id,
                     target_run_id=target.run_id,
-                    principal="service:test",
                 )
             )
 
@@ -1820,7 +1820,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
 
         _artifact, payload_bytes = await artifact_service.read(
             artifact_id=artifacts[-1].artifact_id,
-            principal="service:test",
+            principal="service:remediation-lifecycle",
         )
         published_summary = json.loads(payload_bytes)
         assert published_summary["authorityMode"] == "admin_auto"
@@ -1983,7 +1983,7 @@ class StatusOnlyActionExecutor:
 async def _read_artifact_json(artifact_service, artifact_id: str):
     _artifact, payload = await artifact_service.read(
         artifact_id=artifact_id,
-        principal="service:test",
+        principal="service:remediation-lifecycle",
     )
     return json.loads(payload.decode("utf-8"))
 
@@ -4190,7 +4190,7 @@ async def test_execute_action_verification_artifact_metadata_carries_classificat
         )
         artifact, _payload_bytes = await artifact_service.read(
             artifact_id=result["artifactRefs"]["verification"],
-            principal="service:test",
+            principal="service:remediation-lifecycle",
         )
         assert artifact.metadata_json["verificationOutcome"] == "verified_resolved"
         assert artifact.metadata_json["verificationDeliveryStatus"] == "applied"
@@ -4422,3 +4422,380 @@ async def test_lifecycle_summary_records_resolution_without_clobbering_delivery(
         # Delivery status is preserved; resolution is recorded separately.
         assert link.outcome == "applied"
         assert link.resolution == "resolved_after_action"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spoofed_principal", ["operator", "workflow:unrelated", "service:omnigent-generic-host"]
+)
+async def test_lifecycle_publisher_ignores_caller_created_evidence(
+    tmp_path, mock_client_adapter, spoofed_principal
+):
+    """Artifact links and metadata supplied by a caller are not producer authority."""
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        artifact_type = "remediation.verification"
+        name = "reports/remediation_verification-action-1.json"
+        forged, _ = await service.create(
+            principal=spoofed_principal,
+            content_type="application/json",
+            link=ExecutionRef(
+                namespace=remediation.namespace,
+                workflow_id=remediation.workflow_id,
+                run_id=remediation.run_id,
+                link_type=artifact_type,
+                label=name,
+                created_by_activity_type="remediation.lifecycle.publish",
+            ),
+            metadata_json={
+                "artifact_type": artifact_type,
+                "name": name,
+                "schemaVersion": "v1",
+                "namespace": remediation.namespace,
+                "workflowId": remediation.workflow_id,
+                "runId": remediation.run_id,
+                "verificationOutcome": "verified_resolved",
+            },
+        )
+        forged = await service.write_complete(
+            artifact_id=forged.artifact_id,
+            principal=spoofed_principal,
+            payload=b'{"outcome":"verified_resolved"}',
+            content_type="application/json",
+        )
+        publisher = RemediationLifecyclePublisher(session=session, artifact_service=service)
+        published = await publisher.publish_json_artifact(
+            remediation_workflow_id=remediation.workflow_id,
+            artifact_type=artifact_type,
+            name=name,
+            payload={"outcome": "still_failed"},
+            extra_metadata={"verificationOutcome": "still_failed"},
+        )
+        assert published.artifact_id != forged.artifact_id
+        assert published.created_by_principal == "service:remediation-lifecycle"
+        assert published.metadata_json["verificationOutcome"] == "still_failed"
+        _, content = await service.read(
+            artifact_id=published.artifact_id, principal="service:remediation-lifecycle"
+        )
+        assert json.loads(content) == {"outcome": "still_failed"}
+        # A retry repairs the lost projection and preserves the original
+        # completed evidence, even when new observations differ.
+        record = await session.get(
+            TemporalExecutionCanonicalRecord, remediation.workflow_id
+        )
+        record.artifact_refs = []
+        await session.commit()
+        retried = await RemediationLifecyclePublisher(
+            session=session, artifact_service=service
+        ).publish_json_artifact(
+            remediation_workflow_id=remediation.workflow_id,
+            artifact_type=artifact_type,
+            name=name,
+            payload={"outcome": "verified_resolved"},
+            extra_metadata={"verificationOutcome": "verified_resolved"},
+        )
+        assert retried.artifact_id == published.artifact_id
+        assert retried.metadata_json["verificationOutcome"] == "still_failed"
+        assert published.artifact_id in record.artifact_refs
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_publisher_rejects_relinked_other_run_evidence(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        publisher = RemediationLifecyclePublisher(session=session, artifact_service=service)
+        artifact_type = "remediation.verification"
+        name = "reports/remediation_verification-action-1.json"
+        # A genuine artifact cannot attest a different execution just because
+        # a caller adds a matching link and its producer activity label.
+        other = await publisher.publish_json_artifact(
+            remediation_workflow_id=target.workflow_id,
+            artifact_type=artifact_type,
+            name=name,
+            payload={"outcome": "verified_resolved"},
+        )
+        await service.link_artifact(
+            artifact_id=other.artifact_id,
+            principal="operator",
+            execution_ref=ExecutionRef(
+                namespace=remediation.namespace,
+                workflow_id=remediation.workflow_id,
+                run_id=remediation.run_id,
+                link_type=artifact_type,
+                label=name,
+                created_by_activity_type="remediation.lifecycle.publish",
+            ),
+        )
+        published = await publisher.publish_json_artifact(
+            remediation_workflow_id=remediation.workflow_id,
+            artifact_type=artifact_type,
+            name=name,
+            payload={"outcome": "still_failed"},
+        )
+        assert published.artifact_id != other.artifact_id
+        assert published.metadata_json["workflowId"] == remediation.workflow_id
+        assert published.metadata_json["runId"] == remediation.run_id
+
+
+async def _create_canonical_target_and_remediation(
+    session, mock_client_adapter, *, authority_mode="observe_only"
+):
+    target, remediation = await _create_target_and_remediation(
+        session, mock_client_adapter, authority_mode=authority_mode
+    )
+    # Admission also returns a UI projection. Lifecycle artifacts and run pins
+    # are owned by the canonical records, so retained-state tests use those rows.
+    return (
+        await session.get(TemporalExecutionCanonicalRecord, target.workflow_id),
+        await session.get(TemporalExecutionCanonicalRecord, remediation.workflow_id),
+    )
+
+
+async def _publish_pre_upgrade_lifecycle_artifact(
+    service,
+    record,
+    *,
+    principal,
+    artifact_type,
+    name,
+    target=None,
+    outcome="still_failed",
+):
+    """Persist the original publisher's contract, before producer run metadata."""
+    metadata = {
+        "artifact_type": artifact_type,
+        "name": name,
+        "schemaVersion": "v1",
+        "verificationOutcome": outcome,
+    }
+    if target is not None:
+        metadata.update(targetWorkflowId=target.workflow_id, targetRunId=target.run_id)
+    artifact, _ = await service.create(
+        principal=principal,
+        content_type="application/json",
+        link=ExecutionRef(
+            namespace=record.namespace,
+            workflow_id=record.workflow_id,
+            run_id=record.run_id,
+            link_type=artifact_type,
+            label=name,
+            created_by_activity_type="remediation.lifecycle.publish",
+        ),
+        metadata_json=metadata,
+        redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+    )
+    return await service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=json.dumps({"outcome": outcome}).encode("utf-8"),
+        content_type="application/json",
+    )
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_publisher_reuses_pre_upgrade_consumed_request_receipt(
+    tmp_path, mock_client_adapter
+):
+    principal = "operator"
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_canonical_target_and_remediation(
+            session, mock_client_adapter, authority_mode="approval_gated"
+        )
+        # Use the existing approval owner to bind the retained receipt to the
+        # admitted remediator and pinned target, rather than a caller input ref.
+        await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="execution.pause",
+            parameters={},
+            dry_run=False,
+            idempotency_key="legacy-action-1",
+            requesting_principal=principal,
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link.approval_state["remediationRunId"] == remediation.run_id
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        artifact_type = "remediation.action_request"
+        name = f"reports/{artifact_type.replace('.', '_')}-legacy-action-1.json"
+        original = await _publish_pre_upgrade_lifecycle_artifact(
+            service,
+            remediation,
+            principal=principal,
+            artifact_type=artifact_type,
+            name=name,
+            target=target,
+        )
+        link.approval_state = {
+            **dict(link.approval_state),
+            "status": "consumed",
+            "actionRequestArtifactRef": original.artifact_id,
+        }
+        await session.commit()
+        publisher = RemediationLifecyclePublisher(
+            session=session, artifact_service=service
+        )
+        for _ in range(2):
+            retried = await publisher.publish_json_artifact(
+                remediation_workflow_id=remediation.workflow_id,
+                artifact_type=artifact_type,
+                name=name,
+                payload={"outcome": "verified_resolved"},
+                extra_metadata={"verificationOutcome": "verified_resolved"},
+            )
+            assert retried.artifact_id == original.artifact_id
+            assert retried.metadata_json["verificationOutcome"] == "still_failed"
+        assert original.artifact_id in remediation.artifact_refs
+        _, content = await service.read(
+            artifact_id=retried.artifact_id, principal=principal
+        )
+        assert json.loads(content) == {"outcome": "still_failed"}
+        refs = (
+            (
+                await session.execute(
+                    select(TemporalArtifactLink.artifact_id).where(
+                        TemporalArtifactLink.workflow_id == remediation.workflow_id,
+                        TemporalArtifactLink.link_type == artifact_type,
+                        TemporalArtifactLink.label == name,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert refs == [original.artifact_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stale_field",
+    ["remediationWorkflowId", "remediationRunId", "targetWorkflowId", "targetRunId"],
+)
+async def test_lifecycle_publisher_rejects_stale_pre_upgrade_approval_receipt(
+    tmp_path, mock_client_adapter, stale_field
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_canonical_target_and_remediation(
+            session, mock_client_adapter, authority_mode="approval_gated"
+        )
+        await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="execution.pause",
+            parameters={},
+            dry_run=False,
+            idempotency_key="legacy-action-1",
+            requesting_principal="operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        artifact_type = "remediation.verification"
+        name = "reports/remediation_verification-action-1.json"
+        original = await _publish_pre_upgrade_lifecycle_artifact(
+            service,
+            remediation,
+            principal="operator",
+            artifact_type=artifact_type,
+            name=name,
+            target=target,
+        )
+        remediation.artifact_refs = [original.artifact_id]
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        link.approval_state = {
+            **dict(link.approval_state),
+            stale_field: "other-run",
+            "artifactRefs": {"verification": original.artifact_id},
+        }
+        await session.commit()
+        with pytest.raises(
+            RemediationContextError, match="producer cannot be verified"
+        ):
+            await RemediationLifecyclePublisher(
+                session=session, artifact_service=service
+            ).publish_json_artifact(
+                remediation_workflow_id=remediation.workflow_id,
+                artifact_type=artifact_type,
+                name=name,
+                payload={"outcome": "verified_resolved"},
+            )
+        assert remediation.artifact_refs == [original.artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_publisher_preserves_competing_pre_upgrade_service_evidence(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _, remediation = await _create_canonical_target_and_remediation(
+            session, mock_client_adapter
+        )
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        artifact_type = "remediation.verification"
+        name = "reports/remediation_verification-action-1.json"
+        originals = [
+            await _publish_pre_upgrade_lifecycle_artifact(
+                service,
+                remediation,
+                principal="service:remediation-lifecycle",
+                artifact_type=artifact_type,
+                name=name,
+                outcome=outcome,
+            )
+            for outcome in ("still_failed", "verified_resolved")
+        ]
+        remediation.artifact_refs = [artifact.artifact_id for artifact in originals]
+        await session.commit()
+        with pytest.raises(
+            RemediationContextError, match="Competing legacy remediation artifacts"
+        ):
+            await RemediationLifecyclePublisher(
+                session=session, artifact_service=service
+            ).publish_json_artifact(
+                remediation_workflow_id=remediation.workflow_id,
+                artifact_type=artifact_type,
+                name=name,
+                payload={"outcome": "verified_resolved"},
+            )
+        assert remediation.artifact_refs == [
+            artifact.artifact_id for artifact in originals
+        ]
+        assert all(
+            artifact.status == TemporalArtifactStatus.COMPLETE for artifact in originals
+        )
+        for artifact, outcome in zip(originals, ("still_failed", "verified_resolved")):
+            _, content = await service.read(
+                artifact_id=artifact.artifact_id,
+                principal="service:remediation-lifecycle",
+            )
+            assert json.loads(content) == {"outcome": outcome}

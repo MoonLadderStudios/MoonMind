@@ -12,6 +12,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from moonmind.utils.workspace_paths import (
+    atomic_write_text,
+    open_directory,
+    read_regular_file,
+)
+
 DEFAULT_GIT_USER_NAME = "MoonMind Worker"
 DEFAULT_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 
@@ -53,8 +59,8 @@ def _resolve_workspace_git_dir(workspace: Path) -> Path | None:
             git_dir = dot_git
         elif dot_git.is_file():
             try:
-                pointer = dot_git.read_text(encoding="utf-8").strip()
-            except OSError:
+                pointer = read_regular_file(dot_git, limit=4096).decode("utf-8").strip()
+            except (OSError, UnicodeError):
                 return None
             if not pointer.startswith("gitdir:"):
                 return None
@@ -62,18 +68,15 @@ def _resolve_workspace_git_dir(workspace: Path) -> Path | None:
             if not raw:
                 return None
             candidate = (workspace / raw) if not Path(raw).is_absolute() else Path(raw)
-            try:
-                resolved = candidate.resolve()
-                workspace_root = workspace.resolve()
-            except OSError:
+            # Keep lexical authority: resolving both paths after reading the
+            # pointer could hide a concurrent root-to-symlink replacement.
+            candidate = Path(os.path.abspath(candidate))
+            workspace_root = Path(os.path.abspath(workspace))
+            if not candidate.is_relative_to(workspace_root):
                 return None
-            if resolved != workspace_root and not resolved.is_relative_to(
-                workspace_root
-            ):
-                return None
-            if not resolved.is_dir() or resolved.is_symlink():
-                return None
-            git_dir = resolved
+            with open_directory(candidate):
+                pass
+            git_dir = candidate
         else:
             return None
     except OSError:
@@ -160,7 +163,8 @@ def ensure_workspace_git_identity(
     existing owner.
 
     Returns True when an identity was (re)applied, False when the workspace
-    is not a Git checkout.
+    is not a Git checkout. Errors after recognizing a checkout propagate so
+    preparation cannot complete without applying the required identity.
     """
 
     name, email = resolve_git_identity()
@@ -170,14 +174,24 @@ def ensure_workspace_git_identity(
         return False
     config = git_dir / "config"
     try:
-        if config.exists():
-            existing = config.read_text(encoding="utf-8").splitlines()
-        else:
-            existing = []
-    except OSError:
-        return False
+        existing = (
+            read_regular_file(config, limit=1024 * 1024).decode("utf-8").splitlines()
+        )
+    except FileNotFoundError:
+        existing = []
     updated = _write_user_identity(existing, name, email)
-    config.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    atomic_write_text(
+        config,
+        "\n".join(updated) + "\n",
+        preserve_existing_owner=(runtime_uid is None and runtime_gid is None),
+    )
     if runtime_uid is not None and runtime_gid is not None:
-        os.chown(config, runtime_uid, runtime_gid, follow_symlinks=False)
+        with open_directory(config.parent) as parent_fd:
+            os.chown(
+                config.name,
+                runtime_uid,
+                runtime_gid,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
     return True

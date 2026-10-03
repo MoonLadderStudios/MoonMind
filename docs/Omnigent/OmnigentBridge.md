@@ -64,6 +64,8 @@ The host/runtime remains responsible for:
 
 The native UI is a provider-maintained presentation client behind the MoonMind bridge. It is not an independent control plane, source of workflow authority, or credential boundary.
 
+MoonMind treats the bundled Omnigent UI as trusted first-party application code. Same-origin presentation is intentional; an opaque iframe or separate-origin isolation redesign is not required by this contract. Server-side binding authorization and untrusted artifact protections still apply. Security changes must preserve resilience and simplicity as equal design requirements, including retries, interrupted sessions, and recovery of saved work.
+
 ---
 
 ## 2. Design principles
@@ -265,6 +267,11 @@ The native UI is more than an HTTP transcript: it opens WebSockets and drives te
 - **compatibility_review_required** — a reserved quarantine disposition for a recognized route whose rewrite has not yet been reviewed. The pinned `omnigent.server.v1` HTTP, SSE, global-session-update WebSocket, terminal-attach WebSocket, and dictation WebSocket routes are reviewed and served. A future recognized-but-unreviewed transport is authenticated and binding-validated before upgrade, then fails closed with an explicit compatibility diagnostic. A successful earlier HTTP bootstrap never authorizes a later WebSocket.
 
 Terminal create/attach/input/resize/close and browser-pane control require capabilities the facade never grants, so a nonowner or read-only viewer is denied before any transport opens; terminal viewing/execution-log inspection is a distinct read capability. Unknown or changed transports fail closed with a non-enumerating diagnostic rather than being generically proxied, and a terminal/revoked binding cannot open a new live transport.
+
+Read-only terminal attachments enforce their input boundary in the MoonMind
+relay: output is delivered, but any browser text or binary data frame closes
+the attachment without forwarding or claiming a mutation. The upstream
+`read_only=true` flag is defense in depth, not the authorization boundary.
 
 #### Browser transport API preservation
 
