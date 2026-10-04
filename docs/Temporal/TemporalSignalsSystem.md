@@ -467,7 +467,10 @@ Required behavior:
 
 - only `attempt` advances across redeliveries; the claim identity never rewrites
   ledger metadata;
-- a missing claim is never proof that no consumer exists.
+- a missing claim is never proof that no consumer exists;
+- a `lease_expired` claim is an age-based safety net, not proof that the
+  consumer stopped: the janitor defers it while the attached host lease is
+  still within its heartbeat timeout and drains it once that lease goes stale.
 
 ---
 

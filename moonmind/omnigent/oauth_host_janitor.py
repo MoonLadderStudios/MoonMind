@@ -15,6 +15,7 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 )
 from moonmind.omnigent.oauth_hosts import (
     CLEANUP_CLAIMABLE_HOST_STATES,
+    HEARTBEAT_HOST_STATES,
     OmnigentOAuthHostRepository,
 )
 from moonmind.provider_profiles.lease_client import (
@@ -144,6 +145,16 @@ class OmnigentOAuthHostJanitor:
             state.binding.runtimeBindingRef,
             expected_revision=state.revision,
             expected_fencing_generation=state.fencing_generation,
+        )
+
+    def _host_owner_is_live(self, lease: Any) -> bool:
+        """Whether a non-draining host lease is still within its heartbeat."""
+
+        now = datetime.now(UTC)
+        return (
+            lease.status in HEARTBEAT_HOST_STATES
+            and lease.expires_at > now
+            and lease.last_heartbeat_at > now - self._heartbeat_timeout
         )
 
     async def _claim_cleanup(self, lease: Any) -> Any | None:
@@ -321,6 +332,21 @@ class OmnigentOAuthHostJanitor:
                         "claimId": claim_id,
                         "providerLeaseId": provider_lease_id,
                         "action": "cleanup_claim_skipped_replacement_owner",
+                    }
+                )
+                continue
+            if claim.get("reason") == "lease_expired" and self._host_owner_is_live(
+                host_lease
+            ):
+                # Slot expiry is an age-based safety net, not evidence that the
+                # consumer stopped. A host whose owner is still heartbeating is
+                # running a turn; its owner releases the slot when it ends, and
+                # an abandoned host goes stale and is drained on a later pass.
+                actions.append(
+                    {
+                        "claimId": claim_id,
+                        "providerLeaseId": provider_lease_id,
+                        "action": "cleanup_claim_deferred_live_owner",
                     }
                 )
                 continue
