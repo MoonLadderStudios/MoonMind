@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import re
 import secrets
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
+from logging import getLogger
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -45,7 +45,7 @@ from moonmind.utils.logging import redact_sensitive_payload
 # first-message idempotency state machine onto it from the superseded mapping.
 BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1156", "MM-1140")
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 _ACTIVE_JOURNAL_NAME = re.compile(
     r"runtime\.omnigent\.(?:embedded\.)?sse\.(raw|normalized)[./](\d+)\.jsonl"
 )
@@ -3101,6 +3101,48 @@ class OmnigentBridgeSessionStore:
                 prepared["sequence"] = next_sequence + offset
                 prepared["deduplicationKey"] = dedup_key
                 prepared_events.append(prepared)
+            # A journal can rotate between publication and this append. Bind
+            # delayed index rows to the complete prefix that still contains
+            # their evidence, under the same session lock used by reclamation.
+            current_id = _journal_artifact_id(row.normalized_events_ref)
+            if current_id is not None:
+                from api_service.db.models import (
+                    TemporalArtifact,
+                    TemporalArtifactStatus,
+                )
+
+                artifact_ids = {current_id}
+                artifact_ids.update(
+                    artifact_id
+                    for event in prepared_events
+                    if (artifact_id := _journal_artifact_id(event.get("artifactRef")))
+                )
+                artifacts = {
+                    artifact.artifact_id: artifact
+                    for artifact in await session.scalars(
+                        select(TemporalArtifact).where(
+                            TemporalArtifact.artifact_id.in_(artifact_ids)
+                        )
+                    )
+                }
+                current = artifacts.get(current_id)
+                current_prefix = _journal_prefix(current) if current else None
+                if (
+                    current_prefix
+                    and current.status is TemporalArtifactStatus.COMPLETE
+                ):
+                    for event in prepared_events:
+                        previous = artifacts.get(
+                            _journal_artifact_id(event.get("artifactRef"))
+                        )
+                        prefix = _journal_prefix(previous) if previous else None
+                        if (
+                            prefix
+                            and (prefix[0], prefix[2])
+                            == (current_prefix[0], current_prefix[2])
+                            and prefix[1] < current_prefix[1]
+                        ):
+                            event["artifactRef"] = row.normalized_events_ref
             rows = _build_event_rows(key, prepared_events)
             for event_row in rows:
                 session.add(event_row)
@@ -3199,13 +3241,27 @@ class OmnigentBridgeSessionStore:
                     artifact
                 )
                 if (
-                    old_prefix
-                    and new_prefix
-                    and (old_prefix[0], old_prefix[2]) == (new_prefix[0], new_prefix[2])
-                    and new_prefix[1] < old_prefix[1]
+                    not old_prefix
+                    or not new_prefix
+                    or (old_prefix[0], old_prefix[2]) != (new_prefix[0], new_prefix[2])
                 ):
+                    continue
+                if new_prefix[1] < old_prefix[1]:
                     raise OmnigentIdempotencyError(
                         "Journal replacement would discard verified progress"
+                    )
+                if new_prefix[1] > old_prefix[1]:
+                    # Index rows locate event bodies within the accumulated
+                    # prefix. Advance them in the same commit as the pair,
+                    # even if a pin/claim preserves the original snapshot.
+                    await session.execute(
+                        update(OmnigentBridgeSessionEvent)
+                        .where(
+                            OmnigentBridgeSessionEvent.artifact_ref.in_(
+                                (old_ref, old_id, f"artifact:{old_id}")
+                            )
+                        )
+                        .values(artifact_ref=replacement_ref)
                     )
             row.raw_events_ref = raw_ref
             row.normalized_events_ref = normalized_ref
@@ -3213,7 +3269,9 @@ class OmnigentBridgeSessionStore:
         for old_ref, replacement_ref in zip(previous, replacements):
             if old_ref and old_ref != replacement_ref:
                 try:
-                    await self._reclaim_superseded_journal(old_ref, replacement_ref)
+                    await self._reclaim_superseded_journal(
+                        bridge_session_id, old_ref, replacement_ref
+                    )
                 except Exception as exc:
                     # The replacement is already durable. Reporting/cleanup
                     # cannot erase it, and artifact deletion intents retain
@@ -3225,9 +3283,10 @@ class OmnigentBridgeSessionStore:
                     )
 
     async def _reclaim_superseded_journal(
-        self, old_ref: str, replacement_ref: str
+        self, bridge_session_id: str, old_ref: str, replacement_ref: str
     ) -> None:
         from api_service.db.models import (
+            OmnigentObservation,
             TemporalArtifactRetentionClass,
             TemporalArtifactStatus,
         )
@@ -3237,6 +3296,11 @@ class OmnigentBridgeSessionStore:
         if old_id is None or replacement_id is None:
             return
         async with self._session_factory() as session:
+            await session.scalar(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == bridge_session_id)
+                .with_for_update()
+            )
             service = _journal_artifact_service(session)
             repository = service._repository
             previous = await repository.get_artifact_for_update(old_id)
@@ -3268,6 +3332,22 @@ class OmnigentBridgeSessionStore:
                 .limit(1)
             )
             if current_owner is not None:
+                return
+            # Backfill observations are append-only evidence, rather than
+            # mutable event-index locators. Preserve their exact payload refs.
+            observation_owner = await session.scalar(
+                select(OmnigentObservation.observation_id)
+                .where(OmnigentObservation.payload_ref.in_(aliases))
+                .limit(1)
+            )
+            if observation_owner is not None:
+                return
+            event_owner = await session.scalar(
+                select(OmnigentBridgeSessionEvent.event_id)
+                .where(OmnigentBridgeSessionEvent.artifact_ref.in_(aliases))
+                .limit(1)
+            )
+            if event_owner is not None:
                 return
             previous.metadata_json = {
                 **(previous.metadata_json or {}),

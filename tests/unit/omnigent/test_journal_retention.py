@@ -10,6 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     OmnigentBridgeSession,
+    OmnigentObservation,
+    OmnigentSession,
     TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
 )
@@ -122,6 +124,115 @@ async def test_committed_journal_replacement_reclaims_superseded_prefix(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("embedded", [False, True])
+async def test_event_payload_refs_follow_complete_journal_replacement(
+    journals, embedded
+):
+    store, session_id, sessions, service, blobs, publish = journals
+    previous = await publish(1, embedded=embedded)
+    replacement = await publish(2, embedded=embedded)
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=previous[0], normalized_ref=previous[1]
+    )
+    await store.append_events(
+        session_id,
+        [
+            {
+                "eventType": "response.delta",
+                "artifactRef": previous[1],
+                "textPreview": "first",
+                "deduplicationKey": "first-event",
+            }
+        ],
+    )
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=replacement[0], normalized_ref=replacement[1]
+    )
+    event = (await store.list_event_page(session_id)).rows[0]
+    assert event.artifact_ref == replacement[1]
+    assert event.text_preview == "first"
+    async with sessions() as session:
+        artifacts = service(session)
+        payload = await artifacts._repository.get_artifact(
+            event.artifact_ref.removeprefix("artifact:")
+        )
+        assert blobs.read_bytes(payload.storage_key) == b"event\nevent\n"
+        old = await artifacts._repository.get_artifact(
+            previous[1].removeprefix("artifact:")
+        )
+        assert old.hard_deleted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_delayed_event_append_uses_current_complete_journal(journals):
+    store, session_id, _sessions, _service, _blobs, publish = journals
+    previous = await publish(1)
+    replacement = await publish(2)
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=previous[0], normalized_ref=previous[1]
+    )
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=replacement[0], normalized_ref=replacement[1]
+    )
+    appended = await store.append_events(
+        session_id,
+        [
+            {
+                "eventType": "response.delta",
+                "artifactRef": previous[1],
+                "deduplicationKey": "delayed-event",
+            }
+        ],
+    )
+    assert appended[0].artifact_ref == replacement[1]
+
+
+@pytest.mark.asyncio
+async def test_backfilled_observation_keeps_original_payload_artifact(journals):
+    store, session_id, sessions, service, blobs, publish = journals
+    previous = await publish(1)
+    replacement = await publish(2)
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=previous[0], normalized_ref=previous[1]
+    )
+    async with sessions() as session:
+        session.add(
+            OmnigentSession(
+                session_id="canonical-session",
+                moonmind_workflow_id="workflow-test",
+                provider="omnigent",
+            )
+        )
+        await session.flush()
+        session.add(
+            OmnigentObservation(
+                observation_id="backfilled-event",
+                session_id="canonical-session",
+                observation_type="bridge_event",
+                source="legacy-backfill",
+                observed_at=datetime.now(UTC),
+                deduplication_key="backfilled-event",
+                payload_ref=previous[1],
+                source_digest="original-event-digest",
+                bounded_index_={"artifact_ref": previous[1]},
+            )
+        )
+        await session.commit()
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=replacement[0], normalized_ref=replacement[1]
+    )
+    async with sessions() as session:
+        observation = await session.get(OmnigentObservation, "backfilled-event")
+        assert observation.payload_ref == previous[1]
+        assert observation.source_digest == "original-event-digest"
+        artifact = await service(session)._repository.get_artifact(
+            observation.payload_ref.removeprefix("artifact:")
+        )
+        assert artifact.hard_deleted_at is None
+        assert blobs.read_bytes(artifact.storage_key) == b"event\n"
+
+
+@pytest.mark.asyncio
 async def test_pending_replacement_preserves_committed_journal(journals):
     store, session_id, sessions, service, blobs, publish = journals
     previous = await publish(1)
@@ -182,9 +293,20 @@ async def test_pinned_and_in_use_prefixes_remain_protected(journals):
     await store.attach_active_journal_refs(
         session_id, raw_ref=previous[0], normalized_ref=previous[1]
     )
+    await store.append_events(
+        session_id,
+        [
+            {
+                "eventType": "response.delta",
+                "artifactRef": previous[1],
+                "deduplicationKey": "protected-event",
+            }
+        ],
+    )
     await store.attach_active_journal_refs(
         session_id, raw_ref=replacement[0], normalized_ref=replacement[1]
     )
+    assert (await store.list_events(session_id))[0].artifact_ref == replacement[1]
     async with sessions() as session:
         for ref in previous:
             artifact = await service(session)._repository.get_artifact(
