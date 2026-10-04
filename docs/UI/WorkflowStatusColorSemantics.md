@@ -117,6 +117,10 @@ Terminal outcomes should remain visually stable and easy to scan:
 
 `no_commit` must not be colored green or teal because that would hide the fact that a publish-mode workflow did not produce a commit or PR. It must not be colored red, orange, purple, or yellow because the outcome is not a failure or blocker when the workflow correctly determined no commit was required. Neutral gray keeps the terminal state distinct without implying a successful commit-producing outcome.
 
+A completed execution with recorded objective outcome `idle` displays **Idle** with the existing neutral pill in the workflow list and detail. Outcomes `failed` and `verification_blocked` display **Failed** and **Verification blocked** using the existing failure styling; `cancelled` displays **Cancelled** using the existing cancellation styling. These are objective-outcome presentations: lifecycle state, Temporal closure, and lifecycle filters remain unchanged. An authoritative continuation still displays **Handed off** before considering objective metadata. Failed, canceled, active, and `no_commit` executions keep their lifecycle presentation even if objective metadata is stale.
+
+Workflow Detail omits the generic “Workflow completed successfully” prefix from displayed idle or negative-objective summaries while retaining their actual explanation and formatting. Missing, unknown, successful, `no_commit`, active, and gated-continuation outcomes retain their existing summary presentation. Recorded execution and artifact summary fields remain unchanged.
+
 ### 5.2 Active execution
 
 `executing` is the live/executing hue. Other states should only use the executing hue when they actively consume the same scarce runtime/provider resource or when they are a compatibility/live alias such as `running`. Do not use the executing hue simply because a workflow is non-terminal or animated.

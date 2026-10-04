@@ -744,6 +744,45 @@ describe('Workflows Entrypoint', () => {
     expect(within(row).queryByText('Completed')).toBeNull();
   });
 
+  it('shows a completed idle objective without hiding no-commit and live outcomes', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [
+        { workflowId: 'idle-scan', title: 'Idle issue scan', rawState: 'completed', objectiveOutcome: 'idle' },
+        { workflowId: 'no-commit', title: 'Verified no-commit work', rawState: 'no_commit', objectiveOutcome: 'succeeded' },
+        { workflowId: 'live', title: 'Live workflow', rawState: 'running', objectiveOutcome: 'idle' },
+        { workflowId: 'unknown', title: 'Older objective contract', rawState: 'completed', objectiveOutcome: 'unknown' },
+      ].map((row) => ({ source: 'temporal', status: 'completed', state: 'completed', createdAt: '2026-10-03T22:00:00Z', ...row })) }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const idleRow = await screen.findByRole('row', { name: /Idle issue scan/ });
+    expect(within(idleRow).getByText('Idle').className).toContain('status-neutral');
+    expect(within(idleRow).queryByText('Completed')).toBeNull();
+    expect(within(screen.getByRole('row', { name: /Verified no-commit work/ })).getByText('No commit')).toBeTruthy();
+    expect(within(screen.getByRole('row', { name: /Live workflow/ })).getByLabelText('Executing')).toBeTruthy();
+    expect(within(screen.getByRole('row', { name: /Older objective contract/ })).getByText('Completed')).toBeTruthy();
+  });
+
+  it.each([
+    ['failed', 'Failed', 'status-failed'],
+    ['verification_blocked', 'Verification blocked', 'status-failed'],
+    ['cancelled', 'Cancelled', 'status-canceled'],
+  ])('shows terminal objective %s truthfully in a completed list row', async (objectiveOutcome, label, statusClass) => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ source: 'temporal', workflowId: 'unmet-objective', title: 'Unmet objective',
+        status: 'completed', state: 'completed', rawState: 'completed', objectiveOutcome, createdAt: '2026-10-03T22:00:00Z' }] }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Unmet objective/ });
+    expect(within(row).getByText(label).className).toContain(statusClass);
+    expect(within(row).queryByText('Completed')).toBeNull();
+  });
+
   it('uses closedAt for terminal rows when synthetic updatedAt is older', async () => {
     const closedAt = '2026-04-15T20:00:00Z';
     const syntheticUpdatedAt = '2026-04-15T10:00:00Z';

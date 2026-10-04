@@ -133,9 +133,25 @@ export function WorkflowLifecycleStatusPill({
   status,
   enableMotion = true,
   completionDisposition,
-}: DomainStatusPillProps & { completionDisposition?: string | null | undefined }) {
+  objectiveOutcome,
+}: DomainStatusPillProps & {
+  completionDisposition?: string | null | undefined;
+  objectiveOutcome?: string | null | undefined;
+}) {
   if (status === 'completed' && completionDisposition === 'gated_continuation') {
     return <StatusPill label="Handed off" pillProps={{ className: 'status status-neutral' }} />;
+  }
+  if (status === 'completed') {
+    switch (objectiveOutcome) {
+      case 'idle':
+        return <StatusPill label="Idle" pillProps={{ className: 'status status-neutral' }} />;
+      case 'failed':
+        return <StatusPill label="Failed" pillProps={{ className: 'status status-failed' }} />;
+      case 'verification_blocked':
+        return <StatusPill label="Verification blocked" pillProps={{ className: 'status status-failed' }} />;
+      case 'cancelled':
+        return <StatusPill label="Cancelled" pillProps={{ className: 'status status-canceled' }} />;
+    }
   }
   return (
     <StatusPill

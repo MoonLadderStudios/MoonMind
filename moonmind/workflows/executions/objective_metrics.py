@@ -9,11 +9,11 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, get_args
 
-OUTCOMES = frozenset(
-    {"succeeded", "failed", "cancelled", "idle", "verification_blocked", "active"}
-)
+from moonmind.schemas.temporal_models import ObjectiveOutcomeValue
+
+OUTCOMES = frozenset(get_args(ObjectiveOutcomeValue))
 COUNTERS = (
     "remediationAttempts",
     "evidenceRetries",

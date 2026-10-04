@@ -8233,6 +8233,87 @@ def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "serializer", [_serialize_execution, _serialize_execution_list_item]
+)
+@pytest.mark.parametrize(
+    "outcome, expected",
+    [
+        ("active", "active"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+        ("idle", "idle"),
+        ("verification_blocked", "verification_blocked"),
+        (None, None),
+        ("unknown", None),
+        ({"outcome": "idle"}, None),
+    ],
+)
+def test_execution_projection_exposes_bounded_objective_outcome(
+    serializer, outcome, expected
+) -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.memo["objectiveOutcome"] = outcome
+
+    payload = serializer(record).model_dump(by_alias=True, mode="json")
+
+    assert payload["objectiveOutcome"] == expected
+    assert payload["state"] == "completed"
+    assert payload["rawState"] == "completed"
+    assert payload["temporalStatus"] == "completed"
+    assert payload["closeStatus"] == "completed"
+    assert record.memo["objectiveOutcome"] == outcome
+    if serializer is _serialize_execution:
+        assert payload["memo"]["objectiveOutcome"] == outcome
+    else:
+        assert "memo" not in payload
+
+
+@pytest.mark.parametrize(
+    "state, close_status, outcome, success, sample_size",
+    [
+        (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED, "idle", None, 0),
+        (MoonMindWorkflowState.COMPLETED, None, "idle", None, 0),
+        (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED, "succeeded", True, 1),
+        (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED, "failed", False, 1),
+        (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED, "verification_blocked", False, 1),
+        (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED, "cancelled", False, 1),
+        (MoonMindWorkflowState.NO_COMMIT, TemporalExecutionCloseStatus.COMPLETED, "succeeded", True, 1),
+        (MoonMindWorkflowState.NO_COMMIT, TemporalExecutionCloseStatus.COMPLETED, "active", True, 1),
+        (MoonMindWorkflowState.NO_COMMIT, None, "succeeded", True, 1),
+        (MoonMindWorkflowState.FAILED, TemporalExecutionCloseStatus.FAILED, "failed", False, 1),
+        (MoonMindWorkflowState.FAILED, TemporalExecutionCloseStatus.FAILED, "idle", False, 1),
+        (MoonMindWorkflowState.FAILED, TemporalExecutionCloseStatus.COMPLETED, "idle", False, 1),
+        (MoonMindWorkflowState.CANCELED, TemporalExecutionCloseStatus.CANCELED, "idle", False, 1),
+        (MoonMindWorkflowState.CANCELED, TemporalExecutionCloseStatus.COMPLETED, "idle", False, 1),
+        (MoonMindWorkflowState.EXECUTING, None, "active", False, 0),
+        (MoonMindWorkflowState.EXECUTING, None, "idle", False, 0),
+        (MoonMindWorkflowState.AWAITING_SLOT, None, "active", False, 0),
+    ],
+)
+def test_execution_metrics_exclude_idle_without_hiding_terminal_outcomes(
+    state, close_status, outcome, success, sample_size
+) -> None:
+    record = _build_execution_record(state=state)
+    record.close_status = close_status
+    record.memo["objectiveOutcome"] = outcome
+    record.memo["summary"] = "Search deferred: no provider capacity; no issue was claimed."
+
+    payload = _serialize_execution(record).model_dump(by_alias=True, mode="json")
+
+    assert payload["runMetrics"]["success"] is success
+    assert payload["runMetrics"]["successRateSample"] == {
+        "success": 1 if success else 0,
+        "sampleSize": sample_size,
+    }
+    assert payload["state"] == state.value
+    assert payload["rawState"] == state.value
+    assert payload["closeStatus"] == (close_status.value if close_status else None)
+    assert payload["memo"]["summary"] == record.memo["summary"]
+
+
 def test_serialize_execution_handles_mixed_timezone_duration_inputs() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.close_status = TemporalExecutionCloseStatus.FAILED
