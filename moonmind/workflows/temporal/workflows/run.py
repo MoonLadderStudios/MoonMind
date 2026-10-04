@@ -45,6 +45,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_run_progress import (
         AGENT_RUN_PROGRESS_PATCH_ID,
         AGENT_RUN_PROGRESS_RESUME_EDGES_PATCH_ID,
+        PROGRESS_STATE_RANKS,
         STEP_WAITING_REASONS,
         TERMINAL_PROGRESS_STATES,
         apply_agent_run_progress,
@@ -1781,6 +1782,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             set()
         )
         self._trusted_issue_context: dict[str, Any] | None = None
+        # Attempt ID of the issue claim whose AgentRun has been observed past
+        # capacity admission. Later AgentRuns under that claim (retries, later
+        # steps) inherit it, so re-queueing behind a busy Provider Profile
+        # keeps the reservation instead of taking the no-work backoff.
+        self._issue_claim_work_started_attempt: str | None = None
         self._assessment_context: dict[str, Any] = {}
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
@@ -21810,6 +21816,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         lease = (self._trusted_issue_context or {}).get("issueClaimLease")
         if isinstance(lease, Mapping):
             parameters["issueClaimLease"] = dict(lease)
+            if (
+                self._issue_claim_work_started_attempt
+                and lease.get("attemptId") == self._issue_claim_work_started_attempt
+            ):
+                parameters["issueClaimLease"]["workStarted"] = True
         if repository_operation:
             if repository_operation not in {"read", "write"}:
                 raise ValueError(
@@ -25737,6 +25748,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 extra={"error": str(exc)},
             )
 
+    def _note_issue_claim_work_started(self, progress_state: str) -> None:
+        """Remember that the current issue claim's AgentRun got past capacity."""
+
+        rank = PROGRESS_STATE_RANKS.get(progress_state)
+        launching = PROGRESS_STATE_RANKS["launching"]
+        if rank is None or not launching <= rank < PROGRESS_STATE_RANKS["completed"]:
+            return
+        lease = (self._trusted_issue_context or {}).get("issueClaimLease")
+        if isinstance(lease, Mapping) and lease.get("attemptId"):
+            self._issue_claim_work_started_attempt = str(lease["attemptId"])
+
     @workflow.signal(name="agent_run_progress")
     def agent_run_progress(self, payload: dict) -> None:
         """Apply one typed AgentRun product-progress projection.
@@ -25812,6 +25834,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             return
         accepted = outcome.accepted_state
+        self._note_issue_claim_work_started(str(accepted.get("state") or ""))
         if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
             # Terminal progress seals the projection; the validated
             # AgentRunResult keeps product authority, so no Step state
