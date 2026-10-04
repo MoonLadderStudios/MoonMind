@@ -726,6 +726,7 @@ the current pair of a non-terminal bridge session survives ordinary expiry.
 The artifact service records recoverable deletion intents for failed physical
 cleanup, which the existing hourly lifecycle sweep reconciles. Final journals
 retain the full event history without keeping a separate growing copy per event.
+Proxy and retained embedded journal writers share this same reclamation owner.
 
 ### 10.2 Normalized event shape
 
