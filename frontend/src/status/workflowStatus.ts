@@ -12,6 +12,24 @@ export const WORKFLOW_STATUS_TRACEABILITY = Object.freeze({
   ],
 });
 
+export const WORKFLOW_OBJECTIVE_OUTCOMES = [
+  'active',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'idle',
+  'verification_blocked',
+] as const;
+
+export type WorkflowObjectiveOutcome = (typeof WORKFLOW_OBJECTIVE_OUTCOMES)[number];
+
+const OBJECTIVE_SUMMARY_FALLBACKS: Readonly<Partial<Record<WorkflowObjectiveOutcome, string>>> = {
+  idle: 'Execution ended with an idle outcome.',
+  failed: 'The requested objective failed.',
+  verification_blocked: 'Verification remains blocked.',
+  cancelled: 'The requested objective was cancelled.',
+};
+
 export const WORKFLOW_STATUS_KEYS = [
   'scheduled',
   'initializing',
@@ -130,6 +148,21 @@ export function formatWorkflowStatusLabel(
   }
   warnUnknownWorkflowStatus(key);
   return fallback;
+}
+
+export function formatWorkflowSummary(
+  summary: string | null | undefined,
+  status: string | null | undefined,
+  objectiveOutcome: WorkflowObjectiveOutcome | null | undefined,
+  completionDisposition?: string | null | undefined,
+): string {
+  const displayedSummary = summary || '—';
+  if (status !== 'completed' || completionDisposition === 'gated_continuation' || !objectiveOutcome) return displayedSummary;
+  const fallback = OBJECTIVE_SUMMARY_FALLBACKS[objectiveOutcome];
+  if (!fallback) return displayedSummary;
+  const explanation = displayedSummary.replace(/^Workflow completed successfully(?:[.!] ?|\s*$)/, '');
+  if (explanation === displayedSummary) return displayedSummary;
+  return explanation.trim() ? explanation : fallback;
 }
 
 const SHIMMER_SWEEP_STATUS_KEYS = new Set<string>(SHIMMER_SWEEP_KEYS);

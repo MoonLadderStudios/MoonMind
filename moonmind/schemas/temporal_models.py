@@ -4055,6 +4055,11 @@ class ExecutionOutputBranchModel(BaseModel):
     evidence_ref: str | None = Field(None, alias="evidenceRef")
 
 
+ObjectiveOutcomeValue = Literal[
+    "active", "succeeded", "failed", "cancelled", "idle", "verification_blocked"
+]
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
@@ -4087,6 +4092,9 @@ class ExecutionModel(BaseModel):
     ] = Field(..., alias="status")
     completion_disposition: Literal["gated_continuation"] | None = Field(
         None, alias="completionDisposition"
+    )
+    objective_outcome: ObjectiveOutcomeValue | None = Field(
+        None, alias="objectiveOutcome"
     )
     dashboard_status: Literal[
         "queued",
@@ -4271,6 +4279,9 @@ class ExecutionListItemModel(BaseModel):
     ] = Field(..., alias="status")
     completion_disposition: Literal["gated_continuation"] | None = Field(
         None, alias="completionDisposition"
+    )
+    objective_outcome: ObjectiveOutcomeValue | None = Field(
+        None, alias="objectiveOutcome"
     )
     dashboard_status: Literal[
         "queued",

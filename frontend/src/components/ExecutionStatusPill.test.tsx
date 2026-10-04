@@ -74,3 +74,38 @@ it('shows a terminal continuation as handed off, preserving failures and ordinar
   rerender(<WorkflowLifecycleStatusPill status="completed" />);
   expect(screen.getByText('Completed')).toBeTruthy();
 });
+
+it('shows a completed idle objective neutrally and preserves a continuation handoff', () => {
+  const { rerender } = render(<WorkflowLifecycleStatusPill status="completed" objectiveOutcome="idle" />);
+  expect(screen.getByText('Idle').className).toContain('status-neutral');
+  expect(screen.queryByText('Completed')).toBeNull();
+
+  rerender(<WorkflowLifecycleStatusPill status="completed" objectiveOutcome="idle" completionDisposition="gated_continuation" />);
+  expect(screen.getByText('Handed off')).toBeTruthy();
+  expect(screen.queryByText('Idle')).toBeNull();
+});
+
+it.each([
+  ['failed', 'Failed', 'status-failed'],
+  ['verification_blocked', 'Verification blocked', 'status-failed'],
+  ['cancelled', 'Cancelled', 'status-canceled'],
+])('shows terminal objective %s instead of a completed-success pill', (objectiveOutcome, label, statusClass) => {
+  const { rerender } = render(<WorkflowLifecycleStatusPill status="completed" objectiveOutcome={objectiveOutcome} />);
+  expect(screen.getByText(label).className).toContain(statusClass);
+  expect(screen.queryByText('Completed')).toBeNull();
+
+  rerender(<WorkflowLifecycleStatusPill status="completed" objectiveOutcome={objectiveOutcome} completionDisposition="gated_continuation" />);
+  expect(screen.getByText('Handed off').className).toContain('status-neutral');
+  expect(screen.queryByText(label)).toBeNull();
+});
+
+it.each(([
+  ['failed', 'Failed'],
+  ['canceled', 'Canceled'],
+  ['executing', 'Executing'],
+  ['no_commit', 'No commit'],
+] as const).flatMap(([status, label]) => ['idle', 'failed', 'verification_blocked', 'cancelled'].map((objectiveOutcome) => [status, label, objectiveOutcome] as const)))('preserves %s/%s lifecycle presentation with stale objective %s', (status, label, objectiveOutcome) => {
+  render(<WorkflowLifecycleStatusPill status={status} objectiveOutcome={objectiveOutcome} enableMotion={false} />);
+  expect(screen.getByText(label)).toBeTruthy();
+  expect(screen.queryByText('Idle')).toBeNull();
+});

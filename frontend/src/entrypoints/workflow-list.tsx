@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
-import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
+import { WORKFLOW_OBJECTIVE_OUTCOMES, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import {
@@ -229,6 +229,7 @@ const ExecutionRowSchema = z
     title: z.string(),
     status: z.string(),
     completionDisposition: z.string().nullable().optional(),
+    objectiveOutcome: z.enum(WORKFLOW_OBJECTIVE_OUTCOMES).nullable().optional().catch(undefined),
     state: z.string(),
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
@@ -2571,7 +2572,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
-                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} />
+                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} objectiveOutcome={row.objectiveOutcome} />
                               {statusSupplements.map((item) => (
                                 <div key={item} className="workflow-list-status-supplement small">
                                   {item}
@@ -2631,7 +2632,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </a>
                       </div>
                       <div className="queue-card-status">
-                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} />
+                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} objectiveOutcome={row.objectiveOutcome} />
                         {statusSupplements.map((item) => (
                           <div key={item} className="workflow-list-status-supplement small">
                             {item}
