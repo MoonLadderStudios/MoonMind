@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from types import SimpleNamespace
 
@@ -164,7 +165,12 @@ async def test_enterprise_clone_uses_snapshot_canonical_remote(
             }
         }
     )
-    attachment = await workspace.materialize(request, plan=plan)
+    attachment = await workspace.materialize(
+        request,
+        plan=plan,
+        runtime_uid=os.getuid() or 1000,
+        runtime_gid=os.getgid() or 1000,
+    )
     assert attachment["kind"] == "bind"
     clone_argv, token = calls[0]
     assert _REMOTE in clone_argv
