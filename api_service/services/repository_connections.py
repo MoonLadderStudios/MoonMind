@@ -189,6 +189,10 @@ _GITHUB_REPOSITORY_PREFIXES = (
 )
 
 
+# Audit identity migration 391 records when it maps the legacy credential.
+_LEGACY_DEFAULT_MIGRATION_REQUEST_ID = "migration:391:legacy-github-credential"
+
+
 def _github_repository_key(value: Any) -> str:
     """Compare ``owner/name`` and GitHub remote spellings of one repository."""
 
@@ -1258,12 +1262,14 @@ class RepositoryConnectionService:
     ) -> RepositoryAssignment:
         """Return the assignment that admits an explicitly selected connection.
 
-        A recorded assignment always decides. The default connection is the
-        classified legacy exception: migration 391 maps the deployment's
-        pre-#4023 credential, whose scope predates assignments, so without a
-        recorded match it serves the named GitHub repository with the
-        connection's own operations. That scope is never routed authority
-        (``launch_candidates`` reads recorded assignments only).
+        A recorded assignment always decides. The default connection that
+        migration 391 mapped from the deployment's pre-#4023 credential is
+        the classified legacy exception: its scope predates assignments, so
+        while it has none it serves the named GitHub repository with the
+        connection's own operations. An operator-recorded default, or one the
+        operator has scoped with assignments, gets no exception. The legacy
+        scope is never routed authority (``launch_candidates`` reads recorded
+        assignments only).
         """
 
         try:
@@ -1272,8 +1278,8 @@ class RepositoryConnectionService:
             name = github_repository_name_from_value(repository)
             if (
                 exc.code != REPOSITORY_SETUP_REQUIRED
-                or connection.id != DEFAULT_GIT_CONNECTION_REF
                 or not name
+                or not await self._is_unscoped_migrated_default(connection)
             ):
                 raise
         endpoint = connection.endpoint_ref
@@ -1286,6 +1292,39 @@ class RepositoryConnectionService:
             ),
             operations=connection.allowed_operations,
         )
+
+    async def _is_unscoped_migrated_default(
+        self, connection: RepositoryConnection
+    ) -> bool:
+        """Whether this is migration 391's mapping and still has no assignment.
+
+        The migration writes its ``connection.create`` audit identity only
+        when the default row is its own mapping; it keeps an operator's
+        existing row without one.
+        """
+
+        if connection.id != DEFAULT_GIT_CONNECTION_REF:
+            return False
+        migrated = (
+            await self._session.execute(
+                select(RepositoryConnectionAuditEvent.id).where(
+                    RepositoryConnectionAuditEvent.connection_id == connection.id,
+                    RepositoryConnectionAuditEvent.request_id
+                    == _LEGACY_DEFAULT_MIGRATION_REQUEST_ID,
+                    RepositoryConnectionAuditEvent.action == "connection.create",
+                )
+            )
+        ).first()
+        if migrated is None:
+            return False
+        assigned = (
+            await self._session.execute(
+                select(RepositoryConnectionAssignment.id).where(
+                    RepositoryConnectionAssignment.connection_id == connection.id
+                )
+            )
+        ).first()
+        return assigned is None
 
     async def _recorded_launch_assignment(
         self, connection: RepositoryConnection, repository: str | None

@@ -1492,20 +1492,23 @@ async def test_default_connection_admits_explicit_repository_without_assignment(
 
     Migration 391 records the deployment's legacy credential as
     ``repository-connection:git-default`` without assignments. Selecting it
-    explicitly (as every saved schedule does) must still compile, while an
-    unassigned recorded connection and routed selection stay strict.
+    explicitly (as every saved schedule does) must still compile. A default
+    the operator recorded, or one the operator has scoped with assignments,
+    an unassigned recorded connection, and routed selection all stay strict.
     """
 
     from unittest.mock import AsyncMock
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from api_service.db.models import Base
+    from api_service.db.models import Base, RepositoryConnectionAuditEvent
+    from api_service.services.repository_connections import RepositoryConnectionService
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
     )
     from tests.helpers.repository_connections import (
         github_pat_connection,
+        github_repository_assignment,
         record_repository_connections,
     )
 
@@ -1538,15 +1541,34 @@ async def test_default_connection_admits_explicit_repository_without_assignment(
             extra_parameters={"repository": target_repository, "publishMode": "pr"},
         )
 
+    def explicit(connection_ref):
+        return {
+            "provider": "git",
+            "connectionRef": connection_ref,
+            "repository": {"name": repository},
+        }
+
     artifacts = _ArtifactService()
     try:
-        compiled = await compile_for(
-            {
-                "provider": "git",
-                "connectionRef": DEFAULT_GIT_CONNECTION_REF,
-                "repository": {"name": repository},
-            }
-        )
+        # Without migration provenance the default is operator-owned.
+        with pytest.raises(Exception, match="REPOSITORY_SETUP_REQUIRED"):
+            await compile_for(explicit(DEFAULT_GIT_CONNECTION_REF))
+
+        async with sessions() as session:
+            session.add(
+                RepositoryConnectionAuditEvent(
+                    request_id="migration:391:legacy-github-credential",
+                    actor_ref="system:migration-391",
+                    action="connection.create",
+                    connection_id=DEFAULT_GIT_CONNECTION_REF,
+                    scope_type="system",
+                    policy_revision=1,
+                    detail_json={"migration": "391_legacy_github_cred_4023"},
+                )
+            )
+            await session.commit()
+
+        compiled = await compile_for(explicit(DEFAULT_GIT_CONNECTION_REF))
         access = compiled.envelope.payload.resolvedTools["repositoryAccess"]
         assert set(access) == {"source", "destination"}
         snapshot = json.loads(
@@ -1568,16 +1590,24 @@ async def test_default_connection_admits_explicit_repository_without_assignment(
         }
 
         with pytest.raises(Exception, match="REPOSITORY_SETUP_REQUIRED"):
-            await compile_for(
-                {
-                    "provider": "git",
-                    "connectionRef": "unassigned-repository",
-                    "repository": {"name": repository},
-                }
-            )
+            await compile_for(explicit("unassigned-repository"))
         # The legacy scope is never routed authority.
         with pytest.raises(ValueError, match="missing or ambiguous"):
             await compile_for(repository)
+
+        # Once the operator scopes the default, its assignments decide.
+        async with sessions() as session:
+            await RepositoryConnectionService(session).set_assignment(
+                github_repository_assignment(
+                    DEFAULT_GIT_CONNECTION_REF, "MoonLadderStudios/MoonMind"
+                ),
+                actor_ref="system:deployment",
+                request_id="scope-default",
+                principal_ref="system:deployment",
+                principal_scope=("system", None),
+            )
+        with pytest.raises(Exception, match="REPOSITORY_SETUP_REQUIRED"):
+            await compile_for(explicit(DEFAULT_GIT_CONNECTION_REF))
     finally:
         await engine.dispose()
 
