@@ -1381,35 +1381,43 @@ async def test_drain_completes_owned_claim_and_leaves_foreign_claims() -> None:
     assert foreign_id != owned.lease_id
 
 
-def _expired_slot_claim() -> dict:
+def _slot_claim(reason: str, *, provider_lease_id: str = "provider-lease-1") -> dict:
     return {
-        "lease_id": "provider-lease-1",
+        "lease_id": provider_lease_id,
         "profile_id": "profile-1",
         "fencing_generation": 7,
-        "claim_id": "provider-lease-1:7",
-        "reason": "lease_expired",
+        "claim_id": f"{provider_lease_id}:7",
+        "reason": reason,
         "runId": "run-admitted-1",
         "evidenceIdentity": "evidence-admitted-1",
         "attempt": 0,
     }
 
 
-@pytest.mark.asyncio
-async def test_drain_defers_expired_slot_claim_while_host_owner_is_live() -> None:
-    """Slot age alone never tears down a host its owner is still heartbeating.
-
-    A long repository-continuation run outlived the Provider Profile slot's
-    maximum duration while its coordinator kept the host lease fresh. Stopping
-    that host failed the run with "host lease cleanup is owned by the janitor";
-    the live owner releases the slot itself when its turn ends.
-    """
-
-    owned = _drain_lease(provider_lease_id="provider-lease-1")
+def _live_drain_lease(*, provider_lease_id="provider-lease-1", status="assigned"):
+    lease = _drain_lease(provider_lease_id=provider_lease_id)
     now = datetime.now(UTC)
-    owned.status = "assigned"
-    owned.last_heartbeat_at = now - timedelta(seconds=5)
-    owned.expires_at = now + timedelta(seconds=3600)
-    repository = _Repository(owned)
+    lease.status = status
+    lease.last_heartbeat_at = now - timedelta(seconds=5)
+    lease.expires_at = now + timedelta(seconds=3600)
+    return lease
+
+
+class _MultiLeaseRepository(_Repository):
+    """Serve several host leases; claim/stop act on the last one loaded."""
+
+    def __init__(self, *leases):
+        super().__init__(leases[0])
+        self.leases = {lease.lease_id: lease for lease in leases}
+
+    async def get_host_lease(self, lease_id):
+        lease = self.leases.get(lease_id)
+        if lease is not None:
+            self.lease = lease
+        return lease
+
+
+def _verified_janitor(repository):
     runtime = _Runtime()
     lease_client = _VerifiedLeaseClient()
     janitor = OmnigentOAuthHostJanitor(
@@ -1418,9 +1426,29 @@ async def test_drain_defers_expired_slot_claim_while_host_owner_is_live() -> Non
         client=_Client(),
         lease_client=lease_client,
     )
+    return janitor, runtime, lease_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["lease_expired", "cleanup_requested"])
+async def test_drain_defers_age_based_claim_while_host_owner_is_live(
+    reason: str,
+) -> None:
+    """Slot age alone never tears down a host its owner is still heartbeating.
+
+    A long repository-continuation run outlived the Provider Profile slot's
+    maximum duration while its coordinator kept the host lease fresh. Stopping
+    that host failed the run with "host lease cleanup is owned by the janitor";
+    the live owner releases the slot itself when its turn ends. Claims restored
+    from a snapshot without reasons carry the legacy ``cleanup_requested``
+    reason and get the same protection.
+    """
+
+    owned = _live_drain_lease()
+    janitor, runtime, lease_client = _verified_janitor(_Repository(owned))
 
     result = await janitor.drain_manager_cleanup_claims(
-        "codex_cli", [_expired_slot_claim()]
+        "codex_cli", [_slot_claim(reason)]
     )
 
     assert result["actions"] == [
@@ -1436,29 +1464,90 @@ async def test_drain_defers_expired_slot_claim_while_host_owner_is_live() -> Non
 
 
 @pytest.mark.asyncio
+async def test_drain_reclaims_live_host_for_terminal_owner_claim() -> None:
+    """A terminal owner is evidence, so a live host is still reclaimed."""
+
+    owned = _live_drain_lease()
+    janitor, runtime, _lease_client = _verified_janitor(_Repository(owned))
+
+    result = await janitor.drain_manager_cleanup_claims(
+        "codex_cli", [_slot_claim("owner_terminal")]
+    )
+
+    assert [a["action"] for a in result["actions"]] == [
+        "cleanup_claim_completed_verified"
+    ]
+    assert runtime.stopped == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["lease_expired", "owner_terminal"])
+async def test_drain_leaves_fresh_draining_lease_to_its_cleanup_owner(
+    reason: str,
+) -> None:
+    """A coordinator mid-cleanup keeps sole ownership of its draining lease."""
+
+    owned = _live_drain_lease(status="draining")
+    repository = _Repository(owned)
+    janitor, runtime, lease_client = _verified_janitor(repository)
+
+    result = await janitor.drain_manager_cleanup_claims(
+        "codex_cli", [_slot_claim(reason)]
+    )
+
+    assert [a["action"] for a in result["actions"]] == [
+        "cleanup_claim_deferred_live_owner"
+    ]
+    assert repository.cleanup_claims == []
+    assert owned.status == "draining"
+    assert runtime.stopped == 0
+    assert lease_client.verified == []
+
+
+@pytest.mark.asyncio
 async def test_drain_completes_expired_slot_claim_once_host_owner_is_stale() -> None:
     """The deferral is bounded: an abandoned host is still reclaimed."""
 
     owned = _drain_lease(provider_lease_id="provider-lease-1")
     owned.status = "assigned"
-    repository = _Repository(owned)
-    runtime = _Runtime()
-    lease_client = _VerifiedLeaseClient()
-    janitor = OmnigentOAuthHostJanitor(
-        repository=repository,
-        runtime=runtime,
-        client=_Client(),
-        lease_client=lease_client,
-    )
+    janitor, runtime, _lease_client = _verified_janitor(_Repository(owned))
 
     result = await janitor.drain_manager_cleanup_claims(
-        "codex_cli", [_expired_slot_claim()]
+        "codex_cli", [_slot_claim("lease_expired")]
     )
 
     assert [a["action"] for a in result["actions"]] == [
         "cleanup_claim_completed_verified"
     ]
     assert owned.status == "stopped"
+    assert runtime.stopped == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_live_owner_claims_do_not_starve_later_claims() -> None:
+    """Deferred claims do not spend the per-pass cleanup budget."""
+
+    live = _live_drain_lease(provider_lease_id="provider-lease-1")
+    stale = _drain_lease(provider_lease_id="provider-lease-2")
+    janitor, runtime, _lease_client = _verified_janitor(
+        _MultiLeaseRepository(live, stale)
+    )
+
+    result = await janitor.drain_manager_cleanup_claims(
+        "codex_cli",
+        [
+            _slot_claim("lease_expired", provider_lease_id="provider-lease-1"),
+            _slot_claim("lease_expired", provider_lease_id="provider-lease-2"),
+        ],
+        max_claims=1,
+    )
+
+    assert [(a["providerLeaseId"], a["action"]) for a in result["actions"]] == [
+        ("provider-lease-1", "cleanup_claim_deferred_live_owner"),
+        ("provider-lease-2", "cleanup_claim_completed_verified"),
+    ]
+    assert live.status == "assigned"
+    assert stale.status == "stopped"
     assert runtime.stopped == 1
 
 
