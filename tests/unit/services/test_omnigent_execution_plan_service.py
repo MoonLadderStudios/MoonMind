@@ -1485,6 +1485,104 @@ async def test_schedule_refresh_retains_original_repository_principal(
 
 
 @pytest.mark.asyncio
+async def test_default_connection_admits_explicit_repository_without_assignment(
+    monkeypatch, tmp_path
+) -> None:
+    """The migrated pre-assignment default keeps its legacy repository scope.
+
+    Migration 391 records the deployment's legacy credential as
+    ``repository-connection:git-default`` without assignments. Selecting it
+    explicitly (as every saved schedule does) must still compile, while an
+    unassigned recorded connection and routed selection stay strict.
+    """
+
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        record_repository_connections,
+    )
+
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF", "ghcr.io/example/omnigent-server@sha256:" + "b" * 64
+    )
+    repository = "MoonLadderStudios/Tactics"
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "GITHUB_TOKEN"),
+        github_pat_connection("unassigned-repository", "UNASSIGNED_PAT"),
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        service, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+
+    async def compile_for(target_repository):
+        return await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            session_factory=sessions,
+            extra_parameters={"repository": target_repository, "publishMode": "pr"},
+        )
+
+    artifacts = _ArtifactService()
+    try:
+        compiled = await compile_for(
+            {
+                "provider": "git",
+                "connectionRef": DEFAULT_GIT_CONNECTION_REF,
+                "repository": {"name": repository},
+            }
+        )
+        access = compiled.envelope.payload.resolvedTools["repositoryAccess"]
+        assert set(access) == {"source", "destination"}
+        snapshot = json.loads(
+            artifacts.payloads[
+                access["destination"]["artifactRef"].removeprefix("artifact:")
+            ]
+        )
+        assert snapshot["selection"]["connectionId"] == DEFAULT_GIT_CONNECTION_REF
+        assert snapshot["selection"]["operations"] == [
+            "write",
+            "branch_write",
+            "review_request",
+        ]
+        assert snapshot["repositoryIdentity"] == {
+            "endpoint": "https://github.com",
+            "providerRepoId": None,
+            "canonicalRemote": f"https://github.com/{repository}.git",
+            "displayName": repository,
+        }
+
+        with pytest.raises(Exception, match="REPOSITORY_SETUP_REQUIRED"):
+            await compile_for(
+                {
+                    "provider": "git",
+                    "connectionRef": "unassigned-repository",
+                    "repository": {"name": repository},
+                }
+            )
+        # The legacy scope is never routed authority.
+        with pytest.raises(ValueError, match="missing or ambiguous"):
+            await compile_for(repository)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("generic_admitted", [False, True])
 async def test_repository_codex_product_admission_requires_capable_realizer(
     monkeypatch, generic_admitted
