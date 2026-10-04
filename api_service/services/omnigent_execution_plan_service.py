@@ -1186,7 +1186,13 @@ async def compile_and_persist_execution_plan(
         effective_launch.get("serverImageRef"),
         field_name="effective launch serverImageRef",
     )
-    if harness_id == "codex-native":
+    # Retained static Codex uses its explicit policy-bound host adapter. All
+    # on-demand harnesses resolve the selected image's observed provenance
+    # through one selector; the catalog identifies the server, not that host.
+    if harness_id == "codex-native" and planner_launch_policy.hostMode in {
+        "static-connected",
+        "static_compose",
+    }:
         architectures = [
             value if "/" in value else f"linux/{value}"
             for value in (
@@ -1242,17 +1248,22 @@ async def compile_and_persist_execution_plan(
     # The persisted policy snapshot may still pin the previous digest while
     # Host Class selection reads current deployment evidence. Same-repository
     # drift is reconciled to the selected Host Class image (launch-time
-    # attestation re-verifies major.minor); a foreign repository still fails
+    # attestation verifies the actual host); a foreign repository still fails
     # closed instead of substituting another image family.
-    if harness_id != "codex-native" and host_class.imageRef != str(
-        effective_launch.get("hostImageRef") or ""
-    ):
+    if host_class.imageRef != str(effective_launch.get("hostImageRef") or ""):
         from moonmind.omnigent.host_image_drift import (
             reconcile_effective_launch_to_selected_host,
         )
 
-        reconciled = reconcile_effective_launch_to_selected_host(
-            effective_launch, host_class.imageRef
+        # The retained Codex coordinator recompiles the policy snapshot, so
+        # its explicit image authority must agree before a plan is persisted.
+        # Bootstrap owns advancing that policy for a new default host image.
+        reconciled = (
+            reconcile_effective_launch_to_selected_host(
+                effective_launch, host_class.imageRef
+            )
+            if harness_id != "codex-native"
+            else None
         )
         if reconciled is None:
             planned_ref = str(effective_launch.get("hostImageRef") or "")

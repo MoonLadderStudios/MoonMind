@@ -202,7 +202,17 @@ def _derive_retention(
         return db_models.TemporalArtifactRetentionClass.LONG
     if link in {"report.structured", "report.evidence"}:
         return db_models.TemporalArtifactRetentionClass.STANDARD
-    if link in {"output.logs", "debug.trace"}:
+    if link in {
+        "output.logs",
+        "debug.trace",
+        "debug.skill_resolution_trace",
+        "runtime.stdout",
+        "runtime.stderr",
+        "runtime.merged_logs",
+        "runtime.diagnostics",
+        "runtime.omnigent.sse.raw",
+        "runtime.omnigent.sse.normalized",
+    }:
         return db_models.TemporalArtifactRetentionClass.EPHEMERAL
     if link in {"input.instructions", "input.plan", "input.manifest"}:
         return db_models.TemporalArtifactRetentionClass.STANDARD
@@ -1271,6 +1281,29 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
+    @staticmethod
+    def _active_journal_reference_exists(artifact_id: Any) -> Any:
+        from moonmind.omnigent.bridge_store import _TERMINAL_STATUSES
+
+        bridge = db_models.OmnigentBridgeSession
+        return exists().where(
+            bridge.status.not_in(_TERMINAL_STATUSES),
+            or_(
+                bridge.raw_events_ref == artifact_id,
+                bridge.raw_events_ref == "artifact:" + artifact_id,
+                bridge.normalized_events_ref == artifact_id,
+                bridge.normalized_events_ref == "artifact:" + artifact_id,
+            ),
+        )
+
+    async def has_active_journal_reference(self, artifact_id: str) -> bool:
+        """The current journal remains recovery data until its bridge is terminal."""
+        return bool(
+            await self._session.scalar(
+                select(self._active_journal_reference_exists(artifact_id))
+            )
+        )
+
     async def list_expired_artifacts(
         self,
         *,
@@ -1296,6 +1329,9 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.status
                 != db_models.TemporalArtifactStatus.DELETED,
                 ~pinned_exists,
+                ~self._active_journal_reference_exists(
+                    db_models.TemporalArtifact.artifact_id
+                ).correlate(db_models.TemporalArtifact),
             )
             .order_by(
                 db_models.TemporalArtifact.expires_at.asc(),
@@ -1320,6 +1356,9 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.deleted_at.is_not(None),
                 db_models.TemporalArtifact.deleted_at <= cutoff,
                 db_models.TemporalArtifact.hard_deleted_at.is_(None),
+                ~self._active_journal_reference_exists(
+                    db_models.TemporalArtifact.artifact_id
+                ).correlate(db_models.TemporalArtifact),
             )
             .order_by(db_models.TemporalArtifact.deleted_at.asc())
             .limit(max(1, int(limit)))
@@ -3542,6 +3581,13 @@ class TemporalArtifactService:
         live_claims = await self._repository.list_live_use_claims(
             artifact_id, now=reference_now
         )
+        if not admin and await self._repository.has_active_journal_reference(
+            artifact_id
+        ):
+            raise TemporalArtifactStateError(
+                "SAVED_WORK_DELETE_BLOCKED: artifact "
+                f"{artifact_id} is an active recovery journal"
+            )
         if live_claims and not admin:
             holders = sorted({claim.owner_principal for claim in live_claims})
             raise TemporalArtifactStateError(
@@ -3709,10 +3755,10 @@ class TemporalArtifactService:
         reference_now = datetime.now(UTC)
         if await self._repository.has_live_use_claim(
             artifact_id, now=reference_now
-        ):
+        ) or await self._repository.has_active_journal_reference(artifact_id):
             raise TemporalArtifactStateError(
                 "SAVED_WORK_DELETE_BLOCKED: artifact "
-                f"{artifact_id} has a live use claim; refusing hard delete"
+                f"{artifact_id} has live recovery/use protection; refusing hard delete"
             )
         now = datetime.now(UTC)
         artifact.hard_deleted_at = now
@@ -3777,6 +3823,9 @@ class TemporalArtifactService:
         soft_deleted = 0
         skipped_in_use = 0
         for artifact in expired:
+            artifact = await self._repository.get_artifact_for_update(
+                artifact.artifact_id
+            )
             if artifact.status is db_models.TemporalArtifactStatus.DELETED:
                 artifact.last_lifecycle_run_id = lifecycle_run_id
                 continue
@@ -3784,6 +3833,8 @@ class TemporalArtifactService:
             # alone never removes content under a live claim or operator pin.
             if await self._repository.has_live_use_claim(
                 artifact.artifact_id, now=sweep_now
+            ) or await self._repository.has_active_journal_reference(
+                artifact.artifact_id
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
@@ -3809,6 +3860,8 @@ class TemporalArtifactService:
             )
             if await self._repository.has_live_use_claim(
                 artifact.artifact_id, now=sweep_now
+            ) or await self._repository.has_active_journal_reference(
+                artifact.artifact_id
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
