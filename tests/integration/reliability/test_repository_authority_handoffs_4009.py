@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -356,6 +357,8 @@ async def test_loaded_plan_prepares_clone_and_cli_without_ambient_credentials(
 ):
     from pathlib import Path
 
+    # The simulated clone runs as pytest, so use its owner for preparation and retry.
+    runtime_uid, runtime_gid = os.getuid(), os.getgid()
     parameters = (
         {
             "workspace": {
@@ -462,7 +465,7 @@ async def test_loaded_plan_prepares_clone_and_cli_without_ambient_credentials(
         request=request,
         plan=plan,
         host_class=SimpleNamespace(
-            runtime={"uid": 1000, "gid": 1000},
+            runtime={"uid": runtime_uid, "gid": runtime_gid},
             imageRef="host-image",
             omnigentVersion="",
         ),
@@ -511,7 +514,12 @@ async def test_loaded_plan_prepares_clone_and_cli_without_ambient_credentials(
         await session.commit()
     calls.clear()
     await workspace.materialize(
-        request, plan=plan, repository_owner_ref=owner, authority_sink=record
+        request,
+        plan=plan,
+        repository_owner_ref=owner,
+        authority_sink=record,
+        runtime_uid=runtime_uid,
+        runtime_gid=runtime_gid,
     )
     assert not calls
     assert saved.read_text() == "accepted work survives source revocation"
