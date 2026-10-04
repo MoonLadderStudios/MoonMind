@@ -43,9 +43,8 @@ _OPENCODE_ALLOWED_LAUNCH_POLICIES = [
 _SERVER_IMAGE_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "6" * 64
 
 
-@pytest.fixture(autouse=True)
-def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """Give OpenCode plan tests exact resolver evidence for selected refs."""
+def _configure_ready_host_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Give plan tests exact resolver evidence for selected host images."""
 
     from moonmind.omnigent.bootstrap import store
 
@@ -88,6 +87,11 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str
     monkeypatch.setattr(store, "load_resolved_state", load_state)
 
     return provenance
+
+
+@pytest.fixture(autouse=True)
+def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    return _configure_ready_host_image_pair(monkeypatch)
 
 
 class _LegacyClassAdmissionDecision(BaseModel):

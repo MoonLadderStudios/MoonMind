@@ -16,18 +16,17 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
     _PlanStore,
+    _configure_ready_host_image_pair,
     _policy_snapshot,
     _protected_support_evidence,
     _snapshot,
-)
-from tests.unit.services.test_omnigent_execution_plan_service import (
-    _ready_opencode_image_pair as _ready_opencode_image_pair,
 )
 
 
 @pytest_asyncio.fixture
 async def admitted_codex_plan(monkeypatch, request):
     policy = getattr(request, "param", "codex-on-demand@16")
+    _configure_ready_host_image_pair(monkeypatch)
     monkeypatch.setenv(
         "OMNIGENT_SHARED_HOST_IMAGE_REF",
         "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
