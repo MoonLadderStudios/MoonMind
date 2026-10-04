@@ -15,6 +15,7 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 )
 from moonmind.omnigent.oauth_hosts import (
     CLEANUP_CLAIMABLE_HOST_STATES,
+    HEARTBEAT_HOST_STATES,
     OmnigentOAuthHostRepository,
 )
 from moonmind.provider_profiles.lease_client import (
@@ -144,6 +145,28 @@ class OmnigentOAuthHostJanitor:
             state.binding.runtimeBindingRef,
             expected_revision=state.revision,
             expected_fencing_generation=state.fencing_generation,
+        )
+
+    def _host_owner_is_live(self, lease: Any, *, claim_reason: Any) -> bool:
+        """Whether a manager cleanup claim must leave this host to its owner.
+
+        A fresh draining lease already has a cleanup owner. A fresh running
+        lease yields only to ``owner_terminal`` evidence: slot expiry and the
+        legacy ``cleanup_requested`` reason are age-based safety nets, not
+        proof that the consumer stopped.
+        """
+
+        now = datetime.now(UTC)
+        if (
+            lease.expires_at <= now
+            or lease.last_heartbeat_at <= now - self._heartbeat_timeout
+        ):
+            return False
+        if lease.status == "draining":
+            return True
+        return (
+            lease.status in HEARTBEAT_HOST_STATES
+            and claim_reason != "owner_terminal"
         )
 
     async def _claim_cleanup(self, lease: Any) -> Any | None:
@@ -284,7 +307,10 @@ class OmnigentOAuthHostJanitor:
         from moonmind.omnigent.oauth_hosts import deterministic_host_lease_id
 
         actions: list[dict[str, Any]] = []
-        for claim in list(claims or [])[: max(1, int(max_claims))]:
+        cleanup_budget = max(1, int(max_claims))
+        for claim in list(claims or []):
+            if cleanup_budget <= 0:
+                break
             if not isinstance(claim, dict):
                 continue
             provider_lease_id = str(claim.get("lease_id") or "").strip()
@@ -324,6 +350,20 @@ class OmnigentOAuthHostJanitor:
                     }
                 )
                 continue
+            if self._host_owner_is_live(host_lease, claim_reason=claim.get("reason")):
+                # The live owner releases the slot when its turn or cleanup
+                # ends; an abandoned host goes stale and is drained on a later
+                # pass. Deferred claims do not spend this pass's cleanup budget,
+                # so long-running owners cannot starve later claims.
+                actions.append(
+                    {
+                        "claimId": claim_id,
+                        "providerLeaseId": provider_lease_id,
+                        "action": "cleanup_claim_deferred_live_owner",
+                    }
+                )
+                continue
+            cleanup_budget -= 1
             try:
                 binding = await self._repository.validate_binding(
                     host_lease.binding_ref
