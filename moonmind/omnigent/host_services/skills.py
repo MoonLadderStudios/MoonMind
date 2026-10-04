@@ -17,6 +17,7 @@ from moonmind.omnigent.host_services.workspace import (
     resolve_daemon_attachment_source,
 )
 from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
     materialize_run_skill_snapshot,
@@ -42,13 +43,14 @@ class OmnigentSkillDeliveryService:
     ) -> None:
         self._root = Path(workspace_root).resolve()
         self._workspace_volume = workspace_volume
-        self._artifacts = _ArtifactAdapter(artifact_gateway)
+        self._gateway = artifact_gateway
 
     async def _resolve_authority(
         self,
         resolved_skills: dict[str, Any],
         *,
         owner_ref: str,
+        request: AgentExecutionRequest,
     ) -> tuple[Any, Path, Path, dict[str, Any]]:
         """Resolve deterministic projection and cleanup authority without mutation."""
 
@@ -61,7 +63,9 @@ class OmnigentSkillDeliveryService:
                 "resolved Skill authority is missing",
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
             )
-        resolved = await load_resolved_skillset(self._artifacts, manifest_ref)
+        gateway = self._gateway.for_request(request)
+        artifacts = _ArtifactAdapter(gateway)
+        resolved = await load_resolved_skillset(artifacts, manifest_ref)
         projection_key = hashlib.sha256(
             f"{owner_ref}\0{manifest_ref}\0{expected_digest}".encode("utf-8")
         ).hexdigest()[:24]
@@ -95,11 +99,12 @@ class OmnigentSkillDeliveryService:
         resolved_skills: dict[str, Any],
         *,
         owner_ref: str,
+        request: AgentExecutionRequest,
     ) -> dict[str, Any]:
         """Return cleanup authority that can be persisted before materialization."""
 
         _resolved, _root, _snapshot, attachment = await self._resolve_authority(
-            resolved_skills, owner_ref=owner_ref
+            resolved_skills, owner_ref=owner_ref, request=request
         )
         return attachment
 
@@ -108,9 +113,10 @@ class OmnigentSkillDeliveryService:
         resolved_skills: dict[str, Any],
         *,
         owner_ref: str,
+        request: AgentExecutionRequest,
     ) -> dict[str, Any]:
         resolved, projection_root, active_snapshot, anticipated = (
-            await self._resolve_authority(resolved_skills, owner_ref=owner_ref)
+            await self._resolve_authority(resolved_skills, owner_ref=owner_ref, request=request)
         )
         if active_snapshot.exists() or active_snapshot.is_symlink():
             if active_snapshot.is_symlink() or not active_snapshot.is_dir():
@@ -125,7 +131,7 @@ class OmnigentSkillDeliveryService:
                 run_root=projection_root,
                 runtime_id="omnigent",
                 resolved_skillset=resolved,
-                artifact_service=self._artifacts,
+                artifact_service=_ArtifactAdapter(self._gateway.for_request(request)),
                 project_adapter_aliases=False,
             )
         await verify_skill_projection(

@@ -2852,6 +2852,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     enforced_egress_profile_refs: list[str] = []
 
     class ArtifactServiceProxy:
+        def for_request(self, request):
+            from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+            return TemporalOmnigentArtifactGateway(get_async_session_context).for_request(request)
+
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
                 async with get_async_session_context() as session:

@@ -39,6 +39,18 @@ AUTO_SKILL_SENTINEL = "auto"
 ACTIVE_SKILL_SNAPSHOT_HEADER = "Active MoonMind skill snapshot:"
 
 
+async def runtime_artifact_reader(artifact_service: Any, request: Any) -> Any:
+    """Bind the existing service to the trusted launch request's input closure."""
+    bind = getattr(type(artifact_service), "for_request", None)
+    if bind is None:
+        return artifact_service
+    reader = bind(artifact_service, request)
+    admit = getattr(reader, "admit_runtime_inputs", None)
+    if admit is not None:
+        await admit(request=request)
+    return reader
+
+
 class SkillProjectionError(RuntimeError):
     """Raised when run-scoped skill projection cannot be completed safely.
 

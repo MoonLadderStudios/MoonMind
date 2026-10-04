@@ -421,7 +421,7 @@ async def test_child_plan_reads_parent_artifacts_with_its_admitted_principal(
         child.payload.repositoryAuthorityRefs["source"]
         != parent.envelope.payload.repositoryAuthorityRefs["source"]
     )
-    with pytest.raises(TemporalArtifactAuthorizationError):
+    with pytest.raises(OmnigentArtifactError, match="admitted"):
         await context.gateway.read_bytes(
             parent.envelope.payload.resolvedTools["repositoryAccess"]["source"][
                 "artifactRef"

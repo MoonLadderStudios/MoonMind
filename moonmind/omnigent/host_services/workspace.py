@@ -371,7 +371,7 @@ class OmnigentWorkspaceMaterializer:
                 restore_refs = ()
             checkpoint_ref = source.checkpoint_ref or source.artifact_ref
             try:
-                projection = await self._artifact_projector.project(
+                projection = await self._artifact_projector.for_request(request).project(
                     candidate,
                     checkpoint_ref=checkpoint_ref,
                     checkpoint_digest=source.artifact_digest,
@@ -394,7 +394,7 @@ class OmnigentWorkspaceMaterializer:
             # A ready repository is not evidence that current verifier inputs
             # exist. Re-admit only attachments, preserving all candidate edits.
             try:
-                attachment_evidence = await self._artifact_projector.project_attachments(
+                attachment_evidence = await self._artifact_projector.for_request(request).project_attachments(
                     candidate,
                     refs=attachment_refs,
                     workflow_id=owner_workflow_id,

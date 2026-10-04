@@ -896,6 +896,24 @@ Representative path:
 
 The exact path is implementation-specific.
 
+Durable input authority is provided by the shared request-bound artifact reader
+in `moonmind/omnigent/bridge_artifacts.py` (#4633), also used by surviving direct
+Codex and managed launchers. It admits only the selected manifest and its
+digest-checked content bundles, including helper files. Parent-linked resolution,
+child-linked production and verified unlinked plan-service snapshots keep their
+original bytes, ownership and refs. Runtime publication's
+`inputSkillSnapshotRef` is a reference wrapper; it does not replace the resolved
+manifest or authorize unrelated content. Native managed inputs require exact
+producer namespace/workflow/run linkage; unlinked snapshots require immutable
+plan provenance. A child's workflow name alone cannot delegate a parent's data.
+
+Readers are reconstructed from persisted admission after worker replacement,
+without browser cookies, operator-wide delegation or a filesystem fallback.
+Missing authority or changed refs remain failures. This credential-free restart
+slice is reusable by #4627; live provider qualification and the #4352 account
+removal remain separately owned. The artifact boundary and raw-content policy
+are defined in [WorkflowArtifactSystemDesign.md](../Temporal/WorkflowArtifactSystemDesign.md#93-service-and-worker-access).
+
 Rules:
 
 1. the backing store must be run-scoped;

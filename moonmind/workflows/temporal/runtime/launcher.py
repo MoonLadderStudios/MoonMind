@@ -61,6 +61,7 @@ from moonmind.utils.workspace_paths import read_regular_file
 from moonmind.workflows.skills.run_projection import (
     append_remediation_attempt_context,
     load_resolved_skillset,
+    runtime_artifact_reader,
     materialize_run_skill_snapshot,
     prepend_skill_activation_summary,
     verify_skill_projection,
@@ -2255,8 +2256,9 @@ class ManagedRuntimeLauncher:
         from moonmind.config.settings import settings as _mm_settings
 
         run_root = Path(resolved_workspace_path).absolute().parent
+        artifact_reader = await runtime_artifact_reader(self._artifact_service, request)
         resolved_skillset = await load_resolved_skillset(
-            self._artifact_service, skillset_ref
+            artifact_reader, skillset_ref
         )
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         from moonmind.workflows.agent_skills.selection import selected_agent_skill
@@ -2284,7 +2286,7 @@ class ManagedRuntimeLauncher:
             run_root=str(run_root),
             runtime_id=str(profile.runtime_id or "managed-runtime"),
             resolved_skillset=resolved_skillset,
-            artifact_service=self._artifact_service,
+            artifact_service=artifact_reader,
             projection_owner_uid=1000,
             projection_owner_gid=1000,
             project_adapter_aliases=selected_skill_name != "moonspec-verify",

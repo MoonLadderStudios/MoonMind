@@ -239,6 +239,10 @@ class WorkspaceArtifactProjector:
     def __init__(self, artifact_service: Any | None) -> None:
         self._service = self._as_artifact_service(artifact_service)
 
+    def for_request(self, request):
+        bind = getattr(self._service, "for_request", None)
+        return WorkspaceArtifactProjector(bind(request) if bind else self._service)
+
     async def project(
         self,
         workspace: Path,

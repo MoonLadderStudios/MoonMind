@@ -116,7 +116,9 @@ class ArtifactPlanningSkillResolver:
         existing_ref = str(request.resolved_skillset_ref or "").strip()
         if existing_ref:
             try:
-                body = await self._artifacts.read_bytes(existing_ref)
+                from moonmind.workflows.skills.run_projection import runtime_artifact_reader
+                reader = await runtime_artifact_reader(self._artifacts, request)
+                body = await reader.read_bytes(existing_ref)
                 manifest = json.loads(body)
             except Exception as exc:
                 raise HarnessPlatformError(
@@ -1013,6 +1015,12 @@ class OmnigentPlannedHostResolver:
         self._artifacts = artifact_gateway
         self._architecture = architecture or os.getenv(
             "MOONMIND_OMNIGENT_HOST_ARCHITECTURE", "linux/amd64"
+        )
+
+    def for_request(self, request: AgentExecutionRequest):
+        return OmnigentPlannedHostResolver(
+            catalog_repository=self._catalogs, host_class_selector=self._selector,
+            artifact_gateway=self._artifacts.for_request(request), architecture=self._architecture,
         )
 
     async def __call__(self, plan: OmnigentExecutionPlanEnvelope):

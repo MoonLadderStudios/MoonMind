@@ -460,6 +460,28 @@ Baseline policy:
 
 Workers use service identity with least privilege.
 
+Omnigent input reads use an immutable request-bound reader over
+`TemporalArtifactService` (#4633). At execution admission, the existing plan
+owner verifies the stored plan, task input snapshot, Skill manifest and content
+digests before associating their exact input closure with the execution. The
+association includes the deployment namespace, workflow, run and plan ref;
+native managed inputs also require their exact producer execution linkage.
+Late workflow-prepared refs receive association only when their native producer
+link matches the same namespace, workflow and run; arbitrary unlinked refs in a
+launch request cannot acquire that authority.
+Persisted task attachments and workspace restore refs are admitted inputs,
+not permission to read other artifacts owned by the same operator. Unlinked
+pre-execution snapshots require their verified immutable plan provenance.
+
+Skill materialization, workspace metadata and streamed raw bytes share this
+boundary. A new worker reconstructs it from durable plan and artifact links,
+independently of browser sessions. Ref substitution, sibling runs, unknown
+lineage and removed admission links fail closed. Each request gets its own
+reader; no mutable principal is shared across concurrent runs. Restricted,
+quarantined, expired or incomplete inputs remain denied, previews never grant
+raw restore permission, and consumers retain size and integrity checks. Reads
+preserve artifact bytes, owners, refs and historical links.
+
 Representative examples:
 
 * artifact workers may read/write artifact storage broadly within policy
@@ -488,10 +510,16 @@ this section only binds them to artifact routes.
 
 | `AUTH_PROVIDER` | Artifact API behavior | Intended environment |
 | --- | --- | --- |
-| `accounts` | Require the MoonMind session for the resolved `User.id`, then execution-linked authorization | fresh installs and shared deployments |
+| `accounts` | Require the MoonMind session for the resolved `User.id`, then execution-linked authorization | transitional account deployments (#4352/#4354) |
 | `oidc` | Require the MoonMind session minted from the verified `(issuer, subject)` pair, then execution-linked authorization | shared dev/staging/prod behind an external IdP |
 | `header` | Require the MoonMind session minted from the proxy-asserted identity (ingress strips and replaces identity headers; direct bypass blocked), then execution-linked authorization | authenticated ingress only |
 | `disabled` | No end-user credential required at user-facing metadata/presign endpoints, but only behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`); execution-linked authorization still applies | one-click local/dev |
+
+Compose explicitly uses `AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}`. Omitted
+Compose configuration and explicit `disabled` therefore use the same default;
+runtime input authority remains scoped in every supported mode. The reader
+correction consumes existing machine authority while #4352 owns account removal;
+it does not retain an account product or introduce another credential service.
 
 User versus machine credentials at artifact routes:
 

@@ -131,11 +131,11 @@ class OmnigentSkillDeliveryPort(Protocol):
     """Project the resolved Skill snapshot into a run-owned, cleanable mount."""
 
     async def anticipated_attachment(
-        self, resolved_skills: Any, *, owner_ref: str
+        self, resolved_skills: Any, *, owner_ref: str, request: AgentExecutionRequest
     ) -> dict[str, Any]: ...
 
     async def materialize(
-        self, resolved_skills: Any, *, owner_ref: str
+        self, resolved_skills: Any, *, owner_ref: str, request: AgentExecutionRequest
     ) -> dict[str, Any]: ...
 
     async def cleanup(self, attachment: dict[str, Any]) -> None: ...

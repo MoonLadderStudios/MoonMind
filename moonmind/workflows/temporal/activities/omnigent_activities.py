@@ -32,6 +32,10 @@ class _OnDemandTemporalArtifactService:
     def __init__(self, session_factory: Any) -> None:
         self._session_factory = session_factory
 
+    def for_request(self, request):
+        from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+        return TemporalOmnigentArtifactGateway(self._session_factory).for_request(request)
+
     async def _invoke(self, method: str, **kwargs: Any) -> Any:
         from moonmind.workflows.temporal.artifacts import (
             TemporalArtifactRepository,
@@ -658,7 +662,7 @@ async def _try_generic_realizer_dispatch(
                 raise ValueError(
                     "persisted Omnigent execution plan digest mismatch"
                 )
-            if getattr(persisted.payload, "resolvedTools", {}).get("repositoryAccess"):
+            if request.step_execution is not None:
                 from moonmind.omnigent.harness_platform.execution_plan import (
                     verify_execution_plan_envelope,
                 )
@@ -824,7 +828,7 @@ async def _try_generic_realizer_dispatch(
 
             realizer_registry = get_default_registry()
         realizer = realizer_registry.require(plan.payload.executionRealizerRef)
-        if getattr(plan.payload, "resolvedTools", {}).get("repositoryAccess"):
+        if request.step_execution is not None:
             from moonmind.omnigent.bridge_artifacts import (
                 TemporalOmnigentArtifactGateway,
             )

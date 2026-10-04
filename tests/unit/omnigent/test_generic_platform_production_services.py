@@ -4535,6 +4535,10 @@ async def test_skill_attachment_mounts_the_deployment_volume_subpath(
     }
 
     class Gateway:
+        def for_request(self, request):
+            assert request.idempotency_key == "idem-1"
+            return self
+
         async def read_bytes(self, artifact_id: str) -> bytes:
             assert artifact_id == "art_skillset"
             return json.dumps(resolved_skillset).encode("utf-8")
@@ -4552,6 +4556,7 @@ async def test_skill_attachment_mounts_the_deployment_volume_subpath(
             "skillDeliveryRef": "skill-delivery:1",
         },
         owner_ref="idem-1",
+        request=SimpleNamespace(idempotency_key="idem-1"),
     )
 
     assert attachment["kind"] == "volume"

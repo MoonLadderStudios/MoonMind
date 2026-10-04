@@ -1606,7 +1606,16 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
 
     from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.schemas.agent_runtime_models import (
+        AgentRunResult,
+        AgentRuntimeStepExecutionLaunch,
+        OmnigentExecutionPlanBinding,
+    )
+    from moonmind.omnigent.harness_platform.execution_plan import create_execution_plan_envelope
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.workflows.temporal.activities.omnigent_activities import _OnDemandTemporalArtifactService
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
+    from api_service.services.omnigent_execution_plan_service import persist_json_artifact
 
     monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
     monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
@@ -1620,6 +1629,44 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
         "run-codex-skill",
     )
     assert skillset_ref.startswith("art_")
+
+    # #4633: preserve the #4631 real round trip with genuine persisted admission,
+    # rather than dummy plan pointers or disabled-auth cross-owner access.
+    artifacts = _OnDemandTemporalArtifactService(durable_artifact_storage)
+    task_ref, task_digest = await persist_json_artifact(
+        artifact_service=artifacts, principal="operator",
+        artifact_class="workflow.task_input_snapshot", payload={"draft": {}},
+    )
+    async with durable_artifact_storage() as session:
+        manifest = await TemporalArtifactRepository(session).get_artifact(skillset_ref)
+        manifest_digest = "sha256:" + manifest.sha256
+    payload = plan.payload.model_dump(by_alias=True, mode="json")
+    payload["resolvedSkills"]["resolvedSkillSetRef"] = skillset_ref
+    payload["resolvedSkills"]["resolvedSkillSetDigest"] = manifest_digest
+    plan = create_execution_plan_envelope(payload)
+    await DbExecutionPlanStore(durable_artifact_storage).persist(plan)
+    plan_artifact_ref, _ = await persist_json_artifact(
+        artifact_service=artifacts, principal="operator",
+        artifact_class="omnigent.execution_plan",
+        payload=plan.model_dump(by_alias=True, mode="json"),
+    )
+    binding = OmnigentExecutionPlanBinding(
+        planRef=plan.planRef, planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+        planArtifactRef=plan_artifact_ref, taskInputSnapshotRef=task_ref,
+        taskInputSnapshotDigest=task_digest,
+    )
+    request = request.model_copy(update={
+        "omnigent_execution_plan": binding,
+        "resolved_skillset_ref": skillset_ref,
+        "parameters": {"executionPlanRef": plan.planRef},
+        "step_execution": AgentRuntimeStepExecutionLaunch(
+            workflowId=request.correlation_id, runId="run-codex-skill",
+            logicalStepId="read", executionOrdinal=1,
+            stepExecutionId=f"{request.correlation_id}:run-codex-skill:read:execution:1",
+            runtimeContextPolicy="fresh_agent_run", omnigentExecutionPlan=binding,
+        ),
+    })
+    await durable_gateway.admit_execution_plan_inputs(request=request, plan=plan)
 
     installed: dict[str, Any] = {}
 
@@ -1652,6 +1699,7 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
 
     assert (projection / "_manifest.json").is_file()
     assert (projection / _DURABLE_SKILL_NAME / "SKILL.md").is_file()
+    assert (projection / _DURABLE_SKILL_NAME / "SKILL.md").read_bytes() == _durable_skill_payload(_DURABLE_SKILL_NAME)
 
 
 @pytest.mark.asyncio
