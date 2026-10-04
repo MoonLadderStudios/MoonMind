@@ -13,10 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from moonmind.auth.github_credentials import (
-    GitHubCredentialSource,
-    ResolvedGitHubCredential,
-)
+from moonmind.auth.bound_acquisition import EphemeralCredential
 from moonmind.omnigent.bootstrap import store
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 from moonmind.omnigent.credential_materializers import (
@@ -1132,19 +1129,13 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 ) -> None:
     secret = "github-secret-that-must-not-be-inspectable"
 
-    async def resolve(*, repo=None):
-        assert repo == "MoonLadderStudios/Tactics"
-        return ResolvedGitHubCredential(
-            token=secret,
-            source=GitHubCredentialSource.DIRECT_ENV,
-            sourceName="GITHUB_TOKEN",
-            repo=repo,
+    async def acquire(**kwargs):
+        assert kwargs["role"] == "collaboration" and kwargs["operation"] == "read"
+        assert kwargs["execution_owner"] == "lease-owner-1"
+        return SimpleNamespace(
+            credential=EphemeralCredential(secret.encode()),
+            binding=SimpleNamespace(endpoint="https://github.com"),
         )
-
-    monkeypatch.setattr(
-        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
-        resolve,
-    )
 
     class Backend:
         def __init__(self) -> None:
@@ -1169,9 +1160,15 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
     )
     backend = Backend()
     service = OmnigentGithubCredentialService(backend)
+    monkeypatch.setattr(service, "acquire_repository_use", acquire)
     attachment = await service.materialize(
         request=request,
-        resolved_tools={"tools": ["gh", "git"]},
+        resolved_tools={
+            "tools": ["gh", "git"],
+            "repositoryAccess": {
+                "collaboration": {"snapshotRef": "admitted-test-snapshot"}
+            },
+        },
         owner_ref="lease-owner-1",
         writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
         runtime_uid=1000,
@@ -2048,11 +2045,21 @@ async def test_writer_ref_rejects_unqualified_same_repo_fallback(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "github_failure", [None, "denied", "diagnostics_unavailable", "rate_limited"]
+    "github_failure,github_host",
+    [
+        (None, "github.com"),
+        ("denied", "github.com"),
+        ("diagnostics_unavailable", "github.com"),
+        ("rate_limited", "github.com"),
+        (None, "github.enterprise.test"),
+    ],
 )
 async def test_sha_drift_replay_advances_digest_through_full_handoff(
-    tmp_path, monkeypatch, github_failure
+    tmp_path, monkeypatch, github_failure, github_host
 ) -> None:
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", github_host)
     """Minimized replay of an escaped stale-digest dispatch failure.
 
     Advances the deployed digest in real resolved state, then runs the
@@ -2364,6 +2371,7 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
                     "",
                 )
             if "credential.helper" in rest:
+                assert rest[-1] == f"https://{github_host}"
                 return 0, "!/home/app/.omnigent/moonmind/bin/gh auth git-credential", ""
             if rest == ["/opt/venv/bin/omnigent", "--version"]:
                 return 0, "omnigent 0.13.1 (built 2026-09-14T00:00:00Z)\n", ""
@@ -2442,6 +2450,7 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
             "githubCredentialAttachment": {
                 "sourceRef": "github-vol",
                 "targetPath": "/run/mm-credentials/github",
+                "githubHost": github_host,
             },
             "stateAttachment": {
                 "kind": "volume",

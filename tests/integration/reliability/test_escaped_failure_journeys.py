@@ -2457,28 +2457,95 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
             (tmp_path / relative_target).mkdir(parents=True)
         return 0, "", ""
 
-    async def fake_token() -> str:
-        return "fixture-replay-token"
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_github_token_for_launch",
-        fake_token,
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.omnigent.host_services.github_credentials import (
+        OmnigentGithubCredentialService,
     )
-    materialized = await OmnigentWorkspaceMaterializer(
-        command_runner=runner,
-        workspace_root=tmp_path,
-    ).materialize(execution_request)
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+    from tests.unit.services.test_omnigent_execution_plan_service import (
+        _ArtifactService,
+        _compile_opencode_plan,
+        _ready_opencode_image_pair,
+    )
 
-    clone_argv, clone_input = captured[0]
-    assert materialized["kind"] == "bind"
-    assert clone_argv[-5:-2] == [
-        "main",
-        "https://github.com/MoonLadderStudios/MoonMind.git",
-        f"/work/temporal_sandbox/{workspace_id}/repo",
-    ]
-    assert 'git check-ref-format --branch "$1"' in " ".join(clone_argv)
-    assert clone_input == b"fixture-replay-token"
+    # Replay checkout through current admission/acquisition rather than the
+    # retired ambient-token resolver. The fan-out's selected connection and
+    # branch must survive all the way to clone delivery.
+    _ready_opencode_image_pair.__wrapped__(monkeypatch)
+    monkeypatch.setenv("REPLAY_SELECTED_REPOSITORY_PAT", "fixture-replay-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-replay-token")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    monkeypatch.setattr(
+        omnigent_execution_plan_service,
+        "_try_load_real_harness_config",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        omnigent_execution_plan_service,
+        "resolve_execution_evidence",
+        lambda *_args, **_kwargs: (None, "uncertified"),
+    )
+    connection_ref = normalized_repository["connectionRef"]
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(connection_ref, "REPLAY_SELECTED_REPOSITORY_PAT"),
+        assignments=[
+            github_repository_assignment(connection_ref, manifest["repository"])
+        ],
+    )
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        artifacts = _ArtifactService()
+        compiled = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="omnigent-on-demand@1",
+            plan_store=DbExecutionPlanStore(sessions),
+            session_factory=sessions,
+            workflow_id=workflow_id,
+            extra_parameters={
+                "repository": normalized_repository,
+                "workspace": execution_request.workspace_spec,
+            },
+        )
+        plan = compiled.envelope
+        assert plan.payload.credentialBindings["source"].connectionRef == connection_ref
+
+        async def read_snapshot(ref, *, request):
+            return artifacts.payloads[ref.removeprefix("artifact:")]
+
+        credentials = OmnigentGithubCredentialService(
+            SimpleNamespace(),
+            session_factory=sessions,
+            artifact_gateway=SimpleNamespace(
+                read_repository_access_snapshot=read_snapshot
+            ),
+        )
+        materialized = await OmnigentWorkspaceMaterializer(
+            command_runner=runner,
+            workspace_root=tmp_path,
+            repository_credential_service=credentials,
+        ).materialize(execution_request, plan=plan)
+
+        clone_argv, clone_input = captured[0]
+        assert materialized["kind"] == "bind"
+        assert clone_argv[-5:-2] == [
+            "main",
+            "https://github.com/MoonLadderStudios/MoonMind.git",
+            f"/work/temporal_sandbox/{workspace_id}/repo",
+        ]
+        assert 'git check-ref-format --branch "$1"' in " ".join(clone_argv)
+        assert clone_input == b"fixture-replay-token"
+        assert "ambient-replay-token" not in repr(captured)
+    finally:
+        await engine.dispose()
 
 
 async def test_omnigent_dynamic_remediation_restores_workspace_archive_replay(

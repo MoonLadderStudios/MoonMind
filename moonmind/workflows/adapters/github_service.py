@@ -1275,11 +1275,15 @@ class GitHubService:
         expected_head_sha: str | None = None,
         expected_base_branch: str | None = None,
         expected_draft: bool | None = None,
+        endpoint: str = "https://github.com",
     ) -> PullRequestSelectorResult:
         """Resolve a selector, validating publication expectations when supplied."""
 
         repository = str(repo or "").strip()
         candidate = str(selector or "").strip()
+        from moonmind.auth.github_app_wiring import github_api_base_for
+
+        api_base = github_api_base_for(endpoint)
         if not repository or not candidate:
             return PullRequestSelectorResult(
                 selectorType="invalid",
@@ -1344,7 +1348,7 @@ class GitHubService:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
                 response = await client.get(
-                    f"https://api.github.com/repos/{repository}/pulls",
+                    f"{api_base}/repos/{repository}/pulls",
                     headers=headers,
                     params={
                         "state": "open",

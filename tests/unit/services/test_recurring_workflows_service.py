@@ -1838,9 +1838,15 @@ def _pinned_schedule_service(
 ):
     target["initialParameters"]["agentProfileSnapshot"] = target["agentProfileSnapshot"]
     session = AsyncMock(spec=AsyncSession)
-    session.get = AsyncMock(
-        return_value=SimpleNamespace(profile_id="codex_openai_oauth")
-    )
+
+    async def get_record(model, _record_id):
+        from api_service.db.models import TemporalArtifact
+
+        if model is TemporalArtifact:
+            return SimpleNamespace(created_by_principal="system", sha256="a" * 64)
+        return SimpleNamespace(profile_id="codex_openai_oauth")
+
+    session.get = AsyncMock(side_effect=get_record)
     service = RecurringWorkflowsService(session, artifact_service=object())
     definition = SimpleNamespace(
         id=uuid4(),
@@ -1850,6 +1856,47 @@ def _pinned_schedule_service(
         updated_at=None,
     )
     return service, definition
+
+
+@pytest.mark.parametrize("invalid_authority", ["missing", "principal", "digest"])
+async def test_schedule_refresh_rejects_unverifiable_original_principal(
+    monkeypatch: pytest.MonkeyPatch, invalid_authority: str
+) -> None:
+    compile_plan = _stub_compiled_plan(
+        monkeypatch,
+        binding=_schedule_plan_binding("2"),
+        rollout=_rollout_record("codex.generic-omnigent"),
+    )
+    initial_parameters = {
+        "targetRuntime": "omnigent",
+        "omnigentExecutionPlan": _schedule_plan_binding("1"),
+    }
+    target = {
+        "initialParameters": initial_parameters,
+        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
+    }
+    service, definition = _pinned_schedule_service(monkeypatch, target=target)
+    record = (
+        None
+        if invalid_authority == "missing"
+        else SimpleNamespace(
+            created_by_principal="" if invalid_authority == "principal" else "user-1",
+            sha256="b" * 64 if invalid_authority == "digest" else "a" * 64,
+        )
+    )
+    service._session.get.side_effect = [
+        SimpleNamespace(profile_id="codex_openai_oauth"),
+        record,
+    ]
+
+    with pytest.raises(RecurringWorkflowValidationError, match="principal authority"):
+        await service._refresh_omnigent_execution_plan_target(
+            definition, target=target, initial_parameters=initial_parameters
+        )
+
+    compile_plan.assert_not_awaited()
+    assert definition.version == 4
+    assert initial_parameters["omnigentExecutionPlan"] == _schedule_plan_binding("1")
 
 
 async def test_schedule_pins_its_runtime_provider_target_on_first_refresh(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, call
@@ -17,6 +18,58 @@ from moonmind.omnigent.mounted_tool_preflight import (
     preflight_github_access,
     preflight_mounted_tools,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "https://github.enterprise.test/owner/repo.git",
+        "https://github.enterprise.test:443/owner/repo.git",
+    ],
+)
+async def test_enterprise_preflight_uses_only_the_selected_trusted_host(
+    monkeypatch, repository
+):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.github, "github_trusted_api_hosts", "github.enterprise.test"
+    )
+    calls = []
+
+    async def runner(command):
+        calls.append(command)
+        if command.startswith("gh repo view"):
+            return (
+                0,
+                json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "READ"}),
+                "",
+            )
+        return 0, "", ""
+
+    result = await preflight_github_access(
+        repository=repository,
+        github_host="github.enterprise.test",
+        boundaries={"host": runner, "runner": runner},
+    )
+    assert result["status"] == "ready"
+    assert sum(command.startswith("gh repo view owner/repo ") for command in calls) == 2
+    assert (
+        calls.count("gh auth token --hostname github.enterprise.test >/dev/null") == 2
+    )
+    token_commands = [
+        shlex.split(command)
+        for command in calls
+        if command.startswith("gh auth token ")
+    ]
+    assert {argv[argv.index("--hostname") + 1] for argv in token_commands} == {
+        "github.enterprise.test"
+    }
+    repository_commands = [
+        shlex.split(command) for command in calls if command.startswith("gh repo view ")
+    ]
+    assert {argv[3] for argv in repository_commands} == {"owner/repo"}
 
 
 @pytest.mark.asyncio

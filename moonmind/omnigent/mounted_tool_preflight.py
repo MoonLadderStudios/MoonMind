@@ -77,16 +77,19 @@ def _bounded(value: str) -> str:
     return redact_sensitive_text(str(value or ""))[:MAX_EVIDENCE_CHARS]
 
 
-def _repository_name(repository: str) -> str:
+def _repository_name(repository: str, *, github_host: str = "github.com") -> str:
     value = repository.strip().removesuffix(".git")
     if value.startswith("git@github.com:"):
-        value = value.split(":", 1)[1]
+        value = value.split(":", 1)[1] if github_host == "github.com" else ""
     elif "://" in value:
-        parsed = urlparse(value)
-        if parsed.hostname != "github.com":
-            value = ""
-        else:
-            value = parsed.path
+        from moonmind.omnigent.host_services.github_credentials import (
+            normalize_github_repository_remote,
+        )
+
+        remote = normalize_github_repository_remote(
+            value, endpoint=f"https://{github_host}"
+        )
+        value = urlparse(remote).path.removesuffix(".git") if remote else ""
     value = value.strip("/")
     parts = value.split("/")
     if len(parts) != 2 or not all(parts):
@@ -115,7 +118,9 @@ def _digest_check_command(executable: str, digests: Sequence[str]) -> str:
     )
 
 
-def _github_access_probes(repository: str) -> tuple[Probe, ...]:
+def _github_access_probes(
+    repository: str, *, github_host: str = "github.com"
+) -> tuple[Probe, ...]:
     # Token lookup is local and its value must never cross the command boundary.
     # Account-status probes add unrelated user/scope API calls and turn provider
     # outages into misleading "invalid credential" errors. Prove the requested
@@ -123,7 +128,7 @@ def _github_access_probes(repository: str) -> tuple[Probe, ...]:
     probes = [
         Probe(
             "authentication",
-            "gh auth token --hostname github.com >/dev/null",
+            f"gh auth token --hostname {shlex.quote(github_host)} >/dev/null",
             "github_auth_unavailable",
         ),
     ]
@@ -284,6 +289,7 @@ async def preflight_github_access(
     repository: str,
     boundaries: Mapping[str, CommandRunner],
     mutation_required: bool = False,
+    github_host: str = "github.com",
 ) -> dict[str, Any]:
     """Check projected credentials and requested access on the existing host.
 
@@ -291,8 +297,16 @@ async def preflight_github_access(
     it does not claim remote authorization. Transport retries never rematerialize
     credentials, replace the host, or change repository authority.
     """
+    from moonmind.omnigent.host_services.github_credentials import (
+        github_host_from_endpoint,
+    )
+
+    github_host = github_host_from_endpoint(f"https://{github_host}")
+    repository = (
+        _repository_name(repository, github_host=github_host) if repository else ""
+    )
     return await _run_probes(
-        _github_access_probes(repository),
+        _github_access_probes(repository, github_host=github_host),
         boundaries,
         repository=repository,
         mutation_required=mutation_required,
@@ -306,6 +320,7 @@ async def preflight_mounted_tools(
     mutation_required: bool,
     host_runner: CommandRunner,
     runner_runner: CommandRunner,
+    github_host: str = "github.com",
 ) -> dict[str, Any]:
     """Probe only declared tools through both real shell construction paths."""
 
@@ -313,13 +328,18 @@ async def preflight_mounted_tools(
     if "gh" not in capabilities:
         return {"status": "not_required", "boundaries": []}
 
-    repository = _repository_name(repository)
+    from moonmind.omnigent.host_services.github_credentials import (
+        github_host_from_endpoint,
+    )
+
+    github_host = github_host_from_endpoint(f"https://{github_host}")
+    repository = _repository_name(repository, github_host=github_host)
     return await _run_probes(
         (
             Probe("manifest", _trusted_gh_digest_checks(), "tool_manifest_mismatch"),
             Probe("lookup", "command -v gh", "tool_not_visible_in_login_shell"),
             Probe("version", "gh --version", "tool_manifest_mismatch"),
-            *_github_access_probes(repository),
+            *_github_access_probes(repository, github_host=github_host),
         ),
         {"host": host_runner, "runner": runner_runner},
         repository=repository,

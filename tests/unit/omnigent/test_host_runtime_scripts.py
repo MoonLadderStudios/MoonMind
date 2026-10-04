@@ -1,12 +1,12 @@
 import importlib.util
-from pathlib import Path
+import json
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.host_services.runtime_scripts import (
-    OmnigentRuntimeScriptService,
-)
+from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 
 
 def _build(
@@ -273,3 +273,141 @@ def test_projected_cli_restores_context_after_child_environment_is_stripped(tmp_
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.exercise_projection(tmp_path)
+
+
+@pytest.mark.parametrize("github_host", [None, "github.enterprise.test"])
+def test_runtime_script_builder_remains_portable_with_admitted_attachment(github_host):
+    """The native verifier imports only the builder, without the application."""
+
+    builder = (
+        Path(__file__).resolve().parents[3]
+        / "moonmind/omnigent/host_services/runtime_scripts.py"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            """
+import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("runtime_scripts", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+attachment = (
+    {"targetPath": "/run/mm-credentials/github", "githubHost": sys.argv[2]}
+    if sys.argv[2] else None
+)
+script, environment = module.OmnigentRuntimeScriptService().build_entrypoint(
+    credential_handles=[],
+    skill_attachment={"targetPath": "/opt/moonmind-skills"},
+    step_execution_id="workflow:run:node-1:execution:1",
+    github_credential_attachment=attachment,
+)
+print(json.dumps({"script": script, "environment": environment}))
+""",
+            str(builder),
+            github_host or "",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    if github_host:
+        assert observed["environment"]["GH_HOST"] == github_host
+        assert observed["environment"]["GIT_CONFIG_KEY_0"] == (
+            f"credential.https://{github_host}.helper"
+        )
+        assert f"export GH_HOST={github_host}" in observed["script"]
+    else:
+        assert "GH_HOST" not in observed["environment"]
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=observed["script"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+
+@pytest.mark.parametrize("github_host", ["github.com", "github.enterprise.test"])
+def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(
+    tmp_path, monkeypatch, github_host
+):
+    import os
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", github_host)
+
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[],
+        skill_attachment={"targetPath": "/opt/moonmind-skills"},
+        step_execution_id="workflow:run:node-1:execution:1",
+        github_credential_attachment={
+            "targetPath": "/run/mm-credentials/github",
+            "githubHost": github_host,
+        },
+    )
+    assert environment["GH_HOST"] == github_host
+    assert environment["GIT_CONFIG_KEY_0"] == (
+        f"credential.https://{github_host}.helper"
+    )
+    home = tmp_path / "home"
+    credentials = tmp_path / "credentials"
+    tools = tmp_path / "tools"
+    binaries = tmp_path / "bin"
+    skills = tmp_path / "skills"
+    for directory in (home, credentials / "github", tools / "bin", binaries, skills):
+        directory.mkdir(parents=True)
+    (credentials / "github" / "hosts.yml").write_text(
+        f"{github_host}:\n  oauth_token: selected-canary\n"
+    )
+    gh = tools / "bin" / "gh"
+    gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "print(json.dumps({'host': os.environ['GH_HOST'], 'ambient': [name for name in "
+        "('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN') "
+        "if os.getenv(name)], 'config': Path(os.environ['GH_CONFIG_DIR'], 'hosts.yml').read_text()}))\n"
+    )
+    gh.chmod(0o755)
+    omnigent = binaries / "omnigent"
+    omnigent.write_text(
+        f"#!/bin/sh\nGH_TOKEN=ambient-again; export GH_TOKEN; "
+        "GH_HOST=ambient-host; export GH_HOST; "
+        f'exec "{home}/.omnigent/moonmind/bin/gh" "$@"\n'
+    )
+    omnigent.chmod(0o755)
+    script = (
+        script.replace("/home/app", str(home))
+        .replace("/run/mm-credentials", str(credentials))
+        .replace("/opt/moonmind-tools", str(tools))
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-ceu", script, "--", "http://test-omnigent"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            **environment,
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "MOONMIND_ACTIVE_SKILLS_DIR": str(skills),
+            "GH_TOKEN": "ambient-canary",
+            "GITHUB_TOKEN": "ambient-canary",
+            "GH_ENTERPRISE_TOKEN": "ambient-canary",
+            "GITHUB_ENTERPRISE_TOKEN": "ambient-canary",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["ambient"] == []
+    assert observed["host"] == github_host
+    assert "selected-canary" in observed["config"]

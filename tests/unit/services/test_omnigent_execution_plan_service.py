@@ -683,7 +683,11 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from api_service.db.models import Base, ManagedAgentProviderProfile
+    from api_service.db.models import (
+        Base,
+        ManagedAgentProviderProfile,
+        TemporalArtifact,
+    )
     from moonmind.omnigent.harness_platform.catalog_service import (
         DbHarnessCatalogRepository,
         HarnessCatalogSyncResult,
@@ -778,6 +782,14 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
                 profile_id="provider-opencode-native",
                 runtime_id="opencode",
                 provider_id="opencode-go",
+            )
+        )
+        db_session.add(
+            TemporalArtifact(
+                artifact_id="art_request_1",
+                created_by_principal="user-1",
+                sha256="1" * 64,
+                storage_key="original-schedule-input",
             )
         )
         await db_session.flush()
@@ -1199,6 +1211,11 @@ async def _compile_opencode_plan(
     extra_parameters: dict | None = None,
     provider_id: str = "opencode-go",
     document_source: dict | None = None,
+    session_factory=None,
+    workflow_id="mm:test-deployment-evidence",
+    task_input_snapshot_ref="art_request_1",
+    task_input_snapshot_digest="sha256:" + "1" * 64,
+    profile_tools: tuple[str, ...] = (),
 ):
     """Compile one real OpenCode plan through the product admission boundary."""
 
@@ -1221,11 +1238,12 @@ async def _compile_opencode_plan(
     ] = _OPENCODE_ALLOWED_LAUNCH_POLICIES
     if document_source is not None:
         snapshot["document"]["source"] = document_source
+    snapshot["document"]["tools"] = list(profile_tools)
     return await service.compile_and_persist_execution_plan(
-        session_factory=object(),
+        session_factory=session_factory or object(),
         artifact_service=artifacts,
         principal="user-1",
-        workflow_id="mm:test-deployment-evidence",
+        workflow_id=workflow_id,
         agent_profile_snapshot=snapshot,
         provider_profile=SimpleNamespace(
             profile_id="provider-opencode-native",
@@ -1240,12 +1258,311 @@ async def _compile_opencode_plan(
             "workflow": {"instructions": "Use durable refs only."},
             **(extra_parameters or {}),
         },
-        authored_request_ref="art_request_1",
-        authored_request_digest="sha256:" + "1" * 64,
-        task_input_snapshot_ref="art_request_1",
-        task_input_snapshot_digest="sha256:" + "1" * 64,
+        authored_request_ref=task_input_snapshot_ref,
+        authored_request_digest=task_input_snapshot_digest,
+        task_input_snapshot_ref=task_input_snapshot_ref,
+        task_input_snapshot_digest=task_input_snapshot_digest,
         execution_plan_store=plan_store,
     )
+
+
+@pytest.mark.asyncio
+async def test_profile_github_tool_admits_collaboration_without_skill_capability(
+    monkeypatch, tmp_path
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from api_service.db.models import Base
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    repository = "MoonLadderStudios/MoonMind"
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("profile-github", "PROFILE_GITHUB_PAT"),
+        assignments=[github_repository_assignment("profile-github", repository)],
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        service, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+    artifacts = _ArtifactService()
+    try:
+        compiled = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("GH",),
+            extra_parameters={"repository": repository},
+        )
+    finally:
+        await engine.dispose()
+
+    plan = compiled.envelope.payload
+    assert plan.resolvedTools["tools"] == ["gh"]
+    assert plan.credentialBindings["collaboration"].repositoryRole == "collaboration"
+    assert "destination" not in plan.credentialBindings
+    access = plan.resolvedTools["repositoryAccess"]["collaboration"]
+    selection = json.loads(
+        artifacts.payloads[access["artifactRef"].removeprefix("artifact:")]
+    )["selection"]
+    assert selection["connectionId"] == "profile-github"
+    assert selection["operations"] == ["read"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("access_mode", ["explicit", "routed"])
+async def test_schedule_refresh_retains_original_repository_principal(
+    monkeypatch, tmp_path, access_mode
+) -> None:
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from api_service.db.models import (
+        Base,
+        ManagedAgentProviderProfile,
+        RecurringWorkflowDefinition,
+        TemporalArtifact,
+    )
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowsService,
+    )
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.omnigent.harness_platform.stores import (
+        DbExecutionPlanStore,
+        SessionExecutionPlanStore,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF", "ghcr.io/example/omnigent-server@sha256:" + "b" * 64
+    )
+    repository = "MoonLadderStudios/MoonMind"
+    engine = await record_repository_connections(monkeypatch, tmp_path)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    connection = github_pat_connection("schedule-repository", "SCHEDULE_REPOSITORY_PAT")
+    connection = connection.model_copy(
+        update={
+            "ownership": connection.ownership.model_copy(
+                update={"owner_ref": "user-1", "allowed_principal_refs": ("user-1",)}
+            )
+        }
+    )
+    async with sessions() as session:
+        connections = RepositoryConnectionService(session)
+        await connections.create_connection(
+            connection,
+            actor_ref="user-1",
+            request_id="schedule-connection",
+            principal_ref="user-1",
+            principal_scope=("system", None),
+        )
+        await connections.set_assignment(
+            github_repository_assignment("schedule-repository", repository),
+            actor_ref="user-1",
+            request_id="schedule-assignment",
+            principal_ref="user-1",
+            principal_scope=("system", None),
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="provider-opencode-native",
+                runtime_id="opencode",
+                provider_id="opencode-go",
+            )
+        )
+        session.add(
+            TemporalArtifact(
+                artifact_id="art_request_1",
+                created_by_principal="user-1",
+                sha256="1" * 64,
+                storage_key="original-schedule-input",
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        service, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+    artifacts = _ArtifactService()
+    definition_id = uuid4()
+    target_repository = (
+        {
+            "provider": "git",
+            "connectionRef": "schedule-repository",
+            "repository": {"name": repository},
+        }
+        if access_mode == "explicit"
+        else repository
+    )
+    try:
+        compiled = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=DbExecutionPlanStore(sessions),
+            session_factory=sessions,
+            workflow_id=f"mm-schedule:{definition_id}",
+            extra_parameters={"repository": target_repository},
+        )
+        snapshot = _snapshot(
+            harness="opencode-native",
+            policy="opencode-on-demand@1",
+            provider_id="provider-opencode-native",
+        )
+        snapshot["allowedLaunchPolicyRefs"] = _OPENCODE_ALLOWED_LAUNCH_POLICIES
+        snapshot["document"]["execution"][
+            "allowedLaunchPolicyRefs"
+        ] = _OPENCODE_ALLOWED_LAUNCH_POLICIES
+        initial_parameters = {
+            "repository": target_repository,
+            "targetRuntime": "omnigent",
+            "model": "example/model",
+            "publishMode": "none",
+            "workflow": {"instructions": "Refresh the original connection."},
+            "agentProfileSnapshot": snapshot,
+            "omnigentExecutionPlan": compiled.binding.model_dump(by_alias=True),
+        }
+        target = {
+            "agentProfileSnapshot": snapshot,
+            "initialParameters": initial_parameters,
+        }
+        async with sessions() as session:
+            definition = RecurringWorkflowDefinition(
+                id=definition_id,
+                name="Frozen repository principal",
+                cron="0 * * * *",
+                timezone="UTC",
+                owner_user_id=uuid4(),  # Legacy provenance cannot replace admission.
+                version=1,
+                target=target,
+            )
+            session.add(definition)
+            await session.flush()
+            schedules = RecurringWorkflowsService(session, artifact_service=artifacts)
+            assert await schedules._refresh_omnigent_execution_plan_target(
+                definition, target=target, initial_parameters=initial_parameters
+            )
+            refreshed_binding = definition.target["initialParameters"][
+                "omnigentExecutionPlan"
+            ]
+            refreshed = await SessionExecutionPlanStore(session).load(
+                refreshed_binding["planRef"]
+            )
+            access = refreshed.payload.resolvedTools["repositoryAccess"]["source"]
+            selection = json.loads(
+                artifacts.payloads[access["artifactRef"].removeprefix("artifact:")]
+            )["selection"]
+            assert selection["principalRef"] == "user-1"
+            assert selection["connectionId"] == "schedule-repository"
+            assert refreshed_binding["taskInputSnapshotRef"] == "art_request_1"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic_admitted", [False, True])
+async def test_repository_codex_product_admission_requires_capable_realizer(
+    monkeypatch, generic_admitted
+) -> None:
+    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", str(generic_admitted)
+    )
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="codex-native", policy="codex-on-demand@1")
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    store = InMemoryExecutionPlanStore()
+    artifacts = _ArtifactService()
+
+    async def admit():
+        return await service.compile_and_persist_execution_plan(
+            session_factory=object(),
+            execution_plan_store=store,
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id="mm:codex-repository-admission",
+            agent_profile_snapshot=_snapshot(
+                harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
+            ),
+            provider_profile=SimpleNamespace(
+                profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+            ),
+            initial_parameters={
+                "model": "example/model",
+                "targetRuntime": "omnigent",
+                "publishMode": "none",
+                "workflow": {"instructions": "Read the admitted repository."},
+            },
+            authored_request_ref="art_request_1",
+            authored_request_digest="sha256:" + "1" * 64,
+            task_input_snapshot_ref="art_request_1",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+            repository_bindings={
+                "source": {
+                    "authorityKind": "repository_connection",
+                    "connectionRef": "selected-repository",
+                    "repositoryAccessSnapshotRef": "repository-access-snapshot:sha256:"
+                    + "2" * 64,
+                    "materializerRef": "repository-broker@1",
+                    "repositoryRole": "source_read",
+                }
+            },
+            trusted_repository_declarations={
+                "source": {
+                    "allowedRoles": ("source_read",),
+                    "allowedMaterializers": ("repository-broker@1",),
+                }
+            },
+            workspace_source_kind="repository",
+        )
+
+    if generic_admitted:
+        compiled = await admit()
+        assert (
+            compiled.envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
+        )
+        assert await store.load(compiled.envelope.planRef) == compiled.envelope
+    else:
+        with pytest.raises(HarnessPlatformError, match="realizer.*repository"):
+            await admit()
+        assert store._plans == {}
+        assert all(
+            json.loads(payload).get("schemaVersion")
+            != "moonmind.omnigent-execution-plan-envelope.v1"
+            for payload in artifacts.payloads.values()
+        )
 
 
 @pytest.mark.asyncio
@@ -1532,6 +1849,20 @@ def _write_deployment_evidence(
         evidence_refs={"readRun": "artifact:read-run"},
         resolved_state=None,
     )
+    # Keep the writer's Compose mirror inside this test's owned directory.
+    from moonmind.omnigent.bootstrap import evidence as bootstrap_evidence
+
+    original_path = bootstrap_evidence.Path
+
+    def evidence_path(value):
+        if (
+            str(value)
+            == "/workspace/omnigent-evidence/deployment-execution-evidence.json"
+        ):
+            return tmp_path / "compose-deployment-execution-evidence.json"
+        return original_path(value)
+
+    monkeypatch.setattr(bootstrap_evidence, "Path", evidence_path)
     destination = tmp_path / "deployment-execution-evidence.json"
     write_deployment_evidence(evidence, path=destination)
     monkeypatch.setenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(destination))

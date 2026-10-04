@@ -11,13 +11,7 @@ from typing import Any
 from temporalio import activity
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
-from moonmind.omnigent.harness_platform.credential_bindings import (
-    attenuated_child_grants_for,
-    model_bindings_of,
-    plan_bindings_have_repository_authority,
-    repository_authority_bindings,
-    validate_child_snapshot_coverage,
-)
+from moonmind.omnigent.harness_platform.credential_bindings import model_bindings_of
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
@@ -146,6 +140,9 @@ async def omnigent_prepare_child_execution_plan_activity(
     initial_parameters = dict(initial_parameters_value)
     if str(initial_parameters.get("targetRuntime") or "").strip().lower() != "omnigent":
         raise ValueError("child execution-plan preparation requires Omnigent")
+    principal = str(payload.get("principal") or "").strip() or (
+        "service:merge_automation"
+    )
 
     parent_binding_value = payload.get("parentExecutionPlan")
     if not isinstance(parent_binding_value, Mapping):
@@ -166,84 +163,22 @@ async def omnigent_prepare_child_execution_plan_activity(
             raise ValueError("parent workflow execution parameters are unavailable")
         parent_binding_value = parent_parameters.get("omnigentExecutionPlan")
     parent_binding = OmnigentExecutionPlanBinding.model_validate(parent_binding_value)
-    parent_plan = await _load_verified_execution_plan(parent_binding)
-    # REQ-07/ACC-05 (MoonLadderStudios/MoonMind#4009): inherited repository
-    # authority is bound to the child target/attempt with a freshly admitted
-    # attenuated snapshot. Parent visibility alone is not permission, and the
-    # child plan re-derives model authority through its own admission, so
-    # model slots are never copied here. When the parent carries repository
-    # authority the caller must supply ``childRepositorySnapshotRefs`` from
-    # trusted delivery/publication admission (#4011/#1090); absence fails
-    # closed instead of silently widening or dropping scope. Workspace
-    # restore likewise cannot restore grants: it must supply fresh snapshots.
-    parent_repo_slots: dict[str, Any] = {}
-    child_trusted_repository_declarations: dict[str, dict[str, Any]] = {}
-    child_repository_bindings: dict[str, dict[str, Any]] = {}
-    child_snapshot_refs_value = payload.get("childRepositorySnapshotRefs")
-    child_snapshot_refs: dict[str, str] = (
-        dict(child_snapshot_refs_value)
-        if isinstance(child_snapshot_refs_value, Mapping)
-        else {}
+    parent_plan = await _load_verified_execution_plan(
+        parent_binding, admitted_principal=principal
     )
-    # Lightweight probe first so model-only history and minimal test
-    # doubles never pay for (or crash on) a full set rebuild. Only a
-    # positive probe rebuilds through the versioned constructor, where
-    # unknown kinds, conflicting aliases, and digest mismatches fail
-    # closed before any child grant is composed.
-    parent_refs = getattr(parent_plan.payload, "repositoryAuthorityRefs", None)
-    if plan_bindings_have_repository_authority(
-        getattr(parent_plan.payload, "credentialBindings", None)
-    ) or (isinstance(parent_refs, Mapping) and dict(parent_refs)):
-        parent_binding_set = _parent_repository_binding_set(parent_plan)
-        parent_repo_slots = dict(
-            repository_authority_bindings(parent_binding_set)
-        )
-    if parent_repo_slots:
-        validate_child_snapshot_coverage(
-            parent_binding_set=parent_binding_set,
-            child_snapshot_refs=child_snapshot_refs,
-        )
-        child_grants = attenuated_child_grants_for(
-            parent_binding_set=parent_binding_set,
-            child_target_ref=child_workflow_id,
-            child_attempt_ref=str(
-                payload.get("childAttemptRef") or child_workflow_id
-            ),
-            child_snapshot_refs=child_snapshot_refs,
-        )
-        initial_parameters["childRepositoryGrants"] = {
-            slot: grant.model_dump(by_alias=True, mode="json")
-            for slot, grant in child_grants.items()
-        }
-        # The child compiler builds a model-only binding set unless the
-        # re-admitted repository authority is carried explicitly. Derive
-        # the child's trusted repository declarations and bindings from
-        # the attenuated grants composed above so the compiled child plan
-        # retains the repository authority that was just re-admitted
-        # (MoonLadderStudios/MoonMind#4009 REQ-07). Each declaration admits
-        # only the attenuated grant's own role and delivery contract.
-        child_trusted_repository_declarations = {
-            slot: {
-                "allowedRoles": (grant.binding.repositoryRole,),
-                "allowedMaterializers": (grant.binding.materializerRef,),
-            }
-            for slot, grant in child_grants.items()
-        }
-        child_repository_bindings = {
-            slot: grant.binding.model_dump(by_alias=True, mode="json")
-            for slot, grant in child_grants.items()
-        }
-    elif child_snapshot_refs:
-        raise ValueError(
-            "child repository snapshots name no parent repository slot"
-        )
+    # Issue #4009: the compiler re-admits repository roles against the parent
+    # selections. The real child producer supplies intent, not fabricated
+    # snapshot digests, and model admission remains owned by the child plan.
+    if payload.get("childRepositorySnapshotRefs"):
+        raise ValueError("child repository snapshots must be compiler-admitted")
+    initial_parameters.pop("childRepositoryGrants", None)
     profile_snapshot_ref = str(
         parent_plan.payload.agentProfileSnapshotRef or ""
     ).strip()
     if not profile_snapshot_ref.startswith("artifact:"):
         raise ValueError("parent execution plan lacks Agent Profile authority")
     agent_profile_snapshot = await _read_json_artifact(
-        profile_snapshot_ref.removeprefix("artifact:")
+        profile_snapshot_ref.removeprefix("artifact:"), admitted_principal=principal
     )
     # Model authority only (MoonLadderStudios/MoonMind#4009): repository
     # slots use issuance and never enter Provider Profile derivation.
@@ -300,9 +235,6 @@ async def omnigent_prepare_child_execution_plan_activity(
         "source": {"kind": "merge_automation_resolver_child"},
         "target": {"initialParameters": canonical_snapshot_parameters},
     }
-    principal = str(payload.get("principal") or "").strip() or (
-        "service:merge_automation"
-    )
     artifact_service = _OnDemandTemporalArtifactService(async_session_maker)
     input_snapshot_ref, input_snapshot_digest = await persist_json_artifact(
         artifact_service=artifact_service,
@@ -330,10 +262,7 @@ async def omnigent_prepare_child_execution_plan_activity(
             task_input_snapshot_ref=input_snapshot_ref,
             task_input_snapshot_digest=input_snapshot_digest,
             db_session=db_session,
-            trusted_repository_declarations=(
-                child_trusted_repository_declarations or None
-            ),
-            repository_bindings=(child_repository_bindings or None),
+            parent_repository_plan=parent_plan,
         )
     initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
@@ -729,6 +658,21 @@ async def _try_generic_realizer_dispatch(
                 raise ValueError(
                     "persisted Omnigent execution plan digest mismatch"
                 )
+            if getattr(persisted.payload, "resolvedTools", {}).get("repositoryAccess"):
+                from moonmind.omnigent.harness_platform.execution_plan import (
+                    verify_execution_plan_envelope,
+                )
+                from moonmind.omnigent.bridge_artifacts import (
+                    TemporalOmnigentArtifactGateway,
+                )
+
+                persisted = verify_execution_plan_envelope(persisted)
+                gateway = artifact_gateway or TemporalOmnigentArtifactGateway(
+                    async_session_maker
+                )
+                await gateway.admit_execution_plan_inputs(
+                    request=request, plan=persisted
+                )
             if realizer_registry is None:
                 from moonmind.omnigent.realizers.registry import get_default_registry
 
@@ -880,6 +824,15 @@ async def _try_generic_realizer_dispatch(
 
             realizer_registry = get_default_registry()
         realizer = realizer_registry.require(plan.payload.executionRealizerRef)
+        if getattr(plan.payload, "resolvedTools", {}).get("repositoryAccess"):
+            from moonmind.omnigent.bridge_artifacts import (
+                TemporalOmnigentArtifactGateway,
+            )
+
+            gateway = artifact_gateway or TemporalOmnigentArtifactGateway(
+                async_session_maker
+            )
+            await gateway.admit_execution_plan_inputs(request=request, plan=plan)
         return await realizer.execute(request, plan)
     except OmnigentSessionStillRunningError as exc:
         # Planned requests that reach this path have the same retry contract as

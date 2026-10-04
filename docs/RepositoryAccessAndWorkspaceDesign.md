@@ -202,6 +202,15 @@ trusted Enterprise Server links use `/github-apps/<slug>/installations/new`.
 Enrollment validates `allowedOperations` against the repository operation contract
 before issuing setup state, so an invalid operation cannot fail only after installation.
 
+The connection-bound Omnigent implementation verifies the admitted endpoint and
+repository identity before acquisition. Repository preparation uses the selected
+identity's canonical remote; an identity carrying a provider repository ID derives
+its clone URL from the same endpoint and display name. Attempt-owned GitHub CLI
+configuration, runtime Git helpers, and readiness probes retain that trusted host.
+The credential attachment carries only non-secret host metadata, and GitHub.com
+remains the default for historical attachments without that metadata. An execution
+cannot authorize a different host through its repository URL or snapshot contents.
+
 ### CONTRACT-007 Selection is deterministic for each declared role
 
 Selection receives target identity, requested capabilities, access mode, admitted operator/execution context, role, and policy version. Anonymous access admits only supported read operations and creates no dummy connection.
@@ -291,6 +300,19 @@ Rate-limit coordination uses endpoint, resource bucket, and the appropriate acto
 Transport and hosting-service API adapters consume admitted access plus authenticated execution ownership. They do not accept an optional PAT and independently discover credentials when it is absent. A hosting capability unavailable through the chosen adapter yields an explicit capability error, not an irrelevant PAT prompt.
 
 The local managed broker and Omnigent lease-owned materializer share admission/acquisition semantics while retaining delivery mechanisms appropriate to their runtime. Registry authentication stays within image acquisition. A source PAT is never reused as a GHCR fallback.
+
+The connection-bound Omnigent path verifies the stored execution plan and its
+artifact pointer before linking its exact input artifacts to a concrete Step
+Execution. Generic-host repository snapshot reads carry that execution's admitted
+scope through the artifact service; the submitting principal, a known artifact
+reference, and a bare service identity do not grant unrelated reads. Reusing a
+frozen schedule plan links its inputs to each admitted occurrence without changing
+its selected repository authority. Branch and PR publication acquire the selected
+`destination_write` binding before remote reads or writes, validate the workspace
+origin, and preserve the selected endpoint for PR discovery. Missing or revoked
+destination authority fails before publication; typed repository plans do not
+fall back to ambient credentials. Historical plans without repository snapshots
+retain their existing credential path.
 
 ### INV-004 Ambient identity cannot override admitted identity
 
