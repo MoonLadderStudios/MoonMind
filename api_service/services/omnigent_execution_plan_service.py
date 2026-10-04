@@ -61,7 +61,10 @@ from moonmind.omnigent.harness_platform.materializers import (
     get_materializer,
     materializer_ref_for_provider,
 )
-from moonmind.omnigent.harness_platform.planner import compile_execution_plan
+from moonmind.omnigent.harness_platform.planner import (
+    compile_execution_plan,
+    selected_realizer_consumes_repository_authority,
+)
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.host_services.mounted_tools import deployment_mounted_tool_names
@@ -1354,7 +1357,11 @@ async def compile_and_persist_execution_plan(
         additional_tools=mounted_skill_tools,
     )
     repository_access = {}
-    if repository_bindings is None:
+    # A model-only realizer keeps its existing credential path; typed
+    # repository authority is admitted only where it can be consumed.
+    if repository_bindings is None and selected_realizer_consumes_repository_authority(
+        harness_id=harness_id
+    ):
         repository_inputs = await _admit_repository_plan_inputs(
             session_factory=session_factory,
             db_session=db_session,
