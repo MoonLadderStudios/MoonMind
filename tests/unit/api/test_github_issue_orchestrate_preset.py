@@ -172,6 +172,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1063",
         "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
+        "constraints": "Preserve MM-1063 traceability.",
     }
     assert steps[1]["skill"]["id"] == "moonspec-assess"
     assert "artifacts/github-issue-orchestrate-assessment.json" in steps[1][

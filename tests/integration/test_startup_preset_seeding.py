@@ -391,6 +391,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_brief_step["tool"]["inputs"] == {
             "issueKey": "MM-999",
             "artifactPath": "artifacts/jira-implement-brief.json",
+            "constraints": "",
         }
         implement_assessment_step = expanded_steps[1]
         assert implement_assessment_step["title"] == "Assess existing implementation state"
@@ -420,7 +421,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "brief_artifact_path": "artifacts/jira-implement-brief.json",
             "assessment_artifact_path": "artifacts/jira-implement-assessment.json",
         }
-        assert "immutable initial inspection" in implement_assessment_step["instructions"]
+        assert "immutable initial inspection" in " ".join(
+            implement_assessment_step["instructions"].split()
+        )
         assert "Follow the portable Skill" in implement_assessment_step["instructions"]
         assert (
             "artifacts/jira-implement-assessment.json"

@@ -3422,6 +3422,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert expanded["steps"][1]["tool"]["inputs"] == {
                 "issueKey": "MM-328",
                 "artifactPath": "artifacts/jira-orchestrate-brief.json",
+                "constraints": "Keep the scope narrow.",
             }
             assert "Jira preset brief" in expanded["steps"][1]["instructions"]
             assert "Keep the scope narrow." in expanded["steps"][2]["instructions"]
@@ -3534,6 +3535,7 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
             assert expanded["steps"][0]["tool"]["inputs"] == {
                 "issueKey": "MM-742",
                 "artifactPath": "artifacts/jira-implement-brief.json",
+                "constraints": "",
             }
             assert expanded["steps"][1]["skill"]["id"] == "moonspec-assess"
             assert (
@@ -3605,6 +3607,7 @@ async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
             assert expanded["steps"][0]["tool"]["inputs"] == {
                 "issueKey": "MM-742",
                 "artifactPath": "artifacts/jira-implement-brief.json",
+                "constraints": "",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
 
@@ -3996,6 +3999,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1067",
         "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
+        "constraints": "Keep preset scope bounded.",
     }
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][4]["tool"]["id"] == "github.update_issue_status"
