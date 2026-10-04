@@ -28,7 +28,6 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.workflows.executions.repository_contract import RepositoryIdentity
 
 
 class HostLaunchSpec(BaseModel):
@@ -149,6 +148,20 @@ class OmnigentMountedToolPort(Protocol):
 
 
 @runtime_checkable
+class AdmittedRepositoryIdentity(Protocol):
+    """Read-only repository metadata needed by host credential consumers."""
+
+    @property
+    def endpoint(self) -> str: ...
+
+    @property
+    def canonical_remote(self) -> str | None: ...
+
+    @property
+    def display_name(self) -> str: ...
+
+
+@runtime_checkable
 class OmnigentGithubCredentialPort(Protocol):
     """Materialize and clean up run-owned repository credentials."""
 
@@ -160,7 +173,7 @@ class OmnigentGithubCredentialPort(Protocol):
         role: str,
         operation: str,
         repository: str | None = None,
-    ) -> RepositoryIdentity: ...
+    ) -> AdmittedRepositoryIdentity: ...
 
     async def acquire_repository_use(
         self,
@@ -366,6 +379,7 @@ class OmnigentHostReclamationPorts(
 
 
 __all__ = [
+    "AdmittedRepositoryIdentity",
     "HostLaunchSpec",
     "OmnigentEgressAttestationPort",
     "OmnigentGithubCredentialPort",

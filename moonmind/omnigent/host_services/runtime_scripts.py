@@ -5,8 +5,6 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
-from moonmind.omnigent.host_services.github_credentials import github_host_from_endpoint
-
 _RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
 _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
 
@@ -193,9 +191,11 @@ class OmnigentRuntimeScriptService:
                 != "/run/mm-credentials/github"
             ):
                 raise ValueError("GitHub credential attachment target is unsupported")
-            github_host = github_host_from_endpoint(
-                "https://"
-                + str(github_credential_attachment.get("githubHost") or "github.com")
+            # The credential service admits and canonicalizes this non-secret
+            # authority before issuing the attachment. This portable builder
+            # only renders that metadata; it does not load application config.
+            github_host = str(
+                github_credential_attachment.get("githubHost") or "github.com"
             )
             environment.update(
                 {

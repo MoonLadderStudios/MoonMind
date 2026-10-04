@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, call
@@ -57,7 +58,18 @@ async def test_enterprise_preflight_uses_only_the_selected_trusted_host(
     assert (
         calls.count("gh auth token --hostname github.enterprise.test >/dev/null") == 2
     )
-    assert not any("github.com" in command for command in calls)
+    token_commands = [
+        shlex.split(command)
+        for command in calls
+        if command.startswith("gh auth token ")
+    ]
+    assert {argv[argv.index("--hostname") + 1] for argv in token_commands} == {
+        "github.enterprise.test"
+    }
+    repository_commands = [
+        shlex.split(command) for command in calls if command.startswith("gh repo view ")
+    ]
+    assert {argv[3] for argv in repository_commands} == {"owner/repo"}
 
 
 @pytest.mark.asyncio
