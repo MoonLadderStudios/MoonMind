@@ -740,6 +740,10 @@ the existing artifact service owns tombstones, physical deletion and persisted
 deletion intents. Canonical journal refs, pinned prefixes and prefixes held by a
 live consumer are preserved. A physical-delete failure leaves the committed
 replacement intact and an intent for the hourly lifecycle sweep to reconcile.
+Bridge event-index references advance atomically with the complete journal pair;
+reclamation preserves exact payload references owned by append-only control-plane
+observations. Pins and use claims protect the original snapshots without freezing
+the event index on an older prefix.
 
 Deletion must be idempotent.
 

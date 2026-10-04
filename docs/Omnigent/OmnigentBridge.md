@@ -727,6 +727,11 @@ The artifact service records recoverable deletion intents for failed physical
 cleanup, which the existing hourly lifecycle sweep reconciles. Final journals
 retain the full event history without keeping a separate growing copy per event.
 Proxy and retained embedded journal writers share this same reclamation owner.
+Bridge event-index payload locators advance with the committed complete journal
+pair, including when an older snapshot remains pinned or in use. Delayed event
+appends use the current complete prefix containing their payload. Append-only
+control-plane observations preserve their original artifact references and
+protect those exact snapshots from prefix reclamation.
 
 ### 10.2 Normalized event shape
 
