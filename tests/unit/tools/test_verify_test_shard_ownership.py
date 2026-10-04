@@ -9,14 +9,16 @@ from tools.verify_test_shard_ownership import (
     RELIABILITY_SHARD_NAMES,
     CollectedNode,
     PluginUnavailable,
+)
+from tools.verify_test_shard_ownership import (
+    _run_collection_command as _real_run_collection_command,
+)
+from tools.verify_test_shard_ownership import (
     collect_group_node_ids,
     owners,
     verify,
     verify_physical_partitions,
     verify_physical_reliability_partitions,
-)
-from tools.verify_test_shard_ownership import (
-    _run_collection_command as _real_run_collection_command,
 )
 
 
@@ -258,9 +260,7 @@ def test_plugin_cli_runs_a_history_less_node_exactly_once(tmp_path) -> None:
     (tmp_path / "test_hist_a.py").write_text(
         "def test_one():\n    pass\ndef test_two():\n    pass\n"
     )
-    (tmp_path / "test_brand_new.py").write_text(
-        "def test_brand_new():\n    pass\n"
-    )
+    (tmp_path / "test_brand_new.py").write_text("def test_brand_new():\n    pass\n")
     base = [sys.executable, "-m", "pytest"]
     probe = _real_run_collection_command(base + ["--help"])
     if "--splits" not in (probe.stdout + probe.stderr):
@@ -271,15 +271,11 @@ def test_plugin_cli_runs_a_history_less_node_exactly_once(tmp_path) -> None:
         cwd=tmp_path,
     )
     assert proc.returncode in (0, 5), proc.stderr[-500:]
-    universe = {
-        line.strip() for line in proc.stdout.splitlines() if "::" in line
-    }
+    universe = {line.strip() for line in proc.stdout.splitlines() if "::" in line}
     assert len(universe) == 3
     new_node = next(node for node in universe if "test_brand_new" in node)
     # Hints cover only the pre-existing nodes; the new node has no history.
-    hints = {
-        node: 10.0 for node in sorted(universe) if node != new_node
-    }
+    hints = {node: 10.0 for node in sorted(universe) if node != new_node}
     durations_path = tmp_path / "durations.json"
     durations_path.write_text(json.dumps(hints), encoding="utf-8")
     groups: dict[int, set[str]] = {}
@@ -309,3 +305,98 @@ def test_plugin_cli_runs_a_history_less_node_exactly_once(tmp_path) -> None:
     assert verify_physical_partitions(universe, groups) == []
     appearances = sum(new_node in nodes for nodes in groups.values())
     assert appearances == 1
+
+
+@pytest.mark.parametrize(
+    "mode", ["measured", "missing", "malformed", "invalid", "stale", "zero"]
+)
+def test_supported_hints_partition_provider_free_nodes_through_owner(
+    tmp_path, monkeypatch, mode
+):
+    """#4629: the existing owner collects the real four groups with every fallback."""
+    import json
+    import sys
+
+    from tools import verify_test_shard_ownership as owner
+    from tools.ci.refresh_reliability_durations import (
+        RELIABILITY_MARKER_EXPR,
+        durations_pytest_args,
+    )
+
+    corpus = tmp_path / "tests/integration/reliability"
+    corpus.mkdir(parents=True)
+    (corpus / "test_nodes.py").write_text(
+        """import pytest
+pytestmark = pytest.mark.reliability_journey
+class TestNodes:
+    @pytest.mark.parametrize("p", ["cheap.a", "expensive/b", "new", "renamed"])
+    def test_run(self, p):
+        pass
+@pytest.mark.provider_verification
+def test_provider():
+    pass
+@pytest.mark.requires_credentials
+def test_credentials():
+    pass
+"""
+    )
+    (tmp_path / "pytest.ini").write_text(
+        "[pytest]\nmarkers =\n reliability_journey\n provider_verification\n requires_credentials\n"
+    )
+    # A fallback must not accidentally read pytest-split's unrelated default file.
+    (tmp_path / ".test_durations").write_text("unusable unrelated plugin default")
+    base = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/integration/reliability",
+        "--collect-only",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-m",
+        RELIABILITY_MARKER_EXPR,
+    ]
+    proc = _real_run_collection_command(base, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    universe = {line.strip() for line in proc.stdout.splitlines() if "::" in line}
+    assert len(universe) == 4
+    hints_path = tmp_path / "hints.json"
+    if mode == "measured":
+        hints_path.write_text(
+            json.dumps({node: float(i) for i, node in enumerate(sorted(universe))})
+        )
+    elif mode == "malformed":
+        hints_path.write_text("{invalid")
+    elif mode == "invalid":
+        hints_path.write_text(json.dumps({next(iter(universe)): float("nan")}))
+    elif mode == "stale":
+        hints_path.write_text(
+            json.dumps(
+                {
+                    min(universe): 0.01,
+                    "tests/integration/reliability/old.py::test_removed": 10.0,
+                }
+            )
+        )
+    elif mode == "zero":
+        hints_path.write_text(json.dumps({node: 0.0 for node in universe}))
+    monkeypatch.setattr(
+        owner,
+        "_run_collection_command",
+        lambda argv: _real_run_collection_command(argv, cwd=tmp_path),
+    )
+    original = hints_path.read_bytes() if hints_path.exists() else None
+    args = durations_pytest_args(hints_path)
+    groups = {
+        group: owner.collect_group_node_ids(group, durations_args=args)
+        for group in range(1, 5)
+    }
+    assert owner.verify_physical_partitions(universe, groups) == []
+    assert owner.collect_group_node_ids(1, durations_args=args) == groups[1]
+    assert not any(
+        "test_provider" in node or "test_credentials" in node
+        for nodes in groups.values()
+        for node in nodes
+    )
+    assert (hints_path.read_bytes() if hints_path.exists() else None) == original

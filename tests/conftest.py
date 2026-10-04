@@ -1,16 +1,22 @@
 import asyncio
 import inspect
+import json
 import os
 import signal
 from pathlib import Path
 
 import pytest
+from _pytest.junitxml import xml_key
+
+from tools.ci.refresh_reliability_durations import file_digest, nodeids_digest
 
 # Mirror the auth module's disabled-mode default user id to avoid importing
 # api_service.auth during global pytest collection.
 _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_RELIABILITY_RECORDING = pytest.StashKey[dict]()
+_PHASE_COSTS = pytest.StashKey[dict[str, float]]()
 
 _SLOW_TEST_MODULES = {
     Path("tests/unit/api/routers/test_agent_runs.py"),
@@ -83,10 +89,15 @@ def _item_has_marker(item: pytest.Item, name: str) -> bool:
     return item.get_closest_marker(name) is not None
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(
+    items: list[pytest.Item], config: pytest.Config
+) -> None:
     """Classify tests by runtime resource usage for impact-aware CI selection."""
 
     for item in items:
+        # JUnit classname/name is a display label, not the original pytest ID.
+        item.user_properties.append(("moonmind.nodeid", item.nodeid))
         path = Path(str(item.fspath))
         rel_path = _relative_test_path(path)
 
@@ -122,6 +133,93 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             and not _item_has_marker(item, "requires_credentials")
         ):
             item.add_marker(pytest.mark.unit_fast)
+
+    # Capture eligibility before pytest's marker filter and pytest-split run.
+    # This is metadata in the existing JUnit reporter, not another scheduler.
+    if config.getoption("xmlpath", default=None):
+        universe = [
+            item.nodeid
+            for item in items
+            if _item_has_marker(item, "reliability_journey")
+            and not _item_has_marker(item, "provider_verification")
+            and not _item_has_marker(item, "requires_credentials")
+        ]
+        if universe:
+            hints_path = Path(
+                config.getoption("durations_path", default=".test_durations")
+            )
+            try:
+                revision = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=_REPO_ROOT,
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                config.stash[_RELIABILITY_RECORDING] = {
+                    "revision": revision,
+                    "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                    "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                    "shard": config.getoption("group", default=None) or 1,
+                    "shard_count": config.getoption("splits", default=None) or 1,
+                    "collection_args": config.args,
+                    "marker_expr": config.option.markexpr,
+                    "keyword_expr": config.option.keyword,
+                    "deselected_args": config.getoption("deselect", default=[]) or [],
+                    "algorithm": config.getoption("splitting_algorithm", default=""),
+                    "universe_count": len(universe),
+                    "universe_digest": nodeids_digest(universe),
+                    "hints_digest": file_digest(hints_path),
+                    "baseline_digest": file_digest(
+                        _REPO_ROOT / "tests/.reliability-test-durations.json"
+                    ),
+                    "_hints_path": hints_path,
+                }
+            except (OSError, subprocess.CalledProcessError) as exc:
+                config.stash[_RELIABILITY_RECORDING] = {
+                    "error": f"recording identity unavailable: {exc}"
+                }
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    recording = session.config.stash.get(_RELIABILITY_RECORDING, None)
+    if recording is not None:
+        selected = [item.nodeid for item in session.items]
+        recording.update(
+            selected_count=len(selected), selected_digest=nodeids_digest(selected)
+        )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    result = yield
+    if not item.config.getoption("xmlpath", default=None):
+        return
+    report = result.get_result()
+    phases = item.stash.setdefault(_PHASE_COSTS, {})
+    phases[report.when] = report.duration
+    if report.when == "teardown":
+        # Preserve full precision and phase semantics; JUnit time is rounded.
+        report.user_properties.append(("moonmind.phases", json.dumps(phases)))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    logxml = session.config.stash.get(xml_key, None)
+    recording = session.config.stash.get(_RELIABILITY_RECORDING, None)
+    if logxml is None or recording is None:
+        return
+    recording = recording.copy()
+    hints_path = recording.pop("_hints_path", None)
+    if hints_path is not None:
+        try:
+            recording["hints_digest_after"] = file_digest(hints_path)
+            recording["baseline_digest_after"] = file_digest(
+                _REPO_ROOT / "tests/.reliability-test-durations.json"
+            )
+        except OSError as exc:
+            recording["error"] = f"recording integrity unavailable: {exc}"
+    recording["exit_code"] = int(exitstatus)
+    logxml.add_global_property("moonmind.reliability_recording", json.dumps(recording))
 
 
 @pytest.fixture

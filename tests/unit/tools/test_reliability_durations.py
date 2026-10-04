@@ -9,11 +9,13 @@ duplicate, or skip tests.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
-import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DURATIONS_PATH = REPO_ROOT / "tests" / ".reliability-test-durations.json"
@@ -28,7 +30,9 @@ def test_pytest_split_is_a_test_extra_dependency() -> None:
     ``poetry export --extras tests`` from the lock), so the lock must stay
     regenerated alongside this pin; a second dependency manager must
     not appear."""
-    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    pyproject = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
     dependencies = pyproject["tool"]["poetry"]["dependencies"]
     assert "pytest-split" in dependencies, "pytest-split missing from test dependencies"
     entry = dependencies["pytest-split"]
@@ -54,71 +58,323 @@ def test_duration_hints_are_a_pure_node_mapping() -> None:
     unknown keys would be looked up as node IDs, so the file stays a pure
     mapping and provenance lives in docs, not in the payload."""
     payload = json.loads(DURATIONS_PATH.read_text(encoding="utf-8"))
-    assert isinstance(payload, dict) and payload, "duration hints must be a nonempty mapping"
+    assert (
+        isinstance(payload, dict) and payload
+    ), "duration hints must be a nonempty mapping"
     for nodeid, duration in payload.items():
         assert isinstance(nodeid, str) and "::" in nodeid, nodeid
-        assert isinstance(duration, (int, float)) and duration > 0, (nodeid, duration)
-        filename = nodeid.split("::", 1)[0]
-        assert (REPO_ROOT / filename).exists(), f"hint references missing file: {nodeid}"
+        from tools.ci.refresh_reliability_durations import valid_duration
+
+        assert valid_duration(duration), (nodeid, duration)
 
 
-def test_duration_hints_cover_the_expensive_parameterizations() -> None:
-    """MoonLadderStudios/MoonMind#4366 R3: the expensive parameterized cases
-    (not whole files) carry per-node hints so least_duration can spread them
-    across shards instead of pinning one file to one shard."""
-    payload = json.loads(DURATIONS_PATH.read_text(encoding="utf-8"))
-    routing = sorted(
-        nodeid
-        for nodeid in payload
-        if nodeid.startswith(
-            "tests/integration/reliability/test_release_routing_journey.py::"
-            "test_candidate_canary_compare_and_set_and_inflight_upgrade["
-        )
+def _digest(nodes: list[str]) -> str:
+    return hashlib.sha256(
+        json.dumps(sorted(nodes), separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+@pytest.fixture
+def measured_reports(tmp_path: Path) -> list[Path]:
+    """#4629: coherent reports, with unequal classes/parameters in one file."""
+    nodes = [
+        f"tests/integration/reliability/test_cost.py::TestCost::test_run[{p}]"
+        for p in ("cheap.a", "expensive/b", "zero", "tiny")
+    ]
+    paths = []
+    for group, (nodeid, duration) in enumerate(zip(nodes, (0.01, 12.5, 0.0, 1e-9)), 1):
+        recording = {
+            "revision": "abc123",
+            "run_id": "run-4629",
+            "attempt": "1",
+            "shard": group,
+            "shard_count": 4,
+            "collection_args": ["tests/integration/reliability"],
+            "marker_expr": "reliability_journey and not provider_verification and not requires_credentials",
+            "keyword_expr": "",
+            "deselected_args": [],
+            "algorithm": "least_duration",
+            "universe_count": 4,
+            "universe_digest": _digest(nodes),
+            "selected_count": 1,
+            "selected_digest": _digest([nodeid]),
+            "hints_digest": "same-hints",
+            "hints_digest_after": "same-hints",
+            "baseline_digest": "same-baseline",
+            "baseline_digest_after": "same-baseline",
+            "exit_code": 0,
+        }
+        payload = {
+            "schema_version": 1,
+            "suite": f"reliability-shard-{group}",
+            "identity": "pytest-nodeid",
+            "cost_semantics": "pytest-report/setup+call+teardown",
+            "source": {
+                "revision": "abc123",
+                "run_id": "run-4629",
+                "attempt": "1",
+                "shard": str(group),
+                "selected": True,
+                "test_outcome": "success",
+            },
+            "recording": recording,
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "cases": [
+                {
+                    "nodeid": nodeid,
+                    "duration": duration,
+                    "observed": True,
+                    "phases": {"setup": 0.0, "call": duration, "teardown": 0.0},
+                }
+            ],
+        }
+        path = tmp_path / f"shard-{group}.json"
+        path.write_text(json.dumps(payload))
+        paths.append(path)
+    return paths
+
+
+def _refresh(reports: list[Path], baseline: Path) -> int:
+    from tools.ci.refresh_reliability_durations import main
+
+    return main(
+        [
+            "--import-reports",
+            *map(str, reports),
+            "--run-id",
+            "run-4629",
+            "--revision",
+            "abc123",
+            "--attempt",
+            "1",
+            "--output",
+            str(baseline),
+        ]
     )
-    # The pinned/unpinned in-flight upgrade parameterizations from run #14404.
-    assert len(routing) >= 2, routing
-    assert any("[True]" in nodeid for nodeid in routing)
-    assert any("[False]" in nodeid for nodeid in routing)
 
 
-def test_weight_distribution_spreads_files_across_nodes() -> None:
-    """Advisory file weights divide evenly across that file's collected nodes
-    (deterministic, sorted); files without collected nodes contribute nothing
-    and unweighted files stay absent so the plugin fallback selects them."""
-    from tools.ci.refresh_reliability_durations import distribute_weights
+def test_refresh_preserves_observed_differences_and_source(
+    measured_reports, tmp_path, capsys
+):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text('{"stale.py::test_removed": 52.0}\n')
+    assert _refresh(measured_reports, baseline) == 0
+    hints = json.loads(baseline.read_text())
+    assert list(hints.values()) == [0.01, 12.5, 1e-9, 0.0]
+    assert "run-4629" in capsys.readouterr().out
+    assert "stale.py::test_removed" not in hints
 
-    result = distribute_weights(
-        {"b.py": 100.0, "a.py": 60.0, "empty.py": 50.0},
-        {"a.py": ["a.py::test_1", "a.py::test_2"], "b.py": ["b.py::test_1"]},
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing",
+        "duplicate-report",
+        "duplicate-node",
+        "missing-case",
+        "revision",
+        "attempt",
+        "run",
+        "failed",
+        "skipped",
+        "identity",
+        "semantics",
+        "inherited",
+        "count",
+        "corpus",
+        "selection",
+        "marker",
+        "keyword",
+        "partial-path",
+        "hints",
+        "mutated-hints",
+        "mutated-baseline",
+        "missing-phase",
+        "phase-total",
+        "unknown-schema",
+        "non-node",
+        "source-mismatch",
+    ],
+)
+def test_incoherent_import_preserves_baseline(
+    measured_reports, tmp_path, defect, capsys
+):
+    reports = measured_reports.copy()
+    path = reports[0]
+    payload = json.loads(path.read_text())
+    recording = payload["recording"]
+    case = payload["cases"][0]
+    if defect == "missing":
+        reports.pop()
+    elif defect == "duplicate-report":
+        reports[-1] = reports[0]
+    elif defect == "duplicate-node":
+        case["nodeid"] = json.loads(reports[1].read_text())["cases"][0]["nodeid"]
+    elif defect == "missing-case":
+        payload["cases"] = []
+    elif defect == "revision":
+        recording["revision"] = "other"
+    elif defect == "attempt":
+        recording["attempt"] = "2"
+    elif defect == "run":
+        recording["run_id"] = "other"
+    elif defect == "failed":
+        recording["exit_code"] = 1
+    elif defect == "skipped":
+        payload["skipped"] = 1
+    elif defect == "identity":
+        payload["identity"] = "junit-classname"
+    elif defect == "semantics":
+        payload["cost_semantics"] = "call-only"
+    elif defect == "inherited":
+        case["observed"] = False
+    elif defect == "count":
+        payload["tests"] = 99
+    elif defect == "corpus":
+        recording["universe_digest"] = "other"
+    elif defect == "selection":
+        recording["selected_digest"] = "other"
+    elif defect == "marker":
+        recording["marker_expr"] = "reliability_journey"
+    elif defect == "keyword":
+        recording["keyword_expr"] = "cheap"
+    elif defect == "partial-path":
+        recording["collection_args"] = ["tests/integration/reliability/test_cost.py"]
+    elif defect == "hints":
+        recording["hints_digest"] = recording["hints_digest_after"] = "other"
+    elif defect == "mutated-hints":
+        recording["hints_digest_after"] = "other"
+    elif defect == "mutated-baseline":
+        recording["baseline_digest_after"] = "other"
+    elif defect == "missing-phase":
+        case["phases"].pop("setup")
+    elif defect == "phase-total":
+        case["phases"]["call"] = 1.0
+    elif defect == "unknown-schema":
+        payload["schema_version"] = 999
+    elif defect == "non-node":
+        case["nodeid"] = "mod.TestCost::test_run"
+    elif defect == "source-mismatch":
+        payload["source"]["revision"] = "other"
+    path.write_text(json.dumps(payload))
+    baseline = tmp_path / "baseline.json"
+    original = b'{"old.py::test_old": 7}\n'
+    baseline.write_bytes(original)
+    assert _refresh(reports, baseline) == 1
+    assert baseline.read_bytes() == original
+    assert "unchanged" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "duration",
+    [
+        "slow",
+        "0.2",
+        None,
+        True,
+        False,
+        -0.1,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        10**400,
+    ],
+)
+def test_invalid_import_values_preserve_baseline(measured_reports, tmp_path, duration):
+    path = measured_reports[0]
+    payload = json.loads(path.read_text())
+    payload["cases"][0]["duration"] = duration
+    payload["cases"][0]["phases"]["call"] = duration
+    path.write_text(json.dumps(payload))
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("existing baseline\n")
+    assert _refresh(measured_reports, baseline) == 1
+    assert baseline.read_text() == "existing baseline\n"
+
+
+def test_refresh_write_failure_preserves_baseline(
+    measured_reports, tmp_path, monkeypatch
+):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("existing baseline\n")
+
+    def fail_replace(*args):
+        raise OSError("replacement unavailable")
+
+    monkeypatch.setattr("os.replace", fail_replace)
+    assert _refresh(measured_reports, baseline) == 1
+    assert baseline.read_text() == "existing baseline\n"
+
+
+def test_refresh_success_does_not_depend_on_cleanup(
+    measured_reports, tmp_path, monkeypatch
+):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("existing baseline\n")
+
+    def fail_cleanup(*args, **kwargs):
+        raise OSError("cleanup unavailable")
+
+    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+    assert _refresh(measured_reports, baseline) == 0
+    assert len(json.loads(baseline.read_text())) == 4
+
+
+def test_equivalent_complete_suite_import(measured_reports, tmp_path):
+    payloads = [json.loads(p.read_text()) for p in measured_reports]
+    payload = copy.deepcopy(payloads[0])
+    payload["cases"] = [p["cases"][0] for p in payloads]
+    payload["tests"] = 4
+    payload["suite"] = "reliability"
+    payload["source"]["shard"] = ""
+    payload["recording"].update(
+        shard_count=1,
+        selected_count=4,
+        selected_digest=payload["recording"]["universe_digest"],
     )
-    assert result == {
-        "a.py::test_1": 30.0,
-        "a.py::test_2": 30.0,
-        "b.py::test_1": 100.0,
-    }
+    path = tmp_path / "full-suite.json"
+    path.write_text(json.dumps(payload))
+    baseline = tmp_path / "baseline.json"
+    assert _refresh([path], baseline) == 0
+    assert len(json.loads(baseline.read_text())) == 4
 
 
-def test_refresh_regenerates_from_collection_without_stale_entries() -> None:
-    """Changed/deleted/stale hints cannot drop or duplicate tests: refresh
-    output contains exactly the freshly collected nodes, so a deleted test
-    simply stops being a hint and selection is unaffected (hints are
-    advisory-only)."""
-    from tools.ci.refresh_reliability_durations import assemble_hints
+@pytest.mark.parametrize(
+    "content", ["{broken", "[1, 2]", '{"schema_version": 1, "schema_version": 1}']
+)
+def test_malformed_report_does_not_replace_baseline(
+    measured_reports, tmp_path, content
+):
+    measured_reports[0].write_text(content)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("existing baseline\n")
+    assert _refresh(measured_reports, baseline) == 1
+    assert baseline.read_text() == "existing baseline\n"
 
-    collected = ["a.py::test_1", "a.py::test_2[param]"]
-    hints = assemble_hints(collected, {"a.py": 60.0})
-    assert sorted(hints) == sorted(collected)
-    assert hints["a.py::test_2[param]"] == 30.0
+
+def test_default_command_only_validates_existing_hints(tmp_path):
+    from tools.ci.refresh_reliability_durations import main
+
+    baseline = tmp_path / "hints.json"
+    baseline.write_text('{"a.py::test_cost": 0.01}\n')
+    original = baseline.read_bytes()
+    assert main(["--output", str(baseline)]) == 0
+    assert baseline.read_bytes() == original
+    assert main(["--output", str(tmp_path / "missing.json")]) == 0
 
 
-def test_new_tests_without_history_use_no_hint_entry() -> None:
-    """A newly added test has no duration history: it carries no hint entry
-    and the plugin fallback still selects it exactly once (fallback coverage
-    is asserted at the plugin boundary in the verifier tests)."""
-    from tools.ci.refresh_reliability_durations import assemble_hints
+def test_cli_fallback_supplies_an_absent_path(tmp_path, capsys):
+    from tools.ci.refresh_reliability_durations import main
 
-    hints = assemble_hints(["new.py::test_brand_new"], {"other.py": 60.0})
-    assert hints == {}
+    assert (
+        main(["--pytest-duration-path", "--output", str(tmp_path / "missing.json")])
+        == 0
+    )
+    path = Path(capsys.readouterr().out.strip())
+    assert path.is_absolute() and not path.exists()
 
 
 def _validate(path: Path) -> int:
@@ -133,6 +389,12 @@ def test_validate_accepts_a_well_formed_hints_file(tmp_path: Path) -> None:
     assert _validate(path) == 0
 
 
+def test_validate_preserves_zero_and_tiny_durations(tmp_path):
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"a.py::test_zero": 0.0, "a.py::test_tiny": 1e-9}))
+    assert _validate(path) == 0
+
+
 def test_validate_reports_missing_history_distinctly(tmp_path: Path) -> None:
     """Missing timing history is not a coverage failure: a missing file
     reports a distinct status so CI falls back to the deterministic
@@ -142,7 +404,14 @@ def test_validate_reports_missing_history_distinctly(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "content",
-    ["{not json", "[1, 2]", json.dumps({"a.py::test_1": "slow"}), json.dumps({"a.py::test_1": -1.0})],
+    [
+        "{not json",
+        "[1, 2]",
+        *[
+            json.dumps({"a.py::test_1": value})
+            for value in ("slow", -1.0, True, False, float("inf"), float("nan"))
+        ],
+    ],
 )
 def test_validate_rejects_an_unusable_hints_file(tmp_path: Path, content: str) -> None:
     """An unusable hint file warns and falls back to the same deterministic
