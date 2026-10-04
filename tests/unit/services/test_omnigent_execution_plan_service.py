@@ -1694,16 +1694,27 @@ async def test_repository_codex_product_admission_requires_capable_realizer(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("generic_admitted", [False, True])
+@pytest.mark.parametrize(
+    ("generic_admitted", "selection", "outcome"),
+    [
+        (True, "routed", "typed"),
+        (False, "explicit-default", "legacy"),
+        (False, "routed-default", "legacy"),
+        (False, "explicit-other", "reject"),
+        (False, "routed-other", "reject"),
+    ],
+)
 async def test_repository_codex_default_admits_typed_authority_only_when_consumable(
-    monkeypatch, tmp_path, generic_admitted
+    monkeypatch, tmp_path, generic_admitted, selection, outcome
 ) -> None:
     """A default Codex repository task stays runnable in every rollout state.
 
     Typed repository authority is admitted only when the selected realizer can
     consume it. While generic Codex is unqualified (the shipped default), the
-    retained profile-bound realizer keeps its existing credential path instead
-    of rejecting every repository-bearing Codex task and schedule refresh.
+    retained profile-bound realizer keeps its existing credential path, which
+    is the legacy credential recorded as the default connection. A selection
+    that path cannot honor -- another explicit connection, or a route to one --
+    rejects before persistence instead of silently using that credential.
     """
 
     from unittest.mock import AsyncMock
@@ -1712,6 +1723,9 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
 
     from api_service.db.models import Base
     from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
     from tests.helpers.repository_connections import (
         github_pat_connection,
         github_repository_assignment,
@@ -1719,11 +1733,17 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
     )
 
     repository = "MoonLadderStudios/Tactics"
+    routed_to_other = selection in {"routed", "routed-other", "explicit-other"}
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "GITHUB_TOKEN"),
         github_pat_connection("codex-repository", "CODEX_REPOSITORY_PAT"),
-        assignments=[github_repository_assignment("codex-repository", repository)],
+        assignments=(
+            [github_repository_assignment("codex-repository", repository)]
+            if routed_to_other
+            else []
+        ),
     )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -1743,12 +1763,28 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
         return _policy_snapshot(harness="codex-native", policy="codex-on-demand@1")
 
     monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    target = (
+        {
+            "provider": "git",
+            "connectionRef": (
+                DEFAULT_GIT_CONNECTION_REF
+                if selection == "explicit-default"
+                else "codex-repository"
+            ),
+            "repository": {"name": repository},
+            "branch": {"name": "main"},
+        }
+        if selection.startswith("explicit")
+        else repository
+    )
     store = InMemoryExecutionPlanStore()
-    try:
-        compiled = await service.compile_and_persist_execution_plan(
+    artifacts = _ArtifactService()
+
+    async def admit():
+        return await service.compile_and_persist_execution_plan(
             session_factory=sessions,
             execution_plan_store=store,
-            artifact_service=_ArtifactService(),
+            artifact_service=artifacts,
             principal="user-1",
             workflow_id="mm:codex-default-repository",
             agent_profile_snapshot=_snapshot(
@@ -1760,7 +1796,7 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
             initial_parameters={
                 "model": "example/model",
                 "targetRuntime": "omnigent",
-                "repository": repository,
+                "repository": target,
                 "publishMode": "pr",
                 "workflow": {"instructions": "Search the repository."},
             },
@@ -1769,11 +1805,24 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
             task_input_snapshot_ref="art_request_1",
             task_input_snapshot_digest="sha256:" + "1" * 64,
         )
+
+    try:
+        if outcome == "reject":
+            with pytest.raises(ValueError, match="codex-repository.*profile-bound"):
+                await admit()
+            assert store._plans == {}
+            assert all(
+                json.loads(payload).get("schemaVersion")
+                != "moonmind.omnigent-execution-plan-envelope.v1"
+                for payload in artifacts.payloads.values()
+            )
+            return
+        compiled = await admit()
     finally:
         await engine.dispose()
 
     plan = compiled.envelope.payload
-    if generic_admitted:
+    if outcome == "typed":
         assert plan.executionRealizerRef == "generic-omnigent-host@1"
         assert set(plan.resolvedTools["repositoryAccess"]) == {"source", "destination"}
         assert plan.credentialBindings["source"].connectionRef == "codex-repository"
