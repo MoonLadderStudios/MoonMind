@@ -696,8 +696,13 @@ async def _admit_repository_plan_inputs(
     initial_parameters: Mapping[str, Any],
     requires_github: bool,
     parent_plan: OmnigentExecutionPlanEnvelope | None,
+    typed_authority: bool = True,
 ) -> dict[str, Any]:
-    """Derive transport/tool roles and freeze selection through existing owners."""
+    """Derive transport/tool roles and freeze selection through existing owners.
+
+    Without ``typed_authority`` the selected realizer is model-only: nothing is
+    admitted, and only a selection its legacy credential can honor is accepted.
+    """
     from api_service.services.repository_connections import RepositoryConnectionService
     from moonmind.auth.bound_acquisition import AccessMode, select_repository_authority
     from moonmind.omnigent.harness_platform.credential_bindings import (
@@ -707,6 +712,7 @@ async def _admit_repository_plan_inputs(
     from moonmind.omnigent.repository_sources import normalize_repository_source
     from moonmind.omnigent.workspace_sources import compile_workspace_source
     from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
         RepositoryIdentity,
         admit_scoped_route,
         github_repository_name_from_value,
@@ -813,6 +819,39 @@ async def _admit_repository_plan_inputs(
         else:
             async with session_factory() as session:
                 yield session
+
+    if not typed_authority:
+        # The profile-bound realizer reads only the legacy GitHub credential,
+        # which migration 391 records as the default connection. Any other
+        # selected or routed connection would be silently substituted.
+        unhonored = None
+        if mode == AccessMode.EXPLICIT and connection_ref != DEFAULT_GIT_CONNECTION_REF:
+            unhonored = connection_ref
+        elif mode == AccessMode.ROUTED:
+            async with admission_session() as session:
+                candidates = await RepositoryConnectionService(
+                    session
+                ).launch_candidates(
+                    repository,
+                    principal_ref=principal,
+                    principal_scope=("system", None),
+                )
+            unhonored = next(
+                (
+                    candidate.connection.id
+                    for candidate in candidates
+                    if candidate.connection.id != DEFAULT_GIT_CONNECTION_REF
+                ),
+                None,
+            )
+        if unhonored:
+            raise ValueError(
+                f"repository connection {unhonored} cannot be used by the "
+                "profile-bound Codex realizer, which reads only "
+                f"{DEFAULT_GIT_CONNECTION_REF}; qualify generic Omnigent Codex "
+                "or select the default connection"
+            )
+        return result
 
     async with admission_session() as session:
         connections = (
@@ -1357,11 +1396,7 @@ async def compile_and_persist_execution_plan(
         additional_tools=mounted_skill_tools,
     )
     repository_access = {}
-    # A model-only realizer keeps its existing credential path; typed
-    # repository authority is admitted only where it can be consumed.
-    if repository_bindings is None and selected_realizer_consumes_repository_authority(
-        harness_id=harness_id
-    ):
+    if repository_bindings is None:
         repository_inputs = await _admit_repository_plan_inputs(
             session_factory=session_factory,
             db_session=db_session,
@@ -1371,6 +1406,11 @@ async def compile_and_persist_execution_plan(
             initial_parameters=initial_parameters,
             requires_github="gh" in resolved_profile.tools,
             parent_plan=parent_repository_plan,
+            # A model-only realizer keeps its existing credential path; typed
+            # repository authority is admitted only where it can be consumed.
+            typed_authority=selected_realizer_consumes_repository_authority(
+                harness_id=harness_id
+            ),
         )
         repository_bindings = repository_inputs["bindings"]
         trusted_repository_declarations = repository_inputs["declarations"]
