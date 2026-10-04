@@ -450,7 +450,9 @@ class GenericOmnigentHostRealizer:
                 )
 
             host_started_at = time.monotonic()
-            host_class, launch_policy = await self._resolve_host(plan)
+            bind_resolver = getattr(type(self._resolve_host), "for_request", None)
+            resolver = bind_resolver(self._resolve_host, request) if bind_resolver else self._resolve_host
+            host_class, launch_policy = await resolver(plan)
             credential_handles = await self._credentials.materialize_all(
                 request=request,
                 plan=plan,

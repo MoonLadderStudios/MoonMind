@@ -151,6 +151,8 @@ class CodexProfileBoundRealizer:
         artifact_gateway = self._artifact_gateway or TemporalOmnigentArtifactGateway(
             session_factory
         )
+        if isinstance(artifact_gateway, TemporalOmnigentArtifactGateway):
+            artifact_gateway = artifact_gateway.for_request(request)
         run_store = OmnigentBridgeSessionStore(session_factory)
 
         # If factory supplied (tests), use it

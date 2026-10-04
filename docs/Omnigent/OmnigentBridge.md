@@ -92,6 +92,15 @@ The bridge may observe live Omnigent resources, but MoonMind artifacts remain th
 
 Provider-native ids, URLs, host paths, and file ids may appear in redacted diagnostics or server-side mapping metadata. They must not replace MoonMind artifact refs in workflow evidence, Step evidence, or terminal `AgentRunResult.outputRefs`.
 
+Runtime inputs use `TemporalOmnigentArtifactGateway.for_request(request)`;
+the shared gateway never changes its principal or admission context in place.
+The execution admission owner links the verified plan's exact Skill, restore
+and attachment closure in the deployment namespace. Skill delivery and workspace
+metadata/chunk reads use the same bound reader, including surviving Codex and
+managed consumers. Missing or changed authority fails without a local path or
+alternate-account fallback. The durable admission and raw policy are owned by
+[WorkflowArtifactSystemDesign.md](../Temporal/WorkflowArtifactSystemDesign.md#93-service-and-worker-access).
+
 ### 2.3 Keep the host unchanged
 
 A successful design supports a stock Omnigent host. No custom host image or source patch is required.

@@ -10157,7 +10157,9 @@ class TemporalAgentRuntimeActivities:
             )
 
         try:
-            resolved_skillset = await self._load_resolved_skillset(skillset_ref)
+            from moonmind.workflows.skills.run_projection import runtime_artifact_reader, load_resolved_skillset
+            artifact_reader = await runtime_artifact_reader(self._artifact_service, request)
+            resolved_skillset = await load_resolved_skillset(artifact_reader, skillset_ref)
             resolved_names = {entry.skill_name for entry in resolved_skillset.skills}
             if selected_skill not in resolved_names:
                 raise TemporalActivityRuntimeError(
@@ -10186,7 +10188,7 @@ class TemporalAgentRuntimeActivities:
                 )
             materializer = AgentSkillMaterializer(
                 workspace_root=str(workspace),
-                artifact_service=self._artifact_service,
+                artifact_service=artifact_reader,
                 backing_root=str(skills_backing_root),
                 source_preservation_root=str(skill_source_preservation_root),
                 projection_owner_uid=_MANAGED_AGENT_UID,
@@ -10341,27 +10343,6 @@ class TemporalAgentRuntimeActivities:
                     "selected skill materialization failed before runtime launch: "
                     f"local skill source for '{entry.skill_name}' is disabled by skill source policy"
                 )
-
-    async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
-        if self._artifact_service is None:
-            raise TemporalActivityRuntimeError(
-                "selected skill materialization failed before runtime launch: "
-                "artifact service is required to read request.resolvedSkillsetRef"
-            )
-        try:
-            _artifact, payload = await self._artifact_service.read(
-                artifact_id=skillset_ref,
-                principal="agent_runtime",
-                allow_restricted_raw=True,
-            )
-            data = json.loads(payload.decode("utf-8"))
-            return ResolvedSkillSet.model_validate(data)
-        except TemporalActivityRuntimeError:
-            raise
-        except (OSError, TypeError, ValueError, ValidationError) as exc:
-            raise TemporalActivityRuntimeError(
-                f"failed to read resolvedSkillsetRef {skillset_ref}: {exc}"
-            ) from exc
 
     @staticmethod
     def _managed_session_run_root_for_workspace(workspace: Path) -> Path | None:

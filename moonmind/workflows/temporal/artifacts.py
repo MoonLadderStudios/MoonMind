@@ -1583,6 +1583,14 @@ class TemporalArtifactRepository:
 class TemporalArtifactService:
     """Service implementing Temporal artifact semantics for local/dev runtime."""
 
+    def for_request(self, request):
+        """Keep runtime input delegation inside the existing admitted reader."""
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+        from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+
+        sessions = async_sessionmaker(self._repository._session.bind, expire_on_commit=False)
+        return TemporalOmnigentArtifactGateway(sessions, store=self._store).for_request(request)
+
     def __init__(
         self,
         repository: TemporalArtifactRepository,

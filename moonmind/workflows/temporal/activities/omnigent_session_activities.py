@@ -1208,7 +1208,7 @@ async def _load_verified_execution_plan(
         raise ValueError(
             "execution plan binding conflicts with task-input snapshot authority"
         )
-    if persisted.payload.resolvedTools.get("repositoryAccess") and workflow_id:
+    if workflow_id:
         # The normal Step identity carries the actual parent Temporal run.
         # Legacy unstructured identifiers do not synthesize an execution link.
         prefix = f"{workflow_id}:"

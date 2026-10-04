@@ -136,6 +136,7 @@ class GenericOmnigentHostRuntime:
         anticipated_skills = await self._skills.anticipated_attachment(
             plan.payload.resolvedSkills,
             owner_ref=request.idempotency_key,
+            request=request,
         )
         if authority_sink is not None:
             # Persist deterministic cleanup authority before the first
@@ -144,6 +145,7 @@ class GenericOmnigentHostRuntime:
         skills = await self._skills.materialize(
             plan.payload.resolvedSkills,
             owner_ref=request.idempotency_key,
+            request=request,
         )
         if skills != anticipated_skills:
             raise HarnessPlatformError(
