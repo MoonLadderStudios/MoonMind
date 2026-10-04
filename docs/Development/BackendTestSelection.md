@@ -121,9 +121,23 @@ The collected reliability universe is split into four groups through pytest-spli
 --durations-path tests/.reliability-test-durations.json
 ```
 
-`N` is 1 through 4. All shards use the same checkout, collection inputs, and advisory hints. `tools/ci/refresh_reliability_durations.py --validate-only` checks hint usability. Missing or unusable history warns and falls back consistently; it must not exclude new tests or make an otherwise correct test fail. The ownership verifier checks the actual plugin collections for complete, disjoint coverage.
+`N` is 1 through 4. All shards use the same checkout, collection inputs, and unchanged advisory hints. `tools/ci/refresh_reliability_durations.py --validate-only` checks hint usability. CI uses `--pytest-duration-path` to obtain either the usable baseline or an absent path for deterministic no-history selection; fallback explicitly avoids the plugin's unrelated `.test_durations` cache. Missing or unusable history warns and falls back consistently. New/renamed tests use the plugin's estimate, and removed nodes can leave harmless stale hints until refresh. The ownership verifier uses the same helper and real provider-free marker expression to check the plugin collections for complete, disjoint coverage.
 
 Refresh hints when a measured imbalance or changed corpus warrants it. Per-run timing artifacts are evidence, not a second correctness database or a requirement for automated timing commits. Do not rebuild sharding that is already present.
+
+The existing JUnit producer records each original pytest node ID, including path, nested classes and parameters, and the full-precision duration of its setup, call and teardown reports. The cost meaning is their sum in seconds (`pytest-report/setup+call+teardown`); shared fixture work belongs to the node whose report incurred it. Collection and runner startup/cleanup are separate overhead. The slowest text report shows at most 25 cases; each JSON snapshot retains the complete observed row. Uninstrumented JUnit display labels, inherited plugin hints and fallback estimates are not measured observations. Genuine zero/tiny measurements are retained; malformed, boolean, negative and non-finite import values are rejected.
+
+Download all four finite `pytest-reliability-shard-N-attempt-A` artifacts from one successful revision/run/attempt, keeping each row's directory distinct. Refresh explicitly, outside the matrix run:
+
+```bash
+python3 tools/ci/refresh_reliability_durations.py \
+  --import-reports artifacts/recording/shard-*/pytest-backend-reliability-shard-*-durations.json \
+  --run-id RUN_ID --revision TESTED_SHA --attempt ATTEMPT
+```
+
+The helper also accepts one unsharded `reliability` snapshot from a complete recording of `tests/integration/reliability` with the same provider-free expression. For a local recording, explicitly set `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` before pytest and pass that identity plus the actual checkout revision to the existing summary writer. A refresh requires all eligible cases to finish successfully, without skips, keyword/file selection restrictions, mixed attempts, duplicate rows/nodes or changed hints. The producer's selected-node and eligible-universe digests prove corpus completeness without recollecting a different revision during import. Reporting errors remain diagnostics and do not change the primary pytest outcome.
+
+Validation finishes before the helper atomically replaces the pure node-to-seconds mapping. Rejected or failed imports leave its bytes unchanged. Record the accepted source run/revision/attempt and the refresh output in PR evidence; the importer does not commit anything. The file-weight seed and averaging generator are retired. Until an accepted complete recording replaces the existing committed hints, those retained values are legacy estimates, not newly measured costs. Running the helper with no arguments only checks usability and preserves the baseline.
 
 ### Reliability Docker Fixture Layers
 
@@ -215,9 +229,9 @@ Outside a managed workflow:
 
 The same entrypoints accept other targeted paths or node IDs. Broader suites normally run in GitHub Actions. For a justified host-side integration reproduction, use `./tools/test_integration.sh` and its disposable services. Managed agents do not run nested Docker or acquire a deployment socket to reproduce CI.
 
-To reproduce a reliability partition in an already prepared, disposable host/CI test environment, use its recorded pytest command with `--splits 4 --group N --splitting-algorithm least_duration` and the same validated hints. Omitting the hints path reproduces the consistent no-history fallback. Service addresses, networks, and fixture prerequisites must match that isolated environment, not the installed deployment. The workflow contains the exact suite commands, marker expressions, and environment setup.
+To reproduce a reliability partition in an already prepared, disposable host/CI test environment, use its recorded pytest command with `--splits 4 --group N --splitting-algorithm least_duration` and `--durations-path "$(python3 tools/ci/refresh_reliability_durations.py --pytest-duration-path)"`. This selects the same validated hints or explicit no-history fallback. Service addresses, networks, and fixture prerequisites must match that isolated environment, not the installed deployment. The workflow contains the exact suite commands, marker expressions, and environment setup.
 
-`python3 tools/ci/refresh_reliability_durations.py` refreshes the advisory collection-based hints when needed. `python tools/verify_test_shard_ownership.py` checks the eligible provider-free universe in its supported environment. These are not broad local prerequisites to every PR.
+Use the explicit observed refresh command above when needed. `python tools/verify_test_shard_ownership.py` checks the eligible provider-free universe in its supported environment. These are not broad local prerequisites to every PR.
 
 The source-destroying checkpoint-resume journey still exercises durable capture/restore and idempotent recovery. It does not by itself prove the entire Temporal-to-managed-runtime journey. Use the appropriate owning integration boundary rather than treating one helper test as complete product verification.
 

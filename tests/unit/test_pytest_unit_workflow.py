@@ -412,7 +412,10 @@ def test_reliability_job_runs_the_canonical_journey_suite() -> None:
     assert "${{ matrix.shard }}" in command
     assert "least_duration" in command
     assert "tests/.reliability-test-durations.json" in command
-    assert "-m reliability_journey" in command
+    assert (
+        '-m "reliability_journey and not provider_verification and not requires_credentials"'
+        in command
+    )
     assert "skipping until #3145 lands" not in command
 
     diagnostics = _run_command(job, "Collect reliability shard diagnostics")

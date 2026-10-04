@@ -29,6 +29,15 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.refresh_reliability_durations import (
+    COST_SEMANTICS,
+    DURATIONS_PATH,
+    valid_duration,
+)
 
 SLOWEST_LIMIT = 25
 SUMMARY_SLOWEST_SHOWN = 10
@@ -39,6 +48,8 @@ class CaseTiming:
     nodeid: str
     classname: str
     time: float
+    observed: bool = False
+    phases: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +60,7 @@ class JUnitSummary:
     skipped: int
     time: float
     cases: tuple[CaseTiming, ...]
+    recording: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -90,21 +102,62 @@ def parse_junit(path: Path) -> JUnitSummary:
     tests = failures = errors = skipped = 0
     total_time = 0.0
     cases: list[CaseTiming] = []
+    recording = None
     for suite in suites:
         tests += int(float(suite.get("tests", "0")))
         failures += int(float(suite.get("failures", "0")))
         errors += int(float(suite.get("errors", "0")))
         skipped += int(float(suite.get("skipped", "0")))
         total_time += float(suite.get("time", "0") or 0)
+        for prop in suite.findall("./properties/property"):
+            if prop.get("name") == "moonmind.reliability_recording":
+                if recording is not None:
+                    raise ValueError("duplicate reliability recording metadata")
+                recording = json.loads(prop.get("value", ""))
         for case in suite.iter("testcase"):
             classname = case.get("classname", "")
             name = case.get("name", "")
             nodeid = f"{classname}::{name}" if classname else name
             try:
-                duration = float(case.get("time", "0") or 0)
+                duration = float(case.get("time", ""))
             except ValueError:
-                duration = 0.0
-            cases.append(CaseTiming(nodeid=nodeid, classname=classname, time=duration))
+                raise ValueError(f"invalid JUnit timing for {nodeid}") from None
+            if not valid_duration(duration):
+                raise ValueError(f"invalid JUnit timing for {nodeid}")
+            properties = {}
+            for prop in case.findall("./properties/property"):
+                key = prop.get("name")
+                if key in ("moonmind.nodeid", "moonmind.phases"):
+                    if key in properties:
+                        raise ValueError(
+                            f"duplicate timing/identity property for {nodeid}"
+                        )
+                    properties[key] = prop.get("value", "")
+            exact_nodeid = properties.get("moonmind.nodeid")
+            phases = None
+            if "moonmind.phases" in properties:
+                phases = json.loads(properties["moonmind.phases"])
+                if not isinstance(phases, dict) or not all(
+                    valid_duration(value) for value in phases.values()
+                ):
+                    raise ValueError(f"invalid phase timing for {nodeid}")
+                duration = sum(phases.values())
+                if not valid_duration(duration):
+                    raise ValueError(f"invalid phase timing total for {nodeid}")
+            observed = bool(
+                exact_nodeid
+                and phases is not None
+                and set(phases) == {"setup", "call", "teardown"}
+            )
+            cases.append(
+                CaseTiming(
+                    nodeid=exact_nodeid or nodeid,
+                    classname=classname,
+                    time=duration,
+                    observed=observed,
+                    phases=phases,
+                )
+            )
     cases.sort(key=lambda c: c.time, reverse=True)
     return JUnitSummary(
         tests=tests,
@@ -113,10 +166,13 @@ def parse_junit(path: Path) -> JUnitSummary:
         skipped=skipped,
         time=total_time,
         cases=tuple(cases),
+        recording=recording,
     )
 
 
-def write_slowest_report(summary: JUnitSummary, path: Path, limit: int = SLOWEST_LIMIT) -> None:
+def write_slowest_report(
+    summary: JUnitSummary, path: Path, limit: int = SLOWEST_LIMIT
+) -> None:
     """Write the slowest-test text report derived from JUnit timings."""
     lines = [
         f"# Slowest tests ({min(limit, len(summary.cases))} of {len(summary.cases)} cases)",
@@ -129,15 +185,46 @@ def write_slowest_report(summary: JUnitSummary, path: Path, limit: int = SLOWEST
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_durations_snapshot(suite: str, summary: JUnitSummary, path: Path) -> None:
+def write_durations_snapshot(
+    suite: str,
+    summary: JUnitSummary,
+    path: Path,
+    *,
+    revision: str = "",
+    run_id: str = "",
+    attempt: str = "",
+    shard: str = "",
+    selected: bool = True,
+    test_outcome: str = "unknown",
+    test_seconds: float | None = None,
+) -> None:
     """Write the per-shard duration-hints snapshot (separate artifact).
 
-    This file is the #4366 maintenance input for the current shard only. It
+    This file is the #4629 observation input for the current shard only. It
     must never overwrite a shared/committed selection-hints baseline, and a
     partial failed-shard result must never replace a complete baseline: the
     caller uploads this snapshot path as its own artifact.
     """
+    if path.resolve() == DURATIONS_PATH.resolve():
+        raise ValueError(
+            "observation output cannot overwrite the committed selection baseline"
+        )
     payload = {
+        "schema_version": 1,
+        "identity": (
+            "pytest-nodeid" if all(c.observed for c in summary.cases) else "unavailable"
+        ),
+        "cost_semantics": COST_SEMANTICS,
+        "source": {
+            "revision": revision,
+            "run_id": run_id,
+            "attempt": attempt,
+            "shard": shard,
+            "selected": selected,
+            "test_outcome": test_outcome,
+        },
+        "recording": summary.recording,
+        "test_seconds": test_seconds,
         "suite": suite,
         "tests": summary.tests,
         "failures": summary.failures,
@@ -145,15 +232,25 @@ def write_durations_snapshot(suite: str, summary: JUnitSummary, path: Path) -> N
         "skipped": summary.skipped,
         "time": summary.time,
         "cases": [
-            {"nodeid": c.nodeid, "classname": c.classname, "duration": c.time}
+            {
+                "nodeid": c.nodeid,
+                "classname": c.classname,
+                "duration": c.time,
+                "observed": c.observed,
+                "phases": c.phases,
+            }
             for c in summary.cases
         ],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
 
 
-def extract_last_active_case(log_path: Path, limit: int = LAST_ACTIVE_SHOWN) -> LastActiveCase | None:
+def extract_last_active_case(
+    log_path: Path, limit: int = LAST_ACTIVE_SHOWN
+) -> LastActiveCase | None:
     """Derive the trailing live-test node from the streamed pytest log.
 
     Scans only the tail of the known streamed log for lines carrying a
@@ -169,11 +266,17 @@ def extract_last_active_case(log_path: Path, limit: int = LAST_ACTIVE_SHOWN) -> 
     total_lines = len(lines)
     if total_lines > LAST_ACTIVE_SCAN_TAIL:
         lines = lines[-LAST_ACTIVE_SCAN_TAIL:]
-    node_lines = [line.strip()[:LAST_ACTIVE_LINE_CAP] for line in lines if "::" in line and line.strip()]
+    node_lines = [
+        line.strip()[:LAST_ACTIVE_LINE_CAP]
+        for line in lines
+        if "::" in line and line.strip()
+    ]
     if not node_lines:
         return None
     recent = tuple(node_lines[-limit:])
-    return LastActiveCase(last_case=recent[-1], recent_cases=recent, total_lines=total_lines)
+    return LastActiveCase(
+        last_case=recent[-1], recent_cases=recent, total_lines=total_lines
+    )
 
 
 def classify_outcome(selected: bool, junit_exists: bool, test_outcome: str) -> str:
@@ -245,7 +348,9 @@ def render_summary(
     if effective_command:
         lines.append(f"- Effective pytest command: `{effective_command}`")
     else:
-        lines.append("- Effective pytest command: unavailable (not recorded for this row).")
+        lines.append(
+            "- Effective pytest command: unavailable (not recorded for this row)."
+        )
     budgets = []
     if pytest_timeout:
         budgets.append(f"per-test timeout `{pytest_timeout}`")
@@ -271,7 +376,9 @@ def render_summary(
             "unselected rows report `intentionally unselected`, never zero."
         )
     elif not selected:
-        lines.append("- Selected/collected/executed: intentionally unselected (no tests run).")
+        lines.append(
+            "- Selected/collected/executed: intentionally unselected (no tests run)."
+        )
     else:
         lines.append(
             "- Selected/collected/executed: unavailable (no final JUnit report; "
@@ -281,14 +388,22 @@ def render_summary(
     if test_seconds is not None:
         lines.append(f"- Test step wall time: `{test_seconds:.0f}s` (measured).")
     else:
-        lines.append("- Test step wall time: unavailable (not measured or interrupted).")
+        lines.append(
+            "- Test step wall time: unavailable (not measured or interrupted)."
+        )
     if junit is not None:
         lines.append(f"- JUnit suite time: `{junit.time:.2f}s` (available).")
     else:
         lines.append("- JUnit suite time: unavailable (no final JUnit report).")
-    lines.append("- Setup: unavailable as a separate measurement in this row (included in wall time; see job logs).")
-    lines.append("- Collection: unavailable as a separate measurement in this row (included in wall time; see job logs).")
-    lines.append("- Cleanup: unavailable as a separate measurement in this row (runs as a separate always() step; see job logs).")
+    lines.append(
+        "- Setup: unavailable as a separate measurement in this row (included in wall time; see job logs)."
+    )
+    lines.append(
+        "- Collection: unavailable as a separate measurement in this row (included in wall time; see job logs)."
+    )
+    lines.append(
+        "- Cleanup: unavailable as a separate measurement in this row (runs as a separate always() step; see job logs)."
+    )
     lines += ["", "### Slowest cases", ""]
     if junit is not None and junit.cases:
         for case in junit.cases[:SUMMARY_SLOWEST_SHOWN]:
@@ -326,7 +441,9 @@ def render_summary(
         size = f"`{log_bytes}` bytes" if log_bytes is not None else "available"
         lines.append(f"- Text log: `{log_path}` ({size}).")
     else:
-        lines.append(f"- Text log: `{log_path}` (unavailable -- streamed live in Actions logs).")
+        lines.append(
+            f"- Text log: `{log_path}` (unavailable -- streamed live in Actions logs)."
+        )
     if junit_available:
         lines.append(f"- JUnit report: `{junit_path}` (available).")
     else:
@@ -447,9 +564,20 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
         except OSError as exc:
             error = f"slowest-report write failed: {exc}"
         try:
-            write_durations_snapshot(args.suite, junit, Path(args.durations_snapshot))
+            write_durations_snapshot(
+                args.suite,
+                junit,
+                Path(args.durations_snapshot),
+                revision=args.revision or "",
+                run_id=args.run_id or "",
+                attempt=args.attempt or "",
+                shard=args.shard or "",
+                selected=args.selected == "true",
+                test_outcome=args.test_outcome or "unknown",
+                test_seconds=_read_test_seconds(args.test_seconds_file),
+            )
             durations_available = True
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             note = f"durations-snapshot write failed: {exc}"
             error = f"{error}; {note}" if error else note
     import time as _time
