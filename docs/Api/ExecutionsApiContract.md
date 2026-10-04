@@ -169,6 +169,8 @@ Create, describe, signal, and cancel return this materialized shape. List return
 
 For a completed idle execution, `runMetrics.success` is null and `successRateSample` is `{ "success": 0, "sampleSize": 0 }`, excluding it from success-rate samples. Exact failed/canceled states and explicit failed, verification-blocked, or cancelled objectives remain unsuccessful even when Temporal closed cleanly; an eligible terminal sample records zero successes and a sample size of one. Active executions keep a zero-size sample. A valid `no_commit` outcome remains successful, including historical records whose memo still says active. `/metrics` retains its exact execution lifecycle counts and execution completion rate; its separate bounded `objectiveMetrics` sample describes objective outcomes and excludes idle scans from the objective success denominator.
 
+The optional `recommendedNextAction` uses available outcome evidence and lifecycle state. A completed run without an inline finish summary recommends reviewing its completed summary; active runs retain monitoring guidance. Publication-specific recommendations take precedence when their outcome evidence is available.
+
 ### 8.2 ExecutionProgress
 
 Progress remains bounded and is not a substitute for `/steps`.

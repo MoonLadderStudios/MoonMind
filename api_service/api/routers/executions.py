@@ -5018,7 +5018,7 @@ def _run_metrics_from_summary(
         "failed", "verification_blocked", "cancelled"
     }:
         success = False
-    elif success and state_value == "completed" and objective_outcome == "idle":
+    elif success and objective_outcome == "idle" and state_value != "no_commit":
         success = None
     duration_ms = _int_or_none(timestamps.get("durationMs"))
     if duration_ms is None:
@@ -5201,6 +5201,8 @@ def _recommended_next_action(
         return "Review cancellation reason and rerun if needed."
     if code == "FAILED" or str(close_status or "").lower() == "failed":
         return "Review failure diagnostics and create a separate workflow or issue if needed."
+    if state_value == "completed" or str(close_status or "").lower() == "completed":
+        return "Review the completed execution summary."
     return "Monitor execution until a terminal outcome is available."
 
 
