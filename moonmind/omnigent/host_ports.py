@@ -108,6 +108,7 @@ def expected_omnigent_host_id(host_lease_ref: str, host_lease_generation: int) -
     seed = f"{host_lease_ref}:{int(host_lease_generation)}"
     return _uuid.uuid5(_uuid.NAMESPACE_URL, seed).hex
 
+
 @runtime_checkable
 class OmnigentWorkspaceMaterializationPort(Protocol):
     """Materialize the run-owned workspace attachment and its cleanup ref."""
@@ -152,13 +153,16 @@ class AdmittedRepositoryIdentity(Protocol):
     """Read-only repository metadata needed by host credential consumers."""
 
     @property
-    def endpoint(self) -> str: ...
+    def endpoint(self) -> str:
+        raise NotImplementedError
 
     @property
-    def canonical_remote(self) -> str | None: ...
+    def canonical_remote(self) -> str | None:
+        raise NotImplementedError
 
     @property
-    def display_name(self) -> str: ...
+    def display_name(self) -> str:
+        raise NotImplementedError
 
 
 @runtime_checkable
@@ -173,7 +177,8 @@ class OmnigentGithubCredentialPort(Protocol):
         role: str,
         operation: str,
         repository: str | None = None,
-    ) -> AdmittedRepositoryIdentity: ...
+    ) -> AdmittedRepositoryIdentity:
+        raise NotImplementedError
 
     async def acquire_repository_use(
         self,
@@ -185,7 +190,8 @@ class OmnigentGithubCredentialPort(Protocol):
         repository: str | None = None,
         execution_owner: str | None = None,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
-    ) -> AcquiredCredential | None: ...
+    ) -> AcquiredCredential | None:
+        raise NotImplementedError
 
     def anticipated_attachment(
         self, resolved_tools: Any, *, owner_ref: str
@@ -198,7 +204,8 @@ class OmnigentGithubCredentialPort(Protocol):
         plan: OmnigentExecutionPlanEnvelope,
         request: AgentExecutionRequest,
         owner_ref: str,
-    ) -> dict[str, Any] | None: ...
+    ) -> dict[str, Any] | None:
+        raise NotImplementedError
 
     async def materialize(
         self,

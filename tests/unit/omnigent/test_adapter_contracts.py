@@ -533,6 +533,55 @@ def test_registered_harnesses_bind_a_materializer_that_accepts_them(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "property_name", ("endpoint", "canonical_remote", "display_name")
+)
+def test_inherited_repository_identity_requires_an_implementation(
+    property_name,
+) -> None:
+    from moonmind.omnigent.host_ports import AdmittedRepositoryIdentity
+
+    class UnimplementedIdentity(AdmittedRepositoryIdentity):
+        pass
+
+    with pytest.raises(NotImplementedError):
+        getattr(UnimplementedIdentity(), property_name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "arguments"),
+    (
+        ("admitted_repository_identity", {"role": "source_read", "operation": "read"}),
+        ("acquire_repository_use", {"role": "source_read", "operation": "read"}),
+        (
+            "anticipated_attachment_for_request",
+            {"resolved_tools": {}, "owner_ref": "run"},
+        ),
+    ),
+)
+async def test_inherited_repository_admission_requires_an_implementation(
+    operation, arguments
+) -> None:
+    from moonmind.omnigent.host_ports import OmnigentGithubCredentialPort
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    class UnimplementedCredentials(OmnigentGithubCredentialPort):
+        pass
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="repository-admission",
+        instructionRef="artifact:instruction",
+        idempotencyKey="repository-admission",
+    )
+    with pytest.raises(NotImplementedError):
+        await getattr(UnimplementedCredentials(), operation)(
+            plan=_plan(), request=request, **arguments
+        )
+
+
 def _host_port_pairs():
     from moonmind.omnigent import host_ports
     from moonmind.omnigent import host_services
