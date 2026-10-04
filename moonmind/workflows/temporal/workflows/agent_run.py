@@ -1214,10 +1214,13 @@ class MoonMindAgentRun:
         # during that wait: the run has started no work, so holding the issue
         # behind a queue this deployment cannot drain helps nobody.
         self._capacity_requested = False
-        # True once any provider/host slot has been granted. Managed runs can
-        # release their slot and re-queue for a cooldown or fresh-process
-        # retry after agent work already began; that later wait must not use
-        # the no-work backoff. Plain workflow state for deterministic replay.
+        # True once any provider/host slot has been granted, to this run or
+        # to an earlier AgentRun under the same issue claim (the parent marks
+        # the lease ``workStarted``). Managed runs can release their slot and
+        # re-queue for a cooldown or fresh-process retry, and step retries
+        # re-queue in a new AgentRun, after agent work already began; that
+        # later wait must not use the no-work backoff. Plain workflow state
+        # for deterministic replay.
         self._capacity_ever_granted = False
         self.run_status = RunStatus.queued
         self.final_result: AgentRunResult | None = None
@@ -7036,6 +7039,9 @@ class MoonMindAgentRun:
         lease = request.parameters.get("issueClaimLease")
         if lease:
             from moonmind.workflows.temporal.github_issue_lease_workflow import execute_with_issue_lease
+
+            if lease.get("workStarted") is True:
+                self._capacity_ever_granted = True
 
             async def renew(payload):
                 return await self._execute_routed_activity(
