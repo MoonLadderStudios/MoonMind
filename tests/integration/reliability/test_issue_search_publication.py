@@ -74,6 +74,11 @@ async def artifact_service(tmp_path):
         ({}, 2),
         ({"include_all_authors": False}, 0),
         ({"include_all_authors": True}, 0),
+        pytest.param(
+            {"constraints": "  Preserve prior work.\nKeep target.  "},
+            0,
+            id="constraints",
+        ),
     ],
 )
 @pytest.mark.parametrize("pr_created", [True, False, "unavailable"])
@@ -215,6 +220,7 @@ async def test_search_publication_recovers_missing_pr_before_status(
         }
     )
     assert selected.status == "COMPLETED", selected.outputs
+    assert selected.outputs["constraints"] == inputs.get("constraints", "")
     # Author scope survives catalog expansion into the eligibility decision
     # and durable brief (#4257): omitted and explicit false stay self-only,
     # explicit true broadens to all authors for the same self-authored issue.
@@ -227,7 +233,11 @@ async def test_search_publication_recovers_missing_pr_before_status(
     _brief, brief_bytes = await artifact_service.read(
         artifact_id=brief_ref, principal="test:search-publication"
     )
-    assert json.loads(brief_bytes)["issue"]["body"] == issue["body"]
+    brief = json.loads(brief_bytes)
+    assert brief["issue"]["body"] == brief["description"] == issue["body"]
+    assert brief["issue_ref"] == f"{repository}#{number}"
+    assert brief["source_resolution"]["status"] == "complete"
+    assert brief["truncated"] is False
     assessment, _upload = await artifact_service.create(
         principal="test:search-publication", content_type="application/json"
     )

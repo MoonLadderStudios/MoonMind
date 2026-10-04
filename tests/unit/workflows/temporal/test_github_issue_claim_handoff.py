@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-import json
-from pathlib import Path
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import Base
+from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
@@ -242,6 +244,66 @@ async def test_default_search_claim_survives_assessment_and_blocker_handoffs(
         assert started.status == "COMPLETED", started.outputs
         assert started.outputs["decision"] == "already_applied"
     assert state["writes"] == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", [{"issueSearch": ""}, {"issueNumber": 4271}])
+async def test_assessment_receives_lossless_normalized_brief_attachment(
+    journey, tmp_path, selection
+):
+    """The #4010 assessment blocked on the loader's unnormalized envelope."""
+    state, issue, invoke, _, artifacts = journey
+    issue["title"] = "  Preserve the original scope — including whitespace  "
+    issue["labels"] = [{"name": "moonspec"}]
+    issue["body"] = (
+        "\n  Original description\twith spacing.\n" * 400
+        + "\n## Acceptance\n\n- [ ] Keep the final requirement.\n\n"
+    )
+    constraints = "  Reuse saved work.\nKeep the original target.  "
+    loaded = await invoke(
+        tools.GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME,
+        {"repository": REPO, "constraints": constraints, **selection},
+    )
+    assert loaded.status == "COMPLETED", loaded.outputs
+    ref = loaded.outputs["briefArtifactRef"]
+    _, original = await artifacts.read(artifact_id=ref, principal="fixture-owner")
+    brief = json.loads(original)
+    assert brief["issue_provider"] == "github"
+    assert brief["issue_ref"] == f"{REPO}#4271"
+    assert brief["issue_url"] == issue["html_url"]
+    assert brief["title"] == issue["title"]
+    assert brief["description"] == issue["body"]
+    # GitHub has no separate acceptance field; embedded criteria stay in body.
+    assert brief["acceptance_criteria"] == ""
+    assert brief["labels"] == ["moonspec"]
+    assert brief["constraints"] == constraints
+    assert brief["preset_brief"] == loaded.outputs["presetBrief"]
+    assert brief["trusted_source"] == "moonmind.github.get_issue"
+    assert brief["source_resolution"]["status"] == "complete"
+    assert brief["source_resolution"]["unrecovered_fields"] == []
+    assert brief["truncated"] is False
+    assert brief["truncated_fields"] == []
+    assert brief["admittedIdentity"]["issueNumber"] == 4271
+
+    workspace = tmp_path / "assessment-repo"
+    workspace.mkdir()
+    candidate = workspace / "candidate.py"
+    candidate.write_text("saved progress\n")
+    projector = WorkspaceArtifactProjector(artifacts)
+    for _ in range(2):
+        attachments = await projector.project_attachments(
+            workspace,
+            refs=(f"artifact://{ref}",),
+            workflow_id=state["receipt"].owner.split("/", 1)[1],
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+        attached = workspace / attachments[0]["path"]
+        assert attached.read_bytes() == original
+        assert json.loads(attached.read_bytes())["artifactPath"] == (
+            "artifacts/github-issue-implement-brief.json"
+        )
+        assert candidate.read_text() == "saved progress\n"
 
 
 @pytest.mark.asyncio

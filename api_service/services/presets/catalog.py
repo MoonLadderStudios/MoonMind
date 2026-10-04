@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import yaml
-from jinja2 import StrictUndefined, TemplateError, UndefinedError
+from jinja2 import StrictUndefined, TemplateError, UndefinedError, nodes
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -718,7 +718,23 @@ def _render_value(
 ) -> Any:
     if isinstance(value, str):
         try:
-            rendered = env.from_string(value).render(**variables)
+            native_template = bool(_NATIVE_SCALAR_TEMPLATE_PATTERN.match(value.strip()))
+            parsed_body = env.parse(value.strip()).body if native_template else []
+            if (
+                len(parsed_body) == 1
+                and isinstance(parsed_body[0], nodes.Output)
+                and len(parsed_body[0].nodes) == 1
+            ):
+                native = env.compile_expression(
+                    value.strip()[2:-2], undefined_to_none=False
+                )(**variables)
+                # Source strings are data, including whitespace and words such
+                # as "false". Keep actual boolean/numeric rendering below.
+                if isinstance(native, str):
+                    return native
+                rendered = str(native)
+            else:
+                rendered = env.from_string(value).render(**variables)
         except UndefinedError as exc:
             raise PresetValidationError(
                 f"Template references an unknown variable: {exc}."
@@ -728,7 +744,7 @@ def _render_value(
                 f"Template rendering failed: {exc}."
             ) from exc
         stripped = rendered.strip()
-        if _NATIVE_SCALAR_TEMPLATE_PATTERN.match(value.strip()):
+        if native_template:
             lowered = stripped.lower()
             if lowered in {"true", "false"}:
                 return lowered == "true"
@@ -3170,7 +3186,11 @@ class PresetCatalogService:
                     )
                 resolved[name] = candidate
                 continue
-            resolved[name] = str(raw_value).strip()
+            resolved[name] = (
+                str(raw_value)
+                if input_type in {"textarea", "markdown"}
+                else str(raw_value).strip()
+            )
         return resolved
 
     async def set_favorite(

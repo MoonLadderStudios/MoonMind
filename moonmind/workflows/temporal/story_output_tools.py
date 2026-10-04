@@ -301,6 +301,12 @@ def _normalize_jira_text(value: Any) -> str:
         return _collapse_jira_text("\n".join(part for part in parts if part))
     return _collapse_jira_text(str(value))
 
+
+def _source_text(value: Any) -> str:
+    """Keep native text intact; render structured Jira descriptions as text."""
+    return value if isinstance(value, str) else _normalize_jira_text(value)
+
+
 def _extract_acceptance_criteria(
     fields: Mapping[str, Any],
     names: Mapping[str, Any],
@@ -309,7 +315,7 @@ def _extract_acceptance_criteria(
         normalized_name = str(field_name or "").lower()
         if "acceptance" not in normalized_name:
             continue
-        text = _normalize_jira_text(fields.get(field_key))
+        text = _source_text(fields.get(field_key))
         if text:
             return text
     return ""
@@ -338,6 +344,47 @@ def _first_string(*values: Any) -> str:
         if normalized:
             return normalized
     return ""
+
+
+def _normalized_issue_brief(
+    *,
+    provider: str,
+    issue_ref: str,
+    issue_url: str | None,
+    title: str,
+    description: str,
+    acceptance_criteria: str,
+    labels: list[Any],
+    preset_brief: str,
+    constraints: str,
+    unrecovered_fields: list[str],
+) -> dict[str, Any]:
+    """Produce the portable assessment source at the trusted loader boundary.
+
+    Completeness describes the provider read, before workflow prompt compaction.
+    Embedded acceptance criteria remain in the full description when the provider
+    has no separate field. Document-path resolution is independent of this source.
+    """
+    trusted_source = f"moonmind.{provider}.get_issue"
+    return {
+        "issue_provider": provider,
+        "issue_ref": issue_ref,
+        "issue_url": issue_url,
+        "title": title,
+        "description": description,
+        "acceptance_criteria": acceptance_criteria,
+        "labels": labels,
+        "preset_brief": preset_brief,
+        "constraints": constraints,
+        "source_resolution": {
+            "status": "incomplete" if unrecovered_fields else "complete",
+            "unrecovered_fields": unrecovered_fields,
+        },
+        "trusted_source": trusted_source,
+        "truncated": False,
+        "truncated_fields": [],
+    }
+
 
 def _normalize_document_directory(value: str) -> str:
     return value.replace("\\", "/") if "\\" in value else value
@@ -4530,6 +4577,25 @@ async def load_jira_preset_brief(
         )
 
     outputs: dict[str, Any] = {
+        **_normalized_issue_brief(
+            provider="jira",
+            issue_ref=resolved_key,
+            issue_url=_issue_url(issue),
+            title=_source_text(fields.get("summary")),
+            description=_source_text(fields.get("description")),
+            acceptance_criteria=acceptance_text,
+            labels=_list(fields.get("labels")),
+            preset_brief=preset_brief,
+            constraints=_source_text(inputs.get("constraints")),
+            unrecovered_fields=[
+                normalized
+                for native, normalized in (
+                    ("summary", "title"),
+                    ("description", "description"),
+                )
+                if native not in fields
+            ],
+        ),
         "trustedSource": "moonmind.jira.get_issue",
         "jiraIssueKey": resolved_key,
         "jiraPresetBrief": preset_brief,
@@ -4541,6 +4607,7 @@ async def load_jira_preset_brief(
             "key": resolved_key,
             "summary": summary,
             "descriptionText": description_text,
+            "description": fields.get("description"),
             "acceptanceCriteriaText": acceptance_text,
             "status": _string(status.get("name")),
             "issueType": _string(issue_type.get("name")),
@@ -4974,8 +5041,8 @@ def _github_issue_payload(data: Mapping[str, Any], repository: str) -> dict[str,
     payload: dict[str, Any] = {
         "repository": repository,
         "number": number,
-        "title": _string(data.get("title")),
-        "body": _string(data.get("body")),
+        "title": _source_text(data.get("title")),
+        "body": _source_text(data.get("body")),
         "url": _string(data.get("html_url") or data.get("url")),
         "state": _string(data.get("state")),
         "labels": normalized_labels,
@@ -5703,6 +5770,25 @@ async def _load_github_issue_preset_brief(
     return ToolResult(
         status="COMPLETED",
         outputs={
+            **_normalized_issue_brief(
+                provider="github",
+                issue_ref=issue_ref,
+                issue_url=issue["url"],
+                title=issue["title"],
+                description=issue["body"],
+                acceptance_criteria="",
+                labels=labels,
+                preset_brief=preset_brief,
+                constraints=_source_text(inputs.get("constraints")),
+                unrecovered_fields=[
+                    normalized
+                    for native, normalized in (
+                        ("title", "title"),
+                        ("body", "description"),
+                    )
+                    if native not in issue_data
+                ],
+            ),
             "trustedSource": "moonmind.github.get_issue",
             "issue": issue,
             **search_evidence,

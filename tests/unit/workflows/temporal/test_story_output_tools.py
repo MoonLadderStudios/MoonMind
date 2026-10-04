@@ -2251,6 +2251,52 @@ async def test_load_jira_preset_brief_uses_trusted_jira_issue_payload():
     assert "Expose catalog and audit endpoints." in result.outputs["jiraPresetBrief"]
     assert "Given an operator" in result.outputs["jiraPresetBrief"]
     assert result.outputs["jiraIssue"]["status"] == "In Progress"
+    assert result.outputs["issue_provider"] == "jira"
+    assert result.outputs["issue_ref"] == "MM-657"
+    assert result.outputs["issue_url"] == "https://jira.example/browse/MM-657"
+    assert result.outputs["title"] == "Settings HTTP API surface"
+    assert result.outputs["description"] == "Expose catalog and audit endpoints."
+    assert result.outputs["jiraIssue"]["description"] == (
+        service.issue_responses["MM-657"]["fields"]["description"]
+    )
+    assert result.outputs["acceptance_criteria"] == (
+        "Given an operator\nThen settings are auditable"
+    )
+    assert result.outputs["preset_brief"] == result.outputs["presetBrief"]
+    assert result.outputs["constraints"] == ""
+    assert result.outputs["labels"] == []
+    assert result.outputs["trusted_source"] == "moonmind.jira.get_issue"
+    assert result.outputs["source_resolution"]["status"] == "complete"
+    assert result.outputs["source_resolution"]["unrecovered_fields"] == []
+    assert result.outputs["truncated"] is False
+    assert result.outputs["truncated_fields"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("description_present", [True, False])
+async def test_jira_normalized_brief_preserves_text_and_reports_missing_source(
+    description_present,
+):
+    service = _FakeJiraService()
+    description = "\n  Keep\tspacing.\n\nAcceptance criteria\n- Keep this too.\n"
+    fields = {"summary": "  Original title  ", "labels": ["scope"]}
+    if description_present:
+        fields["description"] = description
+    service.issue_responses["MM-657"] = {"key": "MM-657", "fields": fields}
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-657", "constraints": " Preserve this. "},
+        jira_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["title"] == fields["summary"]
+    assert result.outputs["description"] == (description if description_present else "")
+    assert result.outputs["constraints"] == " Preserve this. "
+    assert result.outputs["labels"] == ["scope"]
+    resolution = result.outputs["source_resolution"]
+    assert resolution["status"] == ("complete" if description_present else "incomplete")
+    assert resolution["unrecovered_fields"] == (
+        [] if description_present else ["description"]
+    )
 
 
 @pytest.mark.asyncio
