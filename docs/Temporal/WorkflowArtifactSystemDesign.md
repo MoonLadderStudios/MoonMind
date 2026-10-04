@@ -3,7 +3,7 @@
 **Document Class:** Canonical declarative
 Status: Draft 
 Owners: MoonMind Platform 
-Last updated: 2026-09-26
+Last updated: 2026-10-04
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
@@ -696,7 +696,7 @@ Optional but recommended where appropriate:
 
 ## 14.1 Baseline retention classes
 
-* `ephemeral`: short-lived operational/debug data
+* `ephemeral`: seven days of operational/debug data
 * `standard`: default inputs/outputs
 * `long`: important outputs or manifests
 * `pinned`: no automatic deletion
@@ -706,7 +706,7 @@ Optional but recommended where appropriate:
 Representative mappings:
 
 * `output.logs`, `debug.trace`, `debug.skill_resolution_trace` → ephemeral
-* `runtime.stdout`, `runtime.stderr`, `runtime.merged_logs`, `runtime.diagnostics` → ephemeral or standard depending on policy
+* `runtime.stdout`, `runtime.stderr`, `runtime.merged_logs`, `runtime.diagnostics`, `runtime.omnigent.sse.raw`, `runtime.omnigent.sse.normalized` → ephemeral
 * `input.instructions`, `input.plan`, `input.manifest`, `input.prompt_index` → standard or long
 * `output.primary`, `output.patch`, `output.summary`, `input.skill_snapshot` → standard or long
 * `output.provider_snapshot` → standard or ephemeral depending on operational needs
@@ -728,6 +728,18 @@ the authority for expiry, pin protection, soft deletion, hard deletion, storage
 mutation, and durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
+
+The current raw and normalized journals referenced by a non-terminal Omnigent
+bridge session remain recovery data and are excluded from expiry and destructive
+deletion. Once that session is terminal, ordinary retention applies. Pins and
+live use claims continue to protect all artifact classes.
+
+Omnigent commits each complete replacement journal pair before reclaiming its
+superseded numbered prefixes. The replacement retains the accumulated events;
+the existing artifact service owns tombstones, physical deletion and persisted
+deletion intents. Canonical journal refs, pinned prefixes and prefixes held by a
+live consumer are preserved. A physical-delete failure leaves the committed
+replacement intact and an intent for the hourly lifecycle sweep to reconcile.
 
 Deletion must be idempotent.
 

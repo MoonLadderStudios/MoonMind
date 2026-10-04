@@ -3,7 +3,7 @@
 **Status:** Shared image, runtime packs, Codex/Claude Host Classes, OAuth-home materializers, and rollout mechanisms implemented; exact qualification, deployment promotion, and retirement remain evidence-gated
 **Document Class:** System / Operator Guide
 **Owners:** MoonMind Platform
-**Last updated:** 2026-10-02
+**Last updated:** 2026-10-04
 **Authority:** Shared host image contract and runtime-pack descriptor authority for the Omnigent primary-runtime program
 
 ## Related documents
@@ -31,6 +31,11 @@ built shared and Pi images. Host selection consumes that image's observation;
 missing evidence cannot borrow the catalog/server digest. `OMNIGENT_BUILD_DIGEST`
 is an optional exact host-build pin. It is never a substitute for the server
 image digest, and publication does not overwrite it with a discovered digest.
+
+API admission uses the shared Host Class selector for on-demand Codex as well
+as the other harnesses. Both generic and retained profile-bound Codex plans
+record the selected host's observed build label separately from the catalog's
+server identity; worker rehydration preserves those admitted identities.
 
 Execution plans obtain version evidence from the immutable `harnessCatalogRef`
 already in the v1 contract. New plans omit the redundant top-level

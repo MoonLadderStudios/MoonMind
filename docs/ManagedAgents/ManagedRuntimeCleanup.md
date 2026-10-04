@@ -3,7 +3,7 @@
 - **Document Class:** Canonical declarative
 - **Status:** Canonical desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-08-10
+- **Last updated:** 2026-10-04
 - **Audience:** Contributors, operators, runtime authors, and infrastructure maintainers
 - **Purpose:** Declarative cleanup design for managed-runtime resources, including managed-session orphan reaping and automatic retained workspace/artifact cleanup.
 
@@ -291,11 +291,10 @@ eligibility:
   deleteWhen:
     - all referencing runs/sessions are terminal
     - artifact retention window has elapsed
-    - no retained record still needs the artifact directory for UI/log/audit lookup
 safety:
-  retainLongerThanWorkspaces: true
-  skipWhenReferencedByRetainedRecord: true
-  dryRunDefault: true
+  defaultRetentionDays: 7
+  preserveActiveOwners: true
+  dryRunDefault: false
 deletionAuthority: ManagedRuntimeWorkspaceJanitor
 schedule: MoonMind.ManagedRuntimeWorkspaceCleanup
 ```
@@ -322,7 +321,7 @@ eligibility:
 safety:
   deleteAfterWorkspaceAndArtifactPasses: true
   optionalFeature: true
-  dryRunDefault: true
+  dryRunDefault: false
 deletionAuthority: ManagedRuntimeWorkspaceJanitor
 schedule: MoonMind.ManagedRuntimeWorkspaceCleanup
 ```
@@ -418,13 +417,32 @@ Default schedule:
 - destructive after retention unless dry-run is explicitly enabled.
 
 The same operational workflow coordinates adjacent storage owners after the
-workspace pass: pressure-triggered Docker image/build-cache maintenance runs at
-the trusted agent-runtime boundary, and the artifact service's lifecycle
+workspace pass: age-bounded Docker image/build-cache expiry runs at
+the trusted agent-runtime boundary on every hourly pass, and the artifact service's lifecycle
 Activity expires and hard-deletes blobs under its own
 retention policy. These operations do not move their classification or deletion
 semantics into the workspace janitor. Failure in either adjacent owner is
 reported as degraded maintenance and retried by the next hourly run; it does not
 erase a successful workspace result.
+
+Unused images older than 24 hours and build cache unused for 24 hours expire
+even below the filesystem high watermark. Docker Desktop's sparse VM disk can
+report available capacity while the Mac's backing filesystem is full, so that
+reading must not disable routine expiry. Critical disk pressure still permits
+the existing broader unused-image/cache pass. Docker protects container-referenced
+images and active build cache; this maintenance never prunes deployment volumes.
+Explicit image/cache age settings and the Docker-maintenance opt-out remain
+deployment-owned.
+
+Docker-container Buildx builders keep a separate cache in their state volumes.
+The hourly pass discovers running builders through Docker rather than relying
+on the operator's local Buildx configuration. It verifies the builder name,
+`buildkitd` entrypoint, and matching `/var/lib/buildkit` state-volume mount before
+running `buildctl prune --all --keep-duration 24h` (using the configured cache
+age). This removes unused cache through BuildKit's own API, preserving active
+builds, the builder container, and its state volume. Stopped builders are not
+started for maintenance. Discovery or pruning failures remain visible in the
+maintenance result and do not suppress the other cleanup operations.
 
 This should be separate from `MoonMind.ManagedSessionReconcile` so broad filesystem deletion cannot slow or destabilize live session leak cleanup.
 
@@ -501,8 +519,8 @@ Defaults:
 
 | Resource | Default retention | Reason |
 |---|---:|---|
-| Workspace/session roots | 10 days | Bounds duplicated checkout/build state while keeping recent debugging state. |
-| Artifact directories | 90 days | Logs, diagnostics, summaries, and continuity artifacts are more operator-visible than checkouts. |
+| Workspace/session roots | 7 days | Bounds duplicated checkout/build state while keeping recent debugging state. |
+| Artifact directories | 7 days | Keeps a week of completed-workflow troubleshooting data with ownership protection. |
 | Run/session JSON records | Disabled | Records are small and useful for audit/debugging; deletion is opt-in. |
 | Grace window | 1 hour | Avoid racing newly completed runs or just-written records. |
 
@@ -516,8 +534,8 @@ Environment variables:
 |---|---:|---|
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED` | `true` | Enables both the retained-state activity and recurring schedule. `false` disables the activity and pauses the schedule. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN` | `false` | When `true`, leaves the schedule active and reports eligible deletes without deleting. |
-| `MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS` | `10` | Workspace/session-root retention. |
-| `MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS` | `90` | Local managed-runtime artifact retention. |
+| `MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS` | `7` | Workspace/session-root retention. |
+| `MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS` | `7` | Local managed-runtime artifact retention. |
 | `MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS` | unset | Optional run/session JSON record retention; unset means no record deletion. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS` | `3600` | Minimum delay after newest owner activity before deletion. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS` | `100` | Per-pass deletion cap. Hourly repetition lets larger backlogs converge. |
@@ -528,7 +546,7 @@ Environment variables:
 
 An installation without explicit janitor settings adopts enabled, non-dry-run cleanup on upgrade. Startup also enables a schedule that was created paused solely under the former default. The first and every later pass remain bounded by the path and optional byte budgets.
 
-Before upgrading, operators may set `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=true` to inspect candidates. Operators requiring indefinite local retention must set `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false`. Otherwise, terminal workspaces older than 10 days and eligible unreferenced local artifact directories older than 90 days may be deleted after startup. There is no implicit first-run dry run.
+Before upgrading, operators may set `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=true` to inspect candidates. Operators requiring indefinite local retention must set `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false`. Otherwise, terminal workspaces and eligible local artifact directories older than 7 days may be deleted after startup. Explicit retention settings are preserved. There is no implicit first-run dry run.
 
 ### 8.8 Deletion gates
 
@@ -713,7 +731,7 @@ The implementation should include tests for:
 13. delete path and byte budgets stop a pass cleanly;
 13b. candidates encountered after the delete-path cap do not receive recursive
    size walks;
-14. artifact directories are retained longer than workspace roots;
+14. terminal workspace roots and artifact directories default to seven days of retention;
 15. record deletion is disabled when record retention is unset.
 
 ---

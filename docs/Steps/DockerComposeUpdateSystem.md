@@ -158,6 +158,13 @@ Resolve the allowlisted target and verify the concrete artifact being executed. 
 
 Reuse native image pull and content-addressed caching. Do not require equal source revisions between the caller, controller, installed worker, and managed runtime. A different SHA is not by itself an incompatible interface.
 
+Host image-selection failures retain redacted Docker diagnostics and stop before
+recording a new release submission. A read-only filesystem or exhausted disk is
+a Docker storage failure, so the host command reports host/data-disk space
+recovery guidance without an uncaught Python traceback or a claim that a release
+job was created. Docker Desktop recovery requires freeing backing host space
+before restarting Desktop; resetting its data disk is not part of updater recovery.
+
 ### 10.5 Persist desired image
 
 After resolving the target, persist the selected deployment intent before recreation. There is no candidate qualification or routing-promotion prerequisite. Preserve the distinction between target selection and installed success throughout recovery.
