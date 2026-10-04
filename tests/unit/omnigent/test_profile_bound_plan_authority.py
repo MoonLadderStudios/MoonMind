@@ -20,11 +20,18 @@ from tests.unit.services.test_omnigent_execution_plan_service import (
     _protected_support_evidence,
     _snapshot,
 )
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _ready_opencode_image_pair as _ready_opencode_image_pair,
+)
 
 
 @pytest_asyncio.fixture
 async def admitted_codex_plan(monkeypatch, request):
     policy = getattr(request, "param", "codex-on-demand@16")
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
     snapshot = _policy_snapshot(harness="codex-native", policy=policy)
     monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
     monkeypatch.setattr(
