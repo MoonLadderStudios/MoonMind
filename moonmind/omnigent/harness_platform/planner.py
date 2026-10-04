@@ -40,6 +40,7 @@ from moonmind.omnigent.harness_platform.credential_bindings import (
     model_authority_bindings,
     model_bindings_of,
     model_materializer_refs,
+    required_worker_authority_kinds,
     validate_binding_set_for_plan,
     validate_workspace_source_bindings,
 )
@@ -80,6 +81,7 @@ from moonmind.omnigent.runtime_provider_rollout import (
     RolloutSelectionContext,
     RuntimeProviderCombination,
     RuntimeProviderPathClass,
+    RuntimeProviderRollbackControl,
     RuntimeProviderRolloutPolicy,
     effective_rule_state,
     freeze_rollout_record,
@@ -438,6 +440,7 @@ def select_execution_realizer(
     harness_id: str,
     is_codex: bool = False,
     rollout_policy: RuntimeProviderRolloutPolicy | None = None,
+    required_authority_kinds: tuple[str, ...] = ("model",),
 ) -> str:
     """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only).
 
@@ -458,6 +461,25 @@ def select_execution_realizer(
         path_class=RuntimeProviderPathClass.generic_omnigent,
     )
     if harness_id == "codex-native" and is_codex:
+        from moonmind.omnigent.realizers.registry import realizer_authority_kinds
+
+        if not set(required_authority_kinds).issubset(
+            realizer_authority_kinds(LEGACY_CODEX_REALIZER_REF)
+        ):
+            restored_legacy_default = (
+                RuntimeProviderRollbackControl.restore_legacy_or_direct_default
+                in policy.rollback_controls
+                and _effective_default_prefers_legacy(policy=policy)
+            )
+            if generic_admitted and not restored_legacy_default:
+                return GENERIC_REALIZER_REF
+            raise HarnessPlatformError(
+                "no execution realizer is admitted for codex-native with "
+                f"authority kinds {sorted(required_authority_kinds)}; "
+                "the repository-capable generic path must be admitted and "
+                "the selected deployment rollback preserved",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+            )
         # Honor the effective default row: a rollback control may restore the
         # legacy row to new_work_default while demoting generic to
         # explicit_only, in which case new plans must use the legacy path
@@ -891,6 +913,11 @@ def compile_execution_plan(
         harness_id=profile.harness.id,
         is_codex=(profile.harness.id == "codex-native"),
         rollout_policy=active_rollout_policy,
+        required_authority_kinds=(
+            required_worker_authority_kinds(credential_binding_set)
+            if execution_realizer_ref is None
+            else ("model",)
+        ),
     )
     if (
         execution_realizer_ref is not None
@@ -934,6 +961,14 @@ def compile_execution_plan(
             f"execution realizer {realizer} unavailable",
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         ) from exc
+
+    from moonmind.omnigent.realizers.registry import realizer_authority_kinds
+
+    # Explicit owners retain their selection, but no plan may persist bindings
+    # the selected implementation cannot consume at the session boundary.
+    assert_worker_supports_binding_set(
+        realizer_authority_kinds(realizer), credential_binding_set
+    )
 
     # Retirement admission (#3835 required work 2). Plan compilation is the one
     # new-admission boundary for every client: a trusted planner default, an

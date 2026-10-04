@@ -171,9 +171,13 @@ class GenericOmnigentHostRuntime:
         if authority_sink is not None:
             for tool in tools:
                 await authority_sink({"kind": "tool", **tool})
-        anticipated_github = self._github_credentials.anticipated_attachment(
-            plan.payload.resolvedTools,
-            owner_ref=repository_owner_ref,
+        anticipated_github = (
+            await self._github_credentials.anticipated_attachment_for_request(
+                plan.payload.resolvedTools,
+                plan=plan,
+                request=request,
+                owner_ref=repository_owner_ref,
+            )
         )
         if anticipated_github is not None and authority_sink is not None:
             await authority_sink({**anticipated_github, "kind": "github_credentials"})

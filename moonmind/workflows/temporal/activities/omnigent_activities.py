@@ -140,6 +140,9 @@ async def omnigent_prepare_child_execution_plan_activity(
     initial_parameters = dict(initial_parameters_value)
     if str(initial_parameters.get("targetRuntime") or "").strip().lower() != "omnigent":
         raise ValueError("child execution-plan preparation requires Omnigent")
+    principal = str(payload.get("principal") or "").strip() or (
+        "service:merge_automation"
+    )
 
     parent_binding_value = payload.get("parentExecutionPlan")
     if not isinstance(parent_binding_value, Mapping):
@@ -160,7 +163,9 @@ async def omnigent_prepare_child_execution_plan_activity(
             raise ValueError("parent workflow execution parameters are unavailable")
         parent_binding_value = parent_parameters.get("omnigentExecutionPlan")
     parent_binding = OmnigentExecutionPlanBinding.model_validate(parent_binding_value)
-    parent_plan = await _load_verified_execution_plan(parent_binding)
+    parent_plan = await _load_verified_execution_plan(
+        parent_binding, admitted_principal=principal
+    )
     # Issue #4009: the compiler re-admits repository roles against the parent
     # selections. The real child producer supplies intent, not fabricated
     # snapshot digests, and model admission remains owned by the child plan.
@@ -173,7 +178,7 @@ async def omnigent_prepare_child_execution_plan_activity(
     if not profile_snapshot_ref.startswith("artifact:"):
         raise ValueError("parent execution plan lacks Agent Profile authority")
     agent_profile_snapshot = await _read_json_artifact(
-        profile_snapshot_ref.removeprefix("artifact:")
+        profile_snapshot_ref.removeprefix("artifact:"), admitted_principal=principal
     )
     # Model authority only (MoonLadderStudios/MoonMind#4009): repository
     # slots use issuance and never enter Provider Profile derivation.
@@ -230,9 +235,6 @@ async def omnigent_prepare_child_execution_plan_activity(
         "source": {"kind": "merge_automation_resolver_child"},
         "target": {"initialParameters": canonical_snapshot_parameters},
     }
-    principal = str(payload.get("principal") or "").strip() or (
-        "service:merge_automation"
-    )
     artifact_service = _OnDemandTemporalArtifactService(async_session_maker)
     input_snapshot_ref, input_snapshot_digest = await persist_json_artifact(
         artifact_service=artifact_service,
@@ -656,6 +658,21 @@ async def _try_generic_realizer_dispatch(
                 raise ValueError(
                     "persisted Omnigent execution plan digest mismatch"
                 )
+            if getattr(persisted.payload, "resolvedTools", {}).get("repositoryAccess"):
+                from moonmind.omnigent.harness_platform.execution_plan import (
+                    verify_execution_plan_envelope,
+                )
+                from moonmind.omnigent.bridge_artifacts import (
+                    TemporalOmnigentArtifactGateway,
+                )
+
+                persisted = verify_execution_plan_envelope(persisted)
+                gateway = artifact_gateway or TemporalOmnigentArtifactGateway(
+                    async_session_maker
+                )
+                await gateway.admit_execution_plan_inputs(
+                    request=request, plan=persisted
+                )
             if realizer_registry is None:
                 from moonmind.omnigent.realizers.registry import get_default_registry
 
@@ -807,6 +824,15 @@ async def _try_generic_realizer_dispatch(
 
             realizer_registry = get_default_registry()
         realizer = realizer_registry.require(plan.payload.executionRealizerRef)
+        if getattr(plan.payload, "resolvedTools", {}).get("repositoryAccess"):
+            from moonmind.omnigent.bridge_artifacts import (
+                TemporalOmnigentArtifactGateway,
+            )
+
+            gateway = artifact_gateway or TemporalOmnigentArtifactGateway(
+                async_session_maker
+            )
+            await gateway.admit_execution_plan_inputs(request=request, plan=plan)
         return await realizer.execute(request, plan)
     except OmnigentSessionStillRunningError as exc:
         # Planned requests that reach this path have the same retry contract as

@@ -28,6 +28,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.executions.repository_contract import RepositoryIdentity
 
 
 class HostLaunchSpec(BaseModel):
@@ -151,6 +152,16 @@ class OmnigentMountedToolPort(Protocol):
 class OmnigentGithubCredentialPort(Protocol):
     """Materialize and clean up run-owned repository credentials."""
 
+    async def admitted_repository_identity(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        role: str,
+        operation: str,
+        repository: str | None = None,
+    ) -> RepositoryIdentity: ...
+
     async def acquire_repository_use(
         self,
         *,
@@ -165,6 +176,15 @@ class OmnigentGithubCredentialPort(Protocol):
 
     def anticipated_attachment(
         self, resolved_tools: Any, *, owner_ref: str
+    ) -> dict[str, Any] | None: ...
+
+    async def anticipated_attachment_for_request(
+        self,
+        resolved_tools: Any,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        owner_ref: str,
     ) -> dict[str, Any] | None: ...
 
     async def materialize(

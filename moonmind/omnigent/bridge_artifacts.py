@@ -61,6 +61,95 @@ class OmnigentArtifactError(RuntimeError):
     """Raised when Omnigent artifact evidence cannot be read or written."""
 
 
+async def link_verified_execution_plan_inputs(
+    *, session_factory, plan, binding, workflow_id: str, run_id: str
+) -> None:
+    """Link exact verified inputs at a trusted execution admission boundary."""
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        verify_execution_plan_envelope,
+    )
+    from moonmind.workflows.temporal.artifacts import (
+        ExecutionRef,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    plan = verify_execution_plan_envelope(plan)
+    if not workflow_id or not run_id:
+        raise OmnigentArtifactError(
+            "plan input delegation requires a concrete execution"
+        )
+    if binding is None or (
+        binding.plan_ref != plan.planRef
+        or binding.plan_digest != "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+        or (
+            plan.payload.authority is not None
+            and (
+                binding.task_input_snapshot_ref
+                != plan.payload.authority.taskInputSnapshotRef
+                or binding.task_input_snapshot_digest
+                != plan.payload.authority.taskInputSnapshotDigest
+            )
+        )
+    ):
+        raise OmnigentArtifactError(
+            "plan input delegation conflicts with admitted authority"
+        )
+    refs = {
+        binding.plan_artifact_ref,
+        binding.task_input_snapshot_ref,
+        plan.payload.agentProfileSnapshotRef,
+        plan.payload.policySnapshotRef,
+        plan.payload.effectiveLaunchSnapshotRef,
+        plan.payload.resolvedSkills.get("resolvedSkillSetRef"),
+        *(
+            access["artifactRef"]
+            for access in plan.payload.resolvedTools.get(
+                "repositoryAccess", {}
+            ).values()
+        ),
+    }
+    async with session_factory() as session:
+        repository = TemporalArtifactRepository(session)
+        # The compact plan artifact pointer is validated before attaching any
+        # execution grant. A wrong pointer must not expose an unrelated blob
+        # while the subsequent plan comparison reports the mismatch.
+        plan_artifact = await repository.get_artifact(
+            TemporalOmnigentArtifactGateway._artifact_id(binding.plan_artifact_ref)
+        )
+        expected_digest = hashlib.sha256(
+            json.dumps(
+                plan.model_dump(mode="json", by_alias=True),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            plan_artifact.sha256 != expected_digest
+            or (plan_artifact.metadata_json or {}).get("artifact_class")
+            != "omnigent.execution_plan"
+        ):
+            raise OmnigentArtifactError(
+                "plan artifact pointer conflicts with verified execution authority"
+            )
+        service = TemporalArtifactService(repository)
+        for ref in sorted(value for value in refs if value):
+            # Historical non-artifact policy refs are not artifact authority.
+            if not str(ref).startswith(("artifact:", "art_")):
+                continue
+            await service.link_artifact(
+                artifact_id=TemporalOmnigentArtifactGateway._artifact_id(ref),
+                principal="service:omnigent-generic-host",
+                execution_ref=ExecutionRef(
+                    namespace="default",
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    link_type="input.execution_plan",
+                ),
+            )
+
+
 @dataclass(slots=True)
 class OmnigentCaptureBundle:
     """MoonMind artifact refs captured for one Omnigent session."""
@@ -116,6 +205,15 @@ class OmnigentArtifactGateway:
     async def read_bytes(self, artifact_ref: str) -> bytes:
         return (await self.read_text(artifact_ref)).encode("utf-8")
 
+    async def read_repository_access_snapshot(
+        self, artifact_ref: str, *, request: AgentExecutionRequest
+    ) -> bytes:
+        """Read admitted repository metadata through the gateway's authority."""
+        return await self.read_bytes(artifact_ref)
+
+    async def admit_execution_plan_inputs(self, *, request, plan) -> None:
+        """Local gateways already own their readable input references."""
+
     async def restore_checkpoint(self, *, restore_request, authority_root):
         raise OmnigentArtifactError("This artifact gateway does not provide durable checkpoint restoration")
 
@@ -131,6 +229,20 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
     ) -> None:
         self._session_factory = session_factory
         self._principal = principal
+
+    async def admit_execution_plan_inputs(self, *, request, plan) -> None:
+        identity = request.step_execution
+        if identity is None:
+            raise OmnigentArtifactError(
+                "repository plan delegation requires Step Execution authority"
+            )
+        await link_verified_execution_plan_inputs(
+            session_factory=self._session_factory,
+            plan=plan,
+            binding=request.omnigent_execution_plan or identity.omnigent_execution_plan,
+            workflow_id=identity.workflow_id,
+            run_id=identity.run_id,
+        )
 
     @staticmethod
     def _artifact_id(artifact_ref: str) -> str:
@@ -267,6 +379,79 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 artifact_id=self._artifact_id(artifact_ref),
                 principal=self._principal,
                 allow_restricted_raw=True,
+            )
+        return payload
+
+    async def read_repository_access_snapshot(
+        self, artifact_ref: str, *, request: AgentExecutionRequest
+    ) -> bytes:
+        """Delegate only a persisted plan's snapshot to its linked execution.
+
+        The requested ref and the submitting principal are not read grants.
+        The trusted dispatch/admission boundary links the verified plan inputs
+        to the concrete execution before this reader consumes them.
+        """
+        from moonmind.omnigent.harness_platform.execution_plan import (
+            verify_execution_plan_envelope,
+        )
+        from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        identity = request.step_execution
+        if identity is None:
+            raise OmnigentArtifactError(
+                "repository snapshot read requires Step Execution authority"
+            )
+        binding = request.omnigent_execution_plan or identity.omnigent_execution_plan
+        plan_ref = (
+            binding.plan_ref if binding else request.parameters.get("executionPlanRef")
+        )
+        if not plan_ref:
+            raise OmnigentArtifactError(
+                "repository snapshot read requires its admitted plan"
+            )
+        persisted = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
+        if persisted is None:
+            raise OmnigentArtifactError("repository snapshot plan is unavailable")
+        plan = verify_execution_plan_envelope(persisted)
+        if binding and (
+            binding.plan_digest != "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+            or (
+                plan.payload.authority is not None
+                and (
+                    binding.task_input_snapshot_ref
+                    != plan.payload.authority.taskInputSnapshotRef
+                    or binding.task_input_snapshot_digest
+                    != plan.payload.authority.taskInputSnapshotDigest
+                )
+            )
+        ):
+            raise OmnigentArtifactError("repository snapshot plan binding conflicts")
+        authored_plan_ref = request.parameters.get("executionPlanRef")
+        if authored_plan_ref and authored_plan_ref != plan.planRef:
+            raise OmnigentArtifactError(
+                "repository snapshot request conflicts with its plan"
+            )
+        artifact_id = self._artifact_id(artifact_ref)
+        admitted_ids = {
+            self._artifact_id(access["artifactRef"])
+            for access in plan.payload.resolvedTools.get(
+                "repositoryAccess", {}
+            ).values()
+        }
+        if artifact_id not in admitted_ids:
+            raise OmnigentArtifactError(
+                "repository snapshot is not admitted by the execution plan"
+            )
+        async with self._session_factory() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            _artifact, payload = await service.read(
+                artifact_id=artifact_id,
+                principal=self._principal,
+                admitted_principal=f"workflow:{identity.workflow_id}",
             )
         return payload
 

@@ -68,11 +68,14 @@ async def authority_context(tmp_path, monkeypatch):
     )
     artifacts = _ArtifactService()
 
-    async def read_json(ref):
+    async def read_json(ref, **_kwargs):
         return json.loads(artifacts.payloads[ref.removeprefix("artifact:")])
 
     async def read_bytes(ref):
         return artifacts.payloads[ref.removeprefix("artifact:")]
+
+    async def read_repository_access_snapshot(ref, *, request):
+        return await read_bytes(ref)
 
     async def read(*, artifact_id, **_kwargs):
         return SimpleNamespace(artifact_id=artifact_id), artifacts.payloads[artifact_id]
@@ -86,7 +89,10 @@ async def authority_context(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: (None, "uncertified"),
     )
     try:
-        yield sessions, artifacts, SimpleNamespace(read_bytes=read_bytes)
+        yield sessions, artifacts, SimpleNamespace(
+            read_bytes=read_bytes,
+            read_repository_access_snapshot=read_repository_access_snapshot,
+        )
     finally:
         from moonmind.omnigent.production import close_omnigent_transport_pool
 
@@ -159,10 +165,7 @@ async def test_selected_repository_writer_store_reader_reaches_bound_consumer(
     assert acquired.binding.connection_id == "selected-repository"
     assert acquired.binding.endpoint == "https://github.com"
     assert acquired.binding.operations == ("read",)
-    assert (
-        acquired.credential.use_now(lambda material: bytes(material))
-        == b"selected-secret-canary"
-    )
+    assert acquired.credential.use_now(bytes) == b"selected-secret-canary"
     assert b"selected-secret-canary" not in b"".join(artifacts.payloads.values())
     assert b"ambient-secret-canary" not in b"".join(artifacts.payloads.values())
 

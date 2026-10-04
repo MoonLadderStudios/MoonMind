@@ -16,6 +16,7 @@ from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.host_ports import HostLaunchSpec
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.github_credentials import (
+    github_host_from_endpoint,
     github_repository_from_request,
 )
 from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
@@ -1017,6 +1018,10 @@ class DockerOmnigentHostAttestor:
             }
         github_mount_evidence: dict[str, Any] | None = None
         if spec.githubCredentialAttachment is not None:
+            github_host = github_host_from_endpoint(
+                "https://"
+                + str(spec.githubCredentialAttachment.get("githubHost") or "github.com")
+            )
             github_mount = next(
                 (
                     mount
@@ -1074,7 +1079,7 @@ class DockerOmnigentHostAttestor:
                     "config",
                     "--get-urlmatch",
                     "credential.helper",
-                    "https://github.com",
+                    f"https://{github_host}",
                 ],
                 check=False,
             )
@@ -1123,6 +1128,7 @@ class DockerOmnigentHostAttestor:
                     repository=repository,
                     boundaries=boundaries,
                     mutation_required=authored_github_mutation_required(request),
+                    github_host=github_host,
                 )
             except MountedToolPreflightError as exc:
                 # Keep bounded, redacted attempts in durable diagnostics even

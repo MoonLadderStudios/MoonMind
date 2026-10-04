@@ -1345,6 +1345,14 @@ async def compile_and_persist_execution_plan(
     mounted_skill_tools = tuple(
         sorted(set(required_capabilities).intersection(deployment_mounted_tool_names()))
     )
+    resolved_profile = _build_v2_profile(
+        snapshot=agent_profile_snapshot,
+        catalog_ref=catalog.catalogRef,
+        implementation_ref=implementation.implementation_ref(),
+        harness_id=harness_id,
+        auth_model=config["authModel"],
+        additional_tools=mounted_skill_tools,
+    )
     repository_access = {}
     if repository_bindings is None:
         repository_inputs = await _admit_repository_plan_inputs(
@@ -1354,7 +1362,7 @@ async def compile_and_persist_execution_plan(
             principal=principal,
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
-            requires_github="gh" in mounted_skill_tools,
+            requires_github="gh" in resolved_profile.tools,
             parent_plan=parent_repository_plan,
         )
         repository_bindings = repository_inputs["bindings"]
@@ -1493,14 +1501,7 @@ async def compile_and_persist_execution_plan(
         trusted_repository_declarations=trusted_repository_declarations,
     )
     plan = compile_execution_plan(
-        agent_profile=_build_v2_profile(
-            snapshot=agent_profile_snapshot,
-            catalog_ref=catalog.catalogRef,
-            implementation_ref=implementation.implementation_ref(),
-            harness_id=harness_id,
-            auth_model=config["authModel"],
-            additional_tools=mounted_skill_tools,
-        ),
+        agent_profile=resolved_profile,
         harness_catalog=catalog,
         freshness_catalog=freshness_catalog,
         trust_record=trust,
@@ -1727,6 +1728,7 @@ async def compile_and_persist_execution_plan(
             profile_snapshot_ref,
             *_evidence_refs,
             *skill_content_refs,
+            *(access["artifactRef"] for access in repository_access.values()),
             skill_ref,
             plan_artifact_ref,
         ),

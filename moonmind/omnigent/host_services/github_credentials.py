@@ -6,8 +6,9 @@ import hashlib
 import json
 import re
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
-from moonmind.auth.bound_acquisition import AcquiredCredential
+from moonmind.auth.bound_acquisition import AcquiredCredential, SelectionSnapshot
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
 )
@@ -17,9 +18,66 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryIdentity,
+    github_repository_name_from_value,
+    normalize_endpoint,
+)
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _TARGET_PATH = "/run/mm-credentials/github"
+_REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def github_host_from_endpoint(endpoint: str) -> str:
+    """Return the Git/CLI authority after deployment-owned endpoint validation."""
+    from moonmind.auth.github_app_wiring import github_api_base_for
+
+    api_base = github_api_base_for(endpoint)
+    if api_base == "https://api.github.com":
+        return "github.com"
+    return urlsplit(normalize_endpoint(endpoint)).netloc
+
+
+def normalize_github_repository_remote(
+    repository: str, *, endpoint: str = "https://github.com"
+) -> str | None:
+    """Normalize a clean repository target on its already selected GitHub host."""
+    try:
+        host = github_host_from_endpoint(endpoint)
+        cleaned = str(repository or "").strip().rstrip("/")
+        if _REPOSITORY_NAME.fullmatch(cleaned):
+            return f"https://{host}/{cleaned.removesuffix('.git')}.git"
+        parsed = urlsplit(cleaned)
+        name = parsed.path.removeprefix("/").removesuffix(".git")
+        if (
+            parsed.scheme.lower() != "https"
+            or normalize_endpoint(f"{parsed.scheme}://{parsed.netloc}")
+            != f"https://{host}"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not _REPOSITORY_NAME.fullmatch(name)
+        ):
+            return None
+        return f"https://{host}/{name}.git"
+    except ValueError:
+        return None
+
+
+def github_clone_source_from_identity(identity: RepositoryIdentity) -> str:
+    """Use the admitted canonical remote, deriving only when it carries an ID."""
+    # Validate trust independently of normalization, so acquisition reports
+    # unsafe deployment destinations without ever resolving a secret.
+    github_host_from_endpoint(identity.endpoint)
+    remote = normalize_github_repository_remote(
+        identity.canonical_remote or identity.display_name,
+        endpoint=identity.endpoint,
+    )
+    if remote is None:
+        raise ValueError("admitted GitHub repository canonical remote is unsafe")
+    return remote
 
 
 def github_repository_from_request(request: AgentExecutionRequest) -> str:
@@ -58,6 +116,106 @@ class OmnigentGithubCredentialService:
         self._sessions = session_factory
         self._artifacts = artifact_gateway
 
+    async def _verified_repository_access(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        role: str,
+        operation: str,
+        repository: str | None,
+    ) -> tuple[
+        str, dict[str, Any], dict[str, Any], SelectionSnapshot, RepositoryIdentity
+    ]:
+        slot = {
+            "source_read": "source",
+            "collaboration": "collaboration",
+            "destination_write": "destination",
+        }.get(role)
+        access = (
+            plan.payload.resolvedTools.get("repositoryAccess", {}).get(slot)
+            if plan is not None
+            else None
+        )
+        if not access or self._artifacts is None:
+            raise ValueError(
+                "repository operation requires its admitted access snapshot"
+            )
+        body = await self._artifacts.read_repository_access_snapshot(
+            access["artifactRef"], request=request
+        )
+        if (
+            "repository-access-snapshot:sha256:" + hashlib.sha256(body).hexdigest()
+            != access["snapshotRef"]
+        ):
+            raise ValueError("repository access snapshot digest mismatch")
+        payload = json.loads(body)
+        snapshot = SelectionSnapshot.model_validate(payload["selection"])
+        identity = RepositoryIdentity.model_validate(payload["repositoryIdentity"])
+        if (
+            normalize_endpoint(identity.endpoint)
+            != normalize_endpoint(snapshot.endpoint)
+            or identity.route_id() != snapshot.route_id
+            or identity.display_name.lower() != snapshot.repository_display.lower()
+        ):
+            raise ValueError("repository access snapshot identity conflicts")
+        clone_source = github_clone_source_from_identity(identity)
+        # A durable schedule plan can serve several fresh execution owners.
+        # Bind to the admitted plan rather than its authoring subject.
+        requested_plan_ref = request.parameters.get("executionPlanRef")
+        if request.step_execution and request.step_execution.omnigent_execution_plan:
+            requested_plan_ref = request.step_execution.omnigent_execution_plan.plan_ref
+        if requested_plan_ref and requested_plan_ref != plan.planRef:
+            raise ValueError(
+                "repository consumer conflicts with admitted execution plan"
+            )
+        requested_repository = repository or github_repository_from_request(request)
+        direct_name = str(requested_repository or "").strip().rstrip("/")
+        direct_name = direct_name.removesuffix(".git")
+        if _REPOSITORY_NAME.fullmatch(direct_name):
+            target_matches = direct_name.lower() == snapshot.repository_display.lower()
+        elif str(requested_repository).startswith("git@github.com:"):
+            target_matches = (
+                github_host_from_endpoint(identity.endpoint) == "github.com"
+                and github_repository_name_from_value(requested_repository).lower()
+                == snapshot.repository_display.lower()
+            )
+        else:
+            requested_remote = normalize_github_repository_remote(
+                requested_repository, endpoint=identity.endpoint
+            )
+            target_matches = bool(
+                requested_remote and requested_remote.lower() == clone_source.lower()
+            )
+        if not target_matches:
+            raise ValueError(
+                "repository consumer target conflicts with admitted snapshot"
+            )
+        if snapshot.role != role or operation not in snapshot.operations:
+            raise ValueError("repository operation or role is not admitted")
+        return slot, access, payload, snapshot, identity
+
+    async def admitted_repository_identity(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        role: str,
+        operation: str,
+        repository: str | None = None,
+    ) -> RepositoryIdentity:
+        """Resolve the snapshot's target without acquiring or exposing a token."""
+        _slot, _access, _payload, _snapshot, identity = (
+            await self._verified_repository_access(
+                plan=plan,
+                request=request,
+                role=role,
+                operation=operation,
+                repository=repository,
+            )
+        )
+        return identity
+
     async def acquire_repository_use(
         self,
         *,
@@ -76,68 +234,22 @@ class OmnigentGithubCredentialService:
         from moonmind.auth.bound_acquisition import (
             AccessMode,
             AcquisitionRequest,
-            SelectionSnapshot,
             select_repository_authority,
         )
         from moonmind.auth.github_app_wiring import (
             build_bound_acquirer_for_connection,
             revision_reader_for,
         )
-        from moonmind.workflows.executions.repository_contract import (
-            github_repository_name_from_value,
-            normalize_endpoint,
-        )
 
-        slot = {
-            "source_read": "source",
-            "collaboration": "collaboration",
-            "destination_write": "destination",
-        }.get(role)
-        access = (
-            plan.payload.resolvedTools.get("repositoryAccess", {}).get(slot)
-            if plan is not None
-            else None
+        slot, access, payload, snapshot, identity = (
+            await self._verified_repository_access(
+                plan=plan,
+                request=request,
+                role=role,
+                operation=operation,
+                repository=repository,
+            )
         )
-        if not access or self._artifacts is None:
-            raise ValueError(
-                "repository operation requires its admitted access snapshot"
-            )
-        body = await self._artifacts.read_bytes(access["artifactRef"])
-        if (
-            "repository-access-snapshot:sha256:" + hashlib.sha256(body).hexdigest()
-            != access["snapshotRef"]
-        ):
-            raise ValueError("repository access snapshot digest mismatch")
-        payload = json.loads(body)
-        snapshot = SelectionSnapshot.model_validate(payload["selection"])
-        from moonmind.workflows.executions.repository_contract import RepositoryIdentity
-
-        identity = RepositoryIdentity.model_validate(payload["repositoryIdentity"])
-        if normalize_endpoint(identity.endpoint) != "https://github.com":
-            raise ValueError(
-                "repository endpoint is unsupported by the GitHub consumer"
-            )
-        # A durable schedule plan can serve several fresh execution owners.
-        # Bind to the admitted plan, rather than equating its authoring subject
-        # with the workflow currently consuming it (issue #4009).
-        requested_plan_ref = request.parameters.get("executionPlanRef")
-        if request.step_execution and request.step_execution.omnigent_execution_plan:
-            requested_plan_ref = request.step_execution.omnigent_execution_plan.plan_ref
-        if requested_plan_ref and requested_plan_ref != plan.planRef:
-            raise ValueError(
-                "repository consumer conflicts with admitted execution plan"
-            )
-        requested_repository = repository or github_repository_from_request(request)
-        if (
-            not requested_repository
-            or github_repository_name_from_value(requested_repository).lower()
-            != snapshot.repository_display.lower()
-        ):
-            raise ValueError(
-                "repository consumer target conflicts with admitted snapshot"
-            )
-        if snapshot.role != role or operation not in snapshot.operations:
-            raise ValueError("repository operation or role is not admitted")
         binding = plan.payload.credentialBindings.get(slot)
         if snapshot.access_mode == AccessMode.ANONYMOUS:
             if role != "source_read" or operation != "read" or binding is not None:
@@ -264,6 +376,26 @@ class OmnigentGithubCredentialService:
             "ownerDigest": owner_digest,
         }
 
+    async def anticipated_attachment_for_request(
+        self,
+        resolved_tools: dict[str, Any],
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        owner_ref: str,
+    ) -> dict[str, Any] | None:
+        """Bind non-secret host metadata before recording projection authority."""
+        attachment = self.anticipated_attachment(resolved_tools, owner_ref=owner_ref)
+        if attachment is None:
+            return None
+        identity = await self.admitted_repository_identity(
+            plan=plan, request=request, role="collaboration", operation="read"
+        )
+        return {
+            **attachment,
+            "githubHost": github_host_from_endpoint(identity.endpoint),
+        }
+
     async def materialize(
         self,
         *,
@@ -289,6 +421,10 @@ class OmnigentGithubCredentialService:
             authority_sink=authority_sink,
         )
         try:
+            attachment = {
+                **attachment,
+                "githubHost": github_host_from_endpoint(acquired.binding.endpoint),
+            }
             return await self._materialize_acquired(
                 attachment=attachment,
                 acquired=acquired,
@@ -360,11 +496,11 @@ class OmnigentGithubCredentialService:
             )
         script = (
             "set -eu; umask 077; mkdir -p /config; "
-            "printf 'github.com:\\n    user: x-access-token\\n    oauth_token: ' "
+            "printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\" "
             "> /config/hosts.yml; "
             "cat >> /config/hosts.yml; "
             "printf '\\n    git_protocol: https\\n' >> /config/hosts.yml; "
-            "chown -R \"$1:$2\" /config; "
+            'chown -R "$1:$2" /config; '
             "chmod 0700 /config; chmod 0600 /config/hosts.yml"
         )
         # Same-repo SHA drift recovery as credential writers: reuse a qualified
@@ -442,6 +578,7 @@ class OmnigentGithubCredentialService:
                     "--",
                     str(runtime_uid),
                     str(runtime_gid),
+                    str(attachment["githubHost"]),
                 ],
                 input_bytes=token.encode(),
                 failure_code=(
@@ -498,5 +635,8 @@ class OmnigentGithubCredentialService:
 
 __all__ = [
     "OmnigentGithubCredentialService",
+    "github_clone_source_from_identity",
+    "github_host_from_endpoint",
     "github_repository_from_request",
+    "normalize_github_repository_remote",
 ]
