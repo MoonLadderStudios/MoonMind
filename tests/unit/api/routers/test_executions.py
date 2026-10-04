@@ -8221,6 +8221,33 @@ def test_serialize_execution_projects_observability_from_finish_summary() -> Non
     }
 
 
+@pytest.mark.parametrize(
+    ("state", "close_status"),
+    [
+        (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED),
+        (MoonMindWorkflowState.COMPLETED, None),
+        (MoonMindWorkflowState.EXECUTING, TemporalExecutionCloseStatus.COMPLETED),
+    ],
+)
+def test_serialize_completed_idle_execution_recommends_review_without_finish_summary(
+    state: MoonMindWorkflowState,
+    close_status: TemporalExecutionCloseStatus | None,
+) -> None:
+    record = _build_execution_record(state=state)
+    record.close_status = close_status
+    record.memo.update(
+        objectiveOutcome="idle",
+        summary="Search deferred: provider capacity is occupied. No issue was claimed.",
+    )
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["finishSummary"] is None
+    assert payload["recommendedNextAction"] == "Review the completed execution summary."
+    assert payload["memo"]["objectiveOutcome"] == "idle"
+    assert payload["summary"] == record.memo["summary"]
+
+
 def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
 
@@ -8231,6 +8258,9 @@ def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
         "success": 0,
         "sampleSize": 0,
     }
+    assert payload["recommendedNextAction"] == (
+        "Monitor execution until a terminal outcome is available."
+    )
 
 
 def test_serialize_execution_handles_mixed_timezone_duration_inputs() -> None:
