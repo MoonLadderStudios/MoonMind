@@ -650,6 +650,12 @@ RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH = "run-canonical-no-commit-outcome-v1"
 RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH = (
     "run-canonical-no-commit-search-preset-v1"
 )
+# Capacity observations are retried by the same unclaimed search owner. Older
+# histories retain their original immediate idle completion and memo commands.
+RUN_ISSUE_SEARCH_CAPACITY_RETRY_PATCH = "run-issue-search-capacity-retry-v1"
+ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT = timedelta(minutes=30)
+ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL = timedelta(seconds=30)
+ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL = timedelta(minutes=5)
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
 # Expose the workflow-owned continuation capability to the portable Skill at
@@ -1537,6 +1543,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._canonical_git_repository_projection_enabled: bool = False
         self._canonical_no_commit_outcome_enabled: bool = False
         self._canonical_no_commit_search_preset_enabled: bool = False
+        self._issue_search_capacity_retry_enabled: bool = False
         self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
@@ -11369,6 +11376,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._canonical_no_commit_search_preset_enabled = workflow.patched(
             RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH
         )
+        self._issue_search_capacity_retry_enabled = workflow.patched(
+            RUN_ISSUE_SEARCH_CAPACITY_RETRY_PATCH
+        )
         self._authoritative_publish_outcome_enabled = workflow.patched(
             RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
         )
@@ -11640,7 +11650,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 close_status=CLOSE_STATUS_FAILED,
                 summary=output_message,
                 error_category=(
-                    "user_error" if self._plan_blocked_message else "execution_error"
+                    "user_error"
+                    if self._plan_blocked_message
+                    and not (
+                        self._issue_search_capacity_retry_enabled
+                        and self._publish_context.get("capacityWait", {}).get("exhausted")
+                    )
+                    else "execution_error"
                 ),
             )
             raise exceptions.ApplicationError(
@@ -13673,6 +13689,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     max_attempts_override=max_attempts_override,
                                 ),
                             )
+                            execution_result = (
+                                await self._wait_for_issue_search_capacity(
+                                    execution_result=execution_result,
+                                    node_id=node_id,
+                                    tool_name=tool_name,
+                                    route=route,
+                                    execute_payload=execute_payload,
+                                    max_attempts_override=max_attempts_override,
+                                )
+                            )
+                            if (
+                                self._issue_search_capacity_retry_enabled
+                                and self._cancel_requested
+                            ):
+                                return
                         except Exception as exc:
                             diagnostic = self._record_step_execution_exception(
                                 exc,
@@ -13907,6 +13938,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             terminal_disposition="failed_unrecoverable",
                         )
                         if failure_mode == "FAIL_FAST":
+                            if (
+                                self._issue_search_capacity_retry_enabled
+                                and self._publish_context.get("capacityWait", {}).get("exhausted")
+                            ):
+                                raise exceptions.ApplicationError(
+                                    step_failure_summary,
+                                    type="RESOURCE_EXHAUSTED",
+                                    non_retryable=True,
+                                )
                             if provider_failure_summary:
                                 raise ValueError(provider_failure_summary)
                             if workflow.patched(
@@ -14431,6 +14471,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 break
 
             if not accepted_execution:
+                if self._issue_search_capacity_retry_enabled and self._publish_context.get(
+                    "capacityWait", {}
+                ).get("exhausted"):
+                    # Even CONTINUE cannot implement an issue that was never
+                    # selected. Keep the failed objective and skip remaining work.
+                    self._mark_remaining_plan_steps_skipped(
+                        ordered_nodes=ordered_nodes,
+                        completed_index=index - 1,
+                        summary=self._plan_blocked_message,
+                    )
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
+                    break
                 if (
                     workflow.patched(RUN_WORKSPACE_BLOCK_FAILURE_POLICY_PATCH)
                     and failure_mode == "FAIL_FAST"
@@ -16380,6 +16433,161 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "summary": diagnostic["message"],
                 },
             }
+
+    async def _wait_for_issue_search_capacity(
+        self,
+        *,
+        execution_result: Any,
+        node_id: str,
+        tool_name: str,
+        route: Any,
+        execute_payload: Mapping[str, Any],
+        max_attempts_override: int | None = None,
+    ) -> Any:
+        """Recheck an unclaimed native search within one durable wait budget."""
+        if not self._issue_search_capacity_retry_enabled:
+            return execution_result
+        invocation = execute_payload.get("invocation_payload")
+        inputs = invocation.get("inputs") if isinstance(invocation, Mapping) else None
+        if (
+            tool_name != "github.load_issue_preset_brief"
+            or not isinstance(inputs, Mapping)
+            or "issueSearch" not in inputs
+            or any(
+                inputs.get(key)
+                for key in (
+                    "issue",
+                    "issueNumber",
+                    "issue_number",
+                    "attemptId",
+                    "attempt_id",
+                )
+            )
+        ):
+            return execution_result
+        context = execute_payload.get("context")
+        if isinstance(context, Mapping) and any(
+            context.get(key)
+            for key in (
+                "issue_claim_receipt",
+                "issueNumber",
+                "issue_number",
+                "attemptId",
+                "attempt_id",
+            )
+        ):
+            return execution_result
+
+        def capacity_deferred(result: Any) -> bool:
+            outputs = self._get_from_result(result, "outputs")
+            return (
+                self._activity_result_status(result) == "COMPLETED"
+                and self._get_from_result(result, "completion_disposition") == "idle"
+                and isinstance(outputs, Mapping)
+                and outputs.get("reasonCode") == "local_capacity_unavailable"
+                and not any(
+                    outputs.get(key)
+                    for key in (
+                        "issue",
+                        "issueNumber",
+                        "issue_number",
+                        "attemptId",
+                        "attempt_id",
+                        "issueClaimLease",
+                        "claimReceipt",
+                    )
+                )
+            )
+
+        if not capacity_deferred(execution_result):
+            return execution_result
+        initial_outputs = self._get_from_result(execution_result, "outputs")
+        initial_evidence = initial_outputs.get("capacityEvidence")
+        wait_context = {
+            "retryCount": 0,
+            "budgetSeconds": int(ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT.total_seconds()),
+            "initialCapacityEvidence": initial_evidence,
+            "lastCapacityEvidence": initial_evidence,
+            "exhausted": False,
+        }
+        self._publish_context["capacityWait"] = wait_context
+        deadline = workflow.now() + ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT
+        interval = ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL
+        current_result = execution_result
+        while capacity_deferred(current_result):
+            remaining = deadline - workflow.now()
+            if remaining <= timedelta():
+                outputs = dict(self._get_from_result(current_result, "outputs"))
+                summary = (
+                    "Issue search could not start within the 30-minute capacity wait "
+                    "budget. No issue was selected or claimed."
+                )
+                outputs.update(error="RESOURCE_EXHAUSTED", summary=summary)
+                outputs.pop("disposition", None)
+                wait_context["exhausted"] = True
+                self._waiting_reason = None
+                self._publish_context["objectiveOutcome"] = "failed"
+                self._plan_blocked_message = summary
+                self._update_search_attributes()
+                self._update_memo()
+                return {"status": "FAILED", "outputs": outputs}
+            self._waiting_reason = "provider_profile_slot"
+            summary = (
+                "Waiting for the selected provider profile's capacity before "
+                "selecting an issue. No issue has been claimed."
+            )
+            self._set_state(STATE_AWAITING_SLOT, summary=summary)
+            self._mark_step_waiting(
+                node_id,
+                status="awaiting_external",
+                updated_at=workflow.now(),
+                waiting_reason=self._waiting_reason,
+                summary=summary,
+            )
+            try:
+                await workflow.wait_condition(
+                    lambda: self._cancel_requested or self._paused,
+                    timeout=min(interval, remaining),
+                )
+            except asyncio.TimeoutError:
+                # Timeout is the expected path for periodic capacity rechecks.
+                pass
+            if self._cancel_requested:
+                return current_result
+            await self._wait_if_paused_at_safe_boundary()
+            if self._cancel_requested:
+                return current_result
+            wait_context["retryCount"] += 1
+            retry_payload = dict(execute_payload)
+            retry_payload["idempotency_key"] = (
+                f"{execute_payload['idempotency_key']}"
+                f"_capacity_recheck_{wait_context['retryCount']}"
+            )
+            current_result = await workflow.execute_activity(
+                route.activity_type,
+                retry_payload,
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **self._execute_kwargs_for_route(
+                    route,
+                    max_attempts_override=max_attempts_override,
+                ),
+            )
+            outputs = self._get_from_result(current_result, "outputs")
+            if isinstance(outputs, Mapping) and outputs.get("capacityEvidence"):
+                wait_context["lastCapacityEvidence"] = outputs["capacityEvidence"]
+            interval = min(interval * 2, ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL)
+
+        self._waiting_reason = None
+        self._set_state(
+            STATE_EXECUTING, summary="Issue search capacity recheck completed."
+        )
+        self._mark_step_running(
+            node_id,
+            updated_at=workflow.now(),
+            summary=self._summary,
+            increment_attempt=False,
+        )
+        return current_result
 
     async def _wait_for_jira_blocker_resolution(
         self,
@@ -19085,6 +19293,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         publish_detail: str | None = None,
         publish_mode: str = "",
     ) -> str:
+        if (
+            self._issue_search_capacity_retry_enabled
+            and self._publish_context.get("objectiveOutcome") == "idle"
+        ):
+            return (
+                self._coerce_text(publish_detail, max_chars=900)
+                or self._coerce_text(self._last_step_summary, max_chars=700)
+                or "No eligible work was selected."
+            )
         parts = ["Workflow completed successfully"]
         detail = self._coerce_text(publish_detail, max_chars=900)
         if detail and detail.lower() not in {
@@ -25429,16 +25646,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         }
         if self._title_target:
             memo_dict["titleTarget"] = dict(self._title_target)
+        if self._issue_search_capacity_retry_enabled and self._publish_context.get(
+            "capacityWait"
+        ):
+            memo_dict["capacityWait"] = dict(self._publish_context["capacityWait"])
         if workflow.patched("run-objective-outcome-projection-v1"):
             info = workflow.info()
             if hasattr(info, "parent"):
                 parent = info.parent
                 memo_dict["objectiveParentId"] = parent.workflow_id if parent else None
             memo_dict["objectiveScheduled"] = bool(self._scheduled_for)
-            memo_dict["objectiveOutcome"] = (
-                self._publish_context.get("objectiveOutcome")
-                or {STATE_COMPLETED: "succeeded", STATE_FAILED: "failed", STATE_CANCELED: "cancelled"}.get(self._state, "active")
-            )
+            terminal_outcomes = {
+                STATE_COMPLETED: "succeeded",
+                STATE_FAILED: "failed",
+                STATE_CANCELED: "cancelled",
+            }
+            if self._issue_search_capacity_retry_enabled:
+                terminal_outcomes[STATE_NO_COMMIT] = "succeeded"
+            memo_dict["objectiveOutcome"] = self._publish_context.get(
+                "objectiveOutcome"
+            ) or terminal_outcomes.get(self._state, "active")
         if workflow.patched("run-objective-progress-v1"):
             if self._remediation_loop_state is not None:
                 budgets = self._remediation_loop_state.consumed_budgets

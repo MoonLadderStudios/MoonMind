@@ -20,7 +20,7 @@ import {
   StepLedgerStatusPill,
   WorkflowLifecycleStatusPill,
 } from '../components/ExecutionStatusPill';
-import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
+import { WORKFLOW_OBJECTIVE_OUTCOMES, formatWorkflowSummary, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { AttachmentImagePreview } from '../components/AttachmentImagePreview';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
@@ -877,6 +877,7 @@ const ExecutionDetailSchema = z
     taskInstructions: z.string().nullable().optional(),
     status: z.string(),
     completionDisposition: z.string().nullable().optional(),
+    objectiveOutcome: z.enum(WORKFLOW_OBJECTIVE_OUTCOMES).nullable().optional().catch(undefined),
     state: z.string(),
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
@@ -9292,7 +9293,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     (executionRunSummary.success ? executionRunSummary.data : null);
   const displayedMergeAutomation =
     execution?.mergeAutomation || runSummary?.mergeAutomation || null;
-  const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
+  const workflowDisplayStatus = resolveWorkflowDisplayStatus(execution?.rawState, execution?.state, execution?.status);
+  const displayedSummary = formatWorkflowSummary(
+    runSummary?.operatorSummary || execution?.summary,
+    workflowDisplayStatus,
+    execution?.objectiveOutcome,
+    execution?.completionDisposition,
+  );
+  const displayedOutcomeReason = runSummary?.finishOutcome?.reason
+    ? formatWorkflowSummary(runSummary.finishOutcome.reason, workflowDisplayStatus, execution?.objectiveOutcome, execution?.completionDisposition)
+    : null;
+  const displayedLastStepSummary = runSummary?.lastStep?.summary
+    ? formatWorkflowSummary(runSummary.lastStep.summary, workflowDisplayStatus, execution?.objectiveOutcome, execution?.completionDisposition)
+    : null;
   const prUrl =
     normalizeGitHubPullRequestUrl(execution?.prUrl) ||
     normalizeGitHubPullRequestUrl(runSummary?.publishContext?.pullRequestUrl);
@@ -10079,11 +10092,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             {execution ? (
               <WorkflowLifecycleStatusPill
                 completionDisposition={execution.completionDisposition}
-                status={resolveWorkflowDisplayStatus(
-                  execution.rawState,
-                  execution.state,
-                  execution.status,
-                )}
+                objectiveOutcome={execution.objectiveOutcome}
+                status={workflowDisplayStatus}
               />
             ) : null}
           </div>
@@ -10251,11 +10261,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 statusPill={
                   <WorkflowLifecycleStatusPill
                     completionDisposition={execution.completionDisposition}
-                    status={resolveWorkflowDisplayStatus(
-                      execution.rawState,
-                      execution.state,
-                      execution.status,
-                    )}
+                    objectiveOutcome={execution.objectiveOutcome}
+                    status={workflowDisplayStatus}
                   />
                 }
                 runtimeLabel={
@@ -10325,9 +10332,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           <div className="td-summary-block">
             <h4>Summary</h4>
             <p className="whitespace-pre-wrap">{displayedSummary}</p>
-            {runSummary?.finishOutcome?.reason && runSummary.finishOutcome.reason !== displayedSummary ? (
+            {displayedOutcomeReason && displayedOutcomeReason !== displayedSummary ? (
               <p className="small" style={{ marginTop: '0.4rem' }}>
-                Outcome: {runSummary.finishOutcome.reason}
+                Outcome: {displayedOutcomeReason}
               </p>
             ) : null}
           </div>
@@ -10785,10 +10792,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   </section>
                 );
               })() : null}
-              {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
+              {displayedLastStepSummary && displayedLastStepSummary !== displayedSummary ? (
                 <div>
                   <strong>Last Step</strong>
-                  <p className="whitespace-pre-wrap">{runSummary.lastStep.summary}</p>
+                  <p className="whitespace-pre-wrap">{displayedLastStepSummary}</p>
                 </div>
               ) : null}
               {runSummary.nextAction ? <p className="small">{runSummary.nextAction}</p> : null}
