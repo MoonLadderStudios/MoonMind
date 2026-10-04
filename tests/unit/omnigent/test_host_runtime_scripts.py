@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -273,11 +275,71 @@ def test_projected_cli_restores_context_after_child_environment_is_stripped(tmp_
     module.exercise_projection(tmp_path)
 
 
+@pytest.mark.parametrize("github_host", [None, "github.enterprise.test"])
+def test_runtime_script_builder_remains_portable_with_admitted_attachment(github_host):
+    """The native verifier imports only the builder, without the application."""
+
+    builder = (
+        Path(__file__).resolve().parents[3]
+        / "moonmind/omnigent/host_services/runtime_scripts.py"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            """
+import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("runtime_scripts", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+attachment = (
+    {"targetPath": "/run/mm-credentials/github", "githubHost": sys.argv[2]}
+    if sys.argv[2] else None
+)
+script, environment = module.OmnigentRuntimeScriptService().build_entrypoint(
+    credential_handles=[],
+    skill_attachment={"targetPath": "/opt/moonmind-skills"},
+    step_execution_id="workflow:run:node-1:execution:1",
+    github_credential_attachment=attachment,
+)
+print(json.dumps({"script": script, "environment": environment}))
+""",
+            str(builder),
+            github_host or "",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    if github_host:
+        assert observed["environment"]["GH_HOST"] == github_host
+        assert observed["environment"]["GIT_CONFIG_KEY_0"] == (
+            f"credential.https://{github_host}.helper"
+        )
+        assert f"export GH_HOST={github_host}" in observed["script"]
+    else:
+        assert "GH_HOST" not in observed["environment"]
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=observed["script"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+
 @pytest.mark.parametrize("github_host", ["github.com", "github.enterprise.test"])
 def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(
     tmp_path, monkeypatch, github_host
 ):
-    import json
     import os
 
     from moonmind.config.settings import settings
